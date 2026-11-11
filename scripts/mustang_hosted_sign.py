@@ -1039,7 +1039,12 @@ def full_run_tools(collection,inputs,root):
     compile_run=str(collection.get('compileRunId')) if retained is not None else run
     compile_source=collection['compileSource'] if retained is not None else collection['collectorSource']
     source=paths['storageRoot']/f'mustang-prep-{compile_run}-1/source'
-    if collection['outputs'].get('outDir')!=str(source/f"out-mustang-build-{collection['build']}"):
+    import mustang_compiler_cache
+    cached = collection.get('candidate', {}).get('compilerCache', {})
+    out_dir = (mustang_compiler_cache.OUT if cached.get('enabled') is True and
+               mustang_compiler_cache.enabled(read_json(Path(root)/'os/build-only/mustang-runtime.json'))
+               else f"out-mustang-build-{collection['build']}")
+    if collection['outputs'].get('outDir')!=str(source/out_dir):
         raise ValueError('full-run bundle source path differs')
     identity=collection['outputs'].get('actualBuildIdentity',{})
     stamp=identity.get('timestamp')

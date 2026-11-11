@@ -29,6 +29,7 @@ import mustang_otatools_qualification as qualification
 import mustang_tool_closure as closure
 import mustang_ota as ota
 import mustang_retained as retained
+import mustang_compiler_cache as compiler_cache
 import test_mustang_edge_gate as edge_fixture
 import test_mustang_bootstrap_collector as fixture_module
 
@@ -59,6 +60,89 @@ sys.exit(result['returncode'])
                         self.assertEqual(run.returncode,code,run.stderr)
                         self.assertEqual(run.stdout,'compiler stdout\n' if visible else '')
                         self.assertEqual(run.stderr,'compiler stderr\n')
+
+
+class CompilerCacheTest(unittest.TestCase):
+    def test_cache_binding_changes_only_private_compile_commands_and_keeps_output_paths_stable(self):
+        build = ota.module('cache_build_adapter', 'mustang-build-only.py')
+        engine = build.engine()
+        recipe = engine.load(ROOT/'os/build-only/mustang.json', probe=False)
+        # The original commands function resolves compile_out_dir in its private
+        # engine module. Bind that actual engine, not a process-global override.
+        state = dict(path='/dedicated/cache', namespace='a'*64)
+        compiler_cache.bind_engine(engine, state)
+        for number in ('2611110500', '2611110600'):
+            op = engine.operator('mustang', '/synthetic/source', 24, '/synthetic/lock',
+                                 '/synthetic/downloads', '/synthetic/integration', 256,
+                                 '/synthetic/inputs.json', '/synthetic/node', number, '1794373200')
+            command = engine.commands(recipe, op)['compile']
+            self.assertEqual(command['env']['OUT_DIR'], compiler_cache.OUT)
+            self.assertEqual(command['env']['BUILD_NUMBER'], number)
+            self.assertIn('mustang-ccache-wrapper.sh', command['env']['CC_WRAPPER'])
+            self.assertEqual(command['env']['USE_CCACHE'], '1')
+        self.assertEqual(build.engine().compile_out_dir(recipe, op), 'out-mustang-build-2611110600')
+
+    def test_only_exact_bounded_cache_configuration_is_enabled(self):
+        self.assertFalse(compiler_cache.enabled({}))
+        self.assertTrue(compiler_cache.enabled({'compilerCache':compiler_cache.SETTING}))
+        with self.assertRaisesRegex(ValueError, 'configuration differs'):
+            compiler_cache.enabled({'compilerCache':dict(compiler_cache.SETTING,maxBytes=0)})
+
+    def test_cache_rejects_linked_storage_and_changed_tool_without_fetch_or_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home=Path(directory);target=home/'other';target.mkdir();cache=home/'cache'
+            cache.symlink_to(target,target_is_directory=True)
+            with patch.object(compiler_cache,'location',return_value=cache), \
+                    self.assertRaisesRegex(ValueError,'traverses a link'):
+                compiler_cache.prepare({}, {'compilerCache':compiler_cache.SETTING})
+            cache.unlink();cache.mkdir();compiler_cache.binary(cache).write_bytes(b'changed')
+            with patch.object(compiler_cache,'location',return_value=cache), \
+                    self.assertRaisesRegex(ValueError,'executable differs'):
+                compiler_cache.prepare({}, {'compilerCache':compiler_cache.SETTING},fetch=lambda:self.fail('no fetch'))
+
+    def test_bad_download_is_refused_before_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache=Path(directory)/'cache'
+            with patch.object(compiler_cache,'location',return_value=cache), \
+                    self.assertRaisesRegex(ValueError,'download differs'):
+                compiler_cache.prepare({}, {'compilerCache':compiler_cache.SETTING}, fetch=lambda:b'wrong')
+            self.assertFalse(compiler_cache.binary(cache).exists())
+
+    def test_real_shell_wrapper_scrubs_ambient_cache_settings_and_preserves_exit_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache=Path(directory);tool=compiler_cache.binary(cache)
+            tool.write_text('#!/usr/bin/env python3\nimport json,os,sys\n'
+                            'print(json.dumps({"args":sys.argv[1:],"env":{k:v for k,v in os.environ.items() if k.startswith("CCACHE_")}}))\n'
+                            'sys.exit(7)\n');tool.chmod(0o755)
+            state=dict(path=str(cache),namespace='a'*64)
+            env=dict(os.environ,CCACHE_DISABLE='1',CCACHE_SLOPPINESS='time_macros',CCACHE_REMOTE_STORAGE='wrong')
+            result=subprocess.run(compiler_cache.wrapper_argv(state)+['clang','-c','input.c','-o','output.o'],
+                                  cwd=cache,env=env,capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode,7,result.stderr)
+            observed=json.loads(result.stdout)
+            self.assertEqual(observed['args'],['clang',f'-fdebug-prefix-map={cache}=.','-c','input.c','-o','output.o'])
+            self.assertEqual(observed['env']['CCACHE_DIR'],str(cache/'objects'))
+            self.assertEqual(observed['env']['CCACHE_COMPILERCHECK'],'content')
+            self.assertNotIn('CCACHE_DISABLE',observed['env'])
+            self.assertNotIn('CCACHE_SLOPPINESS',observed['env'])
+            self.assertNotIn('CCACHE_REMOTE_STORAGE',observed['env'])
+
+    def test_cached_output_collection_still_requires_current_allocated_build_and_time(self):
+        build = ota.module('cache_output_adapter', 'mustang-build-only.py')
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);source=base/'source';out=source/compiler_cache.OUT
+            product=out/'target/product/mustang';packaging=product/'obj/PACKAGING/target_files_intermediates'
+            packaging.mkdir(parents=True)
+            tools=out/'soong/.intermediates/build/make/tools/otatools_package/otatools-package/linux_glibc_x86_64/gen/otatools.zip'
+            tools.parent.mkdir(parents=True);tools.write_bytes(b'tools')
+            for name in ('vendor_boot.img','vendor_kernel_boot.img'):(product/name).write_bytes(b'image')
+            allocation=dict(build='2611110500',reservedAt='2026-11-11T05:00:00Z')
+            (base/'allocation.json').write_text(json.dumps(allocation))
+            props='ro.product.vendor.device=mustang\nro.vendor.build.version.incremental=2611110500\nro.vendor.build.date.utc=1794373200\n'
+            with zipfile.ZipFile(packaging/'mustang-target_files.zip','w') as archive:archive.writestr('VENDOR/build.prop',props)
+            self.assertEqual(build.collect_outputs(source,compiler_cache.OUT)['verdict'],'complete')
+            allocation['build']='2611110600';(base/'allocation.json').write_text(json.dumps(allocation))
+            self.assertEqual(build.collect_outputs(source,compiler_cache.OUT)['verdict'],'incomplete')
 
 
 class FullDeliveryTest(unittest.TestCase):
@@ -204,7 +288,7 @@ class FullDeliveryTest(unittest.TestCase):
             path=str(package),sha256=inspected['packageSha256'],sizeBytes=inspected['packageBytes'])}}))
         return package,inspected,provenance
 
-    def bundle_fixture(self):
+    def bundle_fixture(self, cached=False):
         result=self.observe();source,outcome,copied=self.copy_source(result)
         package,inspected,provenance=self.tool_fixture(source)
         unsigned=self.home/'unsigned.zip';edge_fixture.fixtures.target_files(unsigned)
@@ -217,6 +301,13 @@ class FullDeliveryTest(unittest.TestCase):
                 actualBuildIdentity=dict(device='mustang',build='2026110901',timestamp='1794182400')),
             roseEdge=edge,candidate=dict(stages={'bootstrap-source':dict(result=result['receipt'],receipt=result['receiptFile']),
                                    'source-copy':dict(result=copied)}))
+        if cached:
+            collection['candidate']['compilerCache'] = dict(enabled=True, kind='ccache')
+            collection['outputs']['outDir'] = str(source/compiler_cache.OUT)
+            cfg_path = self.root/'os/build-only/mustang-runtime.json'
+            cfg = json.loads(cfg_path.read_text())
+            cfg['compilerCache'] = compiler_cache.SETTING
+            cfg_path.write_text(json.dumps(cfg))
         path=self.home/'collection.json';path.write_text(json.dumps(collection));out=self.home/'signing-bundle'
         with patch.object(collector.mustang_lane,'configuration',return_value=self.lane), \
                 patch.object(hosted,'public_identity',return_value={'fixtureOnly':True}), \
@@ -236,6 +327,13 @@ class FullDeliveryTest(unittest.TestCase):
         self.assertGreater(bundle['jdkExtractedBytes'],0);self.assertGreater(bundle['otatoolsExtractedBytes'],0)
         self.assertEqual(bundle['timestamp'],'1794182400')
         self.assertFalse(bundle['fullRunSource']['nativeReceipt']['fullBootstrapVerified'])
+
+    def test_cached_output_path_preserves_full_signing_bundle_and_current_build_binding(self):
+        bundle,out=self.bundle_fixture(cached=True)
+        self.assertEqual(bundle['build'],'2026110901')
+        self.assertEqual(bundle['timestamp'],'1794182400')
+        self.assertTrue(bundle['fullRunSource']['copyReceipt']['sourceCopyVerified'])
+        self.assertTrue((out/bundle['otatools']['file']).is_file())
 
     def metadata(self):
         run=int(self.f.run['runId']);sha=self.f.revision

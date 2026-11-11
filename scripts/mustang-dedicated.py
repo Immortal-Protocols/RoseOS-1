@@ -80,6 +80,8 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
         return cfg
     if cfg.get('status')!='bound':
         raise ValueError('dedicated Mustang runtime inputs are unbound')
+    import mustang_compiler_cache
+    mustang_compiler_cache.enabled(cfg)
     controller.require_explicit_target(controller.common_controller())
     import mustang_hosted_sign
     mustang_hosted_sign.require_delivery_capacity(root)
