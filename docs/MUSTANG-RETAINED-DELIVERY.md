@@ -1,5 +1,11 @@
 # Dedicated retained-output delivery
 
+Mustang build-stage stdout and stderr stream directly to the GitHub Actions
+builder job log, which is retained on success and failure. Captured lunch output
+and other devices keep their existing behavior. Make's exit code, process-group
+cleanup and resource limits are unchanged. Run 42907732655 predates this fix;
+its discarded compiler stdout cannot be recovered from the uploaded receipts.
+
 Current policy: Nathan disabled the custom target-files archive validator. The
 runtime passes authenticated, hash-checked target files unchanged to the pinned
 Android signing tools and emits no custom target-validation proof. Executable

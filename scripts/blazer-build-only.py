@@ -949,7 +949,7 @@ def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, mea
     stops the whole group (SIGTERM, then SIGKILL after killGraceSeconds), and members left after a normal exit are ended
     the same way. This is a sampled stop, not a filesystem quota: writes between samples can overshoot the bound."""
     measure = measure or tree_bytes
-    out = tempfile.TemporaryFile() if capture else subprocess.DEVNULL
+    out = tempfile.TemporaryFile() if capture else (None if DEVICE == 'mustang' else subprocess.DEVNULL)
     started = clock()
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out, start_new_session=True)
     pgid, stopped, peak, low = proc.pid, None, 0, None
