@@ -168,7 +168,7 @@ class DiskSpaceTest(unittest.TestCase):
             mustang_route.evaluate_guest(obs,lane,cfg)
         obs['availableBytes']=required
         self.assertFalse(mustang_route.evaluate_guest(obs,lane,cfg)['admitted'])
-        cfg['dataFilesystemTotalInodes']=2*mustang_lane.CONFIRMED_TOTAL_INODES
+        cfg['dataFilesystemTotalInodes']=2*total
         with self.assertRaisesRegex(ValueError,'inode count differs'):
             mustang_route.evaluate_guest(obs,lane,cfg)
         obs['totalInodes']=cfg['dataFilesystemTotalInodes']

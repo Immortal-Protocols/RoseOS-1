@@ -945,7 +945,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         lane_binding=lane.configuration(); runtime=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         good=dict(instanceId=lane.CONFIRMED_INSTANCE_ID,filesystemUuid=lane.CONFIRMED_UUID,
                   mount=lane.CONFIRMED_MOUNT,availableBytes=lane.CONFIRMED_FREE_BYTES,
-                  availableInodes=1000,totalInodes=lane.CONFIRMED_TOTAL_INODES,euid=1000)
+                  availableInodes=1000,totalInodes=runtime.get('dataFilesystemTotalInodes',lane.CONFIRMED_TOTAL_INODES),euid=1000)
         observed=readiness.evaluate_guest(good,lane_binding,runtime)
         self.assertFalse(observed['admitted'])
         self.assertGreaterEqual(observed['availableBytes'],peak)

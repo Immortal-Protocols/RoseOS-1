@@ -1,6 +1,6 @@
 # Dedicated retained-output delivery
 
-## Space protection and the planned disk expansion
+## Space protection and the expanded data disk
 
 Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while
 writing its diagnostic log. This is not completed compilation. The data disk was
@@ -20,9 +20,10 @@ preflight verified its unchanged numeric disk/VM identities and stopped VM.
 `scripts/mustang-grow-data-filesystem.sh` prepares the ext4 expansion: it refuses
 wrong VM, mount, UUID, attached device, partitioned device or block-device size,
 then runs only bounded `resize2fs` and emits actual filesystem/inode readback.
-It never formats, deletes build files or changes ownership/ACLs. Cloud resize,
-guest execution and new filesystem capacity remain unclaimed until actual receipts
-exist. The historical1500GiB infrastructure record remains historical; runtime
+It never formats, deletes build files or changes ownership/ACLs. The second owned maintenance operation completed: the same numeric disk is3000GiB,
+ext4 reports3169514168320 filesystem bytes,1586187993088 available bytes and
+196608000 total inodes. Fresh cloud readback confirms the VM stopped and startup/JIT
+metadata absent. Exact readback is in `os/build-only/mustang-data-growth-20261111.json`. The historical1500GiB infrastructure record remains historical; runtime
 can pin a separately verified expanded inode total without relaxing UUID/device identity.
 
 ## Persistent compiler cache
@@ -79,7 +80,7 @@ Android signing tools and emits no custom target-validation proof. Executable
 archive, provenance, capacity and signature checks remain. The validator sections
 below describe the prior implementation, which remains unused library code.
 
-For dedicated workflow run number 44 only, Nathan renewed the choice to use the verified
+For dedicated workflow run number 45 only, Nathan renewed the choice to use the verified
 `frankel-2026111001` apps (voice 370) instead of refreshing the app export.
 The runtime binds the exact record-byte hash to this one run number.
 Later workflow runs do not inherit this choice. The candidate

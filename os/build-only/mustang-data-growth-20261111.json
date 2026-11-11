@@ -1,0 +1,47 @@
+{
+  "schema": "roseos.mustang-expanded-data-disk.v1",
+  "observedAt": "2026-11-11T15:34:31.588122+00:00",
+  "vm": {
+    "project": "protocols-465723",
+    "zone": "us-west2-a",
+    "instance": "roseos-mustang-builder-20261107-a",
+    "instanceId": "5585425566393384049"
+  },
+  "disk": {
+    "name": "roseos-mustang-data-20261107-a",
+    "id": "4322966418460195960",
+    "sizeGiB": 3000,
+    "previousSizeGiB": 1500,
+    "type": "pd-ssd",
+    "autoDelete": false
+  },
+  "filesystem": {
+    "schema": "roseos.mustang-data-growth.v1",
+    "operation": "mustang-grow-a45c1dc388794b8bb50c7c2051f75aea",
+    "instanceId": "5585425566393384049",
+    "filesystemUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+    "mount": "/mnt/disks/mustang-data",
+    "deviceBytes": 3221225472000,
+    "filesystemBytes": 3169514168320,
+    "availableBytes": 1586187993088,
+    "totalInodes": 196608000,
+    "availableInodes": 176547486
+  },
+  "maintenance": {
+    "operation": "mustang-grow-a45c1dc388794b8bb50c7c2051f75aea",
+    "source": "79da2b17f3b5585b33a4fae7e760e51eb1042b14",
+    "startupScriptSha256": "ba16840b8ab4f2fd0d06feab2c9f2b4805de39e4006795808fe8cb2a3863c9af",
+    "vmStopped": true,
+    "temporaryMetadataRemoved": true,
+    "buildDispatched": false
+  },
+  "billing": {
+    "region": "us-west2",
+    "listUSDPerGiBMonth": "0.204",
+    "additionalGiB": 1500,
+    "additionalUSDPerMonth": "306.00",
+    "source": "https://cloud.google.com/compute/disks-image-pricing",
+    "excludes": "tax, VM compute and other storage/transfer charges"
+  },
+  "basis": "Actual same-device cloud resize and identity-checked whole-device ext4 growth through the existing dev-infra account. No format, file deletion, permission changes, new credentials or build allocation. Original successful outputs, compiler cache and journal retained. Historical1500GiB infrastructure evidence remains historical."
+}
