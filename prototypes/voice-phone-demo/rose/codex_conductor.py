@@ -102,6 +102,7 @@ class Session:
     origin: str = 'user'
     wake_id: str | None = None
     action_id: str | None = None
+    blocked_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -700,10 +701,15 @@ class CodexConductor:
                     else:
                         step = None
                         if s.task and s.origin == 'autonomous':
+                            if s.blocked_reason and name != 'complete_task':
+                                raise PhoneTaskError('app_deferred', 'The controller refused this phase; defer without retrying inputs.')
                             step = self.life.executor.before_action(s, name, args)
                         result, image = (self._app_tool(s, name, args) if s.task
                                          else self._conversation_tool(name, args))
                         if step is not None:
+                            if not result.get('ok') and result.get('action_status') in (
+                                    'locked','user_stopped','target_not_allowed','rejected','secure_window'):
+                                s.blocked_reason = result['action_status']
                             observation_id = self.life.executor.after_action(s, step, result)
                             if observation_id: result['observation_id'] = observation_id
                     if name == 'copy_to_phone_clipboard' and not s.task:

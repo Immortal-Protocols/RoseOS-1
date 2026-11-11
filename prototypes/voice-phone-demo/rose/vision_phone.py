@@ -153,7 +153,8 @@ class VisionSession(RealSession):
             result = self.workspace.start(package)
             self._frame(result.get('observation') or result)
             ok = result.get('status') == 'opened' and self.image is not None
-            return {'ok': ok, 'result': f'Opened {label}; inspect the screenshot.' if ok else _ws_why(result, label)}
+            return {'ok': ok, 'action_status': result.get('status'),
+                    'result': f'Opened {label}; inspect the screenshot.' if ok else _ws_why(result, label)}
         if name not in ('tap_point', 'swipe', 'type_text', 'back'):
             return {'ok': False, 'result': 'Only screenshot coordinate controls are available.'}
         if not self.frame_id or args.get('frame_id') != self.frame_id or time.monotonic() - self.frame_at > 30:

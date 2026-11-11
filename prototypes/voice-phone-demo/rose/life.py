@@ -19,6 +19,18 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
+PROPOSAL = {'type':'object','properties':{
+    'changes':{'type':'object','properties':{
+        **{k:{'type':'object'} for k in ('persona','cast','plans','preferences')},
+        'directions':{'type':'array'},'continuity':{'type':'array'},'fiction_established':{'type':'boolean'}},
+        'additionalProperties':False},
+    'events':{'type':'array','items':{'type':'object','properties':{
+        'kind':{'type':'string','enum':['fictional','plan','digital','conversation']},
+        'occurred_at':{'type':'number','description':'Unix seconds, no later than context.now; future intentions belong in plans'},
+        'body':{'type':'string'},'observations':{'type':'array','items':{'type':'string'}}},
+        'required':['kind','occurred_at','body','observations'],'additionalProperties':False}},
+    'reason':{'type':'string'}},'additionalProperties':False}
+
 TOOLS = [
     {'type': 'function', 'name': 'rosie_life',
      'description': 'Read your committed character world, remember details, pause/resume/stop life, or configure three daily wakes. '
@@ -28,7 +40,7 @@ TOOLS = [
          'action': {'type': 'string', 'enum': ['status', 'diary', 'memory', 'remember', 'schedule', 'note', 'pause', 'resume', 'interest', 'stop']},
          'interest': {'type': 'string'}, 'task_id': {'type': 'string'}, 'revision': {'type':'integer'},
          'query': {'type':'string'},
-         'proposal': {'type':'object'}, 'slots': {'type':'object','properties':{
+         'proposal': PROPOSAL, 'slots': {'type':'object','properties':{
              'morning':{'type':'string'},'afternoon':{'type':'string'},'evening':{'type':'string'}},
              'required':['morning','afternoon','evening'],'additionalProperties':False}},
          'required': ['action'], 'additionalProperties': False}}

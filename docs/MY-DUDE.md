@@ -131,6 +131,10 @@ The existing loopback Host/Origin restriction and stale-conversation checks appl
 these routes are not on the remote phone listener. No event enters user chat.
 
 Record real model/app observations separately from synthetic weekend fixtures.
+`python -m rose.eval.life --live` is an explicit real-Terra behavioral check using
+synthetic dates and app screens in separate private profiles. It compares open
+and closed café decisions, applies a user suggestion, advances a Friday–Sunday
+story and checks a legitimate quiet wake. It never reads the live store/phone.
 For live acceptance, verify a committed intention, actual paired app session and
 screens, host receipts, atomic commit, quiet completion, greeting recall after
 restart, targeted Stop and unchanged pairing/name/voice. An HTTP acceptance reply
