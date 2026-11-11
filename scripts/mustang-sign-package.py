@@ -31,6 +31,7 @@ import mustang_edge
 import mustang_lane
 import mustang_paths
 import mustang_existing_lock
+import mustang_compiler_cache
 
 PROFILE = 'pro-mustang-v1'
 PROJECT = 'protocols-465723'
@@ -109,7 +110,7 @@ def collect(compile_receipt,run_id,attempt,lane=None,*,retained=None):
                 raise ValueError('retained allocation differs from its producer receipt')
             if (source/'releases'/build).exists():
                 raise ValueError('release workspace already exists; no automatic signing resume')
-            outputs=adapter.collect_outputs(source,f'out-mustang-build-{build}')
+            outputs=adapter.collect_outputs(source,mustang_compiler_cache.output_name(value,build))
             report['outputs']=outputs
             if outputs['verdict']!='complete' or outputs['actualBuildIdentity']!={'device':'mustang','build':build,'timestamp':epoch}:
                 raise ValueError('actual Mustang output set or build identity incomplete')
@@ -150,9 +151,10 @@ def compile_binding(path,lane=None):
     if set(outputs['artifacts'])!={'targetFiles','otatools','vendorBootImage','vendorKernelBootImage'} \
             or outputs.get('verdict')!='complete' or outputs['actualBuildIdentity']!={'device':'mustang','build':build,'timestamp':epoch}:
         raise ValueError('actual compiled output identity differs')
-    out=source/f'out-mustang-build-{build}'
+    out_name=mustang_compiler_cache.output_name(value,build)
+    out=source/out_name
     adapter=module('mustang_output_collection','mustang-build-only.py')
-    tools=adapter.otatools_outputs(source,f'out-mustang-build-{build}')
+    tools=adapter.otatools_outputs(source,out_name)
     for role,row in outputs['artifacts'].items():
         artifact=Path(row['path'])
         if row.get('state')!='collected' or out not in artifact.parents or artifact.is_symlink() or not artifact.is_file():
@@ -242,7 +244,7 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt,lane=None):
         config={'target':{'device':'mustang'},'host':{'sign':{
             'project':PROJECT,'keysSecret':SECRETS['keys'],'passphraseSecret':SECRETS['passphrase'],
             'secretVersion':versions['keys'],'passphraseSecretVersion':versions['passphrase'],
-            'otatools':str(Path(outputs['otatools']['path']).relative_to(source/f'out-mustang-build-{build}')),
+            'otatools':str(Path(outputs['otatools']['path']).relative_to(source/mustang_compiler_cache.output_name(compiled,build))),
             'javaHome':str(source/'prebuilts/jdk/jdk21/linux-x86'),
             'updateNotes':{'file':str(notes),'sha256':digest(notes),'device':'mustang','build':build}}},
             'identities':bootstrap['publicIdentity'],'publication':{'channels':{'beta':{'feedChannel':'stable'}}}}
@@ -250,7 +252,7 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt,lane=None):
         env={k:v for k,v in os.environ.items() if k not in ('JAVA_TOOL_OPTIONS','JDK_JAVA_OPTIONS','_JAVA_OPTIONS',
             'CLASSPATH','JAVA_HOME','LD_PRELOAD','LD_LIBRARY_PATH','LD_AUDIT') and not k.startswith('GIT_')}
         env.update(BUILD_NUMBER=build,BUILD_DATETIME=epoch,ROSE_CANDIDATE_SHA=compiled['source'],
-            ROSE_RELEASE_DIR=str(release),ROSE_SIGN_OTATOOLS=outputs['otatools']['path'],OUT_DIR=f'out-mustang-build-{build}')
+            ROSE_RELEASE_DIR=str(release),ROSE_SIGN_OTATOOLS=outputs['otatools']['path'],OUT_DIR=mustang_compiler_cache.output_name(compiled,build))
         bounded=module('mustang_build','mustang-build-only.py').engine()
         hp=module('mustang_factory_host','host-factory-package.py')
         with builder_lock(hp,lock,lane):

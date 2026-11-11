@@ -89,6 +89,19 @@ class CompilerCacheTest(unittest.TestCase):
             self.assertEqual(command['env']['USE_CCACHE'], '1')
         self.assertEqual(build.engine().compile_out_dir(recipe, op), 'out-mustang-build-2611110600')
 
+    def test_output_selection_preserves_compile_binding_and_refuses_foreign_paths(self):
+        self.assertEqual(compiler_cache.output_name({}, '2611111500'), 'out-mustang-build-2611111500')
+        candidate = dict(compilerCache=dict(enabled=True, kind='ccache', outDir=compiler_cache.OUT),
+                         stages=dict(compile=dict(result=dict(outDir=compiler_cache.OUT))))
+        self.assertEqual(compiler_cache.output_name(candidate, '2611111500'), compiler_cache.OUT)
+        for name in ('../outside', '/outside', 'out-mustang-build-2611111500'):
+            changed = copy.deepcopy(candidate); changed['compilerCache']['outDir'] = name
+            with self.assertRaisesRegex(ValueError, 'binding differs'):
+                compiler_cache.output_name(changed, '2611111500')
+        candidate['stages']['compile']['result']['outDir'] = 'out-mustang-build-2611111500'
+        with self.assertRaisesRegex(ValueError, 'binding differs'):
+            compiler_cache.output_name(candidate, '2611111500')
+
     def test_only_exact_bounded_cache_configuration_is_enabled(self):
         self.assertFalse(compiler_cache.enabled({}))
         self.assertTrue(compiler_cache.enabled({'compilerCache':compiler_cache.SETTING}))
@@ -386,7 +399,7 @@ class FullDeliveryTest(unittest.TestCase):
             roseEdge=edge,candidate=dict(stages={'bootstrap-source':dict(result=result['receipt'],receipt=result['receiptFile']),
                                    'source-copy':dict(result=copied)}))
         if cached:
-            collection['candidate']['compilerCache'] = dict(enabled=True, kind='ccache')
+            collection['candidate']['compilerCache'] = dict(enabled=True, kind='ccache', outDir=compiler_cache.OUT)
             collection['outputs']['outDir'] = str(source/compiler_cache.OUT)
             cfg_path = self.root/'os/build-only/mustang-runtime.json'
             cfg = json.loads(cfg_path.read_text())
