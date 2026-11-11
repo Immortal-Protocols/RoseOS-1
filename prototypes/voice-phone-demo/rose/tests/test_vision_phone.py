@@ -12,7 +12,7 @@ class PixelsOnly(fixtures.FixtureController):
         action = p['action']
         if action == 'inspect_ui':
             raise AssertionError('Vision control must never inspect accessibility nodes')
-        if action not in ('screen_gesture', 'screen_text'):
+        if action not in ('screen_gesture', 'screen_text', 'screen_search'):
             return super().op_command(p)
         if p.get('sessionId') != self.id or p.get('taskId') != self.task:
             return {'status': 'stale_task'}
@@ -20,6 +20,9 @@ class PixelsOnly(fixtures.FixtureController):
             return {'status': 'stale_screen'}
         if action == 'screen_text':
             self.apps[self.target]['note'] = p['text'] if p['replace'] else self.apps[self.target]['note'] + p['text']
+        if action == 'screen_search':
+            if p['query']!=self.apps[self.target]['note']:return {'status':'error'}
+            self.apps[self.target]['searched']=p['query']
         self.ops += 1
         self._clear()
         return {**self.state(), 'status': 'action_accepted'}
@@ -36,9 +39,10 @@ class Vision(unittest.TestCase):
         self.controller.slots = [PixelsOnly(Clock(), start_polls=0) for _ in range(2)]
         original = self.controller.__class__.__call__
         self.has_text = True
+        self.has_search = True
         self.cap_patch = patch.object(self.controller.__class__, '__call__',
             lambda controller, op, p: {'schemaVersion': 4, 'multiSession': True, 'maxSessions': 2,
-                                       'visionText': self.has_text} if op == 'capabilities' else original(controller, op, p))
+                                       'visionText': self.has_text,'visionSearch':self.has_search} if op == 'capabilities' else original(controller, op, p))
         self.cap_patch.start()
         self.settle = patch('rose.vision_phone.time.sleep')
         self.settle.start()
@@ -63,7 +67,7 @@ class Vision(unittest.TestCase):
         s = self.opened()
         opening = next(p for op, name, p in self.engine.client.calls if op == 'open' and name == s.name)
         tools = {t['name'] for t in opening['tools']}
-        self.assertEqual(tools, {'open_app', 'observe', 'tap_point', 'swipe', 'type_text', 'back', 'complete_task'})
+        self.assertEqual(tools, {'open_app', 'observe', 'tap_point', 'swipe', 'type_text', 'submit_search', 'back', 'complete_task'})
         self.assertNotIn('UI tree', opening['instructions'])
         first = s.view.frame_id
         tapped = self.call(s, 'tap_point', frame_id=first, x=140, y=934, target='Work on Cloud', label='', icon='', effect='interact')
@@ -138,6 +142,28 @@ class Vision(unittest.TestCase):
             self.assertIn('single line', result['result'])
         self.assertEqual(len(self.commands()), before)
         self.assertIsNotNone(s.view.frame_id)  # a refusal never consumes the frame
+
+    def test_search_submission_is_ime_capability_gated_and_never_submits_a_normal_draft(self):
+        s=self.opened()
+        before=len(self.commands())
+        self.assertFalse(self.call(s,'submit_search',frame_id=s.view.frame_id)['ok'])
+        self.assertEqual(len(self.commands()),before)
+        self.assertTrue(self.call(s,'type_text',frame_id=s.view.frame_id,text='ordinary message draft',replace=True,purpose='text')['ok'])
+        self.assertFalse(self.call(s,'submit_search',frame_id=s.view.frame_id)['ok'])
+        self.assertTrue(self.call(s,'type_text',frame_id=s.view.frame_id,text='Sunnyvale brunch',replace=True,purpose='search')['ok'])
+        frame=s.view.frame_id
+        self.assertTrue(self.call(s,'submit_search',frame_id=frame)['ok'])
+        self.assertFalse(self.call(s,'submit_search',frame_id=frame)['ok'])
+        search=[p for p in self.commands() if p['action']=='screen_search']
+        self.assertEqual(len(search),1);self.assertEqual(search[0]['query'],'Sunnyvale brunch')
+        self.assertTrue(all(p['action']!='inspect_ui' for p in self.commands()))
+
+    def test_old_controller_search_is_pending_without_tapping_a_decorative_icon(self):
+        self.has_search=False;s=self.opened()
+        self.assertTrue(self.call(s,'type_text',frame_id=s.view.frame_id,text='cafes',replace=True,purpose='search')['ok'])
+        before=len(self.commands());result=self.call(s,'submit_search',frame_id=s.view.frame_id)
+        self.assertFalse(result['ok']);self.assertIn('visionSearch',result['result'])
+        self.assertEqual(len(self.commands()),before)
 
     # (label, icon): the control's visible text and icon name as the model read them from the screenshot.
     FINAL = (('Send', ''), ('Buy now', ''), ('Place order', ''), ('Pay $20', ''), ('Submit', ''), ('Publish', ''),

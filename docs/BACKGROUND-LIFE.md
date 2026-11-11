@@ -1,14 +1,19 @@
 # Rosie's background life and activity indicator
 
-November 10 plan 1F/1G, source implementation. **Not delivered or enabled.**
-No deployment, credentials, cloud provisioning or release lane is changed.
+**Current runtime:** [My Dude](MY-DUDE.md) supersedes the research scheduler and
+executor below. This document retains the earlier research/notebook history and
+native activity contract; it is not authorization to resume the old research or
+independent APK/OS release lanes.
+
+November 10 plan 1F/1G. The current notebook design is server-side, per the owner's direction.
+Background research remains paused by default. No phone notebook app is required or delivered.
 
 ## Implemented
 
 `rose/life.py` supplies a private SQLite diary under
 `ROSE_CONFIG_DIR/rosie-life/diary.sqlite3` (0700 directory, 0600 database),
 separate from identity, conversations and owner memory. It persists interests,
-source references, verified phone-note receipts, results, unfinished work and
+source references, verified server-note receipts, results, unfinished work and
 activity status. A failed/unreadable diary does not prevent conversation startup.
 
 The conversation's `rosie_life` tool supports status, diary recall, interests,
@@ -20,16 +25,14 @@ The bounded scheduler defaults to 120 seconds idle, a 120-second session budget,
 and at least 30 minutes between starts. SQLite admits only one active session,
 including across processes. It saves the claim before dispatch. An expired
 unresolved claim pauses research for explicit inspection/resume, never silently
-replaying a possibly completed phone write. Owner speech/typed input sets the
+replaying a possibly completed note write. Owner speech/typed input sets the
 cancellation latch before submitting the conversation turn. A slow interruption
 acknowledgment never holds up the user's request. Unknown stop results remain
 visible, not reported as confirmed stops.
 
-Normal Codex startup now installs a capability-gated `PhoneResearchExecutor`.
-Research remains paused by default. Explicit resume with an interest admits one
-bounded session only after the paired phone proves the private notebook and
-schema-4 alongside controller contracts. Missing capabilities report unavailable
-without opening owner Notes, taking over Home, or inventing a workspace ID.
+Normal Codex startup now installs a capability-gated `ServerResearchExecutor`.
+Research remains paused by default. Explicit resume with an interest admits one bounded, idle session. Research and storage
+do not depend on a phone connection. Server research has no Android workspace binding.
 
 The existing Codex app-task stream now carries additive version-1 activity
 receipts: a monotonic sample and `executing` boolean. A running, accepted background
@@ -66,6 +69,13 @@ inventory contract was inspected in local Codex 0.167.0-alpha.4 offline schemas;
 research requires Codex 0.167 or newer and compatible runtime evidence. Older
 versions are refused before starting the research process; ordinary voice is unchanged.
 
+The public-research child alone starts with the supported invocation override
+`-c mcp_servers.node_repl.enabled=false`, excluding this known ambient MCP before
+app-server startup. Shared user configuration, authentication, and ordinary
+voice/desktop launches are untouched. The existing effective-config and named
+per-thread runtime checks still require disabled MCPs with no exposed tools or
+resources; any other enabled or ambiguous entry is refused before a topic.
+
 The model is asked for at most six public web calls; observing a seventh or an
 unexpected native tool rejects the result and interrupts the thread. An already
 started read may finish. The hard host bound is the session deadline, also checked
@@ -74,40 +84,48 @@ source receipts. They prove observed page-open operations, not that every genera
 claim is correct or that an opened page was readable. Model-written citations or
 phone receipts are never substituted for these events.
 
-The new `workspace/rosie-notes/` ordinary app (`dev.pixel.rosienotes`) owns only
-Rosie's immutable research notes. It has no permissions, Internet/WebView, owner
-Notes access or backup. Its exported command provider checks same signing identity;
-its read-only launcher surface shows stored notes and refreshes when one arrives.
-See [the exact notebook contract](PRIVATE-LIFE-NOTES.md). This separate package is
-necessary because the existing controller correctly refuses Rose Agent's Home
-package as a background target. That Home safety gate is unchanged.
+## Private server notebook and recall
 
-The host starts one actual alongside controller session with the diary task ID,
-checks the returned task/session/package, and carries that real session ID to the
-notebook. The provider independently validates the ready controller binding before
-staging and publishing a new note. One immutable put is followed by exact-body,
-SHA-256 and identity readback. A lost reply never causes a second put. Cancellation
-or deadline during a possible write still gets one bounded read-only reconciliation
-and targeted workspace Stop. Unknown cleanup pauses future admission. A verified
-note may remain on an interrupted/failed diary entry without claiming task completion
-or confirmed Stop. Shutdown waits boundedly for cleanup and persists uncertainty.
+`rose/life_notebook.py` stores immutable notes in
+`ROSE_CONFIG_DIR/rosie-life/notebook/notebook.sqlite3`, separate from the diary,
+identity, voice transcripts, and the owner's notes/memories. The directory is
+0700 and database 0600, owned by the existing service account. Symlink notebook
+paths are refused. SQLite transactions use synchronous FULL durability. Each
+note has an exact task identity, title, UTF-8 body, SHA-256 and save timestamp.
+Identical writes are idempotent; conflicting writes are refused. Storage is
+bounded at 256 notes of at most 16000 body characters; nothing is deleted to
+make room. This is private local persistence, not a remote backup.
 
-Research tasks use the existing task feed, inspect binding and targeted Stop path.
-Only actual execution emits working receipts. No unsolicited speech is generated.
-Diary recall and suggested-interest rotation remain separate from owner memory.
-The combined synthetic test covers research → actual controller-ID-shaped fixture
-→ note put/readback → diary restart → recall, plus isolation, interruption, missing
-capabilities, uncertain writes, cleanup and source rejection.
+The server executor accepts only verified isolated-research results, writes once,
+and reads back the exact task/title/body/hash before supplying a receipt to the
+diary. A lost write reply gets read-only reconciliation, never a second write.
+Cancellation before commit rolls back. A commit racing Stop can remain saved:
+the diary retains its verified note while marking the activity interrupted,
+not completed or undone. Unverifiable writes or research-process shutdown pause
+future admission and remain uncertain. Research notes and source prose are
+untrusted reference content, never instructions, and are never supplied as
+research context. Only the selected public interest reaches the research model.
 
-## Still required for 1F device delivery
+The `rosie_life` conversation tool recalls the durable diary, and `note` with a
+`task_id` reads the exact private server note after a backend restart. Voice
+pause/Stop, owner input, and the existing loopback task Stop route cancel the
+specific research job. Task feed entries use kind `think` and have no phone
+workspace to watch. Existing phone clients that require a workspace for their
+native Watch/Stop controls cannot operate those controls on server research;
+voice and the Mac dashboard remain available. No fake session ID is emitted.
 
-Publish/install the notebook signed with the existing authorized app/controller
-identity and update the backend/client through their authorized delivery owners.
-No signing key, provisioning, app install or deployment was performed here.
-Verify with the real paired cloud backend and phone: public hobby research,
-visible saved note, restart recall, interest follow-through, task inspection/Stop,
-owner priority and all unavailable/uncertain paths. No live Codex provider, native
-Android compilation or physical-device acceptance was run for this source slice.
+`workspace/rosie-notes/` and `docs/PRIVATE-LIFE-NOTES.md` describe the superseded
+phone-app experiment. They are not runtime dependencies or delivery instructions;
+do not build, sign, install or include that app in Frankel for this feature.
+
+## Live acceptance
+
+Keep synthetic checks separate from real results. On an authorized deployment,
+verify one bounded public hobby research session, host-observed HTTPS page-open
+receipts, an actual saved note with exact readback, diary/conversational recall
+after service restart, owner priority, and targeted Stop. Missing Codex tool
+isolation must fail closed; never change shared authentication or weaken guards
+to make an acceptance run pass. Record uncertain cancellation as uncertain.
 
 ## Still required for 1G delivery
 
@@ -141,8 +159,8 @@ views and reduced motion. A host-JVM/source check is not native phone acceptance
 - `python3 -m unittest discover -s os/tests -p test_raised_tray_activity.py`: 34 host-JVM projection/mirror/lifecycle assertions plus source seam checks.
 
 - `bash scripts/test-background-life.sh`: synthetic scheduler, executor, diary and
-  conversation integration, restricted research IPC/config, private notebook restart/
-  binding tests and real Java lifecycle/feed model checks.
+  conversation integration, restricted research IPC/config, server notebook restart/
+  cancellation tests and real Java lifecycle/feed model checks.
 - `PYTHONPATH=prototypes/voice-phone-demo python3 -m unittest rose.tests.test_codex`
 - `node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
   workspace/rose-agent/tests/local-task-feed.test.mjs

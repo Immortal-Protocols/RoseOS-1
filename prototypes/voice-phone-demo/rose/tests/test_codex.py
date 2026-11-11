@@ -100,6 +100,7 @@ class FakeCodex:
             tid = str(self.n)
             self.event({'event': 'started', 'session': session, 'turnId': tid})
             return {'turn': {'id': tid}}
+        if op == 'close':return {'stopped':True}
         return {}
 
     def send(self, message):
@@ -973,6 +974,35 @@ class ConversationCustomization(Integration):
 
 
 class StorageAndContract(unittest.TestCase):
+    def test_life_management_is_loopback_only_and_scoped_to_current_conversation(self):
+        from fastapi.testclient import TestClient
+        from rose.app import build_app
+        from rose.remote import build_remote_app
+        from rose.life_world import WorldStore,WorldLife
+        with tempfile.TemporaryDirectory() as directory:
+            life=WorldLife(WorldStore(Path(directory)/'life'))
+            engine=SimpleNamespace(conversation='current',life=life)
+            from PIL import Image
+            engine.sessions={'app':SimpleNamespace(task=SimpleNamespace(id=7),view=SimpleNamespace(image=Image.new('RGB',(8,8))))}
+            server=SimpleNamespace(args=SimpleNamespace(port=8091),conductor=engine,
+                transcripts=None,tasks=None,serve_audio=lambda ws:None,serve_events=lambda ws:None)
+            client=TestClient(build_app(server),base_url='http://127.0.0.1:8091')
+            self.assertEqual(client.get('/api/life').status_code,200)
+            self.assertEqual(client.get('/api/life',headers={'Origin':'https://untrusted.example'}).status_code,403)
+            self.assertEqual(client.post('/api/life/wake',json={'conversation_id':'stale','event_id':'once'}).status_code,409)
+            cid=engine.conversation
+            self.assertEqual(client.post('/api/life/wake',json={'conversation_id':cid,'event_id':'../bad'}).status_code,400)
+            self.assertEqual(client.get('/api/tasks/7/frame?conversation_id=stale').status_code,409)
+            frame=client.get('/api/tasks/7/frame?conversation_id='+cid)
+            self.assertEqual(frame.status_code,200);self.assertTrue(frame.content.startswith(b'\x89PNG'))
+            self.assertTrue(client.post('/api/life/control',json={'conversation_id':cid,'action':'pause'}).json()['ok'])
+            self.assertFalse(client.post('/api/life/wake',json={'conversation_id':cid,'event_id':'paused'}).json()['ok'])
+            remote=TestClient(build_remote_app(server,None))
+            self.assertEqual(remote.get('/api/life').status_code,404)
+            self.assertEqual(remote.post('/api/life/wake',json={}).status_code,404)
+            self.assertEqual(remote.get('/api/tasks/7/frame?conversation_id='+cid).status_code,404)
+            life.shutdown()
+
     def test_events_connection_restores_current_tasks_without_replaying_actions(self):
         from fastapi import FastAPI, WebSocket
         from fastapi.testclient import TestClient

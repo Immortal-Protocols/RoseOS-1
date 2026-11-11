@@ -31,7 +31,7 @@ class MultiSessionWiringTest(unittest.TestCase):
     def test_every_per_session_field_moves_with_its_slot(self):
         statics = {'session', 'generation', 'started', 'id', 'target', 'taskId', 'status', 'error', 'snapshotId', 'visualSnapshotId', 'stops', 'width',
                    'height', 'operations', 'blocked', 'consent', 'replacement', 'sessionToken', 'pendingToken', 'pending', 'nodes',
-                   'parents', 'labels', 'truncated', 'snapshotTime', 'anyApp', 'observed', 'lastPreview'}
+                   'parents', 'labels', 'truncated', 'snapshotTime', 'anyApp', 'observed', 'lastPreview', 'visionSearch'}
         # No other mutable static field exists: every one is per-session (above) or shared on purpose.
         declared = set()
         for stmt in re.findall(r'\bstatic (?!final\b|synchronized\b|void\b|class\b|interface\b)[\w.]+(?:<[^<>]*>)?(?:\[\])? ([\w,=" .<>()]*?);', CONTROLLER):

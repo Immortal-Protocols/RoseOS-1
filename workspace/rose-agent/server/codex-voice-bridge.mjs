@@ -10,6 +10,9 @@ const fail = () => ({success:false,contentItems:[{type:'inputText',text:'Tool un
 // The model was answered fail() for this call (interrupt or timeout): its own result will be dropped, so rose.app learns
 // which calls those were (a phone action that still finished is then reported on a later turn).
 const cancelled = (session,callId) => send({session,event:'tool_cancelled',callId});
+const cancelCalls=session=>{
+ for(const [id,call] of calls)if(call.session===session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);cancelled(session,id);}
+};
 async function handle(m) {
  if(m.op==='tool_result') {
   const call=calls.get(m.callId);
@@ -19,15 +22,27 @@ async function handle(m) {
  if(m.op==='open') {
   if(sessions.has(m.session))throw Error('Session already exists');
   const research=m.purpose==='public_research';
+  const character=m.purpose==='character_life';
   if(research && (!Array.isArray(m.tools)||m.tools.length))throw Error('Research cannot have phone tools');
   const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,threadId:c.thread,...event});};
-  const c=new Codex(m.cwd, '', null, {externalPhone:true,publicResearch:research,model:m.model,
+  const c=new Codex(m.cwd, '', null, {externalPhone:true,publicResearch:research,characterLife:character,model:m.model,
    developerInstructions:research?lifeResearchPolicy:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
    handleToolCall:params=>new Promise(resolve=>{
     const callId=String(++nextCall);
     const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());cancelled(m.session,callId);},60000);
     calls.set(callId,{resolve,timer,session:m.session});
     publish({event:'tool',callId,params});
+   }).then(async result=>{
+    try{
+     const images=(result.contentItems||[]).filter(x=>x.type==='inputImage').length;
+     const forwarded=await c.forwardToolImages(params,result);
+     if(images)publish({event:'tool_image',turnId:params.turnId,callId:params.callId,images});
+     return forwarded;
+    }catch{
+     publish({event:'failure',fatal:true,message:'Screenshot delivery failed'});
+     await c.interruptForModelSwitch().catch(()=>{});
+     return fail();
+    }
    })});
   sessions.set(m.session,c);
   c.on('turnCreated',p=>publish({event:'started',turnId:p.turnId}));
@@ -51,11 +66,17 @@ async function handle(m) {
     c.interruptForModelSwitch().catch(()=>{});
    });
   }
+  if(character)c.on('toolActivity',(method,params)=>{
+   if(method!=='item/started')return;
+   if(['agentMessage','reasoning','userMessage','plan','dynamicToolCall'].includes(params.item?.type))return;
+   publish({event:'failure',message:'Character work requires registered app/memory tools'});
+   c.interruptForModelSwitch().catch(()=>{});
+  });
   try {await c.init();return {threadId:c.thread,model:c.selectedModel,serviceTier:c.actualServiceTier,authMode:c.authMode};}
   catch(error){
-   if(research && !await c.closeConfirmed())
+   if((research||character) && !await c.closeConfirmed())
     throw Object.assign(Error('Research process stop unconfirmed'),{code:'research_stop_unconfirmed'});
-   if(!research)c.close();
+   if(!research&&!character)c.close();
    sessions.delete(m.session);throw error;
   }
  }
@@ -63,11 +84,15 @@ async function handle(m) {
  if(!c)throw Error('Unknown session');
  if(m.op==='submit')return c.submit(m.text,{model:c.selectedModel,effort:'medium',serviceTier:c.serviceTier});
  if(m.op==='interrupt') {
-  for(const [id,call] of calls)if(call.session===m.session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);cancelled(m.session,id);}
+  cancelCalls(m.session);
   return c.interruptForModelSwitch();
  }
  if(m.op==='close'){
-  if(c.runtime.publicResearch){
+  cancelCalls(m.session);
+  // Let pending dynamic-tool replies reach the child before closing its pipe.
+  await new Promise(resolve=>setImmediate(resolve));
+  if(c.runtime.publicResearch||c.runtime.characterLife){
+   await c.interruptForModelSwitch().catch(()=>{});
    if(!await c.closeConfirmed())throw Error('Research process stop unconfirmed');
    sessions.delete(m.session);return {stopped:true};
   }
@@ -83,6 +108,8 @@ createInterface({input:process.stdin}).on('line',line=>{
  }).catch(error=>{if(m.id!==undefined)send({id:m.id,error:['chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch','research_isolation_unavailable','research_stop_unconfirmed'].includes(error.code)?error.code:'codex_request_failed'});});
 });
 process.stdin.on('end',async()=>{
- const stopped=await Promise.all([...sessions.values()].map(c=>c.runtime.publicResearch?c.closeConfirmed():(c.close(),true)));
+ for(const session of sessions.keys())cancelCalls(session);
+ await new Promise(resolve=>setImmediate(resolve));
+ const stopped=await Promise.all([...sessions.values()].map(c=>(c.runtime.publicResearch||c.runtime.characterLife)?c.closeConfirmed():(c.close(),true)));
  process.exit(stopped.every(Boolean)?0:1);
 });

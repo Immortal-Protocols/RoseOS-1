@@ -942,16 +942,14 @@ class Server:
                 self.identity.loaded(getattr(self.speaker, 'voice', None) or self.voice)
             if codex:
                 from .codex_conductor import CodexConductor
-                from .life import Diary, Life
-                from .life_executor import PhoneResearchExecutor
+                from .life_world import WorldStore, WorldLife
                 from .remote import config_dir
                 try:
-                    life = Life(Diary(config_dir() / "rosie-life"),
-                                executor=PhoneResearchExecutor(self.phone, config_dir() / "rosie-life"))
+                    life = WorldLife(WorldStore(config_dir() / "rosie-life"))
                 except Exception:
                     # A damaged/unwritable diary cannot take down conversation.
                     life = None
-                    self.bus.emit('error', message="Rosie's diary is unavailable; background research is disabled.")
+                    self.bus.emit('error', message="Character memory is unavailable; background life is disabled.")
                 self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts,
                                                 identity=self.identity, life=life)
                 self.tasks = self.conductor
@@ -1286,6 +1284,19 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
             return _json({"ok": False, "error": "stale conversation"}, 409)
         return _json({"ok": bool(server.tasks and server.tasks.cancel(task_id))})
 
+    @app.get('/api/tasks/{task_id}/frame')
+    def task_frame(task_id: int, conversation_id: str = '') -> Response:
+        """Read an existing worker's cached pixels; never capture or drive another screen."""
+        if conversation_id!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        session=next((s for s in getattr(server.conductor,'sessions',{}).values()
+                      if getattr(s,'task',None) and s.task.id==task_id),None)
+        image=getattr(getattr(session,'view',None),'image',None)
+        if image is None:return _json({'ok':False,'reason':'no_cached_frame'},404)
+        import io
+        out=io.BytesIO();image.copy().save(out,format='PNG')
+        return Response(out.getvalue(),media_type='image/png',headers=NO_STORE)
+
     @app.post("/api/say")
     async def say(body: dict) -> Response:
         text = " ".join(str(body.get("text", "")).split())[:400]
@@ -1293,6 +1304,36 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
             return _json({"ok": False, "error": "no text"}, 400)
         payload, status = await server.say(text, typed=bool(body.get("typed")))
         return _json(payload, status)
+
+    @app.get('/api/life')
+    def life_state() -> Response:
+        life=getattr(server.conductor,'life',None)
+        return _json(life.status() if life else {'available':False})
+
+    @app.post('/api/life/wake')
+    def life_wake(body: dict) -> Response:
+        # Existing loopback Host/Origin boundary applies. Internal events never
+        # enter the user transcript, voice stream or phone's chat history.
+        life=getattr(server.conductor,'life',None)
+        if not life or not hasattr(life,'context'):return _json({'ok':False,'reason':'life_unavailable'},503)
+        if body.get('conversation_id')!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        event_id=body.get('event_id')
+        if not isinstance(event_id,str) or not 0<len(event_id)<=80 or not all(c.isalnum() or c in '-_' for c in event_id):
+            return _json({'ok':False,'reason':'bounded_event_id_required'},400)
+        with life._lock:
+            accepted=life.tick(manual=event_id)
+            return _json({'ok':accepted,'wake_id':life._last_wake_id if accepted else None})
+
+    @app.post('/api/life/control')
+    def life_control(body: dict) -> Response:
+        life=getattr(server.conductor,'life',None)
+        if not life:return _json({'ok':False,'reason':'life_unavailable'},503)
+        if body.get('conversation_id')!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        if body.get('action') not in ('pause','resume','stop','schedule'):
+            return _json({'ok':False,'reason':'unknown_control'},400)
+        return _json(life.call(body))
 
     @app.post("/api/notify")
     def notify(body: dict) -> Response:

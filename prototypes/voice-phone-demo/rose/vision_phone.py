@@ -23,7 +23,14 @@ First open_app or observe. Coordinates run from 0 to 1000 across the attached im
 Use the frame_id returned with that image for exactly one input, then inspect the new image.
 Never invent accessibility ids, infer controls from a text tree, or repeat an uncertain submission.
 Tap the visible input first, verify focus in the next image, then type_text into it.
+If an accepted tap leaves the screen unchanged, observe and try a different visible
+input target once. Do not blindly repeat the same tap or an uncertain submission.
+The keyboard may be hidden in a background workspace; inspect the field's cursor,
+selection or highlight rather than treating a missing keyboard alone as failure.
 Typing does not press Enter or send, and text cannot contain line breaks. Check the new image to verify the entered text.
+For a search field, type_text with purpose=search, then use submit_search on its fresh frame.
+It performs the session's IME search action, never an accessibility action or physical-screen Enter.
+It requires the phone's visionSearch capability. A field's decorative magnifier is not a submit button.
 If no image is available, report the blocker; do not act or fall back to another screen.
 For tap_point give the control's visible text exactly as shown (label) and, for an icon, what it is and does (icon),
 describe the target, and declare its effect honestly. Only ordinary
@@ -93,7 +100,10 @@ def vision_tools():
         t('swipe', 'Swipe between visible image coordinates, including scrolling.',
           frame_id=string, x1=coordinate, y1=coordinate, x2=coordinate, y2=coordinate),
         t('type_text', 'Type into the field you visually focused. Does not submit. Verify in the returned image.',
-          frame_id=string, text=string, replace={'type': 'boolean'}),
+          frame_id=string, text=string, replace={'type': 'boolean'},purpose={'type':'string','enum':['text','search']}),
+        t('submit_search', 'Commit only the search you just typed with purpose=search, through this session IME. '
+          'Requires visionSearch on the phone. Never for messages, transactions or forms. Verify the returned screenshot.',
+          frame_id=string),
         t('back', 'Navigate back within this workspace, then observe.', frame_id=string),
         t('complete_task', 'Report the verified outcome; blocked/failed tasks must never be called successful.',
           status={'type': 'string', 'enum': ['succeeded', 'blocked', 'failed']}, summary=string),
@@ -109,6 +119,7 @@ class VisionSession(RealSession):
         self.frame_id = None
         self.frame_at = 0
         self._typed = False  # a draft was typed: "Reply" then counts as a send (tasks._final_control)
+        self._search_query = None
         self.screen = Screen('phone', 'Phone (vision)', [])
 
     def _frame(self, shot):
@@ -134,14 +145,16 @@ class VisionSession(RealSession):
             self.refresh()
             return {'ok': self.image is not None, 'result': 'Observed screenshot.' if self.image else _ws_why(self.obs)}
         if name == 'open_app':
+            self._search_query = None
             package, label = self.phone.resolve_app(args.get('app', ''))
             if not package:
                 return {'ok': False, 'result': 'Requested app is unavailable.'}
             result = self.workspace.start(package)
             self._frame(result.get('observation') or result)
             ok = result.get('status') == 'opened' and self.image is not None
-            return {'ok': ok, 'result': f'Opened {label}; inspect the screenshot.' if ok else _ws_why(result, label)}
-        if name not in ('tap_point', 'swipe', 'type_text', 'back'):
+            return {'ok': ok, 'action_status': result.get('status'),
+                    'result': f'Opened {label}; inspect the screenshot.' if ok else _ws_why(result, label)}
+        if name not in ('tap_point', 'swipe', 'type_text', 'submit_search', 'back'):
             return {'ok': False, 'result': 'Only screenshot coordinate controls are available.'}
         if not self.frame_id or args.get('frame_id') != self.frame_id or time.monotonic() - self.frame_at > 30:
             return {'ok': False, 'result': 'Observe a fresh screenshot before this input.'}
@@ -157,6 +170,11 @@ class VisionSession(RealSession):
                 return {'ok': False, 'result': 'This final action remains with the owner under the current send/purchase policy.'}
         if name == 'type_text' and self.workspace.capabilities.get('visionText') is not True:
             return {'ok': False, 'result': 'The phone controller needs the vision text-input update. No accessibility fallback was used.'}
+        if name == 'submit_search':
+            if self.workspace.capabilities.get('visionSearch') is not True:
+                return {'ok':False,'result':'The phone controller needs the vision IME-search update (visionSearch). The pending search was not submitted.'}
+            if not self._search_query:
+                return {'ok':False,'result':'First visually focus a search field and type_text with purpose=search. Ordinary drafts cannot be submitted.'}
         command = {'snapshotId': self.frame_id}
         if name in ('tap_point', 'swipe'):
             keys = ('x', 'y') if name == 'tap_point' else ('x1', 'y1', 'x2', 'y2')
@@ -177,17 +195,26 @@ class VisionSession(RealSession):
                 return {'ok': False, 'result': 'Text must be at most 4000 characters, with an explicit replace flag.'}
             if any(c in text for c in LINE_BREAKS):
                 return {'ok': False, 'result': 'Text must be a single line; a line break could send or submit. Nothing was typed.'}
+            if args.get('purpose','text') not in ('text','search'):
+                return {'ok':False,'result':'Text purpose must be text or search.'}
             action = 'screen_text'
-            command.update(text=text, replace=args['replace'])
+            command.update(text=text, replace=args['replace'],purpose=args.get('purpose','text'))
+        elif name == 'submit_search':
+            action = 'screen_search'
+            command['query'] = self._search_query
         else:
             action = 'back'
         # Consume before dispatch, including timeouts: never retry an input on the same image.
         self.frame_id = None
         typed = self._typed
+        previous_search = self._search_query
+        self._search_query = None  # every dispatched input consumes search eligibility
         if name == 'type_text':
             self._typed = True  # dispatched: a timeout or lost reply may still have typed the draft
         result = self.workspace.command(action, **command)
         ok = result.get('status') in ('action_accepted', 'gesture_dispatched')
+        if name == 'type_text' and ok and args.get('purpose') == 'search':
+            self._search_query = text if args['replace'] else previous_search+text if previous_search is not None else None
         if name == 'type_text' and result.get('status') in TEXT_REFUSED and result.get('error') != 'no answer':
             self._typed = typed  # the controller answered and refused (no focused field, a password field): nothing typed
         time.sleep(SETTLE_S)
