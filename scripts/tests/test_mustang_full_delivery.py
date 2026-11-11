@@ -63,6 +63,13 @@ sys.exit(result['returncode'])
 
 
 class CompilerCacheTest(unittest.TestCase):
+    def test_cache_uses_existing_runner_writable_persistent_storage_not_its_admin_parent(self):
+        import mustang_lane
+        import mustang_paths
+        lane=mustang_lane.configuration();paths=mustang_paths.layout(lane)
+        self.assertEqual(compiler_cache.location(lane),paths['storageRoot']/'compiler-cache-v1')
+        self.assertNotEqual(compiler_cache.location(lane).parent,paths['home'])
+
     def test_cache_binding_changes_only_private_compile_commands_and_keeps_output_paths_stable(self):
         build = ota.module('cache_build_adapter', 'mustang-build-only.py')
         engine = build.engine()
