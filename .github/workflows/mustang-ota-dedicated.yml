@@ -285,6 +285,8 @@ jobs:
       name: Metadata gate only; no payload byte verification
       run: python3 scripts/mustang_hosted_sign.py preliminary --bundle "$RUNNER_TEMP/mustang-signing-bundle"
     - if: inputs.dry_run == false
+      # FinalizeArtifact can commit, then return an invalid gateway response.
+      continue-on-error: true
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-signing-bundle-${{ github.run_id }}-${{ github.run_attempt }}
@@ -293,15 +295,24 @@ jobs:
         if-no-files-found: error
     - name: Upload the bundled inputs only after the metadata gate
       if: steps.preliminary.outputs.allow == 'true'
+      # FinalizeArtifact can commit, then return an invalid gateway response.
+      continue-on-error: true
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-signing-inputs-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/mustang-signing-bundle/inputs
         retention-days: 14
         if-no-files-found: error
+    - name: Require finalized same-run uploads before scheduling the signer
+      if: steps.preliminary.outputs.allow == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/mustang_hosted_sign.py confirm-uploads --bundle "$RUNNER_TEMP/mustang-signing-bundle"
     - if: always() && inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py report --out "$RUNNER_TEMP/mustang-receipts" --dir "$RUNNER_TEMP/mustang-baseline.json"
     - if: always() && inputs.dry_run == false
+      # FinalizeArtifact can commit, then return an invalid gateway response.
+      continue-on-error: true
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-dedicated-receipts-${{ github.run_id }}-${{ github.run_attempt }}
