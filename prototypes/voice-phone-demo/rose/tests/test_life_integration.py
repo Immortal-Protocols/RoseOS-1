@@ -31,7 +31,7 @@ class LifeIntegration(unittest.TestCase):
             self.assertTrue(result['ok']); self.assertIsNone(image)
         result, _ = self.engine._conversation_tool('rosie_life', {'action': 'diary'})
         self.assertEqual(result['interests'], ['photography'])
-        self.assertEqual(result['status'], 'waiting_for_phone_executor')
+        self.assertEqual(result['status'], 'waiting_for_executor')
         self.assertEqual(result['activities'], [])
         self.assertFalse(any(e['kind'] == 'rose_turn' for e in self.bus.history))
 
@@ -83,7 +83,7 @@ class LifeIntegration(unittest.TestCase):
         self.life.diary.interest('photography', 1)
         self.life.diary.set_enabled(True)
         job = self.life.diary.claim(1000, 1, 1800, 120)
-        binding = {'sessionId': 'real-session', 'controllerTaskId': job['id'], 'targetPackage': 'dev.pixel.rosienotes'}
+        binding = None
         executing = [False]
         self.life.executor = SimpleNamespace(binding=lambda jid: binding if jid == job['id'] else None,
                                               executing=lambda jid: executing[0])
