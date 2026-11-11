@@ -50,6 +50,28 @@ Signer360-minute and publisher90-minute limits are unchanged. Recovery performs
 no native compute; no end-to-end time guarantee is inferred from source tests.
 
 
+## Updater inspection after recovered signing
+
+Recovery run `43104246660` passed artifact download/hash/capacity admission, owned
+STOP and cleanup. The qualified target-files signer finished at21:50:18Z and
+payload signing finished at22:02:58Z. The signer job then failed at22:04:45Z
+while reading packaged Updater resources; publication was skipped and logout ran.
+No signed-output artifact was uploaded after this staging failure. Original
+unsigned artifact13889918815 and its allocation remain unchanged and reusable.
+
+The observer passed the AAPT1 command `dump --values resources` to qualified
+`bin/aapt2`. The exact pinned executable (SHA-256
+`506f6adc10a52a7ff43bde9d824f74952e826fdcdb262c56bbb316e4b1881cf5`)
+reproduced `unknown option '--values'`. Its supported command is
+`dump resources APK`; values are already included. A tiny APK compiled/linked
+with that same tool generated the checked-in AAPT2 dump fixture. Mustang now
+reads its package-scoped default string/array format, requiring the same exact
+Updater URLs/channels and rejecting conflicting localized, duplicate, malformed,
+missing or changed values. AAPT1 callers keep their original command/parser.
+Tool read failures include bounded stderr instead of hiding the actual error.
+This changes inspection compatibility, not the Updater contract, signing
+identity, target archive policy or accepted artifact hashes.
+
 ## Space protection and the expanded data disk
 
 Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while

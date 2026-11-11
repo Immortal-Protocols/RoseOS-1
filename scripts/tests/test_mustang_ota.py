@@ -347,6 +347,41 @@ class ObserverTest(unittest.TestCase):
     def test_resources_signer_and_actual_system_trust(self):
         r=self.observe();self.assertTrue(r['packagedUpdaterVerified'])
         self.assertEqual(r['trustedOtaCertificateSha256'],[self.pin])
+    def test_qualified_aapt2_command_and_real_compiled_resource_format(self):
+        dump=(ota.ROOT/'scripts/tests/fixtures/mustang-updater-aapt2.txt').read_text();calls=[]
+        def execute(argv,**kwargs):
+            calls.append(argv)
+            if argv[0]=='aapt2' and 'badging' not in argv:
+                self.assertEqual(argv[1:3],['dump','resources']);self.assertEqual(len(argv),4)
+                self.assertNotIn('--values',argv)
+                return SimpleNamespace(returncode=0,stdout=dump,stderr='')
+            return self.execute(argv,**kwargs)
+        report=ota.observe_target(self.path,BUILD,EPOCH,dict(aapt='aapt2',apksigner='apksigner'),
+                                  dict(otaCertificateSha256=self.pin),execute=execute)
+        self.assertTrue(report['packagedUpdaterVerified']);self.assertTrue(any('badging' in a for a in calls))
+
+    def test_aapt2_resources_reject_changed_localized_duplicate_missing_and_malformed_values(self):
+        dump=(ota.ROOT/'scripts/tests/fixtures/mustang-updater-aapt2.txt').read_text()
+        expected={('string',k):v for k,v in self.resources.items() if isinstance(v,str)}
+        expected.update({('array',k):v for k,v in self.resources.items() if isinstance(v,list)})
+        self.assertEqual(ota.aapt2_updater_failures(dump,expected),[])
+        for altered in (dump.replace('() "prod"','() "beta"'),
+                        dump.replace('() "prod"','(fr) "prod"'),
+                        dump.replace('size=3','size=4'),
+                        dump.replace('["stable"]','["stable", 1]'),
+                        dump.replace('["prod", "stable", "alpha"]','["prod", "alpha", "stable"]'),
+                        dump.replace('string/url','string/missing_url'),
+                        dump.replace('Package name=app.seamlessupdate.client','Package name=other'),
+                        dump+'\n    resource 0x7f020000 string/channel_default\n      () "prod"\n',
+                        dump.replace('() "prod"','() @string/other'),
+                        dump.replace('() "prod"','() "prod"\n      (fr) "beta"')):
+            with self.subTest(dump=altered):self.assertTrue(ota.aapt2_updater_failures(altered,expected))
+
+    def test_resource_reader_failure_keeps_bounded_real_tool_error(self):
+        def execute(argv,**kwargs):return SimpleNamespace(returncode=1,stdout='',stderr="unknown option '--values'.")
+        with self.assertRaisesRegex(ValueError,"unknown option '--values'"):
+            self.observe(execute=execute)
+
     def test_installed_pre548_baseline_is_not_subject_to_the_new_edge_gate(self):
         baseline=ota.config()['baseline']
         with zipfile.ZipFile(self.path) as archive:
