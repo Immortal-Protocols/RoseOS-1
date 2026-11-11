@@ -70,8 +70,9 @@ def collect_outputs(source, out_dir):
             identity = {'device':props.get('ro.product.vendor.device'),
                         'build':props.get('ro.vendor.build.version.incremental'),
                         'timestamp':props.get('ro.vendor.build.date.utc')}
-            build = out_dir.removeprefix('out-mustang-build-')
             allocation = json.loads((Path(source).parent/'allocation.json').read_text())
+            from mustang_compiler_cache import OUT
+            build = allocation['build'] if out_dir == OUT else out_dir.removeprefix('out-mustang-build-')
             import datetime
             epoch = str(int(datetime.datetime.strptime(allocation['reservedAt'],'%Y-%m-%dT%H:%M:%SZ')
                             .replace(tzinfo=datetime.timezone.utc).timestamp()))
