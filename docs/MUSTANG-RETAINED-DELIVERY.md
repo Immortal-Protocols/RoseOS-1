@@ -1,5 +1,12 @@
 # Dedicated retained-output delivery
 
+The hosted signer supplies generated, hash-bound `UPDATE.md` bytes through the
+existing host-sign release-notes contract. The notes identify the build and
+separate compile and delivery sources/runs. Run 42937365659 compiled and passed
+signer preflight, then stopped before key retrieval because the adapter supplied
+the absolute release-script path as a candidate-commit notes path. That script
+is executable input, not release notes; its existing pin remains unchanged.
+
 Mustang build-stage stdout and stderr stream directly to the GitHub Actions
 builder job log, which is retained on success and failure. Captured lunch output
 and other devices keep their existing behavior. Make's exit code, process-group
