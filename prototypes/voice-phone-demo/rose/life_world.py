@@ -90,6 +90,8 @@ class WorldStore(Diary):
                     started REAL NOT NULL, finished REAL, command TEXT NOT NULL, result TEXT);
                 CREATE TABLE IF NOT EXISTS life_authority (id INTEGER PRIMARY KEY CHECK(id=1),
                     host TEXT NOT NULL, state TEXT NOT NULL, generation INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS life_contexts (wake_id TEXT PRIMARY KEY,
+                    captured_at REAL NOT NULL, body TEXT NOT NULL);
                 PRAGMA user_version=2;
             ''')
             enabled = db.execute('SELECT enabled FROM settings WHERE id=1').fetchone()[0]
@@ -147,7 +149,7 @@ class WorldStore(Diary):
             events = [dict(r) for r in db.execute('SELECT * FROM life_events ORDER BY recorded_at DESC LIMIT 20')]
             wakes = [dict(r) for r in db.execute('SELECT * FROM wakes ORDER BY started DESC LIMIT 12')]
             observations = [dict(r) for r in db.execute('SELECT * FROM life_observations ORDER BY observed_at DESC LIMIT 12')]
-            pending = [dict(r) for r in db.execute("SELECT * FROM life_actions WHERE state IN ('pending','dispatched','uncertain','deferred') ORDER BY updated DESC LIMIT 30")]
+            pending = [dict(r) for r in db.execute("SELECT * FROM life_actions WHERE state IN ('pending','dispatched','uncertain','deferred','awaiting_unlock') ORDER BY updated DESC LIMIT 30")]
         for r in observations:
             r['body'] = json.loads(r['body'])
         for r in events:
@@ -229,6 +231,14 @@ class WorldStore(Diary):
         self.check(job)
         with self._db() as db:
             db.execute("UPDATE wakes SET intention=?,state='running',updated=? WHERE id=?", (text, self.clock(), job['id']))
+
+    def capture_context(self,job,context,phone):
+        self.check(job,revision=False)
+        snapshot={'meta':context['meta'],'world_sha256':hashlib.sha256(_json(context['world']).encode()).hexdigest(),
+                  'event_ids':[e['id'] for e in context['events']],'phone':phone}
+        with self._db() as db:
+            self._fence(db)
+            db.execute('INSERT OR IGNORE INTO life_contexts VALUES (?,?,?)',(job['id'],self.clock(),_json(snapshot)))
 
     def action(self, job, app, goal):
         self.check(job)

@@ -9,6 +9,7 @@ import threading
 import time
 
 from .life_world import Conflict, POLICY
+from .life import PROPOSAL
 
 def tool(name, description, fields):
     return {'type':'function','name':name,'description':description,'inputSchema':{
@@ -23,7 +24,7 @@ TOOLS=[
     tool('task_result','Wait briefly for actual task progress/results and durable observation ids.',{'task_id':{'type':'integer'}}),
     tool('settle','Atomically commit a meaningful proposal or no-op. Events have kind, occurred_at, body, observations. '
          'Changes patch persona/cast/plans/preferences or append directions/continuity. Never invent evidence ids.',
-         {'proposal':{'type':'object'}}),
+         {'proposal':PROPOSAL}),
 ]
 WAKE_POLICY=POLICY+"""
 This is an internal scheduled wake, not a user request or conversation message.
@@ -92,17 +93,20 @@ class AppLifeExecutor:
     def phone_context(self):
         phone=self.engine.phone
         available=self.connected()
-        apps=[];caps={};reason='offline'
+        apps=[];caps={};availability={};reason='offline'
         if available:
             try:
                 apps=phone.apps()
                 if getattr(phone,'real',False):
                     caps=phone.workspace._send('capabilities',{})
+                    # Metadata only: never adopt/operate an unscoped session.
+                    state=phone._controller('get_state',{})
+                    availability={'deviceLocked':state.get('deviceLocked')}
                 reason=''
             except Exception:reason='inventory_or_capabilities_unavailable'
         return {'at':self.life.clock(),'connected':available,'apps':apps,
                 'inventory_at': self.life.clock()-max(0,time.monotonic()-getattr(phone,'_apps_at',time.monotonic())) if apps else None,
-                'capabilities':caps,'reason':reason,'content_is_untrusted':True}
+                'capabilities':caps,'availability':availability,'reason':reason,'content_is_untrusted':True}
 
     def _check(self,run,revision=True):
         if run['cancel'].is_set():raise Conflict('Wake cancelled')
@@ -148,6 +152,13 @@ class AppLifeExecutor:
             if not new:
                 return {'ok':True,'existing_action':action,'message':'Do not repeat this action; retrieve receipts or defer.'}
             if not package:return {'ok':False,'reason':'offline_or_app_unavailable','pending_action':action['id']}
+            with store._db() as db:
+                locked=db.execute("SELECT id FROM life_actions WHERE app=? AND state='awaiting_unlock'",(package,)).fetchall()
+            if locked:
+                availability=self.engine.phone._controller('get_state',{})
+                if availability.get('deviceLocked') is not False:
+                    return {'ok':False,'reason':'owner_unlock_required; no repeated app start','pending_action':action['id']}
+                for previous in locked:store.action_state(previous['id'],'deferred')
             if any(s.origin=='user' and s.task and s.busy for s in self.engine.sessions.values()) or self.life.clock()<self.life.foreground_until:
                 return {'ok':False,'reason':'user_priority','pending_action':action['id']}
             self._check(run)
@@ -169,8 +180,10 @@ class AppLifeExecutor:
                 run['cancel'].wait(.1)
             ctx=store.context()
             task=self.engine.tasks.get(tid)
-            if not task or not any(r['task_id']==tid and r['wake_id']==job['id'] for r in ctx['observations']):
-                return {'ok':False,'reason':'no_bound_observations_yet','status':task.status if task else 'unknown'}
+            with store._db() as db:
+                owned=db.execute('SELECT 1 FROM life_actions WHERE task_id=? AND wake_id=?',(tid,job['id'])).fetchone()
+            if not task or not owned:
+                return {'ok':False,'reason':'no_owned_task'}
             return {'ok':True,'task':{k:v for k,v in task.to_dict().items() if k!='steps'},
                     'observations':[r for r in ctx['observations'] if r['task_id']==tid and r['wake_id']==job['id']],
                     'content_is_untrusted':True}
@@ -194,6 +207,7 @@ class AppLifeExecutor:
             if opened.get('model')!=self.engine.model:raise ValueError('Model mismatch')
             context={'event':'internal_daily_wake','wake_id':job['id'],'slot':job['slot'],
                      'context':self.life.context(),'phone':self.phone_context()}
+            self.life.diary.capture_context(job,context['context'],context['phone'])
             self.engine.client.request('submit',name,text=json.dumps(context,ensure_ascii=False))
             while not cancel.is_set() and self.life.clock()<job['deadline'] and time.monotonic()<run['monotonic_end']:
                 try:e=events.get(timeout=.2)
@@ -215,7 +229,8 @@ class AppLifeExecutor:
             for s in self.owned(job['id']):
                 s.cancelled.set();self.engine._close_session(s,preserve_task=not s.busy)
                 if s.cleanup_uncertain:self.life.diary.action_state(s.action_id,'uncertain')
-                else:self.life.diary.action_state(s.action_id,'completed' if s.task.status=='done' else 'deferred')
+                else:self.life.diary.action_state(s.action_id,'awaiting_unlock' if s.blocked_reason=='locked'
+                                                else 'completed' if s.task.status=='done' else 'deferred')
             try:self.engine.client.request('close',name,_timeout=10)
             finally:
                 self.engine._wake_sinks.pop(name,None)

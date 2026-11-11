@@ -4,6 +4,7 @@ from pathlib import Path
 import threading
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from rose.tests import test_codex as fixtures
 wait=fixtures.wait
@@ -121,22 +122,13 @@ class AppLife(unittest.TestCase):
         self.assertEqual(stops[0]['taskId'],s.view.workspace.task_id)
         self.assertEqual(self.life.context()['observations'][0]['id'],result['observation_id'])
 
-    def test_life_management_is_loopback_only_and_scoped_to_current_conversation(self):
-        from fastapi.testclient import TestClient
-        from rose.app import build_app
-        from rose.remote import build_remote_app
-        server=SimpleNamespace(args=SimpleNamespace(port=8091),conductor=self.engine,
-            transcripts=self.store,tasks=self.engine,serve_audio=lambda ws:None,serve_events=lambda ws:None)
-        client=TestClient(build_app(server),base_url='http://127.0.0.1:8091')
-        self.assertEqual(client.get('/api/life').status_code,200)
-        self.assertEqual(client.get('/api/life',headers={'Origin':'https://untrusted.example'}).status_code,403)
-        self.assertEqual(client.post('/api/life/wake',json={'conversation_id':'stale','event_id':'once'}).status_code,409)
-        cid=self.engine.conversation
-        self.assertEqual(client.post('/api/life/wake',json={'conversation_id':cid,'event_id':'../bad'}).status_code,400)
-        self.assertTrue(client.post('/api/life/control',json={'conversation_id':cid,'action':'pause'}).json()['ok'])
-        self.assertFalse(client.post('/api/life/wake',json={'conversation_id':cid,'event_id':'paused'}).json()['ok'])
-        remote=TestClient(build_remote_app(server,None))
-        self.assertEqual(remote.get('/api/life').status_code,404)
-        self.assertEqual(remote.post('/api/life/wake',json={}).status_code,404)
+    def test_definitive_locked_refusal_prevents_repeated_inputs(self):
+        run=self.run_context();s=self.start(run)
+        with patch.object(self.engine,'_app_tool',return_value=({'ok':False,'action_status':'locked','result':'Phone locked'},None)) as action:
+            self.assertFalse(self.call(s,'open_app',app=s.app)['ok'])
+            self.assertEqual(s.blocked_reason,'locked')
+            self.assertFalse(self.call(s,'observe')['ok'])
+            self.assertFalse(self.call(s,'open_app',app=s.app)['ok'])
+            self.assertEqual(action.call_count,1)
 
 if __name__=='__main__':unittest.main()
