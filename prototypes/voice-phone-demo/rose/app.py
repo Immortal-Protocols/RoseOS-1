@@ -942,16 +942,14 @@ class Server:
                 self.identity.loaded(getattr(self.speaker, 'voice', None) or self.voice)
             if codex:
                 from .codex_conductor import CodexConductor
-                from .life import Diary, Life
-                from .life_executor import ServerResearchExecutor
+                from .life_world import WorldStore, WorldLife
                 from .remote import config_dir
                 try:
-                    life = Life(Diary(config_dir() / "rosie-life"),
-                                executor=ServerResearchExecutor(config_dir() / "rosie-life"))
+                    life = WorldLife(WorldStore(config_dir() / "rosie-life"))
                 except Exception:
                     # A damaged/unwritable diary cannot take down conversation.
                     life = None
-                    self.bus.emit('error', message="Rosie's diary is unavailable; background research is disabled.")
+                    self.bus.emit('error', message="Character memory is unavailable; background life is disabled.")
                 self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts,
                                                 identity=self.identity, life=life)
                 self.tasks = self.conductor
@@ -1293,6 +1291,36 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
             return _json({"ok": False, "error": "no text"}, 400)
         payload, status = await server.say(text, typed=bool(body.get("typed")))
         return _json(payload, status)
+
+    @app.get('/api/life')
+    def life_state() -> Response:
+        life=getattr(server.conductor,'life',None)
+        return _json(life.status() if life else {'available':False})
+
+    @app.post('/api/life/wake')
+    def life_wake(body: dict) -> Response:
+        # Existing loopback Host/Origin boundary applies. Internal events never
+        # enter the user transcript, voice stream or phone's chat history.
+        life=getattr(server.conductor,'life',None)
+        if not life or not hasattr(life,'context'):return _json({'ok':False,'reason':'life_unavailable'},503)
+        if body.get('conversation_id')!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        event_id=body.get('event_id')
+        if not isinstance(event_id,str) or not 0<len(event_id)<=80 or not all(c.isalnum() or c in '-_' for c in event_id):
+            return _json({'ok':False,'reason':'bounded_event_id_required'},400)
+        with life._lock:
+            accepted=life.tick(manual=event_id)
+            return _json({'ok':accepted,'wake_id':life._last_wake_id if accepted else None})
+
+    @app.post('/api/life/control')
+    def life_control(body: dict) -> Response:
+        life=getattr(server.conductor,'life',None)
+        if not life:return _json({'ok':False,'reason':'life_unavailable'},503)
+        if body.get('conversation_id')!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        if body.get('action') not in ('pause','resume','stop','schedule'):
+            return _json({'ok':False,'reason':'unknown_control'},400)
+        return _json(life.call(body))
 
     @app.post("/api/notify")
     def notify(body: dict) -> Response:

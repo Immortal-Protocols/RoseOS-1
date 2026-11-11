@@ -53,3 +53,20 @@ test('completion preceding turn/start response never resurrects the turn',async(
  const {c}=fixture();c.runtime={};c.rpc=async()=>{c.endedTurns.add('turn');return {turn:{id:'turn'}};};
  await c.submit('Hello');assert.equal(c.active,null);
 });
+test('character life permits dynamic app/memory tools with no native search or ambient MCP',async()=>{
+ const {c,calls}=fixture();c.runtime.characterLife=true;
+ const original=c.rpc;
+ c.rpc=async(method,params)=>{
+  if(method==='config/read')return {config:{mcp_servers:{node_repl:{enabled:false}}}};
+  if(method==='mcpServerStatus/list')return {data:[{runtimeStatus:'disabled',tools:{},resources:[],resourceTemplates:[]}]};
+  return original(method,params);
+ };
+ const tools=[{name:'memory'},{name:'app_work'}];
+ await c.initVoiceThread({dynamicTools:tools});
+ const p=calls.find(x=>x.method==='thread/start').params;
+ assert.equal(p.config.web_search,'disabled');
+ assert.equal(p.config['features.shell_tool'],false);
+ assert.equal(p.config['features.view_image'],false);
+ assert.equal(p.config['mcp_servers.node_repl.enabled'],false);
+ assert.deepEqual(p.dynamicTools,tools);assert.deepEqual(p.environments,[]);
+});
