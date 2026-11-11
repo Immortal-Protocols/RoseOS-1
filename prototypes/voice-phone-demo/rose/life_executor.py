@@ -85,7 +85,7 @@ class AppLifeExecutor:
         with self._lock:run=self._run
         if run:
             for s in self.owned(run['job']['id']):
-                self.engine._background(self.engine.cancel,s.task.id)
+                self.engine._background(lambda tid:self.engine.cancel(tid,reason='user_priority'),s.task.id)
 
     def cancel(self,wake_id):
         for s in self.owned(wake_id):self.engine._background(self.engine.cancel,s.task.id)
@@ -119,18 +119,19 @@ class AppLifeExecutor:
         self._check(run)
         if (self.life.clock()<self.life.foreground_until or self.engine._user_speaking
                 or self.engine.sessions['conversation'].busy
-                or any(x.origin=='user' and x.task and x.busy for x in self.engine.sessions.values())):
+                or any(x.origin=='user' and x.task and x.task.status=='running' for x in self.engine.sessions.values())):
             raise Conflict('User priority; defer phone work')
         if not self.connected():raise Conflict('Phone offline; keep work pending')
         # Durable checkpoint precedes every UI operation, including observations.
-        return self.life.diary.step_begin(s.action_id,name,args)
+        return {'id':self.life.diary.step_begin(s.action_id,name,args),
+                'wake_id':run['job']['id'],'action_id':s.action_id,'task_id':s.task.id,'app':s.app}
 
     def after_action(self,s,step,result):
-        self.life.diary.step_end(step,result)
+        self.life.diary.step_end(step['id'],result)
         ws=getattr(s.view,'workspace',None)
         if ws and ws.bound_id:
-            return self.life.diary.receipt(self._run['job'],s.action_id,s.task.id,s.app,ws.bound_id,
-                       {'tool_result':result,'step_id':step,'binding':{'controllerTaskId':ws.task_id},
+            return self.life.diary.receipt({'id':step['wake_id']},step['action_id'],step['task_id'],step['app'],ws.bound_id,
+                       {'tool_result':result,'step_id':step['id'],'binding':{'controllerTaskId':ws.task_id},
                         'targeting':'vision' if getattr(s.view,'visual_only',False) else 'ui'})
 
     def _tool(self,run,name,args):
@@ -154,17 +155,19 @@ class AppLifeExecutor:
             if not package:return {'ok':False,'reason':'offline_or_app_unavailable','pending_action':action['id']}
             with store._db() as db:
                 locked=db.execute("SELECT id FROM life_actions WHERE app=? AND state='awaiting_unlock'",(package,)).fetchall()
-            if locked:
+                blocked=db.execute("SELECT 1 FROM life_blocks WHERE app=? AND reason='locked'",(package,)).fetchone()
+            if locked or blocked:
                 availability=self.engine.phone._controller('get_state',{})
                 if availability.get('deviceLocked') is not False:
                     return {'ok':False,'reason':'owner_unlock_required; no repeated app start','pending_action':action['id']}
                 for previous in locked:store.action_state(previous['id'],'deferred')
-            if any(s.origin=='user' and s.task and s.busy for s in self.engine.sessions.values()) or self.life.clock()<self.life.foreground_until:
+                store.clear_block(package)
+            if any(s.origin=='user' and s.task and s.task.status=='running' for s in self.engine.sessions.values()) or self.life.clock()<self.life.foreground_until:
                 return {'ok':False,'reason':'user_priority','pending_action':action['id']}
             self._check(run)
             for existing in self.owned(job['id']):
                 if existing.app==package:
-                    if existing.busy:return {'ok':False,'reason':'app_phase_still_running'}
+                    if existing.busy or existing.task.status=='running':return {'ok':False,'reason':'app_phase_still_running'}
                     self.engine._close_session(existing,preserve_task=True)
                     if existing.cleanup_uncertain:raise Conflict('Previous app release uncertain')
             # Associate the durable action with the task before its worker can dispatch.
@@ -188,7 +191,7 @@ class AppLifeExecutor:
                     'observations':[r for r in ctx['observations'] if r['task_id']==tid and r['wake_id']==job['id']],
                     'content_is_untrusted':True}
         if name=='settle':
-            if any(s.busy for s in self.owned(job['id'])):raise Conflict('Wait for app work or stop it before settling')
+            if any(s.busy or s.task.status=='running' for s in self.owned(job['id'])):raise Conflict('Wait for app work or stop it before settling')
             result=store.commit(job,args['proposal']);run['settled']=True;return result
         return {'ok':False,'reason':'unknown_internal_tool'}
 
@@ -227,9 +230,10 @@ class AppLifeExecutor:
             # Only exact still-owned autonomous sessions are released. A user
             # takeover changes origin and cannot be stopped by this wake.
             for s in self.owned(job['id']):
-                s.cancelled.set();self.engine._close_session(s,preserve_task=not s.busy)
+                s.cancelled.set();self.engine._close_session(s,preserve_task=not (s.busy or s.task.status=='running'))
                 if s.cleanup_uncertain:self.life.diary.action_state(s.action_id,'uncertain')
-                else:self.life.diary.action_state(s.action_id,'awaiting_unlock' if s.blocked_reason=='locked'
+                else:self.life.diary.action_state(s.action_id,'cancelled' if job.get('cancel_reason') in ('owner_stopped','app_stopped')
+                                                else 'awaiting_unlock' if s.blocked_reason=='locked'
                                                 else 'completed' if s.task.status=='done' else 'deferred')
             try:self.engine.client.request('close',name,_timeout=10)
             finally:

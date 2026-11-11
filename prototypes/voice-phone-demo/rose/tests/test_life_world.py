@@ -126,4 +126,20 @@ class World(unittest.TestCase):
         self.assertIn('different café',life.context()['world']['directions'][-1]['text'])
         self.assertTrue(life.stop());self.assertTrue(life.shutdown())
 
+    def test_stop_cancels_deferred_continuations_after_wake_settles(self):
+        life=WorldLife(self.store,clock=lambda:self.now)
+        j=self.wake('deferred');a,_=self.store.action(j,'maps','Read café hours')
+        self.commit(j)
+        self.assertTrue(life.call({'action':'stop'})['ok'])
+        self.assertEqual(life.context()['pending_work'],[])
+        self.assertFalse(life.call({'action':'stop'})['ok'])
+        life.shutdown()
+
+    def test_actual_heard_disclosure_and_details_survive_fresh_context(self):
+        life=WorldLife(self.store,clock=lambda:self.now)
+        life.record_assistant('Brunch with Maya is fictional; the app checks are real.')
+        self.assertTrue(life.context()['world']['fiction_established'])
+        self.assertIn('Maya',life.context()['world']['continuity'][-1]['text'])
+        life.shutdown()
+
 if __name__=='__main__':unittest.main()

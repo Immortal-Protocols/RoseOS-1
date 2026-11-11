@@ -131,4 +131,20 @@ class AppLife(unittest.TestCase):
             self.assertFalse(self.call(s,'open_app',app=s.app)['ok'])
             self.assertEqual(action.call_count,1)
 
+    def test_inflight_observation_survives_user_takeover_and_wake_finish(self):
+        run=self.run_context();s=self.start(run)
+        self.assertTrue(self.call(s,'open_app',app=s.app)['ok'])
+        entered,release=threading.Event(),threading.Event();original=self.engine._app_tool
+        def slow(*args):
+            entered.set();release.wait(2);return original(*args)
+        result=[]
+        with patch.object(self.engine,'_app_tool',side_effect=slow):
+            thread=threading.Thread(target=lambda:result.append(self.call(s,'observe')))
+            thread.start();self.assertTrue(entered.wait(1))
+            self.engine._conversation_tool('update_task',{'task_id':s.task.id,'instruction':'Continue this for me'})
+            self.executor._run=None  # original wake may finish after ownership changes
+            release.set();thread.join(3)
+        self.assertTrue(result[0]['ok']);self.assertIn('observation_id',result[0])
+        self.assertEqual(self.life.context()['observations'][0]['wake_id'],run['job']['id'])
+
 if __name__=='__main__':unittest.main()
