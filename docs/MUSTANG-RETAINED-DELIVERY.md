@@ -1,5 +1,30 @@
 # Dedicated retained-output delivery
 
+## Space protection and the planned disk expansion
+
+Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while
+writing its diagnostic log. This is not completed compilation. The data disk was
+still1500GiB; Make/collection completion and cache-hit statistics are unknown.
+Owned STOP and metadata/runner cleanup succeeded. Keep the partial output,
+successful run41 output, existing compiler cache and consumed allocation journal.
+
+Disk protection now independently honors `sprint.reserveChecks=true`. The existing
+300GiB reserve and finite source/metadata/lunch/compile bounds are checked before
+each stage and sampled while copying/compiling. Initial guest admission requires
+844GiB free for source, vendor, metadata, lunch, compile and reserve before the
+long source walk starts. Reduced
+target validation remains disabled; no artifact-validation policy is reintroduced.
+
+Nathan proposed increasing the same SSD data disk from1500GiB to3000GiB. Cloud
+preflight verified its unchanged numeric disk/VM identities and stopped VM.
+`scripts/mustang-grow-data-filesystem.sh` prepares the ext4 expansion: it refuses
+wrong VM, mount, UUID, attached device, partitioned device or block-device size,
+then runs only bounded `resize2fs` and emits actual filesystem/inode readback.
+It never formats, deletes build files or changes ownership/ACLs. Cloud resize,
+guest execution and new filesystem capacity remain unclaimed until actual receipts
+exist. The historical1500GiB infrastructure record remains historical; runtime
+can pin a separately verified expanded inode total without relaxing UUID/device identity.
+
 ## Persistent compiler cache
 
 The full automatic dedicated route now enables ccache 4.12.2, pinned by archive
