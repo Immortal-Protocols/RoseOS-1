@@ -73,6 +73,9 @@ intentions retained in context. In-flight receipts retain their original wake/ta
 binding through user takeover. The writer lease stays held through worker cleanup.
 After a locked-session refusal, the phase cannot repeat inputs; a later start in
 that app requires fresh authenticated controller metadata showing it unlocked.
+Coordinator close has a separate confirmed/uncertain receipt. An uncertain close
+blocks replacement wakes; a cancelled wake that never started a process does not
+invent a cleanup failure. Pending dynamic-tool replies drain before child close.
 
 Keep `--phone real --vision-control` for screenshot-only execution. The new
 `submit_search` taps a visibly identified Search/Go key or magnifier in a fresh

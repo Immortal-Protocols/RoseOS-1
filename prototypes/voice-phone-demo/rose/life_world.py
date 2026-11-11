@@ -95,6 +95,7 @@ class WorldStore(Diary):
                 CREATE TABLE IF NOT EXISTS life_contexts (wake_id TEXT PRIMARY KEY,
                     captured_at REAL NOT NULL, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS life_blocks (app TEXT PRIMARY KEY, reason TEXT NOT NULL, at REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS life_cleanup (wake_id TEXT PRIMARY KEY, state TEXT NOT NULL, at REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS life_observations_wake ON life_observations(wake_id,task_id);
                 CREATE INDEX IF NOT EXISTS life_observations_time ON life_observations(observed_at DESC);
                 CREATE INDEX IF NOT EXISTS life_events_time ON life_events(recorded_at DESC);
@@ -285,6 +286,12 @@ class WorldStore(Diary):
         with self._db() as db:
             self._fence(db);db.execute('DELETE FROM life_blocks WHERE app=?',(app,))
 
+    def cleanup(self,wake_id,confirmed):
+        with self._db() as db:
+            self._fence(db)
+            db.execute('INSERT OR REPLACE INTO life_cleanup VALUES (?,?,?)',
+                       (wake_id,'confirmed' if confirmed else 'uncertain',self.clock()))
+
     def cancel_pending(self,wake_id=None):
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE');self._fence(db)
@@ -419,8 +426,10 @@ class WorldLife:
         context=self.context()
         legacy=self.diary.snapshot()['activities']
         return {'enabled':bool(context['meta']['enabled']),
-                'status':'running' if self._job else 'waiting' if context['meta']['enabled'] else 'paused',
-                'world_context':context,'execution_available':self.executor is not None,
+                'status':('stopping' if self._job and self._cancel.is_set() else 'running' if self._job
+                          else 'paused' if not context['meta']['enabled'] else 'waiting' if getattr(self.executor,'available',True) else 'cleanup_uncertain'),
+                'world_context':context,'execution_available':self.executor is not None and getattr(self.executor,'available',True),
+                'execution_reason':getattr(self.executor,'reason',''),
                 'activities':[{k:r[k] for k in ('id','interest','state','started','updated','reason')} for r in legacy[:5]],
                 'legacy_history_available':True}
 
@@ -482,7 +491,7 @@ class WorldLife:
             if self._job:
                 if self.clock()>=self._job['deadline']:self.stop(reason='deadline')
                 return False
-            if self.executor is None:return False
+            if self.executor is None or not getattr(self.executor,'available',True):return False
             job=self.diary.claim(manual=manual)
             if job is None:return False
             self._job=job;self._cancel=threading.Event()

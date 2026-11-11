@@ -100,6 +100,7 @@ class FakeCodex:
             tid = str(self.n)
             self.event({'event': 'started', 'session': session, 'turnId': tid})
             return {'turn': {'id': tid}}
+        if op == 'close':return {'stopped':True}
         return {}
 
     def send(self, message):

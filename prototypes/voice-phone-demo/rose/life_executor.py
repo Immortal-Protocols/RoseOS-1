@@ -45,6 +45,7 @@ class AppLifeExecutor:
     def __init__(self,life,conductor):
         self.life,self.engine=life,conductor
         self._lock=threading.RLock();self._run=None
+        self.available,self.reason=True,''
 
     def owned(self,wake_id):
         return [s for s in list(self.engine.sessions.values())
@@ -197,6 +198,7 @@ class AppLifeExecutor:
 
     def advance(self,job,cancel):
         name='wake-'+job['id'];events=queue.Queue()
+        open_sent=False;clean_start_failure=False
         run={'job':job,'cancel':cancel,'settled':False,
              'monotonic_end':time.monotonic()+max(0,job['deadline']-self.life.clock())}
         with self._lock:self._run=run
@@ -204,9 +206,17 @@ class AppLifeExecutor:
         try:
             self.reconcile()
             self._check(run)
-            opened=self.engine.client.request('open',name,cwd=str(self.engine.store.directory/'runtime-workspace'),
-                       model=self.engine.model,instructions=self.engine._character_policy()+WAKE_POLICY,tools=TOOLS,
-                       purpose='character_life')
+            open_sent=True
+            try:
+                opened=self.engine.client.request('open',name,cwd=str(self.engine.store.directory/'runtime-workspace'),
+                           model=self.engine.model,instructions=self.engine._character_policy()+WAKE_POLICY,tools=TOOLS,
+                           purpose='character_life')
+            except RuntimeError as exc:
+                # These are bridge replies only after its character init catch
+                # confirmed child exit. A request timeout remains uncertain.
+                clean_start_failure=str(exc) in ('codex_request_failed','chatgpt_login_required','model_unavailable',
+                                                'fast_unavailable','model_mode_mismatch','research_isolation_unavailable')
+                raise
             if opened.get('model')!=self.engine.model:raise ValueError('Model mismatch')
             context={'event':'internal_daily_wake','wake_id':job['id'],'slot':job['slot'],
                      'context':self.life.context(),'phone':self.phone_context()}
@@ -235,7 +245,17 @@ class AppLifeExecutor:
                 else:self.life.diary.action_state(s.action_id,'cancelled' if job.get('cancel_reason') in ('owner_stopped','app_stopped')
                                                 else 'awaiting_unlock' if s.blocked_reason=='locked'
                                                 else 'completed' if s.task.status=='done' else 'deferred')
-            try:self.engine.client.request('close',name,_timeout=10)
+            try:
+                confirmed=(not open_sent or clean_start_failure or
+                           self.engine.client.request('close',name,_timeout=10).get('stopped') is True)
+                self.life.diary.cleanup(job['id'],confirmed)
+                if not confirmed:
+                    self.available,self.reason=False,'coordinator_close_unconfirmed'
+                    raise Conflict(self.reason)
+            except Exception:
+                self.available,self.reason=False,'coordinator_close_unconfirmed'
+                self.life.diary.cleanup(job['id'],False)
+                raise
             finally:
                 self.engine._wake_sinks.pop(name,None)
                 with self._lock:self._run=None
