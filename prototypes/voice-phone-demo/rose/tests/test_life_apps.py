@@ -97,6 +97,8 @@ class AppLife(unittest.TestCase):
         self.engine._event({'event':'done','session':name,'turn':{'id':'internal','status':'completed'}})
         self.assertTrue(wait(lambda:self.life._job is None))
         self.assertEqual(self.life.context()['wakes'][0]['state'],'noop')
+        with self.life.diary._db() as db:
+            self.assertEqual(db.execute('SELECT state FROM life_cleanup').fetchone()[0],'confirmed')
         self.assertFalse(any(e['kind'] in ('user_turn','rose_turn') for e in self.bus.history))
 
     def test_rename_reset_and_fresh_conversation_get_committed_memory(self):
@@ -146,5 +148,29 @@ class AppLife(unittest.TestCase):
             release.set();thread.join(3)
         self.assertTrue(result[0]['ok']);self.assertIn('observation_id',result[0])
         self.assertEqual(self.life.context()['observations'][0]['wake_id'],run['job']['id'])
+
+    def test_stop_before_open_does_not_manufacture_uncertain_cleanup(self):
+        entered,release=threading.Event(),threading.Event()
+        with patch.object(self.executor,'reconcile',side_effect=lambda:(entered.set(),release.wait(2))):
+            self.assertTrue(self.life.tick(manual='stop-before-open'))
+            self.assertTrue(entered.wait(1));self.life.stop();release.set()
+            self.assertTrue(wait(lambda:self.life._job is None))
+        self.assertTrue(self.executor.available)
+        self.assertFalse(any(op=='open' and name.startswith('wake-') for op,name,_ in self.engine.client.calls))
+
+    def test_uncertain_coordinator_close_blocks_replacement_wake(self):
+        original=self.engine.client.request
+        def request(op,session,**kwargs):
+            if op=='close' and session.startswith('wake-'):return {'stopped':False}
+            return original(op,session,**kwargs)
+        with patch.object(self.engine.client,'request',side_effect=request):
+            self.assertTrue(self.life.tick(manual='uncertain-close'))
+            self.assertTrue(wait(lambda:bool(self.engine._wake_sinks)))
+            name=next(iter(self.engine._wake_sinks))
+            self.engine._event({'event':'done','session':name,'turn':{'id':'test','status':'failed'}})
+            self.assertTrue(wait(lambda:self.life._job is None))
+        self.assertFalse(self.executor.available)
+        self.assertFalse(self.life.tick(manual='must-not-overlap'))
+        self.assertEqual(self.life.status()['status'],'cleanup_uncertain')
 
 if __name__=='__main__':unittest.main()

@@ -10,6 +10,9 @@ const fail = () => ({success:false,contentItems:[{type:'inputText',text:'Tool un
 // The model was answered fail() for this call (interrupt or timeout): its own result will be dropped, so rose.app learns
 // which calls those were (a phone action that still finished is then reported on a later turn).
 const cancelled = (session,callId) => send({session,event:'tool_cancelled',callId});
+const cancelCalls=session=>{
+ for(const [id,call] of calls)if(call.session===session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);cancelled(session,id);}
+};
 async function handle(m) {
  if(m.op==='tool_result') {
   const call=calls.get(m.callId);
@@ -70,11 +73,15 @@ async function handle(m) {
  if(!c)throw Error('Unknown session');
  if(m.op==='submit')return c.submit(m.text,{model:c.selectedModel,effort:'medium',serviceTier:c.serviceTier});
  if(m.op==='interrupt') {
-  for(const [id,call] of calls)if(call.session===m.session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);cancelled(m.session,id);}
+  cancelCalls(m.session);
   return c.interruptForModelSwitch();
  }
  if(m.op==='close'){
+  cancelCalls(m.session);
+  // Let pending dynamic-tool replies reach the child before closing its pipe.
+  await new Promise(resolve=>setImmediate(resolve));
   if(c.runtime.publicResearch||c.runtime.characterLife){
+   await c.interruptForModelSwitch().catch(()=>{});
    if(!await c.closeConfirmed())throw Error('Research process stop unconfirmed');
    sessions.delete(m.session);return {stopped:true};
   }
@@ -90,6 +97,8 @@ createInterface({input:process.stdin}).on('line',line=>{
  }).catch(error=>{if(m.id!==undefined)send({id:m.id,error:['chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch','research_isolation_unavailable','research_stop_unconfirmed'].includes(error.code)?error.code:'codex_request_failed'});});
 });
 process.stdin.on('end',async()=>{
+ for(const session of sessions.keys())cancelCalls(session);
+ await new Promise(resolve=>setImmediate(resolve));
  const stopped=await Promise.all([...sessions.values()].map(c=>(c.runtime.publicResearch||c.runtime.characterLife)?c.closeConfirmed():(c.close(),true)));
  process.exit(stopped.every(Boolean)?0:1);
 });

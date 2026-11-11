@@ -573,6 +573,7 @@ class CodexConductor:
             self._cancelled_by_bridge(str(e.get('callId')))
             return
         if e['event'] == 'bridge_failure':
+            for sink in list(self._wake_sinks.values()): sink.put(e)
             for s in list(self.sessions.values()):
                 if s.busy:
                     self._failed(s)
