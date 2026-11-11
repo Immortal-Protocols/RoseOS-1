@@ -94,6 +94,10 @@ def problems(d):
         if wp.get('kind') == 'raster':
             if not DRAWABLE.match(wp.get('drawable') or '') or not (wp.get('asset') or '').endswith('.png'):
                 out.append('%s: a raster wallpaper needs a .png asset and a drawable name rose_[a-z0-9_]+' % tid)
+            if wp.get('align', 'top') not in ('top', 'center'):
+                out.append('%s: wallpaper align must be top or center' % tid)
+            if wp.get('roseScrim') is not None and not ARGB.match(wp['roseScrim']):
+                out.append('%s: roseScrim must be #AARRGGBB' % tid)
             asset = THEMES / wp.get('asset', '')
             if not asset.is_file():
                 out.append('%s: wallpaper asset %s missing' % (tid, wp.get('asset')))
@@ -102,10 +106,29 @@ def problems(d):
         elif wp.get('kind') != 'procedural':
             out.append('%s: wallpaper kind must be procedural or raster' % tid)
         der = t.get('derive')
-        if der is not None:
+        if der is not None and der.get('mode') == 'table':
+            # A table theme (Winds): every Oxblood artwork colour has a reviewed value, drawn only from its palette.
+            palette = {v.upper()[-6:] for v in (t.get('palette') or {}).values() if ARGB.match(v)}
+            if not palette or len(palette) != len(t.get('palette') or {}):
+                out.append('%s: a table theme needs a palette of #AARRGGBB colours' % tid)
+            for key in ('destructive', 'warning'):
+                if not ARGB.match('#FF' + (der.get(key) or '#')[1:]):
+                    out.append('%s: derive lacks %s' % (tid, key))
+                elif der[key][1:].upper() not in palette:
+                    out.append('%s: derive %s is not a palette colour' % (tid, key))
+            for k, v in (der.get('table') or {}).items():
+                if not ARGB.match(k) or not ARGB.match(v):
+                    out.append('%s: table %r -> %r is not #AARRGGBB' % (tid, k, v))
+                elif v[3:] not in palette:
+                    out.append('%s: table %s -> %s is not a palette colour' % (tid, k, v))
+            if not der.get('table'):
+                out.append('%s: a table theme needs its table' % tid)
+        elif der is not None:
             missing = [k for k in DERIVE_KEYS + ['destructive'] if k not in der]
             if missing:
                 out.append('%s: derive lacks %s' % (tid, missing))
+        if not isinstance(t.get('light', False), bool):
+            out.append('%s: light must be true or false' % tid)
         for surface, keys in d['surfaceKeys'].items():
             got = (t.get('surfaces') or {}).get(surface) or {}
             if sorted(got) != sorted(keys):
@@ -179,12 +202,16 @@ def java(d, package):
         jstr(t['wallpapers']['default']) for t in themes))
     w('    private static final boolean[] RASTER = {%s};' % ', '.join(
         'true' if t['wallpapers']['kind'] == 'raster' else 'false' for t in themes))
+    w('    private static final boolean[] CENTRED = {%s};' % ', '.join(
+        'true' if t['wallpapers'].get('align') == 'center' else 'false' for t in themes))
+    w('    private static final int[] ROSE_SCRIM = {%s};' % ', '.join(
+        argb(t['wallpapers']['roseScrim']) if t['wallpapers'].get('roseScrim') else '0' for t in themes))
     w('    private static final String[] DRAWABLE = {%s};' % ', '.join(
         jstr(t['wallpapers']['drawable']) if t['wallpapers']['kind'] == 'raster' else 'null' for t in themes))
     derive = []
     for t in themes:
         der = t.get('derive')
-        if der is None:
+        if der is None or der.get('mode') == 'table':
             derive.append('null')
         else:
             derive.append('{' + ', '.join(repr(float(der[k])) for k in DERIVE_KEYS) + '}')
@@ -192,6 +219,27 @@ def java(d, package):
     w('    private static final double[][] DERIVE = {%s};' % ', '.join(derive))
     w('    private static final int[] DESTRUCTIVE = {%s};' % ', '.join(
         argb('#FF' + t['derive']['destructive'][1:]) if t.get('derive') else '0' for t in themes))
+    w('    /** A table theme\'s warning colour (attention, needs-you): amber stays amber, never its destructive red. */')
+    w('    private static final int[] WARNING = {%s};' % ', '.join(
+        argb('#FF' + t['derive']['warning'][1:]) if (t.get('derive') or {}).get('mode') == 'table' else '0' for t in themes))
+    w('    /** Light themes draw dark ink on light surfaces (status and navigation bar icons go dark). */')
+    w('    private static final boolean[] LIGHT = {%s};' % ', '.join(
+        'true' if t.get('light') else 'false' for t in themes))
+    # Table themes: sorted Oxblood literals and their reviewed values (binary search), null for other themes.
+    froms, tos = [], []
+    for t in themes:
+        der = t.get('derive') or {}
+        if der.get('mode') == 'table':
+            # Sorted as Java sees an int (signed), since map() binary-searches it: 0xFF... sorts before 0x0E....
+            signed = lambda x: x - (1 << 32) if x >= 1 << 31 else x
+            pairs = sorted(((int(k[1:], 16), int(v[1:], 16)) for k, v in der['table'].items()), key=lambda p: signed(p[0]))
+            froms.append('{' + ', '.join('0x%08X' % a for a, _ in pairs) + '}')
+            tos.append('{' + ', '.join('0x%08X' % b for _, b in pairs) + '}')
+        else:
+            froms.append('null')
+            tos.append('null')
+    w('    private static final int[][] TABLE_FROM = {%s};' % ', '.join(froms))
+    w('    private static final int[][] TABLE_TO = {%s};' % ', '.join(tos))
     w('')
     w('    /** The index of a known theme id, or of DEFAULT. */')
     w('    static int index(String id) {')
@@ -231,6 +279,15 @@ def java(d, package):
     w('    /** Whether this theme\'s wallpaper is a raster image rather than procedural artwork. */')
     w('    public static boolean rasterWallpaper(String id) { return RASTER[index(id)]; }')
     w('')
+    w('    /** Whether this theme\'s raster wallpaper is centred vertically (otherwise top-aligned); both cover, centred across. */')
+    w('    public static boolean wallpaperCentred(String id) { return CENTRED[index(id)]; }')
+    w('')
+    w('    /** The uniform scrim Rose\'s field draws over this theme\'s raster wallpaper (its quieter field), or 0 for none. */')
+    w('    public static int roseScrim(String id) { return ROSE_SCRIM[index(id)]; }')
+    w('')
+    w('    /** Whether this theme is light: dark ink on light surfaces, so system bar icons must be dark. */')
+    w('    public static boolean light(String id) { return LIGHT[index(id)]; }')
+    w('')
     w('    /** The drawable (no extension) every package carries this theme\'s raster wallpaper as, or null. */')
     w('    public static String wallpaperDrawable(String id) { return DRAWABLE[index(id)]; }')
     w('')
@@ -239,7 +296,14 @@ def java(d, package):
     w('     * without a derivation. The alpha channel is kept. Exactly the approved prototype\'s map, checked against it.')
     w('     */')
     w('    public static int map(String theme, int argb) {')
-    w('        double[] p = DERIVE[index(theme)];')
+    w('        int t = index(theme);')
+    w('        if (TABLE_FROM[t] != null) {')
+    w('            // A table theme: the reviewed value for this exact Oxblood colour (alpha included). A colour not in')
+    w('            // the table is drawn unchanged rather than guessed; test_rose_themes requires every native one.')
+    w('            int at = java.util.Arrays.binarySearch(TABLE_FROM[t], argb);')
+    w('            return at >= 0 ? TABLE_TO[t][at] : argb;')
+    w('        }')
+    w('        double[] p = DERIVE[t];')
     w('        if (p == null) return argb;')
     w('        double[] hls = hls(argb);')
     w('        double h = hls[0], l = hls[1], s = hls[2], hd = h * 360;')
@@ -264,6 +328,16 @@ def java(d, package):
     w('     */')
     w('    public static int warm(String theme, int argb) {')
     w('        int i = index(theme);')
+    w('        if (TABLE_FROM[i] != null) {')
+    w('            // A light table theme: every warm, saturated colour (muted ink, ring, glow, fill, stop) keeps its')
+    w('            // meaning with its own alpha, so it reads on light surfaces and is never its accent: reds take the')
+    w('            // destructive colour, ambers (attention, needs-you) the warning colour.')
+    w('            double[] w = hls(argb);')
+    w('            double wd = w[0] * 360;')
+    w('            if (w[2] > 0.2 && (wd >= 300 || wd <= 20)) return (argb & 0xFF000000) | (DESTRUCTIVE[i] & 0xFFFFFF);')
+    w('            if (w[2] > 0.2 && wd > 20 && wd <= 60) return (argb & 0xFF000000) | (WARNING[i] & 0xFFFFFF);')
+    w('            return argb;')
+    w('        }')
     w('        if (DERIVE[i] == null) return argb;')
     w('        double[] hls = hls(argb);')
     w('        double hd = hls[0] * 360;')
@@ -396,9 +470,24 @@ def golden_text(d):
     return '\n'.join(lines) + '\n'
 
 
+TABLE_GOLDEN = THEMES / 'reference' / 'table-themes-golden.txt'
+
+
+def table_golden_text(d):
+    """Every table theme's entries, so the Java lookup is checked against the definition entry by entry."""
+    lines = ['# theme, Oxblood colour, its reviewed value (themes/rose-themes.json derive.table)']
+    for t in d['themes']:
+        der = t.get('derive') or {}
+        if der.get('mode') == 'table':
+            for k in sorted(der['table']):
+                lines.append('%s %s %s' % (t['id'], k[1:], der['table'][k][1:]))
+    return '\n'.join(lines) + '\n'
+
+
 def outputs(d):
     out = {rel: java(d, pkg) for rel, pkg in TARGETS.values()}
     out[str(GOLDEN.relative_to(ROOT))] = golden_text(d)
+    out[str(TABLE_GOLDEN.relative_to(ROOT))] = table_golden_text(d)
     return out
 
 

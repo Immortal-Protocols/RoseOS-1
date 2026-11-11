@@ -34,6 +34,8 @@ import android.widget.TextView;
 import android.window.TaskSnapshot;
 import android.window.TaskSnapshotManager;
 import com.android.launcher3.R;
+import com.android.launcher3.util.SystemUiController;
+import com.android.launcher3.views.ActivityContext;
 import com.android.launcher3.views.ScrimView;
 import com.android.quickstep.RecentsActivity;
 
@@ -300,7 +302,27 @@ public final class RoseAgentStrip extends LinearLayout {
         ScrimView on = scrim;
         if (on == null) return;
         field.drawAsScrim(canvas, on.getWidth(), on.getHeight(), Color.alpha(on.getBackgroundColor()));
+        lightBars(on);
     };
+    private boolean lightBarsSet;
+
+    /**
+     * Plan 1E, Winds: the stock scrim picks the bar icons from its own (dark) colour, but a light theme's field is what
+     * is drawn on it, so while the scrim is opaque (the stock rule: view and colour above 0.9) a light theme asks for
+     * dark icons. A dark theme leaves the stock choice alone; leaving a light theme restores the stock dark-scrim state.
+     */
+    private void lightBars(ScrimView on) {
+        boolean light = RoseTheme.light(theme);
+        if (!light && !lightBarsSet) return;
+        boolean opaque = on.getVisibility() == VISIBLE && on.getAlpha() > 0.9f
+                && Color.alpha(on.getBackgroundColor()) / 255f > 0.9f;
+        if (light && !opaque) return;
+        SystemUiController bars = ActivityContext.lookupContext(on.getContext()).getSystemUiController();
+        if (light) bars.updateUiState(SystemUiController.UI_STATE_SCRIM_VIEW, true);
+        else if (opaque) bars.updateUiState(SystemUiController.UI_STATE_SCRIM_VIEW, false);
+        else bars.updateUiState(SystemUiController.UI_STATE_SCRIM_VIEW, 0);
+        lightBarsSet = light;
+    }
 
     @Override
     protected void onAttachedToWindow() {
@@ -351,7 +373,10 @@ public final class RoseAgentStrip extends LinearLayout {
             }
         }
         field.setTheme(getContext(), theme);
-        if (scrim != null) scrim.invalidate();
+        if (scrim != null) {
+            if (!RoseTheme.light(theme)) lightBars(scrim);
+            scrim.invalidate();
+        }
     }
 
     @Override

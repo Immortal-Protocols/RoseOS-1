@@ -56,7 +56,7 @@ public final class RoseConversationActivity extends Activity {
   setVolumeControlStream(android.media.AudioManager.STREAM_VOICE_CALL);
   // #410: the Oxblood Rose field (OxbloodField.ROSE) in either system theme, with light bar icons over it.
   getWindow().setStatusBarColor(RoseThemeNow.c(0xff120a0d));getWindow().setNavigationBarColor(RoseThemeNow.c(0xff12060a));
-  View decor=getWindow().getDecorView();decor.setSystemUiVisibility(decor.getSystemUiVisibility()&~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
+  RoseThemeNow.bars(getWindow().getDecorView());
   float density=getResources().getDisplayMetrics().density;
   FrameLayout root=new FrameLayout(this);
   root.setBackground(new OxbloodField(OxbloodField.ROSE));

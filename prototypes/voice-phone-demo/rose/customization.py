@@ -8,7 +8,7 @@ caller: Rose Agent serves it as its app-tool capabilities, this module turns it 
 link. Nothing here adds an endpoint or a phone action.
 
 The controls are the Home column count (0 = automatic), a curated Oxblood wallpaper variant, a bundled font, the
-glasses-on hook, and the Rose theme (Oxblood or Glacier: colours and wallpaper across Home, Rose and the system
+glasses-on hook, and the Rose theme (Oxblood, Glacier or Winds: colours and wallpaper across Home, Rose and the system
 surfaces; columns and font are kept). The hook's signal is any Bluetooth audio device connecting (glasses on) or the last one
 disconnecting (removal), the owner's choice; ``customization_state`` names it in ``glassesWear.basis``.
 

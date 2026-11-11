@@ -168,17 +168,25 @@ final class RoseOxbloodField extends Drawable {
         canvas.clipRect(b);
         Bitmap image = raster();
         if (image != null) {
-            // The raster theme: its field colour, then the image scaled to cover, centred across, top-aligned.
+            // The raster theme: its field colour, then the image scaled to cover, centred across, top-aligned or
+            // centred (RoseTheme.wallpaperCentred), then the theme's Rose scrim (this is the switcher's Rose field).
             art.setShader(null);
             art.setColor(RoseTheme.Field.color(theme, RoseTheme.Field.BACKGROUND));
             art.setAlpha(Math.round(Color.alpha(art.getColor()) * alpha / 255f));
             canvas.drawRect(b, art);
             float s = Math.max(b.width() / (float) image.getWidth(), b.height() / (float) image.getHeight());
-            float w = image.getWidth() * s, left = b.left + (b.width() - w) / 2f;
-            artBounds.set(left, b.top, left + w, b.top + image.getHeight() * s);
+            float w = image.getWidth() * s, h = image.getHeight() * s, left = b.left + (b.width() - w) / 2f;
+            float top = RoseTheme.wallpaperCentred(theme) ? b.top + (b.height() - h) / 2f : b.top;
+            artBounds.set(left, top, left + w, top + h);
             art.setColor(Color.BLACK);
             art.setAlpha(alpha);
             canvas.drawBitmap(image, null, artBounds, art);
+            int scrim = RoseTheme.roseScrim(theme);
+            if (scrim != 0) {
+                art.setColor(scrim);
+                art.setAlpha(Math.round(Color.alpha(scrim) * alpha / 255f));
+                canvas.drawRect(b, art);
+            }
             canvas.restoreToCount(save);
             return;
         }

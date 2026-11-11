@@ -20,22 +20,31 @@ public final class RoseTheme {
 
     public static final String OXBLOOD = "oxblood";
     public static final String GLACIER = "glacier";
+    public static final String WINDS = "winds";
     public static final String DEFAULT = OXBLOOD;
     /** The Settings.Global key SystemUI mirrors the theme id to, for Launcher3 and the keyboard. */
     public static final String SETTING_KEY = "rose_theme";
     /** The tray link STATE bundle key that carries the theme id from Rose Agent to SystemUI. */
     public static final String TRAY_KEY = "theme";
-    public static final List<String> IDS = Collections.unmodifiableList(Arrays.asList(OXBLOOD, GLACIER));
+    public static final List<String> IDS = Collections.unmodifiableList(Arrays.asList(OXBLOOD, GLACIER, WINDS));
 
-    private static final String[] LABELS = {"Oxblood", "Glacier"};
-    private static final String[][] SPOKEN = {{"oxblood", "ox blood", "red", "the original", "default"}, {"glacier", "glacial", "blue", "ice"}};
-    private static final String[][] WALLPAPERS = {{"classic", "garnet", "ember", "velvet", "dusk"}, {"glacier"}};
-    private static final String[] DEFAULT_WALLPAPER = {"classic", "glacier"};
-    private static final boolean[] RASTER = {false, true};
-    private static final String[] DRAWABLE = {null, "rose_glacier_field"};
+    private static final String[] LABELS = {"Oxblood", "Glacier", "Winds"};
+    private static final String[][] SPOKEN = {{"oxblood", "ox blood", "red", "the original", "default"}, {"glacier", "glacial", "blue", "ice"}, {"winds", "wind", "zephyr", "mint"}};
+    private static final String[][] WALLPAPERS = {{"classic", "garnet", "ember", "velvet", "dusk"}, {"glacier"}, {"winds"}};
+    private static final String[] DEFAULT_WALLPAPER = {"classic", "glacier", "winds"};
+    private static final boolean[] RASTER = {false, true, true};
+    private static final boolean[] CENTRED = {false, false, true};
+    private static final int[] ROSE_SCRIM = {0, 0, 0x55D9EEE6};
+    private static final String[] DRAWABLE = {null, "rose_glacier_field", "rose_winds_field"};
     /** hue, neutralHue, chromaCap, chromaScale, neutralScale, darkLift, lightPull, accentL; null = identity. */
-    private static final double[][] DERIVE = {null, {205.0, 205.0, 0.58, 0.78, 0.9, 0.03, 0.45, 0.81}};
-    private static final int[] DESTRUCTIVE = {0, 0xFFFFABAC};
+    private static final double[][] DERIVE = {null, {205.0, 205.0, 0.58, 0.78, 0.9, 0.03, 0.45, 0.81}, null};
+    private static final int[] DESTRUCTIVE = {0, 0xFFFFABAC, 0xFFA52C3B};
+    /** A table theme's warning colour (attention, needs-you): amber stays amber, never its destructive red. */
+    private static final int[] WARNING = {0, 0, 0xFF775100};
+    /** Light themes draw dark ink on light surfaces (status and navigation bar icons go dark). */
+    private static final boolean[] LIGHT = {false, false, true};
+    private static final int[][] TABLE_FROM = {null, null, {0x80080203, 0x80E65064, 0x80E65065, 0x80E65164, 0x80E65165, 0x80FFC4C8, 0x81E65165, 0x81E75165, 0x82E75165, 0x82E75166, 0x82E75265, 0x82E75266, 0x83E75266, 0x83E85266, 0x83E85267, 0x83E85366, 0x83E85367, 0x84E85367, 0x85E85367, 0x85E85368, 0x85E85467, 0x85E85468, 0x86E85468, 0x86E95468, 0x87E95468, 0x87E95469, 0x87E95568, 0x87E95569, 0x88E95569, 0x88E9556A, 0x88E95669, 0x88E9566A, 0x88EA566A, 0x89EA566A, 0x8AEA566A, 0x8AEA566B, 0x8AEA576A, 0x8AEA576B, 0x8BEA576B, 0x8BEB576B, 0x8BEB576C, 0x8BEB586B, 0x8BEB586C, 0x8C0E080B, 0x8C1E0E10, 0x8CC2384C, 0x8CE65064, 0x8CEB586C, 0x8CECDED6, 0x8DEB586C, 0x8DEB586D, 0x8DEB596C, 0x8DEB596D, 0x8EEB596D, 0x8EEC596D, 0x8FEC596D, 0x8FEC596E, 0x8FEC5A6D, 0x8FEC5A6E, 0x90EC5A6E, 0x90ED5A6E, 0x90ED5B6E, 0x90ED5B6F, 0x91ED5B6F, 0x92ED5B6F, 0x92ED5B70, 0x92ED5C6F, 0x92ED5C70, 0x93ED5C70, 0x93EE5C70, 0x93EE5C71, 0x93EE5D71, 0x94EE5D71, 0x95EE5D71, 0x95EE5D72, 0x95EE5E71, 0x95EE5E72, 0x95EF5E72, 0x96EF5E72, 0x97EF5E72, 0x97EF5E73, 0x97EF5F72, 0x97EF5F73, 0x98EF5F73, 0x98F05F73, 0x98F06073, 0x98F06074, 0x99100306, 0x99F06074, 0x9AF06074, 0x9AF06075, 0x9AF06174, 0x9AF06175, 0x9AF16175, 0x9BF16175, 0x9BF16176, 0x9BF16276, 0x9CF16276, 0x9DF16276, 0x9DF26276, 0x9DF26277, 0x9DF26376, 0x9DF26377, 0x9E34221C, 0x9EC8B6AE, 0x9EF26377, 0x9FF26377, 0x9FF26477, 0x9FF26478, 0x9FF36478, 0xA0F36478, 0xA0F36579, 0xA1F36579, 0xA2F36579, 0xA2F36679, 0xA2F3667A, 0xA2F4667A, 0xA3F4667A, 0xA3F4667B, 0xA3F4677B, 0xA4F4677B, 0xA4F5677B, 0xA5F5677B, 0xA5F5687B, 0xA5F5687C, 0xA6D65468, 0xA6F5687C, 0xA7F5687C, 0xA7F5687D, 0xA7F5697D, 0xA7F6697D, 0xA814070D, 0xA8F6697D, 0xA8F66A7E, 0xA9F66A7E, 0xAAF66A7E, 0xAAF76A7E, 0xAAF76B7E, 0xAAF76B7F, 0xABF76B7F, 0xABF76B80, 0xABF76C80, 0xACF76C80, 0xACF86C80, 0xADF86C80, 0xADF86D81, 0xAEF86D81, 0xAFF86D81, 0xAFF86D82, 0xAFF86E82, 0xAFF96E82, 0xB0F96E82, 0xB0F96F83, 0xB1F96F83, 0xB1FA6F83, 0xB2FA6F83, 0xB2FA6F84, 0xB2FA7084, 0xB3000000, 0xB3FA7084, 0xB3FA7085, 0xB3FA7185, 0xB3FF96A5, 0xB3FFB3BD, 0xB4FA7185, 0xB4FB7185, 0xB5FB7185, 0xB5FB7286, 0xB6FB7286, 0xB6FC7286, 0xB6FC7287, 0xB6FC7387, 0xB7FC7387, 0xB8FC7387, 0xB8FC7388, 0xB8FC7488, 0xB9FC7488, 0xB9FD7488, 0xBAFD7488, 0xBAFD7489, 0xBAFD7589, 0xBBFD7589, 0xBBFD758A, 0xBBFD7689, 0xBBFD768A, 0xBBFE768A, 0xBCFE768A, 0xBDFE768A, 0xBDFE768B, 0xBDFE778B, 0xBEFE778B, 0xBEFF778B, 0xBEFF778C, 0xBEFF788C, 0xBFFF788C, 0xC7ECDED6, 0xC7F1E9E1, 0xD1220C0E, 0xD9BEB4AE, 0xD9FF6A78, 0xE614080A, 0xE67A1428, 0xE68A1426, 0xE6FFECE4, 0xE6FFF0F0, 0xF0220B0F, 0xF03A141B, 0xF2240A10, 0xFF0E080B, 0xFF0F0606, 0xFF12060A, 0xFF120A0D, 0xFF170104, 0xFF171110, 0xFF1A0207, 0xFF1A0A0D, 0xFF1B0104, 0xFF1C0609, 0xFF24090E, 0xFF250207, 0xFF2A0309, 0xFF2A0A10, 0xFF2A2221, 0xFF2B1924, 0xFF30151D, 0xFF302327, 0xFF330C10, 0xFF331019, 0xFF36020D, 0xFF3A1219, 0xFF3B020C, 0xFF3C0E13, 0xFF3F2F34, 0xFF46040F, 0xFF4A0612, 0xFF4A141A, 0xFF4FB36A, 0xFF56313B, 0xFF5A514F, 0xFF5B8DEF, 0xFF5E0A1A, 0xFF75595A, 0xFF8A1428, 0xFF8A7A76, 0xFF8B6D6E, 0xFF8E1A2E, 0xFF8E4C5D, 0xFF8E98A6, 0xFF9A3848, 0xFFAEB7C4, 0xFFC43048, 0xFFC44A5E, 0xFFC4574E, 0xFFD2B9AB, 0xFFDDC7BA, 0xFFE04A62, 0xFFE6D4C3, 0xFFE7C7B4, 0xFFE8606F, 0xFFEADBCD, 0xFFEADBD0, 0xFFECDCCB, 0xFFF1CFC8, 0xFFF2C9B6, 0xFFF2E6D9, 0xFFF3DCCD, 0xFFF4EDE0, 0xFFFBE3E7, 0xFFFF4A5E, 0xFFFF6A80, 0xFFFFB3BF, 0xFFFFC4C8, 0xFFFFE6E8, 0xFFFFF3EA, 0xFFFFFFFF, 0x00000000, 0x002A0309, 0x008A3A4C, 0x00A0283C, 0x00C0283F, 0x00C2384C, 0x00C9B6AD, 0x00D65A69, 0x00F0CFC2, 0x00FF6A80, 0x00FF8A9A, 0x00FF96A5, 0x00FFB3BD, 0x00FFC4C8, 0x00FFF1E6, 0x00FFFFFF, 0x0EFFE8DE, 0x12FF96A5, 0x12FFE8DE, 0x1AFFE8DE, 0x1F46121C, 0x1FF4DCCF, 0x1FFFFAF0, 0x29ECD5C6, 0x33FFD9CC, 0x38C82846, 0x38ECD5C6, 0x38F1E9E1, 0x38FFECE0, 0x40140A0C, 0x40E65064, 0x41E65064, 0x42E65064, 0x42F4DCCF, 0x42FFFFFF, 0x43E65064, 0x44E65064, 0x45E65064, 0x46E65064, 0x47000000, 0x47140407, 0x47E65064, 0x47ECD5C6, 0x48E65064, 0x49E65064, 0x4AE65064, 0x4BE65064, 0x4CE65064, 0x4D5E0A1A, 0x4DE65064, 0x4DFFD2C8, 0x4EE65064, 0x4FE65064, 0x50E65064, 0x51E65064, 0x52E65064, 0x53E65064, 0x54E65064, 0x55E65064, 0x56E65064, 0x57E65064, 0x58E65064, 0x598A3A4C, 0x59E6465F, 0x59E65064, 0x61281E1A, 0x66ECCDBE, 0x66FF4A5E, 0x73C0283F, 0x73C8BEBA, 0x73FFEBDC, 0x77C39A85}};
+    private static final int[][] TABLE_TO = {null, null, {0xB3F2F8F2, 0xBF245F54, 0xBF245F54, 0xBF245F54, 0xBF245F54, 0x80FFFFFF, 0xC0245F54, 0xC0245F54, 0xC1245F54, 0xC1245F54, 0xC1245F54, 0xC1245F54, 0xC2245F54, 0xC2245F54, 0xC2245F54, 0xC2245F54, 0xC2245F54, 0xC3245F54, 0xC4245F54, 0xC4245F54, 0xC4245F54, 0xC4245F54, 0xC5245F54, 0xC5245F54, 0xC6245F54, 0xC6245F54, 0xC6245F54, 0xC6245F54, 0xC7245F54, 0xC7245F54, 0xC7245F54, 0xC7245F54, 0xC7245F54, 0xC8245F54, 0xC9245F54, 0xC9245F54, 0xC9245F54, 0xC9245F54, 0xCA245F54, 0xCA245F54, 0xCA245F54, 0xCA245F54, 0xCA245F54, 0xFFFFF0A6, 0xD9FFFFFF, 0x8CFFFFFF, 0xBF245F54, 0xCB245F54, 0x80577A70, 0xCC245F54, 0xCC245F54, 0xCC245F54, 0xCC245F54, 0xCD245F54, 0xCD245F54, 0xCE245F54, 0xCE245F54, 0xCE245F54, 0xCE245F54, 0xCF245F54, 0xCF245F54, 0xCF245F54, 0xCF245F54, 0xD0245F54, 0xD1245F54, 0xD1245F54, 0xD1245F54, 0xD1245F54, 0xD2245F54, 0xD2245F54, 0xD2245F54, 0xD2245F54, 0xD3245F54, 0xD4245F54, 0xD4245F54, 0xD4245F54, 0xD4245F54, 0xD4245F54, 0xD5245F54, 0xD6245F54, 0xD6245F54, 0xD6245F54, 0xD6245F54, 0xD7245F54, 0xD7245F54, 0xD7245F54, 0xD7245F54, 0x99F2F8F2, 0xD8245F54, 0xD9245F54, 0xD9245F54, 0xD9245F54, 0xD9245F54, 0xD9245F54, 0xDA245F54, 0xDA245F54, 0xDA245F54, 0xDB245F54, 0xDC245F54, 0xDC245F54, 0xDC245F54, 0xDC245F54, 0xDC245F54, 0xD9FFFFFF, 0xE6577A70, 0xDD245F54, 0xDE245F54, 0xDE245F54, 0xDE245F54, 0xDE245F54, 0xDF245F54, 0xDF245F54, 0xE0245F54, 0xE1245F54, 0xE1245F54, 0xE1245F54, 0xE1245F54, 0xE2245F54, 0xE2245F54, 0xE2245F54, 0xE3245F54, 0xE3245F54, 0xE4245F54, 0xE4245F54, 0xE4245F54, 0xA6FFFFFF, 0xE5245F54, 0xE6245F54, 0xE6245F54, 0xE6245F54, 0xE6245F54, 0xA8F2F8F2, 0xE7245F54, 0xE7245F54, 0xE8245F54, 0xE9245F54, 0xE9245F54, 0xE9245F54, 0xE9245F54, 0xEA245F54, 0xEA245F54, 0xEA245F54, 0xEB245F54, 0xEB245F54, 0xEC245F54, 0xEC245F54, 0xED245F54, 0xEE245F54, 0xEE245F54, 0xEE245F54, 0xEE245F54, 0xEF245F54, 0xEF245F54, 0xF0245F54, 0xF0245F54, 0xF1245F54, 0xF1245F54, 0xF1245F54, 0x99FFFFFF, 0xF2245F54, 0xF2245F54, 0xF2245F54, 0xFF245F54, 0xB3FFFFFF, 0xF3245F54, 0xF3245F54, 0xF4245F54, 0xF4245F54, 0xF5245F54, 0xF5245F54, 0xF5245F54, 0xF5245F54, 0xF6245F54, 0xF7245F54, 0xF7245F54, 0xF7245F54, 0xF8245F54, 0xF8245F54, 0xF9245F54, 0xF9245F54, 0xF9245F54, 0xFA245F54, 0xFA245F54, 0xFA245F54, 0xFA245F54, 0xFA245F54, 0xFB245F54, 0xFC245F54, 0xFC245F54, 0xFC245F54, 0xFD245F54, 0xFD245F54, 0xFD245F54, 0xFD245F54, 0xFE245F54, 0xE6577A70, 0xE6577A70, 0xFFFFF0A6, 0xE6577A70, 0xD9FFF0A6, 0xE6FFFFFF, 0xE6F8F6D4, 0xE6F8F6D4, 0xE6FEFCF5, 0xE6FEFCF5, 0xF0F2F8F2, 0xF0FFFFFF, 0xF2FFFFFF, 0xFFD9EEE6, 0xFFD9EEE6, 0xFFC5E2D1, 0xFFD9EEE6, 0xFFD9EEE6, 0xFFD9EEE6, 0xFFC5E2D1, 0xFFF2F8F2, 0xFFC5E2D1, 0xFFF2F8F2, 0xFFF2F8F2, 0xFFC5E2D1, 0xFFD9EEE6, 0xFFFFFFFF, 0xFFD9EEE6, 0xFFF2F8F2, 0xFF102D2D, 0xFFF2F8F2, 0x99F2F8F2, 0xFFF2F8F2, 0xFFD9EEE6, 0xFFFFFFFF, 0xFFD9EEE6, 0x9EF2F8F2, 0xFFB8DDD1, 0xFFC5E2D1, 0xFFE7D67D, 0xA6F2F8F2, 0xFF245F54, 0xFFFFFFFF, 0xFFF2F8F2, 0xFF193A38, 0xFFF8F6D4, 0xFF577A70, 0xFFF9DD6C, 0xFF577A70, 0xFF245F54, 0xFFE7D67D, 0xFFE7D67D, 0xFF405B57, 0xFF193A38, 0xFF577A70, 0xFFF7EDDA, 0xFF245F54, 0xFF245F54, 0xFF102D2D, 0xFF405B57, 0xFFF9DD6C, 0xFF193A38, 0xFFFFF0A6, 0xFFFEFCF5, 0xFF193A38, 0xFF102D2D, 0xFF193A38, 0xFF577A70, 0xFF245F54, 0xFF102D2D, 0xFFE7D67D, 0xFF193A38, 0xFFFEFCF5, 0xFF245F54, 0xFFF9DD6C, 0xFFF7EDDA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFEFCF5, 0xFFFFFFFF, 0x00FFFFFF, 0x00F8F6D4, 0x00FFFFFF, 0x00FFFFFF, 0x00F8F6D4, 0x00FFF0A6, 0x00FFFFFF, 0x00FFF0A6, 0x00FFFFFF, 0x00F9DD6C, 0x00FEFCF5, 0x00FFFFFF, 0x00FFFFFF, 0x00FFFFFF, 0x00FFFFFF, 0x00FFFFFF, 0xB3FFFFFF, 0x33FFFFFF, 0x33577A70, 0xCCFFFFFF, 0x40FFFFFF, 0x1FFFFFFF, 0x1FFEFCF5, 0xD9577A70, 0x4D577A70, 0x38245F54, 0x66577A70, 0xE6577A70, 0x66577A70, 0xE6FFFFFF, 0x40F9DD6C, 0x41F9DD6C, 0x42F9DD6C, 0x42FFFFFF, 0x42FFFFFF, 0x43F9DD6C, 0x44F9DD6C, 0x45F9DD6C, 0x46F9DD6C, 0xFFFFFFFF, 0x66FFFFFF, 0x47F9DD6C, 0xE6577A70, 0x48F9DD6C, 0x49F9DD6C, 0x4AF9DD6C, 0x4BF9DD6C, 0x4CF9DD6C, 0x4DF8F6D4, 0x4DF9DD6C, 0x4DFFFFFF, 0x4EF9DD6C, 0x4FF9DD6C, 0x50F9DD6C, 0x51F9DD6C, 0x52F9DD6C, 0x53F9DD6C, 0x54F9DD6C, 0x55F9DD6C, 0x56F9DD6C, 0x57F9DD6C, 0x58F9DD6C, 0x59FFFFFF, 0x80F9DD6C, 0x59F9DD6C, 0xB3FFFFFF, 0xD9577A70, 0x99B8DDD1, 0x73F8F6D4, 0xCC405B57, 0x73FFFFFF, 0x80577A70}};
 
     /** The index of a known theme id, or of DEFAULT. */
     static int index(String id) {
@@ -75,6 +84,15 @@ public final class RoseTheme {
     /** Whether this theme's wallpaper is a raster image rather than procedural artwork. */
     public static boolean rasterWallpaper(String id) { return RASTER[index(id)]; }
 
+    /** Whether this theme's raster wallpaper is centred vertically (otherwise top-aligned); both cover, centred across. */
+    public static boolean wallpaperCentred(String id) { return CENTRED[index(id)]; }
+
+    /** The uniform scrim Rose's field draws over this theme's raster wallpaper (its quieter field), or 0 for none. */
+    public static int roseScrim(String id) { return ROSE_SCRIM[index(id)]; }
+
+    /** Whether this theme is light: dark ink on light surfaces, so system bar icons must be dark. */
+    public static boolean light(String id) { return LIGHT[index(id)]; }
+
     /** The drawable (no extension) every package carries this theme's raster wallpaper as, or null. */
     public static String wallpaperDrawable(String id) { return DRAWABLE[index(id)]; }
 
@@ -83,7 +101,14 @@ public final class RoseTheme {
      * without a derivation. The alpha channel is kept. Exactly the approved prototype's map, checked against it.
      */
     public static int map(String theme, int argb) {
-        double[] p = DERIVE[index(theme)];
+        int t = index(theme);
+        if (TABLE_FROM[t] != null) {
+            // A table theme: the reviewed value for this exact Oxblood colour (alpha included). A colour not in
+            // the table is drawn unchanged rather than guessed; test_rose_themes requires every native one.
+            int at = java.util.Arrays.binarySearch(TABLE_FROM[t], argb);
+            return at >= 0 ? TABLE_TO[t][at] : argb;
+        }
+        double[] p = DERIVE[t];
         if (p == null) return argb;
         double[] hls = hls(argb);
         double h = hls[0], l = hls[1], s = hls[2], hd = h * 360;
@@ -108,6 +133,16 @@ public final class RoseTheme {
      */
     public static int warm(String theme, int argb) {
         int i = index(theme);
+        if (TABLE_FROM[i] != null) {
+            // A light table theme: every warm, saturated colour (muted ink, ring, glow, fill, stop) keeps its
+            // meaning with its own alpha, so it reads on light surfaces and is never its accent: reds take the
+            // destructive colour, ambers (attention, needs-you) the warning colour.
+            double[] w = hls(argb);
+            double wd = w[0] * 360;
+            if (w[2] > 0.2 && (wd >= 300 || wd <= 20)) return (argb & 0xFF000000) | (DESTRUCTIVE[i] & 0xFFFFFF);
+            if (w[2] > 0.2 && wd > 20 && wd <= 60) return (argb & 0xFF000000) | (WARNING[i] & 0xFFFFFF);
+            return argb;
+        }
         if (DERIVE[i] == null) return argb;
         double[] hls = hls(argb);
         double hd = hls[0] * 360;
@@ -181,7 +216,8 @@ public final class RoseTheme {
         public static final int CORRECTION = 9;
         private static final int[][] COLORS = {
             {0xFF1D1114, 0xFF150C0F, 0xFF3A2A2E, 0xFF2C1F22, 0xFF1E1417, 0xFFC8304A, 0xFF97182E, 0xFFF2E6D9, 0xFFF2E6D9, 0xFFE04A62}, // oxblood
-            {0xFF0F1B27, 0xFF0B141D, 0xFF29475D, 0xFF20374A, 0xFF142536, 0xFFA6D8F5, 0xFFA6D8F5, 0xFF08131D, 0xFFF0F6FA, 0xFFA6D8F5} // glacier
+            {0xFF0F1B27, 0xFF0B141D, 0xFF29475D, 0xFF20374A, 0xFF142536, 0xFFA6D8F5, 0xFFA6D8F5, 0xFF08131D, 0xFFF0F6FA, 0xFFA6D8F5}, // glacier
+            {0xFFF2F8F2, 0xFFD9EEE6, 0xFFFFFFFF, 0xFFF2F8F2, 0xFFB8DDD1, 0xFFFFF0A6, 0xFFE7D67D, 0xFF102D2D, 0xFF102D2D, 0xFF245F54} // winds
         };
 
         public static int color(String theme, int key) { return COLORS[index(theme)][key]; }
@@ -203,7 +239,8 @@ public final class RoseTheme {
         public static final int SCRIM = 10;
         private static final int[][] COLORS = {
             {0xF2141012, 0xFF221B1D, 0xFF2A2224, 0xFF7A1F2B, 0xFFF4EEEE, 0xFFE07A88, 0xFFE07A88, 0xFFF4EEEE, 0xFFB9AEB0, 0x66F4EEEE, 0x8C000000}, // oxblood
-            {0xFF0B141D, 0xFF142536, 0xFF20374A, 0xFFA6D8F5, 0xFF08131D, 0xFFA6D8F5, 0xFFFFABAC, 0xFFF0F6FA, 0xFFB8CAD8, 0xFF7897AE, 0x8C000000} // glacier
+            {0xFF0B141D, 0xFF142536, 0xFF20374A, 0xFFA6D8F5, 0xFF08131D, 0xFFA6D8F5, 0xFFFFABAC, 0xFFF0F6FA, 0xFFB8CAD8, 0xFF7897AE, 0x8C000000}, // glacier
+            {0xFFF2F8F2, 0xFFFFFFFF, 0xFFD9EEE6, 0xFFFFF0A6, 0xFF102D2D, 0xFFF9DD6C, 0xFFA52C3B, 0xFF102D2D, 0xFF405B57, 0xFF577A70, 0x8C000000} // winds
         };
 
         public static int color(String theme, int key) { return COLORS[index(theme)][key]; }
@@ -224,7 +261,8 @@ public final class RoseTheme {
         public static final int CANCEL_PRESSED = 9;
         private static final int[][] COLORS = {
             {0xFFE9CFBF, 0xFFCDB4A6, 0xFFC9B3A6, 0xBB49202C, 0xCC29111D, 0x80B1737C, 0x90D4A0A5, 0xFF633040, 0xFFE1B0B2, 0x335C2A39}, // oxblood
-            {0xFFF0F6FA, 0xFFB8CAD8, 0xFFB8CAD8, 0xFF20374A, 0xFF20374A, 0xFF7897AE, 0xFF7897AE, 0xFF29475D, 0xFF7897AE, 0xFF29475D} // glacier
+            {0xFFF0F6FA, 0xFFB8CAD8, 0xFFB8CAD8, 0xFF20374A, 0xFF20374A, 0xFF7897AE, 0xFF7897AE, 0xFF29475D, 0xFF7897AE, 0xFF29475D}, // glacier
+            {0xFF102D2D, 0xFF405B57, 0xFF405B57, 0xFFFFFFFF, 0xFFF2F8F2, 0xFF577A70, 0xFFFFFFFF, 0xFFB8DDD1, 0xFF577A70, 0xFFB8DDD1} // winds
         };
 
         public static int color(String theme, int key) { return COLORS[index(theme)][key]; }
@@ -236,7 +274,8 @@ public final class RoseTheme {
         public static final int BACKGROUND = 0;
         private static final int[][] COLORS = {
             {0xFF170104}, // oxblood
-            {0xFF0B141D} // glacier
+            {0xFF0B141D}, // glacier
+            {0xFFD9EEE6} // winds
         };
 
         public static int color(String theme, int key) { return COLORS[index(theme)][key]; }
@@ -249,7 +288,8 @@ public final class RoseTheme {
         public static final int SECONDARY = 1;
         private static final int[][] COLORS = {
             {0xFFFFFFFF, 0xC7FFFFFF}, // oxblood
-            {0xFFFFFFFF, 0xC7FFFFFF} // glacier
+            {0xFFFFFFFF, 0xC7FFFFFF}, // glacier
+            {0xFF102D2D, 0xFF405B57} // winds
         };
 
         public static int color(String theme, int key) { return COLORS[index(theme)][key]; }

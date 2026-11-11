@@ -419,7 +419,10 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
             final RectF pill = new RectF(left, top, left + width, top + h);
             // Plan 1E: muted keeps its warm meaning in every theme (RoseTheme.warm).
             final String t = RoseThemeMirror.current();
-            micOffPaint.setColor(RoseTheme.warm(t, MUTED_FILL));
+            // A light theme (Winds) fills the pill with its light plate so the red label and ring read on it.
+            micOffPaint.setColor(RoseTheme.light(t)
+                    ? (MUTED_FILL & 0xff000000) | (RoseTheme.Shade.color(t, RoseTheme.Shade.PANEL) & 0xffffff)
+                    : RoseTheme.warm(t, MUTED_FILL));
             canvas.drawRoundRect(pill, h / 2, h / 2, micOffPaint);
             micOffPaint.setStyle(Paint.Style.STROKE);
             micOffPaint.setStrokeWidth(dp(1));

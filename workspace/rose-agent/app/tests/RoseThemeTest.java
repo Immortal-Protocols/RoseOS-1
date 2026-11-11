@@ -38,7 +38,34 @@ public final class RoseThemeTest {
         check(RoseTheme.warm(RoseTheme.GLACIER, 0xffff8c9a) == 0xffffabac, "muted ink is Glacier destructive");
         check(RoseTheme.map(RoseTheme.GLACIER, 0xff8a1428) != 0xff8a1428, "ruby is remapped in Glacier");
         // Ids, unknown ids and spoken names.
-        check(RoseTheme.IDS.size() == 2 && RoseTheme.IDS.get(0).equals("oxblood") && RoseTheme.IDS.get(1).equals("glacier"), "ids");
+        check(RoseTheme.IDS.size() == 3 && RoseTheme.IDS.get(0).equals("oxblood") && RoseTheme.IDS.get(1).equals("glacier")
+                && RoseTheme.IDS.get(2).equals("winds"), "ids");
+        // Winds (WINDS-SELECTED-1111) is light: a reviewed table, its own wallpaper, warm meanings in its error red.
+        check(RoseTheme.light("winds") && !RoseTheme.light("glacier") && !RoseTheme.light("oxblood"), "only Winds is light");
+        check("winds".equals(RoseTheme.fromSpoken("Zephyr")) && "winds".equals(RoseTheme.fromSpoken("winds")), "Winds spoken names");
+        check(RoseTheme.wallpapers("winds").size() == 1 && "winds".equals(RoseTheme.wallpaperTheme("winds"))
+                && "rose_winds_field".equals(RoseTheme.wallpaperDrawable("winds")), "Winds has its own wallpaper");
+        check(RoseTheme.warm("winds", 0xffff8c9a) == 0xffa52c3b && (RoseTheme.warm("winds", 0xbfff5a6e) >>> 24) == 0xbf,
+                "Winds muted ink and ring are its error red, alpha kept");
+        check(RoseTheme.warm("winds", 0xffe6a23a) == 0xff775100 && RoseTheme.warm("winds", 0xffd9534a) == 0xffa52c3b,
+                "Winds attention amber is its warning colour, not its destructive red");
+        check(RoseTheme.map("winds", 0xfff1cfc8) == 0xff577a70 && RoseTheme.map("winds", 0xffc44a5e) == 0xff245f54,
+                "Winds running edge is a visible teal on light cards");
+        check(RoseTheme.map("winds", 0x12345678) == 0x12345678, "a colour outside the Winds table is never guessed");
+        // Every reviewed table entry is what map() returns (args[1]: table-themes-golden.txt), signed sort included.
+        if (args.length > 1) {
+            int entries = 0;
+            for (String line : Files.readAllLines(Paths.get(args[1]), StandardCharsets.UTF_8)) {
+                if (line.startsWith("#") || line.isEmpty()) continue;
+                String[] f = line.split(" ");
+                int from = (int) Long.parseLong(f[1], 16), to = (int) Long.parseLong(f[2], 16);
+                entries++;
+                check(RoseTheme.map(f[0], from) == to, String.format("%s table %08X -> %08X, got %08X", f[0], from, to, RoseTheme.map(f[0], from)));
+            }
+            check(entries > 300, "the Winds table is checked entry by entry (" + entries + ")");
+        }
+        check(RoseTheme.Keyboard.color("winds", RoseTheme.Keyboard.TEXT) == 0xFF102D2D
+                && RoseTheme.Shade.color("winds", RoseTheme.Shade.ERROR) == 0xFFA52C3B, "Winds surface tokens");
         // The text table is today's Rose ink (OxbloodRose.INK, INK_2) in Oxblood and Glacier.
         for (String t : new String[] {"oxblood", "glacier"}) {
             check(RoseTheme.Text.color(t, RoseTheme.Text.PRIMARY) == 0xffffffff

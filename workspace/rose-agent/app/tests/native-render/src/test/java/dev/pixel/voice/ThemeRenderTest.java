@@ -1,5 +1,6 @@
 package dev.pixel.voice;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -146,11 +147,20 @@ public class ThemeRenderTest {
             HomeOxbloodRenderTest.save(home, "theme-" + theme + "-home" + suffix);
             HomeOxbloodRenderTest.save(draw(rose()), "theme-" + theme + "-rose" + suffix);
             if (RoseTheme.OXBLOOD.equals(theme)) oxbloodHome = home;
-            // Every theme draws a dark field behind Home's content (row 120, the open field).
+            // A light theme draws a light field behind Home's content; the others stay dark (row 120, the open field).
             double l = luminance(home.getPixel(200, 120));
-            assertTrue(theme + " field is dark: " + l, l < 0.3);
+            if (RoseTheme.light(theme)) assertTrue(theme + " field is light: " + l, l > 0.5);
+            else assertTrue(theme + " field is dark: " + l, l < 0.3);
         }
         use(RoseTheme.OXBLOOD);
         assertTrue("Oxblood unchanged by drawing other themes", HomeOxbloodRenderTest.sameAs(oxbloodHome, draw(home())));
+    }
+
+    @Test public void windsTextIsDarkOnLight() throws Exception {
+        use("winds");
+        int ink = RoseTheme.Text.color("winds", RoseTheme.Text.PRIMARY);
+        assertEquals(0xFF102D2D, ink);
+        double contrast = (luminance(RoseTheme.Field.color("winds", RoseTheme.Field.BACKGROUND)) + 0.05) / (luminance(ink) + 0.05);
+        assertTrue("Winds text on its field " + contrast, contrast >= 4.5);
     }
 }

@@ -76,4 +76,21 @@ public class RoseKeyboardRenderNativeTest {
         assertTrue(typing.getWidth() > 0);
         render("rose-keyboard-symbols", "", true);
     }
+
+    /**
+     * Plan 1E, Winds (held for review): the same keyboard once SystemUI has mirrored the theme to Settings.Global
+     * rose_theme, as RoseKeyboardTheme reads it on the phone. Light board and keys, dark text, pale yellow action.
+     */
+    @Test
+    public void windsKeyboardRendersFromTheMirroredSetting() throws Exception {
+        android.content.ContentResolver cr = RuntimeEnvironment.getApplication().getContentResolver();
+        android.provider.Settings.Global.putString(cr, RoseTheme.SETTING_KEY, "winds");
+        try {
+            Bitmap winds = render("rose-keyboard-winds-typing", "see you at th", false);
+            assertEquals(RoseTheme.Keyboard.color("winds", RoseTheme.Keyboard.BOARD_TOP), winds.getPixel(1, 1));
+            render("rose-keyboard-winds-symbols", "", true);
+        } finally {
+            android.provider.Settings.Global.putString(cr, RoseTheme.SETTING_KEY, null);
+        }
+    }
 }

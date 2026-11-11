@@ -493,7 +493,7 @@ public class MainActivity extends Activity {
  TextView appLabel(String label){return HomeAppTile.label(this,label);}
  /** Light status and navigation icons over the dark Oxblood field (#410), whatever the system theme. base() restores
   * the theme's own bars for every other screen. */
- void homeBars(){getWindow().setStatusBarColor(0);getWindow().setNavigationBarColor(0);View decor=getWindow().getDecorView();decor.setSystemUiVisibility(decor.getSystemUiVisibility()&~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));}
+ void homeBars(){getWindow().setStatusBarColor(0);getWindow().setNavigationBarColor(0);RoseThemeNow.bars(getWindow().getDecorView());}
  LinearLayout makePageDots(ArrayList<String> titles){
   LinearLayout dots=new LinearLayout(this);dots.setGravity(Gravity.CENTER);dots.setOrientation(0);
   // #410: an indicator only, as in the reference (19dp apart); paging is by swipe, and the pager names the page and

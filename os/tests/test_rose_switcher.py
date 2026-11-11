@@ -224,6 +224,14 @@ class RoseSwitcherTest(unittest.TestCase):
                 'void drawOnScrimWithScaleAndBottomOffset(android.graphics.Canvas c, float s, int b); } }',
             'com/android/quickstep/RecentsActivity.java': 'package com.android.quickstep; '
                 'public class RecentsActivity extends android.app.Activity {}',
+            # The same ScrimView (fixture rose-switcher/ScrimView.java) picks its bar icons through these.
+            'com/android/launcher3/util/SystemUiController.java': 'package com.android.launcher3.util; '
+                'public class SystemUiController { public static final int UI_STATE_SCRIM_VIEW = 1; '
+                'public void updateUiState(int s, boolean light) {} public void updateUiState(int s, int flags) {} }',
+            'com/android/launcher3/views/ActivityContext.java': 'package com.android.launcher3.views; '
+                'public interface ActivityContext { '
+                'default com.android.launcher3.util.SystemUiController getSystemUiController() { return null; } '
+                'static <T extends ActivityContext> T lookupContext(android.content.Context c) { return null; } }',
             'com/android/launcher3/util/Executors.java': 'package com.android.launcher3.util; public class Executors { '
                 'public static final java.util.concurrent.Executor UI_HELPER_EXECUTOR = Runnable::run; }',
         }

@@ -38,6 +38,14 @@ final class RoseThemeNow {
  /** The raster wallpaper of theme, or null (a procedural theme, or not decoded). */
  static Bitmap raster(String theme) { return theme != null && theme.equals(rasterTheme) ? raster : null; }
 
+ /** System bar icons for the current theme: light icons on Oxblood and Glacier (as before), dark icons on a light
+  * theme (Winds), so the clock, battery and navigation stay readable over its pale field. */
+ static void bars(android.view.View decor) {
+  int light = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+  int flags = decor.getSystemUiVisibility() & ~light;
+  decor.setSystemUiVisibility(RoseTheme.light(id) ? flags | light : flags);
+ }
+
  static int c(int argb) { return RoseTheme.map(id, argb); }
  static int w(int argb) { return RoseTheme.warm(id, argb); }
  static int[] c(int[] colors) { return RoseTheme.map(id, colors); }
