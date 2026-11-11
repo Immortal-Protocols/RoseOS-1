@@ -37,6 +37,10 @@ export class Codex extends EventEmitter {
   if(this.runtime.publicResearch)for(const name of ['hooks','memories','apps','plugins','shell_tool','multi_agent','view_image'])
    providerArgs.push('-c','features.'+name+'=false');
   if(this.runtime.publicResearch)providerArgs.push('-c','project_doc_max_bytes=0');
+  // This known ambient MCP is excluded before the research app-server starts.
+  // Shared configuration and ordinary voice/desktop launches are unchanged;
+  // effective-config and runtime checks still refuse any other enabled MCP.
+  if(this.runtime.publicResearch)providerArgs.push('-c','mcp_servers.node_repl.enabled=false');
   if(this.runtime.baseten?.enabled){
    this.baseten=await new BasetenGateway(this.runtime.baseten).listen();
    const catalog=JSON.parse(readFileSync(catalogPath,'utf8'));

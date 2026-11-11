@@ -1,11 +1,59 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {EventEmitter} from 'node:events';
 import {Codex} from './codex.mjs';
 import {publicPageReceipt,lifeResearchPolicy,researchConfig,verifyResearchMcp,supportsResearchVersion} from './life-research.mjs';
 
 const opened=url=>({type:'webSearch',action:{type:'openPage',url},status:'completed'});
+test('actual child launch scopes the MCP override and gates all topic submission',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'rose-research-launch-'));
+ const cli=join(dir,'codex.cjs'),record=join(dir,'record.jsonl');
+ const old={bin:process.env.PIXEL_CODEX_BIN,record:process.env.ROSE_TEST_RECORD,scenario:process.env.ROSE_TEST_SCENARIO};
+ writeFileSync(cli,`#!${process.execPath}
+ const fs=require('node:fs');
+ if(process.argv.includes('--version')){console.log('codex-cli 0.167.1');process.exit(0);}
+ const args=process.argv.slice(2),file=process.env.ROSE_TEST_RECORD,scenario=process.env.ROSE_TEST_SCENARIO;
+ const log=x=>fs.appendFileSync(file,JSON.stringify(x)+'\\n');log({args});
+ require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+  const m=JSON.parse(line);if(m.id===undefined)return;log({method:m.method});let result={};
+  if(m.method==='account/read')result={account:{type:'chatgpt'}};
+  if(m.method==='model/list')result={data:[{id:'gpt-6.1-terra',serviceTiers:[{id:'priority'}]}]};
+  if(m.method==='config/read'){
+   const servers={node_repl:{enabled:!args.includes('mcp_servers.node_repl.enabled=false')}};
+   if(scenario==='unknown')servers.unexpected={};
+   result={config:{mcp_servers:servers}};
+  }
+  if(m.method==='thread/start')result={thread:{id:'research'},model:'gpt-6.1-terra',serviceTier:'priority'};
+  if(m.method==='mcpServerStatus/list')result={data:[{runtimeStatus:scenario==='connected'?'connected':'disabled',tools:{},resources:[],resourceTemplates:[]}]};
+  if(m.method==='turn/start')result={turn:{id:'turn'}};
+  console.log(JSON.stringify({id:m.id,result}));
+ });`,{mode:0o700});
+ try{
+  process.env.PIXEL_CODEX_BIN=cli;process.env.ROSE_TEST_RECORD=record;
+  for(const [publicResearch,scenario] of [[false,'normal'],[true,'normal'],[true,'unknown'],[true,'connected']]){
+   writeFileSync(record,'');process.env.ROSE_TEST_SCENARIO=scenario;
+   const c=new Codex(dir,join(dir,'unused'),null,{externalPhone:true,publicResearch,model:'gpt-6.1-terra',dynamicTools:[]});
+   try{
+    if(scenario==='normal'){
+     await c.init();await c.submit('Synthetic public topic',{model:c.selectedModel,serviceTier:c.serviceTier});
+    }else await assert.rejects(c.init(),{code:'research_isolation_unavailable'});
+   }finally{await c.closeConfirmed();}
+   const rows=readFileSync(record,'utf8').trim().split('\n').map(JSON.parse),args=rows[0].args;
+   assert.equal(args.includes('mcp_servers.node_repl.enabled=false'),publicResearch);
+   const methods=rows.slice(1).map(r=>r.method);
+   if(scenario==='unknown')assert.equal(methods.includes('thread/start'),false);
+   if(scenario!=='normal')assert.equal(methods.includes('turn/start'),false);
+   if(publicResearch&&scenario==='normal')assert.ok(methods.indexOf('mcpServerStatus/list')<methods.indexOf('turn/start'));
+  }
+ }finally{
+  for(const [key,value] of [['PIXEL_CODEX_BIN',old.bin],['ROSE_TEST_RECORD',old.record],['ROSE_TEST_SCENARIO',old.scenario]])
+   if(value===undefined)delete process.env[key];else process.env[key]=value;
+  rmSync(dir,{recursive:true,force:true});
+ }
+});
 test('unknown or older native contracts fail closed before research process startup',()=>{
  for(const version of ['codex-cli 0.163.0','codex-cli 0.166.9','unknown','0.167.0'])assert.equal(supportsResearchVersion(version),false);
  for(const version of ['codex-cli 0.167.0-alpha.4\n','codex-cli 0.167.0','codex-cli 1.0.0'])assert.equal(supportsResearchVersion(version),true);

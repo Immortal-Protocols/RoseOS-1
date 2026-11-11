@@ -64,6 +64,13 @@ inventory contract was inspected in local Codex 0.167.0-alpha.4 offline schemas;
 research requires Codex 0.167 or newer and compatible runtime evidence. Older
 versions are refused before starting the research process; ordinary voice is unchanged.
 
+The public-research child alone starts with the supported invocation override
+`-c mcp_servers.node_repl.enabled=false`, excluding this known ambient MCP before
+app-server startup. Shared user configuration, authentication, and ordinary
+voice/desktop launches are untouched. The existing effective-config and named
+per-thread runtime checks still require disabled MCPs with no exposed tools or
+resources; any other enabled or ambiguous entry is refused before a topic.
+
 The model is asked for at most six public web calls; observing a seventh or an
 unexpected native tool rejects the result and interrupts the thread. An already
 started read may finish. The hard host bound is the session deadline, also checked
