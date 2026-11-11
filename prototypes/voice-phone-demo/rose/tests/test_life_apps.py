@@ -59,6 +59,7 @@ class AppLife(unittest.TestCase):
         self.life.record_user('Choose a quieter café')
         result=self.call(s,'observe')
         self.assertFalse(result['ok'])
+        self.assertEqual(result['reason'],'wake_context_changed_or_stopped')
         # A controller Stop watcher may poll, but no extra UI command is sent.
         self.assertFalse(any(op=='command' for op,_ in self.controller.calls[before:]))
         self.executor._tool(run,'memory',{})
@@ -172,5 +173,12 @@ class AppLife(unittest.TestCase):
         self.assertFalse(self.executor.available)
         self.assertFalse(self.life.tick(manual='must-not-overlap'))
         self.assertEqual(self.life.status()['status'],'cleanup_uncertain')
+
+    def test_app_worker_memory_is_read_only_and_does_not_create_phone_evidence(self):
+        run=self.run_context();s=self.start(run)
+        result=self.call(s,'life_memory',query='')
+        self.assertTrue(result['ok']);self.assertIn('Maya',result['world']['cast'])
+        self.assertEqual(self.life.context()['observations'],[])
+        with self.life.diary._db() as db:self.assertEqual(db.execute('SELECT count(*) FROM life_steps').fetchone()[0],0)
 
 if __name__=='__main__':unittest.main()

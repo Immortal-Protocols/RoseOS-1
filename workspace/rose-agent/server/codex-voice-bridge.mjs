@@ -32,6 +32,17 @@ async function handle(m) {
     const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());cancelled(m.session,callId);},60000);
     calls.set(callId,{resolve,timer,session:m.session});
     publish({event:'tool',callId,params});
+   }).then(async result=>{
+    try{
+     const images=(result.contentItems||[]).filter(x=>x.type==='inputImage').length;
+     const forwarded=await c.forwardToolImages(params,result);
+     if(images)publish({event:'tool_image',turnId:params.turnId,callId:params.callId,images});
+     return forwarded;
+    }catch{
+     publish({event:'failure',fatal:true,message:'Screenshot delivery failed'});
+     await c.interruptForModelSwitch().catch(()=>{});
+     return fail();
+    }
    })});
   sessions.set(m.session,c);
   c.on('turnCreated',p=>publish({event:'started',turnId:p.turnId}));
