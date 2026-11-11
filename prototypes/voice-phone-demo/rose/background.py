@@ -79,7 +79,7 @@ CONTROLLER_STATES = {"idle", "starting", "launching", "scheduled", "ready", "blo
 NODE_ACTIONS = {"tap", "long_press", "touch_point", "set_text", "ime_enter", "scroll", "swipe", "drag"}
 LABEL_ACTIONS = {"tap_label", "touch_label"}
 UI_ACTIONS = NODE_ACTIONS | LABEL_ACTIONS | {"screenshot", "inspect_ui", "app_context", "screen_gesture",
-                                             "screen_text", "back", "home"}
+                                             "screen_text", "screen_search", "back", "home"}
 # Two-slot controllers (provider schema 4, MultiSession.java): a start in a free slot "alongside"
 # the other session, and its refusals, which open and stop nothing.
 ALONGSIDE = "alongside"

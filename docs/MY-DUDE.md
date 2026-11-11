@@ -77,13 +77,21 @@ Coordinator close has a separate confirmed/uncertain receipt. An uncertain close
 blocks replacement wakes; a cancelled wake that never started a process does not
 invent a cleanup failure. Pending dynamic-tool replies drain before child close.
 
-Keep `--phone real --vision-control` for screenshot-only execution. The new
-`submit_search` taps a visibly identified Search/Go key or magnifier in a fresh
-frame after typing. It sends no generic Enter, reads no accessibility tree, refuses
-send/purchase targets and verifies the next screenshot. Existing sends, purchases,
+Keep `--phone real --vision-control` for screenshot-only execution. `type_text`
+defaults to non-submitting text; a visually identified search must explicitly set
+`purpose=search`. `submit_search` requires a fresh frame, that session's matching
+confirmed query, and the phone's `visionSearch=true` capability. Its additive
+`screen_search` operation uses the existing session virtual IME with commit enabled,
+without an accessibility action or physical-screen Enter. Query eligibility is
+consumed before dispatch and cleared on navigation/Stop; ordinary drafts never
+authorize commit. A decorative field magnifier is not a submit control. Existing sends, purchases,
 publishing, deletion and security changes remain owner actions. Installed app
 inventory and deployed capabilities are timestamped at wake time; missing
 capabilities produce a pending/blocked outcome, never an accessibility fallback.
+The controller source and pure JVM/wiring tests are included. An installed
+controller without `visionSearch` needs a normal controller/OS update before IME
+search works; this task does not authorize building, signing, installing or
+publishing that phone artifact. No release/component pins are regenerated here.
 App workers can retrieve read-only character memory without creating phone evidence.
 Screenshot pixels use documented [same-turn image input](https://learn.chatgpt.com/docs/app-server),
 bound to the tool's expected turn. The installed Codex 0.167.1 preflight reported
