@@ -4,9 +4,14 @@
 
 The full automatic dedicated route now enables ccache 4.12.2, pinned by archive
 and executable SHA-256, under the existing Mustang data disk at
-`roseos/compiler-cache-v1`. Its local object cache is capped at 20 GiB and is
+`roseos/rose-actions/compiler-cache-v1`. Its local object cache is capped at 20 GiB and is
 outside the disposable runner workspace. No new host, IAM, credentials, sudo,
 remote cache or disk purchase is needed. Existing compile/disk/time bounds apply.
+
+Run 43 stopped before source copy/allocation/Make because its cache path used the
+administrator-owned `roseos` parent. The cache now uses the runner's existing
+writable `rose-actions` storage, alongside its attempt directories. No ownership,
+ACL, sudo or parent-directory permission change is performed.
 
 Each attempt still gets a fresh source tree and fresh `out-mustang-cache` output
 directory. The stable relative output name, per-source base directory and debug
@@ -49,7 +54,7 @@ Android signing tools and emits no custom target-validation proof. Executable
 archive, provenance, capacity and signature checks remain. The validator sections
 below describe the prior implementation, which remains unused library code.
 
-For dedicated workflow run number 43 only, Nathan renewed the choice to use the verified
+For dedicated workflow run number 44 only, Nathan renewed the choice to use the verified
 `frankel-2026111001` apps (voice 370) instead of refreshing the app export.
 The runtime binds the exact record-byte hash to this one run number.
 Later workflow runs do not inherit this choice. The candidate

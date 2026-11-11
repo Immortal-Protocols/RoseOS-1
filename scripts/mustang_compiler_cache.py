@@ -48,7 +48,9 @@ def plain(path, directory=False):
 
 def location(lane):
     import mustang_paths
-    return mustang_paths.layout(lane)['home'] / 'compiler-cache-v1'
+    # The runner owns rose-actions, where it already creates attempt receipts.
+    # Its parent is administrator-owned; never mkdir there or change its access.
+    return mustang_paths.layout(lane)['storageRoot'] / 'compiler-cache-v1'
 
 
 def binary(cache):
