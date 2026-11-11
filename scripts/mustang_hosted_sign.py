@@ -1295,6 +1295,15 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
         host_sign_main = host_sign_entry(source_root)
     release_dir = Path(release_dir)
     release_dir.mkdir(mode=0o700, exist_ok=True)
+    import mustang_retained
+    compile_run, compile_attempt, compile_source = mustang_retained.compile_context(bundle)
+    build = str(bundle.get('build') or '0')
+    notes = release_dir / 'UPDATE.md'
+    notes.write_text(f'# RoseOS Mustang {build}\n\nCompiled source: {compile_source}\n'
+                     f'Compile run: {compile_run}, attempt {compile_attempt}\n'
+                     f'Delivery source: {bundle["sourceSha"]}\n'
+                     f'Delivery run: {bundle["runId"]}, attempt {bundle["runAttempt"]}\n\n'
+                     'Physical-device acceptance has not been verified.\n')
     # host-sign copies a ZIP into releases/BUILD, not the preflight extraction directory.
     tools_archive=Path(extracted).parent/Path(bundle['otatools']['file']).name
     config = {
@@ -1307,7 +1316,8 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
             'passphraseSecretVersion': SECRET_VERSION,
             'otatools': str(tools_archive),
             'javaHome': str(jdk_home),
-            'updateNotes': str(Path(source_root) / 'script' / 'generate-release.sh'),
+            'updateNotes': {'file': str(notes.absolute()), 'sha256': sha256_file(notes),
+                            'device': 'mustang', 'build': build},
         }},
         'identities': {'otaCertificateSha256': OTA, 'avbPublicKeySha256': AVB},
         'publication': {'channels': {'beta': {'feedChannel': 'beta'}}},
@@ -1316,10 +1326,8 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
     config_path.write_text(json.dumps(config, sort_keys=True) + '\n')
     sign_env = {k:v for k,v in env.items() if k not in ('GH_TOKEN','GITHUB_TOKEN',
         'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL')}
-    import mustang_retained
-    _compile_run,_compile_attempt,compile_source=mustang_retained.compile_context(bundle)
     sign_env.update(ROSE_RELEASE_DIR=str(release_dir), ROSE_SIGN_OTATOOLS=str(tools_archive),
-                    BUILD_NUMBER=str(bundle.get('build') or '0'), BUILD_DATETIME=str(bundle.get('timestamp') or '0'),
+                    BUILD_NUMBER=build, BUILD_DATETIME=str(bundle.get('timestamp') or '0'),
                     ROSE_CANDIDATE_SHA=compile_source)
     previous = Path.cwd()
     os.chdir(source_root)
