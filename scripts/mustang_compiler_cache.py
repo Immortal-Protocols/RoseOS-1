@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import stat
@@ -34,6 +35,23 @@ def enabled(runtime):
     if value != SETTING:
         raise ValueError('Mustang compiler-cache configuration differs')
     return True
+
+
+def output_name(candidate, build):
+    """Select only a fixed output name bound to the completed compile receipt."""
+    cached = candidate.get('compilerCache') or {}
+    if cached.get('enabled') is True:
+        if cached.get('kind') != 'ccache' or cached.get('outDir') != OUT:
+            raise ValueError('compiled cache output-directory binding differs')
+        name = OUT
+    else:
+        if not re.fullmatch(r'[1-9][0-9]{0,19}', str(build)):
+            raise ValueError('compiled build identity differs')
+        name = f'out-mustang-build-{build}'
+    recorded = candidate.get('stages', {}).get('compile', {}).get('result', {}).get('outDir')
+    if recorded is not None and recorded != name:
+        raise ValueError('compiled output-directory binding differs')
+    return name
 
 
 def plain(path, directory=False):

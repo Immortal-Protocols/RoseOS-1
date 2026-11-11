@@ -50,7 +50,9 @@ this layer. Unsupported compilations pass through ccache to the compiler.
 
 Run 41 predates ccache, so its object files cannot populate ccache after the fact.
 Its complete unsigned outputs and original allocation/journal remain untouched.
-The next build starts with a cold compiler cache and populates it for later runs.
+Run 44 populated the cache before its disk-space failure. Run 45 then completed
+Make with 70,859 hits (70,777 direct and 82 preprocessed), zero cacheable misses
+and 5,800 unsupported-option calls passed through to the compiler.
 `compiler-cache.json`, the candidate receipt and the job log record before/after
 statistics and deltas, including hits, misses and stored size. A cold or changed
 input is not called a cache hit. Make still runs and the collected target ZIP
@@ -60,6 +62,15 @@ same automatic signing and publication stages can proceed.
 References: [pinned Soong wrapper](https://github.com/GrapheneOS/platform_build_soong/blob/250710f7f87acfbb8e3c517d90abde8b4a08fe1e/cc/config/global.go),
 [ccache 4.12.2](https://github.com/ccache/ccache/releases/tag/v4.12.2) and its bundled
 manual, including compiler-content checks, path normalization and local size limits.
+
+Run 45 (`43050571884`, source `902867effd4cd4705f3d74824b446a94b7a3cfc8`)
+finished unsigned compilation for build `2611111500`, but collection still looked
+under the legacy build-number output directory. No signing or publication ran.
+Collection, compile binding and the signing adapters now select the same fixed
+`out-mustang-cache` directory from the authenticated compile receipt, reject a
+conflicting recorded directory, and retain the actual build/timestamp/hash checks.
+The original output and allocation journal are preserved. The next attempt uses
+the existing complete automatic path and persistent compiler cache.
 
 The hosted signer supplies generated, hash-bound `UPDATE.md` bytes through the
 existing host-sign release-notes contract. The notes identify the build and
@@ -80,7 +91,7 @@ Android signing tools and emits no custom target-validation proof. Executable
 archive, provenance, capacity and signature checks remain. The validator sections
 below describe the prior implementation, which remains unused library code.
 
-For dedicated workflow run number 45 only, Nathan renewed the choice to use the verified
+For dedicated workflow run number 46 only, the runtime carries Nathan’s standing choice to use the verified
 `frankel-2026111001` apps (voice 370) instead of refreshing the app export.
 The runtime binds the exact record-byte hash to this one run number.
 Later workflow runs do not inherit this choice. The candidate

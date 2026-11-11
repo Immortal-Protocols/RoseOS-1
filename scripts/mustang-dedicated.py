@@ -608,10 +608,10 @@ def main():
                     or sign.get('keysSecret')!=signing.SECRETS['keys'] or sign.get('passphraseSecret')!=signing.SECRETS['passphrase'] \
                     or str(sign.get('secretVersion'))!='1' or str(sign.get('passphraseSecretVersion'))!='1':
                 raise ValueError('dedicated signing executor must preserve Mustang version-1 scope')
-            _,source,build,epoch,outputs=signing.compile_binding(prep/'delivery-inputs/candidate-receipt.json',lane=lane)
+            compiled,source,build,epoch,outputs=signing.compile_binding(prep/'delivery-inputs/candidate-receipt.json',lane=lane)
             if Path.cwd()!=source or Path(os.environ.get('ROSE_RELEASE_DIR',''))!=expected.parent/'release' \
                     or os.environ.get('BUILD_NUMBER')!=build or os.environ.get('BUILD_DATETIME')!=epoch \
-                    or sign.get('otatools')!=str(Path(outputs['otatools']['path']).relative_to(source/f'out-mustang-build-{build}')):
+                    or sign.get('otatools')!=str(Path(outputs['otatools']['path']).relative_to(source/signing.mustang_compiler_cache.output_name(compiled,build))):
                 raise ValueError('dedicated signing executor output/source/tool binding differs')
             if signing.digest(expected.parent/'release/unsigned-target_files.zip')!=outputs['targetFiles']['sha256']:
                 raise ValueError('signing input copy differs from the unsigned proof')

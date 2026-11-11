@@ -1461,6 +1461,37 @@ class AdapterTest(unittest.TestCase):
     def collect(self):
         return adapter.collect(str(self.receipt),'333','1')
 
+    def test_cached_compile_collects_and_signs_from_the_same_verified_output_directory(self):
+        import mustang_compiler_cache
+        cached=self.source/mustang_compiler_cache.OUT
+        self.out.rename(cached);self.out=cached
+        self.tf=cached/self.tf.name;self.tools=cached/self.tools.name
+        for role,row in list(self.artifacts.items()):
+            self.artifacts[role]=descriptor(cached/Path(row['path']).name)
+        self.outputs['outDir']=str(cached)
+        self.candidate['compilerCache']=dict(enabled=True,kind='ccache',outDir=mustang_compiler_cache.OUT)
+        completed=self.candidate['stages']['compile']['result'];completed['outDir']=mustang_compiler_cache.OUT
+        self.receipt.write_text(json.dumps(self.candidate))
+        (self.receipt.parent/'compile-completed.json').write_text(json.dumps(completed))
+        original=self.modules;original_sign=self.synthetic_sign;selected=[]
+        def modules(name,filename):
+            result=original(name,filename)
+            if filename=='mustang-build-only.py':
+                def collect(source,out_dir):
+                    selected.append(out_dir)
+                    self.assertEqual(out_dir,mustang_compiler_cache.OUT)
+                    return copy.deepcopy(self.outputs)
+                result.collect_outputs=collect
+            return result
+        def sign(argv,cwd,env,*bounds):
+            self.assertEqual(env['OUT_DIR'],mustang_compiler_cache.OUT)
+            return original_sign(argv,cwd,env,*bounds)
+        with patch.object(adapter,'module',side_effect=modules),patch.object(self,'synthetic_sign',side_effect=sign):
+            collected=self.collect();self.assertEqual(collected['status'],'complete')
+            self.sign()
+        self.assertEqual(selected,[mustang_compiler_cache.OUT])
+        self.assertIn('signer stand-in',self.calls)
+
     def sign(self):
         return adapter.sign(str(self.receipt),str(self.bootstrap),'333','1')
 
