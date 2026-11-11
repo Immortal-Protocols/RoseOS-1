@@ -84,6 +84,11 @@ send/purchase targets and verifies the next screenshot. Existing sends, purchase
 publishing, deletion and security changes remain owner actions. Installed app
 inventory and deployed capabilities are timestamped at wake time; missing
 capabilities produce a pending/blocked outcome, never an accessibility fallback.
+App workers can retrieve read-only character memory without creating phone evidence.
+Screenshot pixels use documented [same-turn image input](https://learn.chatgpt.com/docs/app-server),
+bound to the tool's expected turn. The installed Codex 0.167.1 preflight reported
+NO_IMAGE for dynamic image output; the repaired bridge read the fixture correctly
+and emitted a delivery acknowledgement. A failed delivery stops that app phase.
 
 ## Private backup, rollback and explicit transfer
 

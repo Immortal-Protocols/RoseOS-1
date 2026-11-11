@@ -163,7 +163,10 @@ class AppLifeExecutor:
                     return {'ok':False,'reason':'owner_unlock_required; no repeated app start','pending_action':action['id']}
                 for previous in locked:store.action_state(previous['id'],'deferred')
                 store.clear_block(package)
-            if any(s.origin=='user' and s.task and s.task.status=='running' for s in self.engine.sessions.values()) or self.life.clock()<self.life.foreground_until:
+            conversation=self.engine.sessions.get('conversation')
+            if (any(s.origin=='user' and s.task and s.task.status=='running' for s in self.engine.sessions.values())
+                    or self.life.clock()<self.life.foreground_until or (conversation and conversation.busy)
+                    or bool(getattr(getattr(self.engine,'speaker',None),'audible',False))):
                 return {'ok':False,'reason':'user_priority','pending_action':action['id']}
             self._check(run)
             for existing in self.owned(job['id']):
