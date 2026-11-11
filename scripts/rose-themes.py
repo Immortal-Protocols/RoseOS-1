@@ -36,11 +36,17 @@ TARGETS = {
                  'dev.pixel.rose.keyboard'),
 }
 
-# Raster wallpapers are copied byte for byte into the packages that draw them (checked like the Java copies).
-ASSET_COPIES = {
-    'glacier/field.png': ['workspace/rose-agent/app/res/drawable-nodpi/rose_glacier_field.png',
-                          'os/overlays/packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png'],
-}
+# Raster wallpapers are copied byte for byte, as their theme's named drawable, into every package that draws them
+# (checked like the Java copies): Rose Agent (Home, Rose) and Launcher3 (the switcher field).
+RASTER_DIRS = ['workspace/rose-agent/app/res/drawable-nodpi',
+               'os/overlays/packages/apps/Launcher3/quickstep/res/drawable-nodpi']
+DRAWABLE = re.compile(r'^rose_[a-z0-9_]+$')
+
+
+def asset_copies(d):
+    """{theme asset (relative to themes/): [package copies]} for every raster theme."""
+    return {t['wallpapers']['asset']: ['%s/%s.png' % (r, t['wallpapers']['drawable']) for r in RASTER_DIRS]
+            for t in d['themes'] if t['wallpapers'].get('kind') == 'raster'}
 
 # Every colour literal the native renderers draw with is a golden input; these sources are scanned.
 GOLDEN_SOURCES = [
@@ -86,6 +92,8 @@ def problems(d):
         if wp.get('default') not in (wp.get('ids') or []):
             out.append('%s: default wallpaper must be one of its own' % tid)
         if wp.get('kind') == 'raster':
+            if not DRAWABLE.match(wp.get('drawable') or '') or not (wp.get('asset') or '').endswith('.png'):
+                out.append('%s: a raster wallpaper needs a .png asset and a drawable name rose_[a-z0-9_]+' % tid)
             asset = THEMES / wp.get('asset', '')
             if not asset.is_file():
                 out.append('%s: wallpaper asset %s missing' % (tid, wp.get('asset')))
@@ -171,6 +179,8 @@ def java(d, package):
         jstr(t['wallpapers']['default']) for t in themes))
     w('    private static final boolean[] RASTER = {%s};' % ', '.join(
         'true' if t['wallpapers']['kind'] == 'raster' else 'false' for t in themes))
+    w('    private static final String[] DRAWABLE = {%s};' % ', '.join(
+        jstr(t['wallpapers']['drawable']) if t['wallpapers']['kind'] == 'raster' else 'null' for t in themes))
     derive = []
     for t in themes:
         der = t.get('derive')
@@ -220,6 +230,9 @@ def java(d, package):
     w('')
     w('    /** Whether this theme\'s wallpaper is a raster image rather than procedural artwork. */')
     w('    public static boolean rasterWallpaper(String id) { return RASTER[index(id)]; }')
+    w('')
+    w('    /** The drawable (no extension) every package carries this theme\'s raster wallpaper as, or null. */')
+    w('    public static String wallpaperDrawable(String id) { return DRAWABLE[index(id)]; }')
     w('')
     w('    /**')
     w('     * This theme\'s colour for an Oxblood artwork colour (fields, plates, pearls, glyphs). Identity for a theme')
@@ -401,7 +414,7 @@ def main():
         print('\n'.join(bad), file=sys.stderr)
         return 1
     stale = []
-    for src, copies in ASSET_COPIES.items():
+    for src, copies in asset_copies(d).items():
         data = (THEMES / src).read_bytes()
         for rel in copies:
             p = ROOT / rel

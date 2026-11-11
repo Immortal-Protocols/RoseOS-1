@@ -41,7 +41,8 @@ import android.graphics.drawable.Drawable;
  *
  * <p>Plan 1E: the field follows the theme its owner gives it (setTheme; RoseThemeSetting). Oxblood draws the geometry
  * above unchanged. A theme with a raster wallpaper (Glacier) draws that raster instead, the package's
- * rose_glacier_field, on the theme's field colour, scaled to cover, centred across and top-aligned like the geometry;
+ * own drawable (RoseTheme.wallpaperDrawable), on the theme's field colour, scaled to cover, centred across and
+ * top-aligned like the geometry;
  * if it cannot be loaded, the geometry is drawn in the theme's colours (RoseTheme.map).
  */
 final class RoseOxbloodField extends Drawable {
@@ -120,12 +121,12 @@ final class RoseOxbloodField extends Drawable {
 
     /**
      * The theme's raster wallpaper, or null to draw the geometry (Oxblood, no context, not decoded yet or unloadable).
-     * The image is decoded once per process off the UI thread (RoseThemeSetting.glacierField), never in draw; until it
+     * The image is decoded once per process off the UI thread (RoseThemeSetting.field), never in draw; until it
      * is ready the geometry draws in the theme's own colours, and onRaster redraws the surface when it arrives.
      */
     private Bitmap raster() {
         if (!RoseTheme.rasterWallpaper(theme) || resources == null) return null;
-        return RoseThemeSetting.glacierField(resources, () -> {
+        return RoseThemeSetting.field(resources, theme, () -> {
             invalidateSelf();
             if (onRaster != null) onRaster.run();
         });

@@ -51,7 +51,7 @@ final class OxbloodRose {
    paint.setColor(RoseThemeNow.c(working ? WORK_RING : IDLE_RING));
    c.drawRoundRect(sq.left + w / 2, sq.top + w / 2, sq.right - w / 2, sq.bottom - w / 2, r - w / 2, r - w / 2, paint);
    // 2x2 panes of 8dp, 4dp apart, radius 2, 1.5dp white outline, centred.
-   paint.setColor(INK);
+   paint.setColor(RoseTheme.Text.color(RoseThemeNow.id, RoseTheme.Text.PRIMARY));
    float cell = 8 * d, gap = 4 * d, x0 = b.exactCenterX() - cell - gap / 2, y0 = b.exactCenterY() - cell - gap / 2;
    for (int i = 0; i < 4; i++) {
     float x = x0 + (i % 2) * (cell + gap), y = y0 + (i / 2) * (cell + gap);

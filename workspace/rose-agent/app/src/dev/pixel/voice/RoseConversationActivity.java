@@ -19,7 +19,8 @@ public final class RoseConversationActivity extends Activity {
  // #410 Oxblood (qa/oxblood/oxblood-contract.json "ink", "rose"): white and 78% white ink on the dark Rose field,
  // hairlines rgba(241,233,225,.22), the ruby x of Disconnect; the surface is dark in either system theme.
  static int c(int light,int dark){return dark;}
- static int paper(){return 0xff120a0d;} static int ink(){return OxbloodRose.INK;} static int ink2(){return OxbloodRose.INK_2;}
+ // Plan 1E: Rose's text inks come from the theme's text table (RoseTheme.Text).
+ static int paper(){return 0xff120a0d;} static int ink(){return RoseTheme.Text.color(RoseThemeNow.id,RoseTheme.Text.PRIMARY);} static int ink2(){return RoseTheme.Text.color(RoseThemeNow.id,RoseTheme.Text.SECONDARY);}
  static int control(){return 0x24f1e9e1;} static int line(){return OxbloodRose.LINE;}
  static int noticeBg(){return 0xf03a141b;} static int endInk(){return OxbloodRose.PillGlyph.X;}
  final Handler handler=new Handler(Looper.getMainLooper());
@@ -168,7 +169,7 @@ public final class RoseConversationActivity extends Activity {
  }
  TextView taskAction(String text,int color){TextView t=presentedText(15,color,"sans-serif-medium");t.setText(text);t.setGravity(Gravity.CENTER);t.setMinHeight(dp(44));
   t.setPadding(dp(16),0,dp(16),0);GradientDrawable g=new GradientDrawable();g.setColor(RoseThemeNow.c(0x8c0e080b));g.setCornerRadius(dp(10));g.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x38f1e9e1));t.setBackground(g);t.setClickable(true);t.setFocusable(true);return t;}
- static int eyebrow(){return OxbloodRose.INK_2;}
+ static int eyebrow(){return ink2();}
  TextView presentedText(int size,int color,String family){TextView t=new TextView(this);t.setTextSize(size);t.setTextColor(color);t.setTypeface(Typeface.create(family,Typeface.NORMAL));return t;}
  int statusInset(){int id=getResources().getIdentifier("status_bar_height","dimen","android");return id>0?getResources().getDimensionPixelSize(id):dp(24);}
 

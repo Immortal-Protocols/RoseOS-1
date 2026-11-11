@@ -39,6 +39,13 @@ public final class RoseThemeTest {
         check(RoseTheme.map(RoseTheme.GLACIER, 0xff8a1428) != 0xff8a1428, "ruby is remapped in Glacier");
         // Ids, unknown ids and spoken names.
         check(RoseTheme.IDS.size() == 2 && RoseTheme.IDS.get(0).equals("oxblood") && RoseTheme.IDS.get(1).equals("glacier"), "ids");
+        // The text table is today's Rose ink (OxbloodRose.INK, INK_2) in Oxblood and Glacier.
+        for (String t : new String[] {"oxblood", "glacier"}) {
+            check(RoseTheme.Text.color(t, RoseTheme.Text.PRIMARY) == 0xffffffff
+                    && RoseTheme.Text.color(t, RoseTheme.Text.SECONDARY) == 0xc7ffffff, t + " text table is today's ink");
+        }
+        check("rose_glacier_field".equals(RoseTheme.wallpaperDrawable("glacier")) && RoseTheme.wallpaperDrawable("oxblood") == null,
+                "raster wallpapers are named drawables");
         check(RoseTheme.DEFAULT.equals(RoseTheme.OXBLOOD), "default is Oxblood");
         check(RoseTheme.normalize(null).equals("oxblood") && RoseTheme.normalize("aurora").equals("oxblood"), "unknown ids fall back to the default");
         check(RoseTheme.normalize("glacier").equals("glacier") && RoseTheme.known("glacier") && !RoseTheme.known("Glacier"), "known ids are exact");

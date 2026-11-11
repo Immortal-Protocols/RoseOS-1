@@ -9,7 +9,8 @@
     "shade": ["panel", "card", "tile", "accent", "accentInk", "roseDot", "error", "text", "text2", "line", "scrim"],
     "returnControl": ["ink", "pendingInk", "cancelInk", "plateTop", "plateBottom", "edge", "topEdge", "pressed",
       "pressedEdge", "cancelPressed"],
-    "field": ["background"]
+    "field": ["background"],
+    "text": ["primary", "secondary"]
   },
   "themes": [
     {
@@ -40,6 +41,9 @@
         },
         "field": {
           "background": "#FF170104"
+        },
+        "text": {
+          "primary": "#FFFFFFFF", "secondary": "#C7FFFFFF"
         }
       }
     },
@@ -64,6 +68,7 @@
         "default": "glacier",
         "ids": ["glacier"],
         "asset": "glacier/field.png",
+        "drawable": "rose_glacier_field",
         "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e",
         "width": 852,
         "height": 1846,
@@ -90,6 +95,9 @@
         },
         "field": {
           "background": "#FF0B141D"
+        },
+        "text": {
+          "primary": "#FFFFFFFF", "secondary": "#C7FFFFFF"
         }
       }
     }

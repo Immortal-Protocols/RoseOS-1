@@ -89,14 +89,27 @@ class GlacierAssetTest(unittest.TestCase):
         portrait = next(f for f in manifest['files'] if f['name'] == 'glacier-portrait.png')
         self.assertEqual(portrait['sha256'], wp['sha256'])
 
-    def test_the_app_carries_the_same_bytes(self):
-        a = (themes.THEMES / 'glacier' / 'field.png').read_bytes()
-        b = (ROOT / 'workspace/rose-agent/app/res/drawable-nodpi/rose_glacier_field.png').read_bytes()
-        self.assertEqual(a, b)
+    def test_every_package_carries_each_raster_theme_as_its_drawable(self):
+        # Rose Agent and Launcher3 load a raster theme's wallpaper by its drawable name (RoseTheme.wallpaperDrawable).
+        rasters = [t for t in D['themes'] if t['wallpapers']['kind'] == 'raster']
+        self.assertTrue(rasters)
+        for t in rasters:
+            wp = t['wallpapers']
+            source = (themes.THEMES / wp['asset']).read_bytes()
+            for folder in themes.RASTER_DIRS:
+                copy = ROOT / folder / (wp['drawable'] + '.png')
+                self.assertTrue(copy.is_file(), copy)
+                self.assertEqual(copy.read_bytes(), source, copy)
+        for src in ('workspace/rose-agent/app/src/dev/pixel/voice/RoseThemeNow.java',
+                    'os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java'):
+            text = (ROOT / src).read_text()
+            self.assertIn('RoseTheme.wallpaperDrawable(', text, src)
+            self.assertNotIn('rose_glacier_field', text, src + ': no theme is named in loader code')
 
     def test_the_tokens_are_the_illustrators(self):
         tokens = json.loads((themes.THEMES / 'glacier' / 'glacier.tokens.json').read_text())['colors']
-        allowed = {('#FF' + v[1:]).upper() for v in tokens.values()} | {'#FF0F1B27', '#8C000000'}
+        # #0F1B27 is the prototype's keyboard top; the text table keeps today's white Rose text in Glacier.
+        allowed = {('#FF' + v[1:]).upper() for v in tokens.values()} | {'#FF0F1B27', '#8C000000', '#FFFFFFFF', '#C7FFFFFF'}
         for surface, values in BY_ID['glacier']['surfaces'].items():
             for k, v in values.items():
                 self.assertIn(v, allowed, 'glacier.%s.%s %s is not an approved token' % (surface, k, v))
@@ -151,7 +164,8 @@ class GlacierContrastTest(unittest.TestCase):
     def test_every_glacier_surface_colour_is_opaque_except_the_scrim(self):
         for surface, values in self.S.items():
             for k, v in values.items():
-                if k != 'scrim':
+                # The scrim, and Rose's secondary text (today's translucent white, unchanged), are translucent.
+                if k != 'scrim' and (surface, k) != ('text', 'secondary'):
                     self.assertEqual(v[1:3], 'FF', 'glacier.%s.%s' % (surface, k))
 
     def test_shade(self):

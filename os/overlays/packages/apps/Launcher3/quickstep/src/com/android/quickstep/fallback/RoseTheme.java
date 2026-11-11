@@ -32,6 +32,7 @@ public final class RoseTheme {
     private static final String[][] WALLPAPERS = {{"classic", "garnet", "ember", "velvet", "dusk"}, {"glacier"}};
     private static final String[] DEFAULT_WALLPAPER = {"classic", "glacier"};
     private static final boolean[] RASTER = {false, true};
+    private static final String[] DRAWABLE = {null, "rose_glacier_field"};
     /** hue, neutralHue, chromaCap, chromaScale, neutralScale, darkLift, lightPull, accentL; null = identity. */
     private static final double[][] DERIVE = {null, {205.0, 205.0, 0.58, 0.78, 0.9, 0.03, 0.45, 0.81}};
     private static final int[] DESTRUCTIVE = {0, 0xFFFFABAC};
@@ -73,6 +74,9 @@ public final class RoseTheme {
 
     /** Whether this theme's wallpaper is a raster image rather than procedural artwork. */
     public static boolean rasterWallpaper(String id) { return RASTER[index(id)]; }
+
+    /** The drawable (no extension) every package carries this theme's raster wallpaper as, or null. */
+    public static String wallpaperDrawable(String id) { return DRAWABLE[index(id)]; }
 
     /**
      * This theme's colour for an Oxblood artwork colour (fields, plates, pearls, glyphs). Identity for a theme
@@ -233,6 +237,19 @@ public final class RoseTheme {
         private static final int[][] COLORS = {
             {0xFF170104}, // oxblood
             {0xFF0B141D} // glacier
+        };
+
+        public static int color(String theme, int key) { return COLORS[index(theme)][key]; }
+    }
+
+    /** Text colours per theme, exact (#AARRGGBB in themes/rose-themes.json). */
+    public static final class Text {
+        private Text() {}
+        public static final int PRIMARY = 0;
+        public static final int SECONDARY = 1;
+        private static final int[][] COLORS = {
+            {0xFFFFFFFF, 0xC7FFFFFF}, // oxblood
+            {0xFFFFFFFF, 0xC7FFFFFF} // glacier
         };
 
         public static int color(String theme, int key) { return COLORS[index(theme)][key]; }
