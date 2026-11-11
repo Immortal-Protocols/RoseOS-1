@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -30,6 +31,34 @@ import mustang_ota as ota
 import mustang_retained as retained
 import test_mustang_edge_gate as edge_fixture
 import test_mustang_bootstrap_collector as fixture_module
+
+
+class CompilerOutputTest(unittest.TestCase):
+    def test_mustang_output_reaches_job_log_and_preserves_failure_status(self):
+        script = '''
+import importlib.util, os, sys
+spec=importlib.util.spec_from_file_location('output_adapter',sys.argv[1])
+adapter=importlib.util.module_from_spec(spec);spec.loader.exec_module(adapter)
+engine=adapter.engine();engine.DEVICE=sys.argv[2]
+code=int(sys.argv[3]);capture=sys.argv[4]=='true'
+child="import sys;print('compiler stdout',flush=True);print('compiler stderr',file=sys.stderr,flush=True);sys.exit("+str(code)+")"
+result=engine.supervise([sys.executable,'-c',child],os.getcwd(),{'PATH':'/usr/bin:/bin'},10,
+    {'sampleSeconds':0.05,'killGraceSeconds':1,'boundBytes':1<<30,'reserveBytes':0},capture=capture)
+if capture:
+    assert result['stdout']=='compiler stdout\\n',result
+assert result['stopped'] is None,result
+sys.exit(result['returncode'])
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            for device,capture,visible in [('mustang',False,True),('mustang',True,False),('blazer',False,False)]:
+                for code in (0,7):
+                    with self.subTest(device=device,capture=capture,code=code):
+                        run=subprocess.run([sys.executable,'-c',script,str(ROOT/'scripts/mustang-build-only.py'),
+                            device,str(code),str(capture).lower()],cwd=directory,env={'PATH':'/usr/bin:/bin'},
+                            capture_output=True,text=True,timeout=20)
+                        self.assertEqual(run.returncode,code,run.stderr)
+                        self.assertEqual(run.stdout,'compiler stdout\n' if visible else '')
+                        self.assertEqual(run.stderr,'compiler stderr\n')
 
 
 class FullDeliveryTest(unittest.TestCase):
