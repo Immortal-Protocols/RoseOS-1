@@ -1,3 +1,7 @@
+> Superseded: the owner chose private server storage on November 10. This phone-app
+> experiment must not be built, signed, installed or included in Frankel for background life.
+> See [the current server notebook](BACKGROUND-LIFE.md#private-server-notebook-and-recall).
+
 # Rosie's private phone notebook (plan 1F)
 
 Source only. This is not a built, signed, installed, deployed or device-accepted

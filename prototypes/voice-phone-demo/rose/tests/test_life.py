@@ -31,8 +31,8 @@ class Executor:
         body = 'A sourced public photography note.'
         return {'task_id': job['id'], 'action': 'public_research', 'summary': 'Researched exposure.', 'body': body,
                 'sources': [{'title': 'Exposure', 'url': 'https://example.org/exposure', 'read_at': job['started']}],
-                'phone_note': {'task_id': job['id'], 'verified': True, 'sha256': hashlib.sha256(body.encode()).hexdigest(),
-                               'note_id': 'note-1', 'workspace_id': 'rosie-only', 'saved_at': job['started']},
+                'server_note': {'task_id': job['id'], 'verified': True, 'sha256': hashlib.sha256(body.encode()).hexdigest(),
+                               'note_id': 'life-'+job['id'], 'storage': 'server', 'namespace': 'rosie-server-life-v1', 'version': 1, 'saved_at': job['started']},
                 'unfinished': 'Compare aperture examples.'}
     def cancel(self, task_id):
         self.cancelled.append(task_id)
@@ -78,7 +78,7 @@ class LifeTest(unittest.TestCase):
 
     def test_unconfigured_never_fabricates_work(self):
         life = Life(self.diary, clock=self.clock)
-        self.assertEqual(life.call({'action': 'resume'})['status'], 'waiting_for_phone_executor')
+        self.assertEqual(life.call({'action': 'resume'})['status'], 'waiting_for_executor')
         self.assertFalse(life.tick(connected=True))
         self.assertEqual(life.status()['activities'], [])
 
@@ -116,7 +116,7 @@ class LifeTest(unittest.TestCase):
         self.finish()
         self.assertTrue(self.executor.stopped.wait(2))
         self.assertEqual(self.executor.cancelled, [tid])
-        self.assertTrue(self.latest()['result']['phone_note']['verified'])
+        self.assertTrue(self.latest()['result']['server_note']['verified'])
 
     def test_pause_persists_across_restart(self):
         self.life.call({'action': 'pause'})
@@ -127,7 +127,7 @@ class LifeTest(unittest.TestCase):
         self.start(); self.clock.now += 21
         self.life.tick(connected=True); self.finish()
         self.assertEqual(self.latest()['state'], 'interrupted')
-        self.assertTrue(self.latest()['result']['phone_note']['verified'])
+        self.assertTrue(self.latest()['result']['server_note']['verified'])
 
     def test_crash_claim_is_not_replayed(self):
         job = self.diary.claim(self.clock(), 10, 100, 20)
@@ -165,17 +165,17 @@ class LifeTest(unittest.TestCase):
         self.assertEqual(self.latest()['state'], 'failed')
         self.assertEqual(self.latest()['reason'], 'research_failed')
 
-    def test_receipt_requires_sources_and_own_phone_note(self):
+    def test_receipt_requires_sources_and_own_server_note(self):
         job = {'id': 'one', 'started': 1000., 'deadline': 1020.}
         self.executor.release.set()
         good = self.executor.research(job, threading.Event(), lambda: True)
         self.assertIsNotNone(verified_result(good, job, 1001.))
         for field, value in [('task_id', 'other'), ('action', 'visited_cafe'), ('body', ''), ('sources', []),
-                             ('phone_note', None), ('summary', 'x'*1201)]:
+                             ('server_note', None), ('summary', 'x'*1201)]:
             self.assertIsNone(verified_result({**good, field: value}, job, 1001.), field)
         for field, value in [('verified', False), ('task_id', 'other'), ('sha256', 'fake'), ('saved_at', float('nan')),
-                             ('saved_at', 2000), ('workspace_id', '')]:
-            self.assertIsNone(verified_result({**good, 'phone_note': {**good['phone_note'], field: value}}, job, 1001.))
+                             ('saved_at', 2000), ('storage', 'phone'), ('namespace', 'other'), ('version', 0)]:
+            self.assertIsNone(verified_result({**good, 'server_note': {**good['server_note'], field: value}}, job, 1001.))
         for url in ('file:///private/user', 'https://user:secret@example.org', 'javascript:alert(1)', 'https://'):
             self.assertIsNone(verified_result({**good, 'sources': [{**good['sources'][0], 'url': url}]}, job, 1001.))
 
@@ -185,7 +185,7 @@ class LifeTest(unittest.TestCase):
         self.assertFalse(self.life.tick(connected=True))
         self.finish()
         self.assertEqual(self.latest()['state'], 'interrupted')
-        self.assertTrue(self.latest()['result']['phone_note']['verified'])
+        self.assertTrue(self.latest()['result']['server_note']['verified'])
 
     def test_shutdown_waits_for_worker_and_marks_timeout_uncertain(self):
         self.start()

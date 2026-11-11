@@ -1,8 +1,8 @@
-"""Bounded public reasoning and verified writes to Rosie's own phone app.
+"""Bounded public reasoning and verified writes to Rosie's private server notebook.
 
-Uses only the existing Codex ChatGPT session and paired phone transport. No
-owner conversation, Notes data, browser, shell, API key or foreground fallback.
-All network/phone calls occur off the conversation thread, after explicit resume.
+Uses only the existing Codex ChatGPT session for isolated public research.
+No owner conversation, personal Notes data, phone, shell or new credentials.
+Research occurs off the conversation thread after explicit resume.
 """
 from __future__ import annotations
 
@@ -10,15 +10,13 @@ import hashlib
 import json
 from pathlib import Path
 import queue
+import sys
 import threading
 import time
 from urllib.parse import urlsplit
 
 from .codex_client import CodexClient
 
-NOTES = 'dev.pixel.rosienotes'
-CONTROLLER = 'dev.pixel.backgroundcontrol'
-NAMESPACE = 'rosie-life-v1'
 
 
 class ResearchStopped(RuntimeError):
@@ -137,21 +135,20 @@ class CodexResearch:
                 raise ExecutionUnavailable('research_stop_unconfirmed', uncertain=True)
 
 
-class PhoneResearchExecutor:
-    def __init__(self, phone, directory, *, research=None, clock=time.time, sleep=time.sleep, monotonic=time.monotonic):
-        self.phone, self.clock, self.sleep, self.monotonic = phone, clock, sleep, monotonic
+class ServerResearchExecutor:
+    requires_phone = False
+
+    def __init__(self, directory, *, research=None, notebook=None, clock=time.time, monotonic=time.monotonic):
+        from .life_notebook import Notebook
+        self.clock, self.monotonic = clock, monotonic
+        self.notebook = notebook or Notebook(Path(directory) / 'notebook', clock=clock)
         self.researcher = research or CodexResearch(Path(directory) / 'research-workspace', clock=clock)
         self._lock = threading.Lock()
         self._active = None
-        self.available = False
-        self.reason = 'awaiting_private_notes_capability'
+        self.available, self.reason = True, ''
 
     def binding(self, task_id):
-        with self._lock:
-            run = self._active
-            if not run or run['job']['id'] != task_id or not run['session']:
-                return None
-            return {'sessionId': run['session'], 'targetPackage': NOTES, 'controllerTaskId': task_id}
+        return None  # Server work has no Android workspace or fabricated session ID.
 
     def executing(self, task_id):
         with self._lock:
@@ -168,62 +165,20 @@ class PhoneResearchExecutor:
         return run['finished'].wait(2) and run['cleaned']
 
     def research(self, job, cancelled, started):
-        run = {'job': job, 'cancel': cancelled, 'finished': threading.Event(), 'session': None,
-               'executing': False, 'cleaned': False, 'start_attempted': False, 'last_check': 0,
-               'write_attempted': False, 'note_verified': False,
+        run = {'job': job, 'cancel': cancelled, 'finished': threading.Event(),
+               'executing': False, 'cleaned': False,
                'end': self.monotonic()+max(0, job['deadline']-self.clock())}
         with self._lock:
             if self._active:
                 raise ExecutionUnavailable('research_already_running')
             self._active = run
 
-        def guard():
+        def check():
             if cancelled.is_set() or self.clock() >= job['deadline'] or self.monotonic() >= run['end']:
                 raise ResearchStopped()
-            if not getattr(self.phone, 'connected', False):
-                raise ExecutionUnavailable('phone_disconnected')
-
-        def call(package, operation, params, *, cleanup=False):
-            if not cleanup:
-                guard()
-            # Cleanup is scoped, bounded and allowed after the cancellation latch.
-            timeout = 3 if cleanup else max(.1, min(8, job['deadline']-self.clock()))
-            return self.phone.link.call('app_command', timeout=timeout, packageName=package,
-                                        operation=operation, params=params)
-
-        def state(*, cleanup=False):
-            params = {'sessionId': run['session']} if run['session'] else {}
-            reply = call(CONTROLLER, 'get_state', params, cleanup=cleanup)
-            if not run['session']:
-                # Reconcile a lost start response by exact persisted task identity.
-                matches = [s for s in reply.get('sessions', []) if s.get('taskId') == job['id']
-                           and s.get('targetPackage') == NOTES and s.get('sessionId')]
-                if len(matches) == 1:
-                    run['session'] = matches[0]['sessionId']
-                    reply = call(CONTROLLER, 'get_state', {'sessionId': run['session']}, cleanup=cleanup)
-            return reply
-
-        def valid(reply):
-            return (bool(run['session']) and isinstance(reply, dict) and reply.get('sessionId') == run['session']
-                    and reply.get('taskId') == job['id'] and reply.get('targetPackage') == NOTES
-                    and reply.get('status') == 'ready' and reply.get('blocked') is not True
-                    and reply.get('foregroundFallback') is not True)
-
-        def check():
-            guard()
-            if self.clock()-run['last_check'] >= 1:
-                reply = state()
-                if (reply.get('status') == 'stopped' and reply.get('stopReason') == 'user'
-                        and reply.get('stoppedSessionId', reply.get('sessionId')) == run['session']
-                        and reply.get('stoppedTaskId', reply.get('taskId')) == job['id']):
-                    cancelled.set()
-                    raise ResearchStopped()
-                if not valid(reply):
-                    raise ExecutionUnavailable('workspace_not_ready')
-                run['last_check'] = self.clock()
 
         def began():
-            guard()
+            check()
             if not started():
                 return False
             run['executing'] = True
@@ -231,88 +186,47 @@ class PhoneResearchExecutor:
 
         result = None
         try:
-            caps = call(NOTES, 'life_note_capabilities', {})
-            if (caps.get('namespace') != NAMESPACE or caps.get('version') != 1
-                    or caps.get('target_package') != NOTES or caps.get('status') != 'ok'
-                    or caps.get('workspace_binding') != 'controller_session_id'
-                    or caps.get('immutable') is not True or caps.get('owner_data_access') is not False):
-                self.available = False
-                raise ExecutionUnavailable('private_notes_unavailable')
-            control = call(CONTROLLER, 'capabilities', {})
-            if control.get('schemaVersion', 0) < 4 or control.get('multiSession') is not True:
-                raise ExecutionUnavailable('scoped_workspaces_unavailable')
-            self.available, self.reason = True, ''
-            run['start_attempted'] = True
-            reply = call(CONTROLLER, 'start', {'packageName': NOTES, 'taskId': job['id'], 'mode': 'alongside'})
-            if reply.get('status') in ('session_limit', 'app_in_other_session', 'multi_session_unavailable',
-                                      'invalid_mode', 'user_stopped', 'locked', 'target_not_allowed'):
-                run['start_attempted'] = False  # explicit refusal: no unscoped cleanup
-                raise ExecutionUnavailable('workspace_start_refused')
-            if reply.get('taskId') == job['id'] and reply.get('targetPackage') == NOTES and reply.get('sessionId'):
-                run['session'] = reply['sessionId']
-            end = min(job['deadline'], self.clock()+22)
-            while not valid(reply) and self.clock() < end:
-                if reply.get('status') not in ('starting', 'launching', 'scheduled', 'uncertain', 'timeout'):
-                    raise ExecutionUnavailable('workspace_start_refused')
-                self.sleep(.15)
-                reply = state()
-            if not valid(reply):
-                raise ExecutionUnavailable('workspace_start_unconfirmed', uncertain=True)
+            check()
             result = self.researcher.run(job, check, began)
+            # CodexResearch returns only after confirmed termination of its child.
+            run['executing'] = False
             check()
             body, title = result['body'], job['interest']
-            digest = hashlib.sha256(body.encode('utf-8')).hexdigest()
-            scope = {'task_id': job['id'], 'workspace_id': run['session']}
-            if not valid(state()):
-                raise ExecutionUnavailable('workspace_not_ready')
-            # Exactly one write. A missing reply gets one readback, never a retry.
             try:
-                run['write_attempted'] = True
-                call(NOTES, 'life_note_put', {**scope, 'controller_task_id': job['id'],
-                     'title': title, 'body': body, 'sha256': digest})
+                self.notebook.put(job['id'], title, body, check)
+            except Exception as error:
+                # A commit/reply can race cancellation. Reconcile this exact task,
+                # never retry the write or invent a replacement identity.
+                try:
+                    note = self.notebook.read(job['id'])
+                except Exception:
+                    raise ExecutionUnavailable('note_write_unconfirmed', uncertain=True) from None
+                if note is None:
+                    if isinstance(error, ResearchStopped):
+                        raise
+                    raise ExecutionUnavailable('note_write_failed') from None
+            try:
+                note = self.notebook.read(job['id'])
             except Exception:
-                pass
-            # A dispatched write can finish during cancellation. Reconcile it
-            # once as bounded read-only cleanup even after the deadline/latch.
-            note = call(NOTES, 'life_note_read', scope, cleanup=True)
-            if (note.get('status') != 'verified' or note.get('verified') is not True
-                    or note.get('namespace') != NAMESPACE or note.get('version') != 1
-                    or note.get('task_id') != job['id'] or note.get('controller_task_id') != job['id']
-                    or note.get('workspace_id') != run['session'] or note.get('body') != body
-                    or note.get('title') != title or note.get('sha256') != digest
-                    or note.get('note_id') != 'life-'+job['id']):
+                raise ExecutionUnavailable('note_readback_unverified', uncertain=True) from None
+            if (not note or note['body'] != body or note['title'] != title
+                    or note['sha256'] != hashlib.sha256(body.encode('utf-8')).hexdigest()):
                 raise ExecutionUnavailable('note_readback_unverified', uncertain=True)
-            result.update(task_id=job['id'], action='public_research', phone_note=note)
+            result.update(task_id=job['id'], action='public_research', server_note=note)
             from .life import verified_result
             if verified_result(result, job, self.clock()) is None:
                 raise ExecutionUnavailable('note_receipt_unverified', uncertain=True)
-            run['note_verified'] = True
+            self.available, self.reason = True, ''
+            return result
         except ExecutionUnavailable as exc:
             self.reason = exc.reason
-            if exc.reason.endswith('unavailable') or exc.reason == 'chatgpt_login_required':
-                self.available = False
+            self.available = False
             raise
         finally:
             run['executing'] = False
-            try:
-                if run['start_attempted'] and not run['session']:
-                    state(cleanup=True)  # one bounded reconciliation, not a second start
-                if run['session']:
-                    closed = call(CONTROLLER, 'stop', {'sessionId': run['session'], 'taskId': job['id']}, cleanup=True)
-                    run['cleaned'] = (closed.get('status') in ('stopped', 'closed', 'idle')
-                                      and closed.get('foregroundFallback') is not True
-                                      and closed.get('taskId', job['id']) == job['id']
-                                      and closed.get('sessionId', closed.get('stoppedSessionId', run['session'])) == run['session'])
-                else:
-                    run['cleaned'] = not run['start_attempted']
-            except Exception:
-                run['cleaned'] = False
+            # An unconfirmed research shutdown remains uncertain in Life._run.
+            error = sys.exc_info()[1]
+            run['cleaned'] = not (isinstance(error, ExecutionUnavailable) and error.uncertain)
             with self._lock:
                 self._active = None
             run['finished'].set()
-            if not run['cleaned']:
-                raise ExecutionUnavailable('workspace_cleanup_unconfirmed', uncertain=True,
-                                           observed_result=result if run['note_verified'] else None)
-            if run['write_attempted'] and not run['note_verified']:
-                raise ExecutionUnavailable('note_write_unconfirmed', uncertain=True)
-        return result

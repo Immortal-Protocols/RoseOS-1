@@ -460,13 +460,13 @@ class CodexConductor:
         if tid is None:
             tid = next(self._ids)
             self._life_tasks[tid], self._life_conversations[tid] = job['id'], self.conversation
-            self.tasks[tid] = Task(tid, 'phone', 'Research ' + job['interest'], background=True, started=job['started'])
+            self.tasks[tid] = Task(tid, 'think', 'Research ' + job['interest'], background=True, started=job['started'])
         task = self.tasks[tid]
         state = job['state']
         task.status = {'completed': 'done', 'failed': 'failed', 'interrupted': 'cancelled'}.get(state, 'running')
-        task.detail = ('Stopping; waiting for research and workspace acknowledgment.' if event['state'] == 'stopping'
-                       else 'Researching public sources in Rosie’s private workspace.' if state == 'running'
-                       else 'Waiting for a private notes workspace.' if state == 'queued' else '')
+        task.detail = ('Waiting for research to stop.' if event['state'] == 'stopping'
+                       else 'Researching public sources for Rosie’s private server notebook.' if state == 'running'
+                       else 'Waiting for isolated public research.' if state == 'queued' else '')
         if task.status != 'running':
             task.finished = job['updated']
             summary = (job.get('result') or {}).get('summary', '')
