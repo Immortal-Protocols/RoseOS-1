@@ -274,6 +274,9 @@ class CodexConductor:
         # the other app's actions remain independent of this network wait.
         with self._session_lock:
             with self._lock:
+                if origin == 'autonomous' and any(s.origin == 'user' and s.task and s.task.status == 'running'
+                                                  for s in self.sessions.values()):
+                    raise PhoneTaskError('user_priority', 'Defer autonomous app work until the user task finishes.')
                 if any(s.cleanup_uncertain for s in self.sessions.values()):
                     raise PhoneTaskError('session_cleanup_unconfirmed',
                                          'A previous workspace release was not confirmed. Check the phone before restarting Rose.')
@@ -407,7 +410,7 @@ class CodexConductor:
         self._background(run)
         return s.task
 
-    def cancel(self, task_id):
+    def cancel(self, task_id, *, reason='owner_stopped'):
         life_id = self._life_tasks.get(task_id)
         if life_id is not None:
             return self.life.stop(life_id, reason='owner_stopped')
@@ -415,7 +418,7 @@ class CodexConductor:
         if not s or s.cancelled.is_set():
             return False
         if s.origin == 'autonomous' and self.life is not None:
-            self.life.stop(s.wake_id, reason='app_stopped')
+            self.life.stop(s.wake_id, reason=reason)
         s.cancelled.set()  # latch before waiting for network or an in-flight action
         ws = getattr(s.view, 'workspace', None)
         if ws and hasattr(ws, 'request_stop'):
@@ -710,6 +713,7 @@ class CodexConductor:
                             if not result.get('ok') and result.get('action_status') in (
                                     'locked','user_stopped','target_not_allowed','rejected','secure_window'):
                                 s.blocked_reason = result['action_status']
+                                if s.blocked_reason == 'locked':self.life.diary.block_app(s.app,'locked')
                             observation_id = self.life.executor.after_action(s, step, result)
                             if observation_id: result['observation_id'] = observation_id
                     if name == 'copy_to_phone_clipboard' and not s.task:
@@ -1078,7 +1082,8 @@ class CodexConductor:
 
     def stop(self):
         if self.life is not None:
-            self.life.shutdown()
+            if hasattr(self.life, 'context'): self.life.shutdown(release=False)
+            else: self.life.shutdown()
         for tid in list(self.tasks):
             self.cancel(tid)
         try:
@@ -1091,3 +1096,5 @@ class CodexConductor:
                     self._close_session(s)
             self._stopped.set()
             self.client.close()
+            if self.life is not None and hasattr(self.life, 'context'):
+                self.life.shutdown(timeout=2)

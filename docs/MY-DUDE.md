@@ -68,6 +68,11 @@ receipted afterwards. A crash with an unfinished action retains uncertainty.
 Recovery reads/stops only recorded exact controller session/task pairs; an unknown
 start reply stays uncertain and blocks further work in that app. No unscoped Stop
 or automatic input replay is used. Offline fiction/conversation remain available.
+Stop also cancels deferred continuations after a wake has settled, with stopped
+intentions retained in context. In-flight receipts retain their original wake/task
+binding through user takeover. The writer lease stays held through worker cleanup.
+After a locked-session refusal, the phase cannot repeat inputs; a later start in
+that app requires fresh authenticated controller metadata showing it unlocked.
 
 Keep `--phone real --vision-control` for screenshot-only execution. The new
 `submit_search` taps a visibly identified Search/Go key or magnifier in a fresh

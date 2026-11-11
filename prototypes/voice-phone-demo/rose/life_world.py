@@ -41,6 +41,8 @@ Background activity finishes quietly. Quiet/no-op wakes are valid; no forced nov
 app use or personal diary entry. Offline fiction can continue; phone work stays pending.
 Do not fill paused time with fictional catch-up. The schedule floor marks the latest
 resume or schedule change; consider pending plans anew from the present time.
+Respect cancelled wake intentions: do not continue stopped app work unless the
+owner asks again. Stop cancels continuations as well as the current activity.
 Use rosie_life for memory, controls and configurable daily wake times, never a phone notebook.
 """
 
@@ -92,6 +94,11 @@ class WorldStore(Diary):
                     host TEXT NOT NULL, state TEXT NOT NULL, generation INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS life_contexts (wake_id TEXT PRIMARY KEY,
                     captured_at REAL NOT NULL, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS life_blocks (app TEXT PRIMARY KEY, reason TEXT NOT NULL, at REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS life_observations_wake ON life_observations(wake_id,task_id);
+                CREATE INDEX IF NOT EXISTS life_observations_time ON life_observations(observed_at DESC);
+                CREATE INDEX IF NOT EXISTS life_events_time ON life_events(recorded_at DESC);
+                CREATE INDEX IF NOT EXISTS life_actions_status ON life_actions(state,app);
                 PRAGMA user_version=2;
             ''')
             enabled = db.execute('SELECT enabled FROM settings WHERE id=1').fetchone()[0]
@@ -146,20 +153,25 @@ class WorldStore(Diary):
         with self._db() as db:
             meta = dict(db.execute('SELECT * FROM world_meta WHERE id=1').fetchone())
             body = json.loads(db.execute('SELECT body FROM world WHERE id=1').fetchone()[0])
+            legacy_interests=[r[0] for r in db.execute('SELECT name FROM interests ORDER BY added,name')]
             events = [dict(r) for r in db.execute('SELECT * FROM life_events ORDER BY recorded_at DESC LIMIT 20')]
             wakes = [dict(r) for r in db.execute('SELECT * FROM wakes ORDER BY started DESC LIMIT 12')]
             observations = [dict(r) for r in db.execute('SELECT * FROM life_observations ORDER BY observed_at DESC LIMIT 12')]
             pending = [dict(r) for r in db.execute("SELECT * FROM life_actions WHERE state IN ('pending','dispatched','uncertain','deferred','awaiting_unlock') ORDER BY updated DESC LIMIT 30")]
+            stopped = [dict(r) for r in db.execute("SELECT id,wake_id,app,goal,updated FROM life_actions WHERE state='cancelled' ORDER BY updated DESC LIMIT 15")]
         for r in observations:
             r['body'] = json.loads(r['body'])
         for r in events:
             r['observations'] = json.loads(r['observations'])
         for r in wakes:
-            r.pop('outcome',None)  # committed events/world carry the personal content
+            outcome=json.loads(r.pop('outcome') or '{}')
+            r['outcome_reason']=outcome.get('reason')  # cancellation survives thread hydration
         meta.pop('writer')
         meta['slots'] = json.loads(meta['slots'])
         return {'now': self.clock(), 'meta': meta, 'world': body, 'events': events,
                 'wakes': wakes, 'observations': observations, 'pending_work': pending,
+                'stopped_work': stopped,
+                'legacy_interests': legacy_interests,
                 'content_is_untrusted': True}
 
     def settings(self, enabled=None, slots=None):
@@ -182,8 +194,10 @@ class WorldStore(Diary):
         pattern='%'+query.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
         with self._db() as db:
             events=[dict(r) for r in db.execute("SELECT * FROM life_events WHERE body LIKE ? ESCAPE '\\' ORDER BY recorded_at DESC LIMIT 30",(pattern,))]
+            legacy=[dict(r) for r in db.execute("SELECT * FROM activities WHERE interest LIKE ? ESCAPE '\\' OR result LIKE ? ESCAPE '\\' ORDER BY started DESC LIMIT 10",(pattern,pattern))]
         for event in events:event['observations']=json.loads(event['observations'])
-        return {'events':events,'content_is_untrusted':True}
+        for entry in legacy:entry['result']=json.loads(entry['result']) if entry['result'] else None
+        return {'events':events,'legacy_research':legacy,'content_is_untrusted':True}
 
     def claim(self, *, manual=None, budget=600):
         now = self.clock()
@@ -261,6 +275,24 @@ class WorldStore(Diary):
             self._fence(db)
             db.execute('UPDATE life_actions SET state=?,task_id=COALESCE(?,task_id),updated=? WHERE id=?',
                        (state,task_id,self.clock(),action_id))
+
+    def block_app(self,app,reason):
+        with self._db() as db:
+            self._fence(db)
+            db.execute('INSERT OR REPLACE INTO life_blocks VALUES (?,?,?)',(app,reason,self.clock()))
+
+    def clear_block(self,app):
+        with self._db() as db:
+            self._fence(db);db.execute('DELETE FROM life_blocks WHERE app=?',(app,))
+
+    def cancel_pending(self,wake_id=None):
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE');self._fence(db)
+            changed=db.execute("UPDATE life_actions SET state='cancelled',updated=? WHERE state IN "
+                "('pending','deferred','awaiting_unlock')"+(' AND wake_id=?' if wake_id else ''),
+                (self.clock(),wake_id) if wake_id else (self.clock(),)).rowcount
+            if changed:db.execute('UPDATE world_meta SET revision=revision+1 WHERE id=1')
+            return bool(changed)
 
     def step_begin(self,action_id,name,args):
         step=uuid.uuid4().hex
@@ -356,9 +388,12 @@ class WorldStore(Diary):
     def cancel(self, job, reason):
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE'); self._fence(db)
-            db.execute('UPDATE world_meta SET cancel_epoch=cancel_epoch+1 WHERE id=1')
+            db.execute('UPDATE world_meta SET cancel_epoch=cancel_epoch+1,revision=revision+1 WHERE id=1')
             db.execute("UPDATE wakes SET state='interrupted',outcome=?,updated=? WHERE id=? AND state IN ('claimed','running')",
                        (_json({'reason':reason}),self.clock(),job['id']))
+            if reason in ('owner_stopped','app_stopped'):
+                db.execute("UPDATE life_actions SET state='cancelled',updated=? WHERE wake_id=? AND state IN "
+                           "('pending','dispatched','deferred','awaiting_unlock')",(self.clock(),job['id']))
 
     def settle_failure(self, job, reason):
         with self._db() as db:
@@ -431,7 +466,7 @@ class WorldLife:
             # Only heard/displayed disclosure establishes the fiction boundary;
             # a cancelled model proposal does not prove the owner heard it.
             lower=text.casefold()
-            if 'fictional' in lower and any(w in lower for w in ('friend','outing','life','companion')):
+            if 'fictional' in lower and any(w in lower for w in ('friend','outing','life','companion','brunch','meal','story')):
                 changes['fiction_established']=True
             try:self.diary.remember({'changes':changes},c['meta']['revision']);return
             except Conflict:
@@ -464,15 +499,18 @@ class WorldLife:
 
     def stop(self,task_id=None,*,reason='owner_stopped'):
         with self._lock:
-            if not self._job or (task_id is not None and task_id!=self._job['id']):return False
+            if self.diary.writer is None:return False  # shutdown is idempotent
+            if not self._job or (task_id is not None and task_id!=self._job['id']):
+                return self.diary.cancel_pending(task_id) if reason in ('owner_stopped','app_stopped') else False
             if self._cancel.is_set():return True
+            self._job['cancel_reason']=reason
             self._cancel.set();self.diary.cancel(self._job,reason)
             if self.executor:self.executor.cancel(self._job['id'])
             return True
 
-    def shutdown(self,timeout=12):
+    def shutdown(self,timeout=12,*,release=True):
         self.stop(reason='shutdown')
         if self._worker:self._worker.join(timeout)
         alive=bool(self._worker and self._worker.is_alive())
-        if not alive:self.diary.release()
+        if not alive and release:self.diary.release()
         return not alive
