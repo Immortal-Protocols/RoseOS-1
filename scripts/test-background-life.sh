@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-PYTHONPATH=prototypes/voice-phone-demo python3 -m unittest rose.tests.test_life rose.tests.test_life_integration rose.tests.test_life_executor rose.tests.test_life_notebook
+PYTHONPATH=prototypes/voice-phone-demo python3 -m unittest rose.tests.test_life_world rose.tests.test_life_apps rose.tests.test_life rose.tests.test_life_integration rose.tests.test_life_executor rose.tests.test_life_notebook
 node --test workspace/rose-agent/server/life-research.test.mjs
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT

@@ -7,7 +7,7 @@ import threading
 import unittest
 
 from rose.life import Diary, Life, verified_result
-from rose.life_executor import CodexResearch, ServerResearchExecutor, ExecutionUnavailable, ResearchStopped
+from rose.life_research_legacy import CodexResearch, ServerResearchExecutor, ExecutionUnavailable, ResearchStopped
 
 JOB = {'id': 'abc123', 'interest': 'photography', 'started': 1000., 'deadline': 1120.}
 CONTENT = {'summary': 'Read about shutter speed.', 'body': 'A sourced finding: https://example.com/shutter',

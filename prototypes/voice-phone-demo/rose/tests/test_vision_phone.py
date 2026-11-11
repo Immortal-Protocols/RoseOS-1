@@ -63,7 +63,7 @@ class Vision(unittest.TestCase):
         s = self.opened()
         opening = next(p for op, name, p in self.engine.client.calls if op == 'open' and name == s.name)
         tools = {t['name'] for t in opening['tools']}
-        self.assertEqual(tools, {'open_app', 'observe', 'tap_point', 'swipe', 'type_text', 'back', 'complete_task'})
+        self.assertEqual(tools, {'open_app', 'observe', 'tap_point', 'swipe', 'type_text', 'submit_search', 'back', 'complete_task'})
         self.assertNotIn('UI tree', opening['instructions'])
         first = s.view.frame_id
         tapped = self.call(s, 'tap_point', frame_id=first, x=140, y=934, target='Work on Cloud', label='', icon='', effect='interact')
@@ -138,6 +138,19 @@ class Vision(unittest.TestCase):
             self.assertIn('single line', result['result'])
         self.assertEqual(len(self.commands()), before)
         self.assertIsNotNone(s.view.frame_id)  # a refusal never consumes the frame
+
+    def test_search_submission_uses_pixels_once_and_refuses_send_or_generic_enter(self):
+        s=self.opened()
+        before=len(self.commands())
+        self.assertFalse(self.call(s,'submit_search',frame_id=s.view.frame_id,x=900,y=950,label='Search',icon='')['ok'])
+        self.assertEqual(len(self.commands()),before)
+        self.assertTrue(self.call(s,'type_text',frame_id=s.view.frame_id,text='Sunnyvale brunch',replace=True)['ok'])
+        for label,icon in [('Send',''),('','up arrow'),('Enter',''),('Go','send arrow')]:
+            self.assertFalse(self.call(s,'submit_search',frame_id=s.view.frame_id,x=900,y=950,label=label,icon=icon)['ok'])
+        frame=s.view.frame_id
+        self.assertTrue(self.call(s,'submit_search',frame_id=frame,x=900,y=950,label='Search',icon='')['ok'])
+        self.assertFalse(self.call(s,'submit_search',frame_id=frame,x=900,y=950,label='Search',icon='')['ok'])
+        self.assertTrue(all(p['action']!='inspect_ui' for p in self.commands()))
 
     # (label, icon): the control's visible text and icon name as the model read them from the screenshot.
     FINAL = (('Send', ''), ('Buy now', ''), ('Place order', ''), ('Pay $20', ''), ('Submit', ''), ('Publish', ''),

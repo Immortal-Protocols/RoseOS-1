@@ -1,5 +1,10 @@
 # Rosie's background life and activity indicator
 
+**Current runtime:** [My Dude](MY-DUDE.md) supersedes the research scheduler and
+executor below. This document retains the earlier research/notebook history and
+native activity contract; it is not authorization to resume the old research or
+independent APK/OS release lanes.
+
 November 10 plan 1F/1G. The current notebook design is server-side, per the owner's direction.
 Background research remains paused by default. No phone notebook app is required or delivered.
 

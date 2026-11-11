@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from rose.life import Diary, Life, verified_result
-from rose.life_executor import ServerResearchExecutor, ExecutionUnavailable, ResearchStopped
+from rose.life_research_legacy import ServerResearchExecutor, ExecutionUnavailable, ResearchStopped
 from rose.life_notebook import Notebook
 
 JOB = dict(id='synthetic-task', interest='photography', started=1000., deadline=1120.)

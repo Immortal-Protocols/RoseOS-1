@@ -17,7 +17,7 @@ export class Codex extends EventEmitter {
  constructor(root,state,apiKeyFile=null,runtime={}){super();this.root=root;this.state=state;this.apiKeyFile=apiKeyFile;this.runtime=runtime;this.authMode=null;this.seq=0;this.pending=new Map();this.active=null;this.thread=null;this.starting=null;this.switchingTurns=new Set();this.endedTurns=new Set();this.provider='openai';this.providerThreads={};this.policyHashes={};this.memoryRevisions={};this.unstartedThread=false;}
  async init(){
   if(this.runtime.externalPhone&&this.apiKeyFile)throw Object.assign(Error('Sign in with ChatGPT is required'),{code:'chatgpt_login_required'});
-  if(this.runtime.publicResearch){
+  if(this.runtime.publicResearch||this.runtime.characterLife){
    const version=spawnSync(process.env.PIXEL_CODEX_BIN||'codex',['--version'],{encoding:'utf8',timeout:3000,maxBuffer:4096});
    if(version.status!==0||!supportsResearchVersion(version.stdout||''))
     throw Object.assign(Error('Research requires a compatible Codex tool-isolation contract'),{code:'research_isolation_unavailable'});
@@ -34,13 +34,13 @@ export class Codex extends EventEmitter {
   for(const file of ['control.py','README.md'])copyFileSync(join(this.root,'rose-agent/launcher-visual',file),join(visualTools,file));
   }
   const providerArgs=[],providerEnv={};let catalogPath=((process.env.PIXEL_VOICE_CONFIG_DIR||(process.env.HOME+"/.config/pixel-voice"))+"/model-catalog.json");
-  if(this.runtime.publicResearch)for(const name of ['hooks','memories','apps','plugins','shell_tool','multi_agent','view_image'])
+  if(this.runtime.publicResearch||this.runtime.characterLife)for(const name of ['hooks','memories','apps','plugins','shell_tool','multi_agent','view_image'])
    providerArgs.push('-c','features.'+name+'=false');
-  if(this.runtime.publicResearch)providerArgs.push('-c','project_doc_max_bytes=0');
+  if(this.runtime.publicResearch||this.runtime.characterLife)providerArgs.push('-c','project_doc_max_bytes=0');
   // This known ambient MCP is excluded before the research app-server starts.
   // Shared configuration and ordinary voice/desktop launches are unchanged;
   // effective-config and runtime checks still refuse any other enabled MCP.
-  if(this.runtime.publicResearch)providerArgs.push('-c','mcp_servers.node_repl.enabled=false');
+  if(this.runtime.publicResearch||this.runtime.characterLife)providerArgs.push('-c','mcp_servers.node_repl.enabled=false');
   if(this.runtime.baseten?.enabled){
    this.baseten=await new BasetenGateway(this.runtime.baseten).listen();
    const catalog=JSON.parse(readFileSync(catalogPath,'utf8'));
@@ -170,23 +170,23 @@ export class Codex extends EventEmitter {
   if(!tier)throw Object.assign(Error('Terra Fast mode is unavailable to this account'),{code:'fast_unavailable'});
   this.serviceTier=tier.id;
   let isolated;
-  if(this.runtime.publicResearch){
-   try{isolated=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);}
+  if(this.runtime.publicResearch||this.runtime.characterLife){
+   try{isolated=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)isolated.web_search='disabled';}
    catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
   }
   const r=await this.rpc('thread/start',{...options,model,modelProvider:'openai',ephemeral:true,
    sandbox:'read-only',serviceTier:this.serviceTier,
-   ...(this.runtime.publicResearch?{environments:[]}:{}),
+   ...((this.runtime.publicResearch||this.runtime.characterLife)?{environments:[]}:{}),
    config:isolated??{web_search:'disabled','features.fast_mode':true,'features.shell_tool':false,
     'features.apps':false,'features.multi_agent':false}});
   this.thread=r.thread.id;this.selectedModel=r.model;this.actualServiceTier=r.serviceTier;
   if(r.model!==model||!['fast','priority'].includes(r.serviceTier))
    throw Object.assign(Error('Requested Terra Fast mode was not selected'),{code:'model_mode_mismatch'});
-  if(this.runtime.publicResearch){
+  if(this.runtime.publicResearch||this.runtime.characterLife){
    try{
     // Recheck after thread creation and before sending a topic. There is no
     // public atomic MCP deny-all field; live configuration changes are refused.
-    const current=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);
+    const current=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)current.web_search='disabled';
     if(JSON.stringify(current)!==JSON.stringify(isolated))throw Error('Research config changed');
     const names=Object.keys(isolated).filter(k=>k.startsWith('mcp_servers.')).map(k=>k.slice(12,-8));
     await verifyResearchMcp(this.rpc.bind(this),this.thread,names);

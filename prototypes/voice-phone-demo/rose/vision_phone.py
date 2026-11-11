@@ -24,6 +24,8 @@ Use the frame_id returned with that image for exactly one input, then inspect th
 Never invent accessibility ids, infer controls from a text tree, or repeat an uncertain submission.
 Tap the visible input first, verify focus in the next image, then type_text into it.
 Typing does not press Enter or send, and text cannot contain line breaks. Check the new image to verify the entered text.
+For search, use submit_search on the visible Search/Go key or magnifying-glass control after typing.
+It taps the search control using the screenshot, never accessibility or a generic Enter key.
 If no image is available, report the blocker; do not act or fall back to another screen.
 For tap_point give the control's visible text exactly as shown (label) and, for an icon, what it is and does (icon),
 describe the target, and declare its effect honestly. Only ordinary
@@ -94,6 +96,9 @@ def vision_tools():
           frame_id=string, x1=coordinate, y1=coordinate, x2=coordinate, y2=coordinate),
         t('type_text', 'Type into the field you visually focused. Does not submit. Verify in the returned image.',
           frame_id=string, text=string, replace={'type': 'boolean'}),
+        t('submit_search', 'Submit the typed search by tapping a visible Search/Go key or magnifier. '
+          'Only for searching, never a message, transaction or form. Verify the returned screenshot.',
+          frame_id=string, x=coordinate, y=coordinate, label=string, icon=string),
         t('back', 'Navigate back within this workspace, then observe.', frame_id=string),
         t('complete_task', 'Report the verified outcome; blocked/failed tasks must never be called successful.',
           status={'type': 'string', 'enum': ['succeeded', 'blocked', 'failed']}, summary=string),
@@ -130,6 +135,14 @@ class VisionSession(RealSession):
         return f'Screenshot only; frame_id={self.frame_id or "unavailable"}. No accessibility nodes.'
 
     def execute(self, name, args):
+        if name == 'submit_search':
+            label,icon=args.get('label',''),args.get('icon','')
+            if (not self._typed or not isinstance(label,str) or not isinstance(icon,str)
+                    or final_target(label,icon,True)
+                    or not (label.casefold().strip() in ('search','go')
+                            or (not label and icon.casefold().strip() in ('search','magnifying glass','magnifier')))):
+                return {'ok':False,'result':'Use only a visibly identified search key after typing a search. No generic Enter was sent.'}
+            return self.execute('tap_point',{**args,'target':'Visible search submission control', 'effect':'interact'})
         if name == 'observe':
             self.refresh()
             return {'ok': self.image is not None, 'result': 'Observed screenshot.' if self.image else _ws_why(self.obs)}
