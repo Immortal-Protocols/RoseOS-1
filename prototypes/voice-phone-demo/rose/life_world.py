@@ -129,6 +129,7 @@ class WorldStore(Diary):
                 if authority['host']!=self.host_id() or authority['state']!='active':
                     raise Conflict('Explicit profile transfer/writer handoff required')
                 db.execute('UPDATE world_meta SET writer=? WHERE id=1', (self.writer,))
+                db.execute('UPDATE settings SET enabled=0 WHERE id=1')  # retire research admission, preserve its history
             # A dead process cannot complete these actions. Retain their uncertainty
             # and receipts; never dispatch them again under replacement identities.
                 db.execute("UPDATE life_actions SET state='uncertain' WHERE state='dispatched'")
@@ -193,8 +194,6 @@ class WorldStore(Diary):
                        'cancel_epoch=cancel_epoch+? WHERE id=1',
                        (meta['enabled'] if enabled is None else int(enabled),
                         meta['slots'] if slots is None else _json(slots), self.clock(), int(enabled is False)))
-            if enabled is not None:
-                db.execute('UPDATE settings SET enabled=? WHERE id=1', (int(enabled),))
 
     def retrieve(self,query):
         if not isinstance(query,str) or not 0<len(query)<=200:raise ValueError('Use a short memory query')

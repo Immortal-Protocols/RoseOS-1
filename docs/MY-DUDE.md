@@ -11,7 +11,9 @@ is established in conversation, with honest answers to direct reality questions.
 Normal `--brain codex` startup now opens `WorldStore`/`WorldLife` at the existing
 `config_dir()/rosie-life/diary.sqlite3`. The version-2 migration is additive:
 legacy `settings`, `interests`, `activities` and the immutable server notebook
-are preserved, including failed attempts and receipts. `life_research_legacy.py`
+are preserved, including failed attempts and receipts. The old enabled setting
+transfers to the new primary metadata at migration; legacy research admission is
+then disabled and cannot be reactivated by life resume. `life_research_legacy.py`
 exists for regression/rollback compatibility, not production execution. There is
 no phone notebook or native server-search replacement.
 

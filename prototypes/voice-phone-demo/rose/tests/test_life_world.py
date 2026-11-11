@@ -107,6 +107,15 @@ class World(unittest.TestCase):
             self.assertEqual(migrated.context()['meta']['agent_id'],stable)
         finally:migrated.release()
 
+    def test_migrated_profile_cannot_admit_a_second_legacy_research_scheduler(self):
+        legacy=Diary(self.store.directory);legacy.interest('music',self.now-1000)
+        legacy.set_enabled(True)
+        self.assertIsNone(legacy.claim(self.now,1,30,60))
+        self.store.settings(enabled=True)
+        self.assertTrue(self.store.context()['meta']['enabled'])
+        self.store.release();self.store.acquire()
+        self.assertFalse(legacy.snapshot()['enabled'])
+
     def test_configurable_local_slots_and_dst(self):
         self.store.settings(slots={'morning':'10:15','afternoon':'15:30','evening':'21:45'})
         self.at(13,10);self.assertIsNone(self.store.claim())
