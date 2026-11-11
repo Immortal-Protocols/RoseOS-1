@@ -44,6 +44,8 @@ class AppLife(unittest.TestCase):
         self.assertEqual(observation['id'],ref)
         self.assertEqual(observation['session_id'],s.view.workspace.bound_id)
         self.assertEqual(observation['wake_id'],run['job']['id'])
+        self.assertEqual(observation['body']['action']['tool'],'open_app')
+        self.assertEqual(observation['body']['action']['arguments']['app'],s.app)
         self.engine._event({'event':'done','session':s.name,'turn':{'id':s.turn,'status':'completed'}})
         self.assertEqual(s.task.status,'done')
         self.assertTrue(self.engine._announcements.empty())

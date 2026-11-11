@@ -357,6 +357,8 @@ class CodexConductor:
                     worker_policy += '\nThis is authorized autonomous character app work, not a user message. Finish quietly. '
                     worker_policy += 'Use checkpointed progress; if blocked or uncertain defer to a later wake without retrying inputs. '
                     worker_policy += 'Use life_memory for read-only character memory; only the coordinator commits changes. '
+                    worker_policy += 'Start with life_memory and use historical app actions to avoid repeating completed inputs. '
+                    worker_policy += 'Historical frames are context only; open/observe this session before new inputs. '
                 self._open(s, worker_policy + '\n' + policy +
                            f'\nThis thread owns only {s.app}. Use tools for actions, then report the observed result in plain text. '
                            'Do not open another app. Use this app UI for timers and other actions; '
@@ -905,6 +907,7 @@ class CodexConductor:
         if name == 'life_memory' and s.origin == 'autonomous':
             context=self.life.context()
             out={'ok':True,'now':context['now'],'world':context['world'],'content_is_untrusted':True}
+            out['app_history']=[r for r in context['observations'] if r['app']==s.app]
             if a.get('query'):out['retrieved']=self.life.diary.retrieve(a['query'])
             return out,None
         from .tasks import TaskManager, _execute, _arg_id, DIRECT

@@ -142,6 +142,9 @@ The loopback dashboard exposes GET `/api/life` and POST `/api/life/control`
 with POST `/api/life/wake`, supplying `conversation_id` and a bounded `event_id`.
 The existing loopback Host/Origin restriction and stale-conversation checks apply;
 these routes are not on the remote phone listener. No event enters user chat.
+GET `/api/tasks/{id}/frame?conversation_id=...` reads only that worker's existing
+cached pixels for diagnosis, under the same loopback/current-conversation boundary.
+It never captures another screen or issues a phone action.
 
 Record real model/app observations separately from synthetic weekend fixtures.
 `python -m rose.eval.life --live` is an explicit real-Terra behavioral check using
