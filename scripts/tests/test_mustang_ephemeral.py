@@ -364,7 +364,7 @@ class EnrollmentTest(unittest.TestCase):
             return True
 
         space = type('Space', (), {'f_bavail': 10**9, 'f_frsize': 4096, 'f_bsize': 4096,
-                                    'f_files': lane.CONFIRMED_TOTAL_INODES, 'f_favail': 1000})()
+                                    'f_files': cfg.get('dataFilesystemTotalInodes',lane.CONFIRMED_TOTAL_INODES), 'f_favail': 1000})()
 
         def execute(argv, **kwargs):
             self.assertEqual(argv[0], 'findmnt')
