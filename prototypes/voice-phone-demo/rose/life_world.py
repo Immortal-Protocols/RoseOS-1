@@ -162,6 +162,12 @@ class WorldStore(Diary):
             stopped = [dict(r) for r in db.execute("SELECT id,wake_id,app,goal,updated FROM life_actions WHERE state='cancelled' ORDER BY updated DESC LIMIT 15")]
         for r in observations:
             r['body'] = json.loads(r['body'])
+        with self._db() as db:
+            for r in observations:
+                step_id=r['body'].get('step_id')
+                if step_id and 'action' not in r['body']:
+                    step=db.execute('SELECT command FROM life_steps WHERE id=?',(step_id,)).fetchone()
+                    if step:r['body']['action']=json.loads(step[0])
         for r in events:
             r['observations'] = json.loads(r['observations'])
         for r in wakes:

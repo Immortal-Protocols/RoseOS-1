@@ -1284,6 +1284,19 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
             return _json({"ok": False, "error": "stale conversation"}, 409)
         return _json({"ok": bool(server.tasks and server.tasks.cancel(task_id))})
 
+    @app.get('/api/tasks/{task_id}/frame')
+    def task_frame(task_id: int, conversation_id: str = '') -> Response:
+        """Read an existing worker's cached pixels; never capture or drive another screen."""
+        if conversation_id!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        session=next((s for s in getattr(server.conductor,'sessions',{}).values()
+                      if getattr(s,'task',None) and s.task.id==task_id),None)
+        image=getattr(getattr(session,'view',None),'image',None)
+        if image is None:return _json({'ok':False,'reason':'no_cached_frame'},404)
+        import io
+        out=io.BytesIO();image.copy().save(out,format='PNG')
+        return Response(out.getvalue(),media_type='image/png',headers=NO_STORE)
+
     @app.post("/api/say")
     async def say(body: dict) -> Response:
         text = " ".join(str(body.get("text", "")).split())[:400]

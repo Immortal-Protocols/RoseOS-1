@@ -23,6 +23,10 @@ First open_app or observe. Coordinates run from 0 to 1000 across the attached im
 Use the frame_id returned with that image for exactly one input, then inspect the new image.
 Never invent accessibility ids, infer controls from a text tree, or repeat an uncertain submission.
 Tap the visible input first, verify focus in the next image, then type_text into it.
+If an accepted tap leaves the screen unchanged, observe and try a different visible
+input target once. Do not blindly repeat the same tap or an uncertain submission.
+The keyboard may be hidden in a background workspace; inspect the field's cursor,
+selection or highlight rather than treating a missing keyboard alone as failure.
 Typing does not press Enter or send, and text cannot contain line breaks. Check the new image to verify the entered text.
 For search, use submit_search on the visible Search/Go key or magnifying-glass control after typing.
 It taps the search control using the screenshot, never accessibility or a generic Enter key.
