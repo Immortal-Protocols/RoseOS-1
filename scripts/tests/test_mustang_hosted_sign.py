@@ -1,5 +1,6 @@
 """Hosted Mustang signer gate. No live login, secret, VM, dispatch, or publication."""
 import hashlib
+import copy
 import json
 import os
 from pathlib import Path
@@ -472,6 +473,58 @@ class HostedSignGateTest(unittest.TestCase):
             (directory / 'mustang-hosted-sign-receipt.json').write_text(json.dumps(receipt))
             with self.assertRaisesRegex(ValueError, 'hosted signing receipt is not this run'):
                 hosted.bind_outputs(directory, env=ENV)
+
+    def test_finalized_upload_confirmation_requires_both_current_artifacts_and_never_admits_payload(self):
+        bundle,files,pin=self.tiny_bundle()
+        root=self.checkout(files['generateRelease'].read_bytes())
+        directory=self.write_bundle(bundle,files)
+        rows=[dict(id=index+1,name='mustang-signing-'+kind+'-123-1',expired=False,
+                   size_in_bytes=100,digest='sha256:'+'a'*64,
+                   workflow_run=dict(id=123,head_sha=ENV['GITHUB_SHA'],repository_id=1428996648,
+                                     head_repository_id=1428996648))
+              for index,kind in enumerate(('bundle','inputs'))]
+        env=dict(ENV,GITHUB_JOB='builder');calls=[]
+        def api(path):
+            calls.append(path)
+            return dict(total_count=len(rows),artifacts=rows)
+        result=hosted.confirm_uploads(directory,env,api=api,root=root)
+        self.assertEqual(calls,['/repos/Immortal-Protocols/RoseOS-1/actions/runs/123/artifacts?per_page=100'])
+        self.assertEqual(set(result['finalizedArtifacts']),{'bundle','inputs'})
+        self.assertFalse(result['payloadBytesVerified']);self.assertFalse(result['signerAdmitted'])
+        original=copy.deepcopy(rows)
+        for key,value in [('expired',True),('digest',None),('size_in_bytes',0),('id',False)]:
+            rows[:]=copy.deepcopy(original);rows[1][key]=value
+            with self.assertRaisesRegex(ValueError,'identity differs'):
+                hosted.confirm_uploads(directory,env,api=api,root=root)
+        for key,value in [('id',124),('head_sha','b'*40),('repository_id',1),('head_repository_id',1)]:
+            rows[:]=copy.deepcopy(original);rows[1]['workflow_run'][key]=value
+            with self.assertRaisesRegex(ValueError,'identity differs'):
+                hosted.confirm_uploads(directory,env,api=api,root=root)
+        for invalid in (original[:1],original+[original[1]]):
+            rows[:]=copy.deepcopy(invalid)
+            with self.assertRaisesRegex(ValueError,'missing or ambiguous'):
+                hosted.confirm_uploads(directory,env,api=api,root=root)
+        rows[:]=copy.deepcopy(original)
+        files['unsigned'].write_bytes(b'corrupt after an apparently successful upload')
+        with self.assertRaisesRegex(ValueError,'hash differs'):
+            hosted.evaluate(bundle,root,free=10**18,files=files,
+                            secret_access=lambda:self.fail('no secret access'),pin=pin,env=ENV,
+                            capacity_config=self.admitted())
+
+    def test_failed_upload_response_is_confirmed_without_waiving_downstream_download_or_preflight(self):
+        jobs=workflow_shape.jobs(WORKFLOW.read_text());builder=jobs['builder'];signer=jobs['signer']
+        for name in ('mustang-signing-bundle-${{','mustang-signing-inputs-${{','mustang-dedicated-receipts-${{'):
+            step=builder[:builder.index(name)].rsplit('    - ',1)[-1]
+            self.assertIn('continue-on-error: true',step)
+        confirmation=builder.split('    - name: Require finalized same-run uploads',1)[1].split('    - ',1)[0]
+        self.assertNotIn('continue-on-error',confirmation)
+        self.assertIn('mustang_hosted_sign.py confirm-uploads',confirmation)
+        self.assertIn("steps.preliminary.outputs.allow == 'true'",confirmation)
+        self.assertLess(builder.index('mustang-signing-inputs-${{'),builder.index('mustang_hosted_sign.py confirm-uploads'))
+        for block in ('Download the same-run input bytes','Full byte, hash, archive, and peak preflight'):
+            step=signer.split('name: '+block,1)[1].split('    - ',1)[0]
+            self.assertNotIn('continue-on-error',step)
+        self.assertLess(signer.index('mustang_hosted_sign.py preflight'),signer.index('actions-gcp-login.py login'))
 
     def test_workflow_keeps_signer_login_off_the_guest_and_behind_capacity(self):
         workflow = WORKFLOW.read_text()

@@ -315,6 +315,36 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
     return result
 
 
+def confirm_uploads(bundle_path,env=None,*,api=None,root=ROOT):
+    """Require finalized same-run artifacts; payload verification remains on the signer."""
+    import mustang_bootstrap_collector as collector
+    env=os.environ if env is None else env
+    bundle,_directory=bundle_document(bundle_path)
+    require_bundle_identity(bundle,env,root)
+    if env.get('GITHUB_JOB')!='builder' or str(bundle['runAttempt'])!='1' \
+            or not re.fullmatch(r'[1-9][0-9]{0,19}',str(bundle['runId'])):
+        raise ValueError('upload confirmation requires this fresh builder attempt')
+    api=api or collector.github_reader(dict(runId=bundle['runId']),env.get('GH_TOKEN',''),include_artifacts=True)
+    rows=collector.listing(api('/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+bundle['runId']+
+                               '/artifacts?per_page=100'),'artifacts')
+    found={}
+    for kind in ('bundle','inputs'):
+        name='mustang-signing-'+kind+'-'+bundle['runId']+'-1'
+        matches=[row for row in rows if row.get('name')==name]
+        if len(matches)!=1:raise ValueError('finalized signing artifact missing or ambiguous: '+kind)
+        row=matches[0];run=row.get('workflow_run') or {}
+        if type(row.get('id')) is not int or row['id']<=0 or row.get('expired') is not False \
+                or type(row.get('size_in_bytes')) is not int or row['size_in_bytes']<=0 \
+                or not re.fullmatch(r'sha256:[0-9a-f]{64}',str(row.get('digest',''))) \
+                or (run.get('id'),run.get('head_sha'),run.get('repository_id'),run.get('head_repository_id')) != (
+                    int(bundle['runId']),bundle['sourceSha'],1428996648,1428996648):
+            raise ValueError('finalized signing artifact identity differs: '+kind)
+        found[kind]=dict(id=row['id'],name=name,digest=row['digest'],sizeBytes=row['size_in_bytes'])
+    result=dict(finalizedArtifacts=found,payloadBytesVerified=False,signerAdmitted=False)
+    print(json.dumps(result))
+    return result
+
+
 def full_bundle_gate(bundle,path,env,root):
     if 'fullRunSource' not in bundle:return None
     require_full_bundle_source(bundle,root)
@@ -1413,7 +1443,7 @@ def step_output(name, value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('export-bundle', 'preliminary', 'gate', 'preflight', 'sign', 'bind-outputs'))
+    parser.add_argument('action', choices=('export-bundle', 'preliminary', 'gate', 'preflight', 'sign', 'bind-outputs', 'confirm-uploads'))
     parser.add_argument('--collection')
     parser.add_argument('--out')
     parser.add_argument('--bundle')
@@ -1432,6 +1462,9 @@ def main(argv=None):
             return 0
         if not args.bundle:
             raise ValueError('signing bundle is missing')
+        if args.action == 'confirm-uploads':
+            confirm_uploads(args.bundle)
+            return 0
         if args.action == 'sign':
             if not args.out:
                 raise ValueError('hosted signed output is missing')

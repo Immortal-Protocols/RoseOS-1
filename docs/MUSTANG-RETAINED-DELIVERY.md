@@ -72,6 +72,18 @@ conflicting recorded directory, and retain the actual build/timestamp/hash check
 The original output and allocation journal are preserved. The next attempt uses
 the existing complete automatic path and persistent compiler cache.
 
+Run 46 (`43074045726`) compiled, collected and bundled build `2611111800`.
+Its input upload reported all bytes transferred and ZIP digest
+`f7a17ed88a5e5846ccd4452f411e3b36a110981c63bd7305e9bb66147fb5afe0`,
+but FinalizeArtifact returned HTML instead of JSON through all five client retries.
+GitHub independently lists artifact `13889918815` with that exact digest. This
+metadata does not prove its payload bytes. Builder uploads now tolerate a client
+finalization error only behind a required read-only check for both uniquely named,
+finalized same-run/source artifacts. Missing, expired or foreign metadata fails.
+The signer must still download and verify every input byte/hash and capacity
+before login; no keys are accessed merely because an artifact is listed.
+Diagnostic receipt-upload failure cannot prevent an otherwise admitted delivery.
+
 The hosted signer supplies generated, hash-bound `UPDATE.md` bytes through the
 existing host-sign release-notes contract. The notes identify the build and
 separate compile and delivery sources/runs. Run 42937365659 compiled and passed
@@ -91,7 +103,7 @@ Android signing tools and emits no custom target-validation proof. Executable
 archive, provenance, capacity and signature checks remain. The validator sections
 below describe the prior implementation, which remains unused library code.
 
-For dedicated workflow run number 46 only, the runtime carries Nathan’s standing choice to use the verified
+For dedicated workflow run number 47 only, the runtime carries Nathan’s standing choice to use the verified
 `frankel-2026111001` apps (voice 370) instead of refreshing the app export.
 The runtime binds the exact record-byte hash to this one run number.
 Later workflow runs do not inherit this choice. The candidate
