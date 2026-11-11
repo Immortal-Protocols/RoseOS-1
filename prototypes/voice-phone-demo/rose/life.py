@@ -119,6 +119,8 @@ class Diary:
     def claim(self, now, idle_seconds, interval, budget):
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='world_meta'").fetchone():
+                return None  # migrated profiles have only the character scheduler
             # Expired work is NOT proof of success or safe automatic resumption.
             expired = db.execute("UPDATE activities SET state='interrupted', reason='execution_receipt_expired', updated=? "
                        "WHERE state IN ('queued','running','stopping') AND deadline<=?", (now, now)).rowcount
