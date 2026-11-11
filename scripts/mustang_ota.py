@@ -184,6 +184,41 @@ def observe_target(path, build, epoch, tools, pins, execute=subprocess.run):
             member(archive,'SYSTEM/etc/security/otacerts.zip',4<<20),build,epoch,tools,pins,execute)
 
 
+def aapt2_updater_failures(dump,expected):
+    """Read the qualified AAPT2 resource format, keeping exact default-only values."""
+    blocks={key:[] for key in expected};package=None;current=None
+    for line in dump.splitlines():
+        indent=len(line)-len(line.lstrip());text=line.strip()
+        if current is not None and text and indent>current[0]:
+            current[1].append(text)
+            continue
+        current=None
+        found=re.fullmatch(r'Package name=([\w.]+) id=[0-9a-f]+',text)
+        if found:package=found.group(1)
+        row=re.match(r'resource 0x[0-9a-f]{8} (string|array)/([a-z][a-z0-9_]*)(?:\s.*)?$',text)
+        if row and package=='app.seamlessupdate.client' and tuple(row.groups()) in blocks:
+            body=[];blocks[tuple(row.groups())].append(body);current=(indent,body)
+    failures=[]
+    for (kind,name),want in expected.items():
+        rows=blocks[(kind,name)]
+        if len(rows)!=1:
+            failures.append(f'Updater {name} has {len(rows)} AAPT2 resource blocks')
+            continue
+        body=rows[0];value=None;valid=False
+        try:
+            if kind=='string' and len(body)==1 and body[0].startswith('() '):
+                value=json.loads(body[0][3:]);valid=isinstance(value,str)
+            elif kind=='array' and len(body)==2:
+                count=re.fullmatch(r'\(\) \(array\) size=(0|[1-9][0-9]*)',body[0])
+                if count:
+                    value=json.loads(body[1]);valid=isinstance(value,list) and all(isinstance(x,str) for x in value) \
+                        and len(value)==int(count.group(1))
+        except (ValueError,TypeError):pass
+        if not valid:failures.append(f'Updater {name} is not a single well-formed AAPT2 default {kind}')
+        elif value!=want:failures.append(f'Updater compiled {name} is {value!r}, expected {want!r}')
+    return failures
+
+
 def observe_components(vendor_props, updater, trust_store, build, epoch, tools, pins,
                        execute=subprocess.run, workdir=None, origin='target-files'):
     """The same baseline checks on explicitly proven image/target-files components."""
@@ -202,13 +237,16 @@ def observe_components(vendor_props, updater, trust_store, build, epoch, tools, 
             compiled = [member(package, name, 128 << 20) for name in dexes]
             if not all(any(descriptor in dex for dex in compiled) for descriptor in descriptors):
                 raise ValueError('packaged Updater discovery classes not observed; diagnose baseline compatibility before proceeding')
-        result = execute([tools['aapt'], 'dump', '--values', 'resources', str(apk)], capture_output=True, text=True, timeout=120)
+        modern=Path(tools['aapt']).name=='aapt2'
+        command=[tools['aapt'],'dump']+(['resources'] if modern else ['--values','resources'])+[str(apk)]
+        result=execute(command,capture_output=True,text=True,timeout=120)
         if result.returncode:
-            raise ValueError('packaged Updater resources could not be read')
+            detail=str(getattr(result,'stderr','')).strip()[:1024]
+            raise ValueError(f'packaged Updater resources could not be read ({Path(tools["aapt"]).name} exit {result.returncode}): '+detail)
         expected = {('string', 'url'): route['updaterUrl'], ('string', 'release_index'): route['releaseIndex'],
                     ('string', 'channel_default'): 'prod', ('array', 'channel_published'): ['stable'],
                     ('array', 'channel_values'): ['prod', 'stable', 'alpha']}
-        failures = pipeline.updater_failures(result.stdout, expected)
+        failures = aapt2_updater_failures(result.stdout,expected) if modern else pipeline.updater_failures(result.stdout,expected)
         if failures:
             raise ValueError('; '.join(failures))
         result = execute([tools['aapt'], 'dump', 'badging', str(apk)], capture_output=True, text=True, timeout=120)
