@@ -16,3 +16,4 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/VisionInput.java os/background-control/tests/VisionInputTest.java
 java -cp "$OUT/vision-input" dev.pixel.backgroundcontrol.VisionInputTest
 python3 os/background-control/tests/test_vision_input_wiring.py
+python3 os/background-control/tests/test_multi_session_wiring.py
