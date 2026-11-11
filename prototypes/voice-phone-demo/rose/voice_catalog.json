@@ -1,0 +1,260 @@
+{
+  "source": {
+    "repo": "gradium/phonon-voices",
+    "revision": "0ee17205f254b5abc43b266c8a0f215565c352f7",
+    "model": "gradium/phonon-31m-en",
+    "license": "Apache-2.0"
+  },
+  "voices": {
+    "zoey": {
+      "voice_id": "NbpkqMVS3CJeq2j8",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/female/1_zoey_NbpkqMVS3CJeq2j8",
+      "quality": "existing",
+      "sha256": "97c7f8c253413574406ab80dd23f49c3ebb2517163b00a9bf86b9c4cf43e7e23"
+    },
+    "harper": {
+      "voice_id": "4SZHfMpw-p46Ywgs",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/female/4_harper_4SZHfMpw-p46Ywgs",
+      "quality": "existing",
+      "sha256": "6b3da6e2d796a20c51af892c482bd6509fb88267a221aff83c870843dee2a123"
+    },
+    "everly": {
+      "voice_id": "vjFyp2BcCyTlUmYb",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/female/3_everly_vjFyp2BcCyTlUmYb",
+      "quality": "existing",
+      "sha256": "958ea94da14f46dd48c7f64adac11ed2ad2aa45f7ccd165dfebab5272664402e"
+    },
+    "juniper": {
+      "voice_id": "NIWIOv5vTi5eRMj8",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/female/2_juniper_NIWIOv5vTi5eRMj8",
+      "quality": "existing",
+      "sha256": "444378eb06b7c492b86e8fc7d13e4db1a3c0cf3e68891a960bf6f0a41a13ef35"
+    },
+    "hadley": {
+      "voice_id": "bXwrkHhURL1VFJdG",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/female/5_hadley_bXwrkHhURL1VFJdG",
+      "quality": "existing",
+      "sha256": "a879938aa9a2df0a8220bdadef88137929f71e887bd91e7db205bd5fa11661d2"
+    },
+    "delia": {
+      "voice_id": "nGzMHMPAWGaJFHOo",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/female/6_delia_nGzMHMPAWGaJFHOo",
+      "quality": "existing",
+      "sha256": "a0c3dcb91b2247eca56536be9ae8e8becc1c807b1136c5fe101552d6a155b24a"
+    },
+    "easton": {
+      "voice_id": "LMDIYE0Oa377Qh6Z",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/male/1_easton_LMDIYE0Oa377Qh6Z",
+      "quality": "existing",
+      "sha256": "45c582673cb20edb04ddcca2b5a8865ddfb0a82599efadb269021e87d20fbdd4"
+    },
+    "micah": {
+      "voice_id": "40QrMVgAxFiUnP9f",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/male/2_micah_40QrMVgAxFiUnP9f",
+      "quality": "existing",
+      "sha256": "0de1098d1051686a138d068e83ff09deb5053328bc74ec9541a1fdb90bfc24da"
+    },
+    "miles": {
+      "voice_id": "d9XCyhjo4JhkHF1d",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/male/6_miles_d9XCyhjo4JhkHF1d",
+      "quality": "existing",
+      "sha256": "eab20e4f159b48cfbc01b1885804e24f681f80e7a64f909182763a4e3361bee8"
+    },
+    "maeve": {
+      "voice_id": "6PWnV0Nq4wu7RVBT",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/female/1_maeve_6PWnV0Nq4wu7RVBT",
+      "quality": "pending_listening",
+      "sha256": "56494ee67d533ad227ff0dfd0b1c13ff5aa91f1ad6e596e66c2986ba3005e844"
+    },
+    "freya": {
+      "voice_id": "GgfEkEJtxZR7gnpy",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/female/2_freya_GgfEkEJtxZR7gnpy",
+      "quality": "pending_listening",
+      "sha256": "eb3cd47418349e618408c16bea7153988b3ad04b41a6033039dd474a9a4dcd23"
+    },
+    "pippa": {
+      "voice_id": "uem82D50GRv2Dwma",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/female/3_pippa_uem82D50GRv2Dwma",
+      "quality": "pending_listening",
+      "sha256": "d41a8f01d6e33450f1ce062d332914da10beee99e585dab531750706f187c48a"
+    },
+    "elodie_rose": {
+      "voice_id": "y9bQqIDnyxwqK01t",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/female/4_elodie_rose_y9bQqIDnyxwqK01t",
+      "quality": "pending_listening",
+      "sha256": "21eade9d83b2e66b9364e1b6cd999a3a6704c000a71f27f34e05ace5cdfd58bb"
+    },
+    "imogen": {
+      "voice_id": "gDT1nz7Ie36ZhL-C",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/female/5_imogen_gDT1nz7Ie36ZhL-C",
+      "quality": "pending_listening",
+      "sha256": "1980ab3c35fa98a25b5f3b5e643fd852e14ca8a12a4a26b06aaf1abf2a8c68b1"
+    },
+    "lottie": {
+      "voice_id": "m9MxpY6IUGXtWp76",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/female/6_lottie_m9MxpY6IUGXtWp76",
+      "quality": "pending_listening",
+      "sha256": "a906ebf17e43fded12b3d6bd077abb2df33bc86eff51c1beeb82e5d416527db3"
+    },
+    "bryony": {
+      "voice_id": "gfP44RlHwr2kEwk7",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "female",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/female/7_bryony_gfP44RlHwr2kEwk7",
+      "quality": "pending_listening",
+      "sha256": "bcc207a73b7885e45b49ab633d3377a10158292e3a7cef9cd6764ad107f1cb9b"
+    },
+    "alfie": {
+      "voice_id": "X6NceqF285Gr04gb",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/male/1_alfie_X6NceqF285Gr04gb",
+      "quality": "pending_listening",
+      "sha256": "4de75497fff3030168e8aa6dca23ffeb332b1bc8c25d0bf3507ceadac953ae9c"
+    },
+    "hugh": {
+      "voice_id": "YyKcxPG7iIgS3jsK",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/male/2_hugh_YyKcxPG7iIgS3jsK",
+      "quality": "pending_listening",
+      "sha256": "3169d74b47a54d1eb15e4c243f56393abe9fe90c7e1c308ecf96ee67618b152a"
+    },
+    "edwin": {
+      "voice_id": "zUCxzrOrugTSis03",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/male/3_edwin_zUCxzrOrugTSis03",
+      "quality": "pending_listening",
+      "sha256": "ff1d0735b8b45710462b1d1f846da040f970c6eb62c7c2f36dbfb8e5bde74f1e"
+    },
+    "spencer": {
+      "voice_id": "JOW0vchyswkQUMDS",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/male/4_spencer_JOW0vchyswkQUMDS",
+      "quality": "pending_listening",
+      "sha256": "cc9ac1107b0ffce282374a19beb7bfa95847724e6b7afbac991b4ae4277d5e6d"
+    },
+    "toby": {
+      "voice_id": "dME3IWyZBvmh1n1q",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/male/5_toby_dME3IWyZBvmh1n1q",
+      "quality": "pending_listening",
+      "sha256": "09ab315c7f4b72b4d71e66cb756184cedfb1f14d222d096e115bf95bfe7b29dc"
+    },
+    "teddy": {
+      "voice_id": "Zn7g6NxLqXlJb7Qi",
+      "language": "en",
+      "locale": "en-gb",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-gb/male/6_teddy_Zn7g6NxLqXlJb7Qi",
+      "quality": "pending_listening",
+      "sha256": "baea0ea9506f3237a5ebfc61afb7c72dbd189c5603b199ef42fbb00dbda379e0"
+    },
+    "trevor": {
+      "voice_id": "0zLApsZfVLLNaEGl",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/male/3_trevor_0zLApsZfVLLNaEGl",
+      "quality": "pending_listening",
+      "sha256": "dc1341c8937af5534e6bbcc5c0fc5e7c10312229b59061228074f93683fe2261"
+    },
+    "russell": {
+      "voice_id": "_6Aslh2DxfmnRLmP",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/male/4_russell__6Aslh2DxfmnRLmP",
+      "quality": "pending_listening",
+      "sha256": "beae9e4030efce0a935fcb0f807dc0784d598bcaa87ad4aacb047436b1eaa411"
+    },
+    "preston": {
+      "voice_id": "qIxlZ7Ei8KvWlyQH",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "male",
+      "category": "ordinary",
+      "sample_dir": "samples/31m/en/en-us/male/5_preston_qIxlZ7Ei8KvWlyQH",
+      "quality": "pending_listening",
+      "sha256": "6e04b84d3ae8751b22bca0a4f63936f9cb648f4f2182b2d0788071ea1c0b68a1"
+    }
+  }
+}

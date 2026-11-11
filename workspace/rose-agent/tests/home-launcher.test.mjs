@@ -275,7 +275,8 @@ test('Home\'s edge stays fixed over the swiping pages and reaches the screen bot
 test('the overview well asks for the real system overview through the one permitted route (OS-OVERVIEW-156-M001)',()=>{
  // The selected glyph stays; the well is one focusable, clickable action whose only click is the overview callback.
  const well=homeTray.slice(homeTray.indexOf('FrameLayout switcher = control(activity);'),homeTray.indexOf('addView(switcher'));
- assert.match(well,/glyph\.setBackground\(new OxbloodEdge\.SwitcherGlyph\(density\)\);/);
+ assert.match(well,/BackgroundSwitcherView glyph = new BackgroundSwitcherView\(activity,density\);/);
+ assert.match(read('../app/src/dev/pixel/voice/BackgroundSwitcherView.java'),/setBackground\(new OxbloodEdge\.SwitcherGlyph\(density\)\);/);
  assert.match(well,/switcher\.setOnClickListener\(v -> openOverview\.run\(\)\);/);
  assert.ok(!well.includes('setEnabled(false)')&&!homeTray.includes('not available yet'),'the obsolete disabled placeholder is gone');
  for(const fake of ['GLOBAL_ACTION','startActivity','Intent','WorkspaceLauncher','apps'])assert.ok(!well.includes(fake),fake);
@@ -320,7 +321,7 @@ test('the tray Rose reads real state once per tick and stops when Home is hidden
  assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable\);/);
  assert.match(main,/protected void onDestroy\(\)\{closeSystemFolder\(\);if\(homeTray!=null\)homeTray\.release\(\);/);
  assert.match(homeTray,/void show\(ConversationState conversation, RoseVisualState visual, boolean micMuted\) \{\n  if \(released\) return;/);
- assert.match(homeTray,/void release\(\) \{\n  released = true;\n \}/);
+ assert.match(homeTray,/void release\(\) \{\n  released = true;\n  switcherGlyph\.release\(\);\n \}/);
  // One mount point for the pearl; no second poller, timer or animation of Home's own (#410: Home's pearl is static).
  assert.equal((homeTray.match(/void applyVisual\(RoseVisualState visual\)/g)||[]).length,1);
  assert.equal((homeTray.match(/new RosePearl\(/g)||[]).length,1);

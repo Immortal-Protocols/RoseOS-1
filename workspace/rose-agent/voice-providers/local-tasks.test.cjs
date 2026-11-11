@@ -260,3 +260,19 @@ test('closing a connection twice never stops or deafens a newer connection',asyn
  handler({type:'status',status:'live'});await next;
 });
 
+
+
+test('executing receipts refresh only on actual producer samples, not client timers',async()=>{
+ const p=page();live(p);await p.started;
+ const task={...produced[0].task,status:'running',server:'activity-test',contract:1,background:true,
+  activity:{version:1,sample:100,executing:true}};
+ p.send({type:'task',task});const first=p.lists.length;
+ assert.equal(p.last()[0].activity.executing,true);
+ p.send({type:'task',task});assert.equal(p.lists.length,first,'same sample dedupes');
+ p.send({type:'task',task:{...task,activity:{...task.activity,sample:101}}});
+ assert.equal(p.lists.length,first+1,'new authoritative sample reaches native');
+ p.send({type:'task',task:{...task,status:'done',activity:{version:1,sample:102,executing:false}}});
+ assert.equal(p.last()[0].activity.executing,false);
+ p.send({type:'task',task:{...task,activity:{...task.activity,sample:103}}});
+ assert.equal(p.last()[0].status,'done','late executing receipt cannot resurrect completed task');
+});

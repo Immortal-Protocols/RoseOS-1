@@ -20,6 +20,15 @@ controller's provider accepts only callers with its own signing certificate, so
 Rose Agent and the controller must share the app signing identity, as the policy
 already checks.
 
+Raised-edge activity uses this same trusted STATE channel, separate from voice
+state and controller readiness. SystemUI mirrors only a validated activity phase,
+producer expiry and boot count to `Settings.Global.rose_background_activity_v1`;
+Launcher3 observes it read-only. The mirror is owner-user-only and cleared on link
+reset and SystemUI startup. Cached receipts expire after at most three seconds,
+including after a process crash. No new permission or external endpoint is added.
+See [background life](BACKGROUND-LIFE.md) for lifecycle semantics and verification
+limits. This is source wiring, not an installed or visually accepted release.
+
 Before `--agent-tray`, the repository applied the tray code but never enabled it.
 Only the historical Mustang scripts and the Fold patch set the property for one
 device. The new patch sets it in `generic_system.mk`. Confirm that the target
@@ -214,6 +223,16 @@ Rose Agent's own entries route in `MainActivity` (`HomeEntry`):
 - A HOME intent shows Rose Home.
 - The app icon (MAIN/LAUNCHER) shows Rose Home with the Rose conversation
   (`RoseConversationActivity`) opened over it, so Back returns to Rose Home.
+
+The raised tray's Rose button instead starts `RoseTrayEntry`, an activity alias
+for the existing single-task conversation. The alias requires
+`android.permission.INTERNAL_SYSTEM_WINDOW`, which Launcher3 already holds;
+the conversation component itself remains unexported. It never starts MainActivity
+or a HOME/LAUNCHER intent. This preserves the Shell's app → Rose focus transition,
+so the unchanged exact-task return path can restore the source app rather than
+losing its target when Home intervenes. No return task identifier comes from the
+caller. A missing, disabled or permission-denied entry displays a failure notice
+and does not navigate Home. The OS and bundled Rose Agent must ship together.
 
 Agent 302 (build 2026102804) kept the legacy voice page for the app icon, which is
 why its icon showed the blue "Tap to talk" screen.

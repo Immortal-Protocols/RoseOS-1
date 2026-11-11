@@ -138,9 +138,10 @@ class CallTest(unittest.TestCase):
               'customization': {'theme': 'glacier', 'themeLabel': 'Glacier', 'revision': 9},
               'home': {'appliedRevision': 8, 'applied': False}, 'system': {'shown': 'oxblood', 'applied': False}}
 
-    def test_a_theme_is_done_only_when_home_and_the_system_show_it(self):
+    def test_a_theme_is_done_only_when_home_conversation_and_system_show_it(self):
         home_only = {'status': 'ok', 'home': {'appliedRevision': 9, 'applied': True}, 'system': {'shown': 'oxblood', 'applied': False}}
-        both = {'status': 'ok', 'home': {'appliedRevision': 9, 'applied': True}, 'system': {'shown': 'glacier', 'applied': True}}
+        both = {'status': 'ok', 'home': {'appliedRevision': 9, 'applied': True}, 'system': {'shown': 'glacier', 'applied': True},
+                'conversation': {'requested': 'glacier', 'shown': 'glacier', 'applied': True, 'state': 'applied'}}
         link = FakeLink(self.THEMED, states=[home_only, both])
         out = c.call(FakePhone(link), 'customization_theme', {'theme': 'glacier'})
         self.assertEqual(link.calls[0]['params'], {'theme': 'glacier'})
@@ -163,6 +164,104 @@ class CallTest(unittest.TestCase):
         never = {'status': 'ok', 'home': {'appliedRevision': 8, 'applied': False}, 'system': {'shown': 'glacier', 'applied': True}}
         out = c.call(FakePhone(FakeLink(self.THEMED, states=[never])), 'customization_theme', {'theme': 'glacier'})
         self.assertEqual((out['ok'], out['outcome']), (False, 'saved_not_shown'))
+
+    @staticmethod
+    def theme_state(*, theme='glacier', revision=9, conversation='applied', system=True, home=True):
+        ack = {'requested': theme, 'shown': theme if conversation == 'applied' else None,
+               'applied': conversation == 'applied', 'state': conversation}
+        state = {'status': 'ok', 'customization': {'theme': theme, 'revision': revision},
+                 'home': {'appliedRevision': revision, 'applied': home},
+                 'system': {'shown': theme if system else 'oxblood', 'applied': system}}
+        if conversation is not None:
+            state['conversation'] = ack
+        return state
+
+    def test_deferred_conversation_never_claims_done_despite_home_and_system(self):
+        deferred = self.theme_state(conversation='deferred')
+        link = FakeLink(self.THEMED, states=[deferred])
+        out = c.call(FakePhone(link), 'customization_theme', {'theme': 'glacier'})
+        self.assertEqual((out['ok'], out['outcome']), (False, 'shown_on_home'))
+        self.assertIn('after Return, Stop or Background Work closes', out['message'])
+        self.assertNotIn('everywhere', out['message'])
+        self.assertEqual(out['conversation'], deferred['conversation'])
+        self.assertEqual(len(link.calls), 1 + int(c.APPLY_WAIT_S / c.APPLY_POLL_S))
+        self.assertEqual(sum(x['operation'] == 'customization_theme' for x in link.calls), 1)
+
+    def test_closing_flow_waits_for_replacement_frame_before_done(self):
+        states = [self.theme_state(conversation=k) for k in ('deferred', 'not_open', 'pending', 'applied')]
+        link = FakeLink(self.THEMED, states=states)
+        out = c.call(FakePhone(link), 'customization_theme', {'theme': 'glacier'})
+        self.assertEqual((out['ok'], out['outcome'], len(link.calls)), (True, 'applied', 5))
+        self.assertEqual(out['conversation']['state'], 'applied')
+        self.assertEqual(sum(x['operation'] == 'customization_theme' for x in link.calls), 1)
+
+    def test_legacy_closed_and_malformed_acknowledgments_are_not_completion(self):
+        for ack in (None, {}, 'not-a-state', {'applied': True},
+                    {'requested': 'glacier', 'shown': 'glacier', 'applied': True, 'state': 'pending'},
+                    {'requested': 'oxblood', 'shown': 'glacier', 'applied': True, 'state': 'applied'},
+                    {'requested': 'glacier', 'shown': 'oxblood', 'applied': True, 'state': 'applied'}):
+            result = dict(self.theme_state(), status='verified', conversation=ack)
+            out = c.outcome('customization_theme', result)
+            self.assertEqual((out['ok'], out['outcome']), (False, 'shown_on_home'), ack)
+            self.assertNotIn('everywhere', out['message'])
+        result = dict(self.theme_state(conversation='not_open'), status='verified')
+        out = c.outcome('customization_theme', result)
+        self.assertEqual(out['outcome'], 'shown_on_home')
+        self.assertIn('when next opened', out['message'])
+
+    def test_matching_initial_frame_needs_no_poll(self):
+        for theme in ('glacier', 'oxblood'):
+            result = dict(self.theme_state(theme=theme), status='verified')
+            link = FakeLink(result)
+            out = c.call(FakePhone(link), 'customization_theme', {'theme': theme})
+            self.assertEqual((out['ok'], out['outcome'], len(link.calls)), (True, 'applied', 1))
+
+    def test_does_not_combine_acknowledgments_from_different_snapshots(self):
+        # First the old activity drew, without SystemUI. By its next read the activity
+        # has been replaced. The two partial snapshots cannot prove global completion.
+        first = self.theme_state(system=False)
+        second = self.theme_state(conversation='pending')
+        link = FakeLink(self.THEMED, states=[first, second])
+        out = c.call(FakePhone(link), 'customization_theme', {'theme': 'glacier'})
+        self.assertEqual(out['outcome'], 'shown_on_home')
+        self.assertFalse(out['conversation']['applied'])
+        self.assertTrue(out['system']['applied'])
+
+    def test_newer_reverse_theme_does_not_complete_original_request(self):
+        later = self.theme_state(theme='oxblood', revision=10)
+        out = c.call(FakePhone(FakeLink(self.THEMED, states=[later])), 'customization_theme', {'theme': 'glacier'})
+        self.assertFalse(out['ok'])
+        self.assertNotIn('everywhere', out['message'])
+        self.assertEqual(out['customization']['theme'], 'glacier')
+        self.assertEqual(out['home']['appliedRevision'], 10)
+        self.assertIn('newer customization settings', out['message'])
+        self.assertEqual(out['currentCustomization']['theme'], 'oxblood')
+
+    def test_same_theme_newer_customization_revision_is_not_promised_to_draw_later(self):
+        later = self.theme_state(revision=10)
+        later['customization']['homeColumns'] = 5
+        link = FakeLink(self.THEMED, states=[later])
+        out = c.call(FakePhone(link), 'customization_theme', {'theme': 'glacier'})
+        self.assertFalse(out['ok'])
+        self.assertIn('newer customization settings', out['message'])
+        self.assertNotIn('when Rose Home next draws', out['message'])
+        self.assertEqual(out['currentCustomization']['revision'], 10)
+        self.assertEqual(len(link.calls), 2)
+
+    def test_direct_mismatched_home_revision_or_system_theme_does_not_complete(self):
+        result = dict(self.theme_state(), status='verified')
+        result['home'] = {'applied': True, 'appliedRevision': 8}
+        self.assertEqual(c.outcome('customization_theme', result)['outcome'], 'saved_not_shown')
+        result = dict(self.theme_state(), status='verified')
+        result['system'] = {'shown': 'oxblood', 'applied': True}
+        self.assertEqual(c.outcome('customization_theme', result)['outcome'], 'shown_on_home')
+
+    def test_state_read_preserves_surface_evidence_without_claiming_draw(self):
+        state = self.theme_state(conversation='deferred')
+        out = c.call(FakePhone(FakeLink(state)), 'customization_state', {})
+        self.assertTrue(out['ok'])  # Successful read, not a mutation acknowledgment.
+        self.assertEqual(out['conversation'], state['conversation'])
+        self.assertNotIn('message', out)
 
     def test_an_oxblood_wallpaper_refused_in_glacier_is_rejected(self):
         refused = {'status': 'error', 'reason': 'That wallpaper belongs to Oxblood; Glacier draws its own. Switch to Oxblood first'}

@@ -33,14 +33,14 @@ class CodexClient:
             self.process.stdin.write(json.dumps(message) + '\n')
             self.process.stdin.flush()
 
-    def request(self, op, session, **params):
+    def request(self, op, session, _timeout=100, **params):
         fid = next(self.ids)
         future = concurrent.futures.Future()
         with self.lock:
             self.pending[fid] = future
         try:
             self.send(dict(id=fid, op=op, session=session, **params))
-            return future.result(timeout=100)
+            return future.result(timeout=_timeout)
         finally:
             with self.lock:
                 self.pending.pop(fid, None)
@@ -75,10 +75,13 @@ class CodexClient:
         with self.lock:
             if not self.closed:
                 self.process.stdin.close()
+        forced = False
         try:
-            self.process.wait(timeout=5)
+            code = self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            forced = True
             self.process.kill()
-            self.process.wait(timeout=5)
+            code = self.process.wait(timeout=5)
         self.reader.join(timeout=5)
         self.process.stdout.close()
+        return not forced and code == 0 and not self.reader.is_alive()

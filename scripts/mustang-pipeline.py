@@ -179,6 +179,8 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
             bootstrap_collector.proof.deps.read_event(os.environ))
         verifier = module('mustang_app_input_verify','app-inputs-verify.py')
         admission = verifier.verify(ROOT/runtime['appInputsRecord'], inputs_dir, runtime['tools'])
+        if runtime.get('frozenAppInputs') and os.environ.get('GITHUB_RUN_NUMBER') == str(runtime['frozenAppInputs']['workflowRunNumber']):
+            admission['sourceChoice'] = runtime['frozenAppInputs']
     run_root = base/f'mustang-prep-{run_id}-{attempt}'
     # Basic overwrite/access protections remain; no independent safe-path test suite is run.
     if not base.is_dir() or engine.symlink_in(run_root) or os.path.lexists(run_root):

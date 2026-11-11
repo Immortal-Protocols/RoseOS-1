@@ -46,7 +46,7 @@ test('voice, results, Watch/Stop, notices and Update Rose Agent are unchanged',(
  assert.match(tap,/checkSelfPermission\("android\.permission\.RECORD_AUDIO"\)!=PackageManager\.PERMISSION_GRANTED/);
  assert.match(tap,/send\("talk"\);/);assert.ok(!/mute/.test(tap),'Disconnect never mutes');
  assert.match(activity,/mic\.setOnClickListener\(v->\{if\(state!=null&&state\.active\(\)\)send\(state\.muted\?"tray_unmute":"tray_mute"\);\}\);/);
- assert.match(activity,/mic\.setContentDescription\(state\.muted\?"Rose’s microphone is muted\. Unmute":"Mute Rose’s microphone"\);/);
+ assert.match(activity,/mic\.setContentDescription\(state\.muted\?agentName\+"’s microphone is muted\. Unmute":"Mute "\+agentName\+"’s microphone"\);/);
  // F08: still only during a live call, and now only where the OS Rose chin is not reachable (RoseChin).
  assert.match(activity,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\),navigationMode\(\)\)\?View\.VISIBLE:View\.GONE\);/);
  assert.match(activity,/setOnClickListener\(v->openWorkspace\(\)\)/);assert.match(activity,/setPositiveButton\("Stop task",\(d,w\)->sendStop\(id\)\)/);
@@ -55,7 +55,7 @@ test('voice, results, Watch/Stop, notices and Update Rose Agent are unchanged',(
  assert.ok(!/Interrupt|EditText|Listening…|Speaking…/.test(activity),'no composer, Interrupt or listening/speaking notice');
 });
 test('Oxblood composition: header pearl and title, upper-right work entry, caption, results type and one Connect/Disconnect (#410)',()=>{
- assert.match(activity,/title\.setText\("Rose"\);title\.setAccessibilityHeading\(true\)/);
+ assert.match(activity,/title\.setText\(LocalAssistantIdentity.name\(this\)\);title\.setAccessibilityHeading\(true\)/);
  assert.match(activity,/caption\.setImportantForAccessibility\(View\.IMPORTANT_FOR_ACCESSIBILITY_NO\)/,'the caption is not a notice or a second announcement');
  assert.match(activity,/ConversationPresentation\.of\([^;]*,t\.visible,cfg\.fontScale\)/,'type sizes from the tested layout (ConversationPresentationTest)');
  assert.match(activity,/taskTitle=presentedText\(ConversationPresentation\.TITLE_SP,ink\(\)/);assert.match(activity,/taskBody=presentedText\(ConversationPresentation\.BODY_SP,ink2\(\)/);
@@ -68,7 +68,7 @@ test('Oxblood composition: header pearl and title, upper-right work entry, capti
  assert.match(activity,/slots\.add\(new String\[\]\{jsonString\(x,"sessionId"\),jsonString\(x,"status"\)\}\)/,'only each slot\'s id and status are kept');
  assert.doesNotMatch(activity,/workGlyph\.set\([^;]*"launching"/,'the work button never lights while a session is only launching');
  assert.match(activity,/connect\.setBackground\(new OxbloodRose\.Pill\(density\)\);/);
- assert.match(activity,/connect\.setContentDescription\(live\?\(state\.phase==ConversationState\.Phase\.CONNECTING\?"Cancel connecting to Rose":"Disconnect from Rose"\):"Connect to Rose"\);/);
+ assert.match(activity,/connect\.setContentDescription\(live\?\(state\.phase==ConversationState\.Phase\.CONNECTING\?"Cancel connecting to "\+agentName:"Disconnect from "\+agentName\):"Connect to "\+agentName\);/);
  assert.match(activity,/if\(!t\.visible\)\{shownTaskId="";shownTaskActive=false;return;\}/);
  assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctl\);boolean canWatch=!localTask&&ws\.canWatch;/,'the Node task\'s View workspace keeps the classified read; local cards stay read-only');
  assert.match(activity,/boolean canStop=!localTask&&running&&stopPendingFor==null&&!stopInFlight;/,'local task cards never call the unrelated Node task Stop route');

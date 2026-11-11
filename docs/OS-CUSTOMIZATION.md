@@ -55,8 +55,14 @@ the four controls above are unchanged.
 - **Reaching other processes.** Rose Agent stores the choice beside the other controls and sends it on the existing
   SystemUI tray link. SystemUI applies it, mirrors it to `Settings.Global rose_theme` with its existing permission for
   Launcher3 and the keyboard, and acknowledges what it shows.
-- **Truthful outcomes.** A theme is reported `applied` only when Home drew that revision (`home.applied`) and SystemUI
-  acknowledged drawing it (`system.applied`). Otherwise the outcome is `shown_on_home` or `saved_not_shown`.
+- **Truthful outcomes.** A theme is reported `applied` only when Home acknowledges that revision (`home.applied`),
+  the independently hosted Rose screen acknowledges its drawn frame (`conversation.applied`, with matching
+  `requested` and `shown` theme), and SystemUI acknowledges that theme (`system.applied`). Otherwise the outcome is
+  `shown_on_home` or `saved_not_shown`. The conversation reports `deferred` while Return, Stop or Background Work
+  prevents rebuilding, `pending` until a new frame, or `not_open` when no conversation screen exists. An older phone
+  without that acknowledgment cannot justify an all-surfaces completion claim. Reads are bounded and never retry the
+  theme write; later customization revisions are reported as superseding the original request, not as a change still
+  waiting to draw. See [deferred rebuild regression](GLACIER-DEFERRED-REBUILD-REGRESSION.md) for source tests and limits.
 - No new permission, exported component or endpoint.
 
 Excluded from 1O (the theme came later, as 1E): web-app shortcuts, motion controls and general widgets. Also excluded: an exported or

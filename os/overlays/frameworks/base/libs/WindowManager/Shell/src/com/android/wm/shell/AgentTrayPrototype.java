@@ -124,9 +124,10 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         if (message.what == AgentTrayLink.Return.CANCEL) return true;
         if (message.what != 100) return true;
         Bundle data = message.getData();
-        if (data.getInt("protocolVersion") != 1) return true;
+        if (data.getInt("protocolVersion") != 1) { mirrorBackgroundActivity(null); return true; }
         // Plan 1E: Rose Agent's theme choice; SystemUI applies, mirrors and acknowledges it (RoseThemeMirror).
         theme.fromRose(data.getString(RoseTheme.TRAY_KEY));
+        mirrorBackgroundActivity(data.getString("backgroundActivity"));
         listening = data.getBoolean("listening");
         muted = data.getBoolean("muted");
         if (view != null) view.describe();
@@ -231,6 +232,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         SystemProperties.addChangeCallback(() -> handler.post(this::chinMaybeChanged));
         // Plan 1E: the last theme is drawn before Rose answers, and an outside change of the setting is followed.
         theme.start();
+        mirrorBackgroundActivity(null);
         RoseThemeMirror.listen(() -> { if (view != null) view.invalidate(); });
         context.getContentResolver().registerContentObserver(
                 Settings.Global.getUriFor(RoseTheme.SETTING_KEY), false,
@@ -250,7 +252,24 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         } catch (android.content.pm.PackageManager.NameNotFoundException e) { return false; }
     }
 
+    // Same trusted Settings.Global writer as the theme. Deadline is producer-owned, never renewed here.
+    private void mirrorBackgroundActivity(String value) {
+        try {
+            int boot = Settings.Global.getInt(context.getContentResolver(), Settings.Global.BOOT_COUNT, -1);
+            String next = AgentStatusControls.backgroundActivity(link.user() == 0 ? value : null,
+                    boot, System.nanoTime() / 1000000);
+            String key = "rose_background_activity_v1";
+            if (!next.equals(Settings.Global.getString(context.getContentResolver(), key))) {
+                Settings.Global.putString(context.getContentResolver(), key, next);
+            }
+        } catch (RuntimeException e) {
+            // A failed write cannot prolong an old receipt: readers expire its original deadline.
+            Log.w(TAG, "Rose activity setting not written", e);
+        }
+    }
+
     private void clearState() {
+        mirrorBackgroundActivity(null);
         connected = listening = muted = active = false;
         if (view != null) view.describe();
         controls.cancel();

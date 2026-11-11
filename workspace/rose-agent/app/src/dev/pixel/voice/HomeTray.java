@@ -28,6 +28,7 @@ final class HomeTray extends LinearLayout {
    CONTROL_H_DP = OxbloodEdge.CONTROL_H_DP, GAP_DP = OxbloodEdge.GAP_DP, PEARL_DP = OxbloodEdge.PEARL_DP;
  final View presence, overview, mic;
  final RosePearl pearl;
+ final BackgroundSwitcherView switcherGlyph;
  final OxbloodEdge.MicGlyph micGlyph;
  /** The mute last shown (RoseMicInput.shown). */
  boolean shownMicMuted;
@@ -76,9 +77,8 @@ final class HomeTray extends LinearLayout {
   addView(micControl, micParams);
 
   FrameLayout switcher = control(activity);
-  View glyph = new View(activity);
-  glyph.setBackground(new OxbloodEdge.SwitcherGlyph(density));
-  glyph.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+  BackgroundSwitcherView glyph = new BackgroundSwitcherView(activity,density);
+  switcherGlyph= glyph;
   switcher.addView(glyph, new FrameLayout.LayoutParams(activity.dp(OxbloodEdge.SwitcherGlyph.BOX_W_DP), activity.dp(OxbloodEdge.SwitcherGlyph.BOX_H_DP), Gravity.CENTER));
   switcher.setOnClickListener(v -> openOverview.run());
   overview = switcher;
@@ -113,6 +113,7 @@ final class HomeTray extends LinearLayout {
   applyVisual(visual);
   boolean available = overviewAvailable.getAsBoolean();
   if (available != shownOverviewAvailable) applyOverview(available);
+  switcherGlyph.show(visual.animate&&available);
  }
 
  /** The switcher control at full strength with its action when the route is available, dimmed with the reason when not. */
@@ -125,6 +126,7 @@ final class HomeTray extends LinearLayout {
  /** The edge is leaving (frame rebuilt, activity destroyed): accept no further frames. */
  void release() {
   released = true;
+  switcherGlyph.release();
  }
 
  /** The mic well: Rose's microphone-input mute, named for what a tap does. */

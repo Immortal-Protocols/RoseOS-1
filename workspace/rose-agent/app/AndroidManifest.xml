@@ -35,6 +35,8 @@
 <provider android:name=".CameraMicrophoneProvider" android:authorities="dev.pixel.voice.camera-microphone" android:exported="true" android:permission="dev.pixel.voice.permission.CAMERA_CONTEXT"/>
 <provider android:name=".SettingsAgentProvider" android:authorities="dev.pixel.voice.agent" android:exported="true"/>
 <activity android:name=".RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:taskAffinity="dev.pixel.voice.conversation" android:launchMode="singleTask" android:excludeFromRecents="true" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
+<!-- Raised tray navigation only: direct to the existing conversation task, never through Home. -->
+<activity-alias android:name=".RoseTrayEntry" android:targetActivity=".RoseConversationActivity" android:exported="true" android:permission="android.permission.INTERNAL_SYSTEM_WINDOW"/>
 <activity android:name=".PairingActivity" android:exported="false"/>
 <activity android:name=".LocalRosePairActivity" android:exported="true" android:launchMode="singleTop" android:screenOrientation="portrait" android:excludeFromRecents="true" android:label="Pair with Rose"><intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="roseagent" android:host="pair"/></intent-filter></activity>
 <activity android:name=".SettingsAccessActivity" android:exported="false"/>

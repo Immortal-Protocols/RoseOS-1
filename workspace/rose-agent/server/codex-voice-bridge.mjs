@@ -1,6 +1,7 @@
 // Private stdio IPC for rose.app. Codex remains the only app-server adapter.
 import {createInterface} from 'node:readline';
 import {Codex} from './codex.mjs';
+import {lifeResearchPolicy,publicPageReceipt} from './life-research.mjs';
 
 const sessions = new Map(), calls = new Map();
 let nextCall = 0;
@@ -17,9 +18,11 @@ async function handle(m) {
  }
  if(m.op==='open') {
   if(sessions.has(m.session))throw Error('Session already exists');
+  const research=m.purpose==='public_research';
+  if(research && (!Array.isArray(m.tools)||m.tools.length))throw Error('Research cannot have phone tools');
   const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,threadId:c.thread,...event});};
-  const c=new Codex(m.cwd, '', null, {externalPhone:true,model:m.model,
-   developerInstructions:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
+  const c=new Codex(m.cwd, '', null, {externalPhone:true,publicResearch:research,model:m.model,
+   developerInstructions:research?lifeResearchPolicy:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
    handleToolCall:params=>new Promise(resolve=>{
     const callId=String(++nextCall);
     const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());cancelled(m.session,callId);},60000);
@@ -33,8 +36,28 @@ async function handle(m) {
   c.on('done',turn=>publish({event:'done',turn:{id:turn.id,status:turn.status,
    error:turn.error?{message:'Codex turn failed'}:null}}));
   c.on('failure',()=>publish({event:'failure',message:'Codex process stopped'}));
+  if(research)c.on('toolEvidence',item=>{
+   const source=publicPageReceipt(item);
+   if(source)publish({event:'research_source',source});
+  });
+  if(research){
+   let webCalls=0,refused=false;
+   c.on('toolActivity',(method,params)=>{
+    if(refused||method!=='item/started')return;
+    const type=params.item?.type;
+    if(type==='webSearch'&&++webCalls<=6)return;
+    if(['agentMessage','reasoning','userMessage','plan'].includes(type))return;
+    refused=true;publish({event:'failure',message:'Research tool boundary or budget exceeded'});
+    c.interruptForModelSwitch().catch(()=>{});
+   });
+  }
   try {await c.init();return {threadId:c.thread,model:c.selectedModel,serviceTier:c.actualServiceTier,authMode:c.authMode};}
-  catch(error){c.close();sessions.delete(m.session);throw error;}
+  catch(error){
+   if(research && !await c.closeConfirmed())
+    throw Object.assign(Error('Research process stop unconfirmed'),{code:'research_stop_unconfirmed'});
+   if(!research)c.close();
+   sessions.delete(m.session);throw error;
+  }
  }
  const c=sessions.get(m.session);
  if(!c)throw Error('Unknown session');
@@ -43,7 +66,13 @@ async function handle(m) {
   for(const [id,call] of calls)if(call.session===m.session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);cancelled(m.session,id);}
   return c.interruptForModelSwitch();
  }
- if(m.op==='close'){c.close();sessions.delete(m.session);return {};}
+ if(m.op==='close'){
+  if(c.runtime.publicResearch){
+   if(!await c.closeConfirmed())throw Error('Research process stop unconfirmed');
+   sessions.delete(m.session);return {stopped:true};
+  }
+  c.close();sessions.delete(m.session);return {};
+ }
  throw Error('Unknown operation');
 }
 createInterface({input:process.stdin}).on('line',line=>{
@@ -51,6 +80,9 @@ createInterface({input:process.stdin}).on('line',line=>{
  // Do not serialize input: tool responses and interrupts must pass a pending submit.
  Promise.resolve().then(()=>handle(m)).then(result=>{
   if(m.id!==undefined)send({id:m.id,result:result??{}});
- }).catch(error=>{if(m.id!==undefined)send({id:m.id,error:['chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch'].includes(error.code)?error.code:'codex_request_failed'});});
+ }).catch(error=>{if(m.id!==undefined)send({id:m.id,error:['chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch','research_isolation_unavailable','research_stop_unconfirmed'].includes(error.code)?error.code:'codex_request_failed'});});
 });
-process.stdin.on('end',()=>{for(const c of sessions.values())c.close();process.exit(0);});
+process.stdin.on('end',async()=>{
+ const stopped=await Promise.all([...sessions.values()].map(c=>c.runtime.publicResearch?c.closeConfirmed():(c.close(),true)));
+ process.exit(stopped.every(Boolean)?0:1);
+});

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Measure Rose's Phonon voices from the provider's own samples (Nov 9 plan 1D).
 
-Writes rose/voice_traits.json: for each voice in rose/speaker.py VOICES, the provider's metadata (locale and gender,
-from the folder its samples are published under) and acoustic measurements of the five Phonon S (31M) samples the
-provider publishes for it at a pinned revision. Every voice speaks the same five prompts, so the numbers compare
+Writes rose/voice_traits.json: for each voice in rose/voice_catalog.json, explicit provider metadata
+(locale, category and gender) and acoustic measurements of the five Phonon S (31M) samples the provider publishes for it at a pinned revision. Every voice speaks the same five prompts, so the numbers compare
 voices directly. Voice names play no part.
 
 Measured, per voice, over all five samples:
@@ -41,14 +40,23 @@ RATE = 16000
 FRAME, HOP = 640, 160  # 40 ms frames every 10 ms
 
 
-def voices() -> dict[str, str]:
-    """rose/speaker.py's VOICES, read without importing mlx."""
-    import ast
-    tree = ast.parse((ROOT / 'rose/speaker.py').read_text())
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(getattr(t, 'id', None) == 'VOICES' for t in node.targets):
-            return ast.literal_eval(node.value)
-    raise SystemExit('VOICES not found in rose/speaker.py')
+def voices() -> dict[str, dict]:
+    """The manifest is independent of MLX and never infers metadata from names."""
+    from rose.voice_catalog import CATALOG
+    return CATALOG['voices']
+
+
+def sample_paths(entry: dict, files: list[str]) -> list[str]:
+    """Require the common corpus, including characters with nonstandard folders.
+
+    Never infer gender from a folder or compare a shorter recording as a faster
+    voice. Incomplete samples are a reported error, not invented measurements.
+    """
+    paths = [f"{entry['sample_dir']}/{prompt}.ogg" for prompt in PROMPTS]
+    missing = [path for path in paths if path not in files]
+    if missing:
+        raise ValueError('missing common-corpus samples: ' + ', '.join(missing))
+    return paths
 
 
 def listing() -> list[str]:
@@ -73,7 +81,9 @@ def decode(path: Path) -> np.ndarray:
 
 
 def frames(x: np.ndarray) -> np.ndarray:
-    n = 1 + max(0, (len(x) - FRAME) // HOP)
+    if len(x) < FRAME:
+        raise ValueError("sample is shorter than one analysis frame")
+    n = 1 + (len(x) - FRAME) // HOP
     return np.stack([x[i * HOP:i * HOP + FRAME] for i in range(n)])
 
 
@@ -132,6 +142,8 @@ def measure(samples: list[np.ndarray]) -> dict:
             sample_f0.append(f0)
             spectrum += np.abs(np.fft.rfft(fr[i] * window)) ** 2
         f0s.extend(octave_fixed(sample_f0))
+    if not f0s or spectrum[low].sum() <= 0 or spectrum[high].sum() <= 0:
+        raise ValueError("sample corpus has no measurable voiced spectrum")
     f0s = np.array(f0s)
     st = 12 * np.log2(f0s / np.median(f0s))
     return {
@@ -151,21 +163,20 @@ def main(argv=None) -> int:
     files = listing()
     out = {'source': {'repo': REPO, 'revision': REVISION, 'model': MODEL, 'prompts': list(PROMPTS),
                       'method': 'scripts/describe_voices.py'}, 'voices': {}}
-    for name, voice_id in voices().items():
-        folder = next((f.rsplit('/', 1)[0] for f in files
-                       if f.startswith(f'samples/{MODEL}/') and f'_{voice_id}/' in f), None)
-        if folder is None:
-            raise SystemExit(f'no {MODEL} samples for {name} ({voice_id}) at {REVISION[:12]}')
-        _, _, language, locale, gender, _ = folder.split('/')
-        paths = [fetch(f'{folder}/{prompt}.ogg', args.cache) for prompt in PROMPTS]
+    for name, entry in voices().items():
+        try:
+            paths = [fetch(path, args.cache) for path in sample_paths(entry, files)]
+            measured = measure([decode(path) for path in paths])
+        except ValueError as exc:
+            raise SystemExit(f'{name}: {exc}') from exc
         out['voices'][name] = {
-            'voice_id': voice_id, 'language': language, 'locale': locale, 'gender': gender,
+            **{key: entry.get(key) for key in ('voice_id', 'language', 'locale', 'gender', 'category')},
             'samples': {prompt: hashlib.sha256(path.read_bytes()).hexdigest() for prompt, path in zip(PROMPTS, paths)},
-            **measure([decode(path) for path in paths]),
+            **measured,
         }
     args.out.write_text(json.dumps(out, indent=1, sort_keys=False) + '\n')
     for name, v in out['voices'].items():
-        print(f"{name:8} {v['gender']:6} {v['pitch_hz']:6.1f} Hz  range {v['pitch_range_st']:5.2f} st  "
+        print(f"{name:12} {str(v['gender']):6} {v['pitch_hz']:6.1f} Hz  range {v['pitch_range_st']:5.2f} st  "
               f"tilt {v['brightness_db']:6.2f} dB  speech {v['speech_s']:5.2f} s")
     return 0
 

@@ -50,7 +50,7 @@ MODEL_FILES = {
 # weight_candidates). f32 is the default (quant=None is Quant::F32) and the full-precision file mlx-audio uses.
 WEIGHTS = {'f32': 'model.safetensors', 'q8_0': 'model.q8.gguf', 'q4k': 'model.q4k.gguf'}
 PTTS = ('ptts', '0.6.0')  # PyPI; wheel pinned in manifest.json
-# PR288 rose/speaker.py VOICES, with each voice file's sha256 at VOICE_REPO's revision.
+# BEGIN GENERATED VOICE CATALOG (scripts/sync_voice_catalog.py)
 VOICES = {
     'zoey': ('NbpkqMVS3CJeq2j8', '97c7f8c253413574406ab80dd23f49c3ebb2517163b00a9bf86b9c4cf43e7e23'),
     'harper': ('4SZHfMpw-p46Ywgs', '6b3da6e2d796a20c51af892c482bd6509fb88267a221aff83c870843dee2a123'),
@@ -61,7 +61,24 @@ VOICES = {
     'easton': ('LMDIYE0Oa377Qh6Z', '45c582673cb20edb04ddcca2b5a8865ddfb0a82599efadb269021e87d20fbdd4'),
     'micah': ('40QrMVgAxFiUnP9f', '0de1098d1051686a138d068e83ff09deb5053328bc74ec9541a1fdb90bfc24da'),
     'miles': ('d9XCyhjo4JhkHF1d', 'eab20e4f159b48cfbc01b1885804e24f681f80e7a64f909182763a4e3361bee8'),
+    'maeve': ('6PWnV0Nq4wu7RVBT', '56494ee67d533ad227ff0dfd0b1c13ff5aa91f1ad6e596e66c2986ba3005e844'),
+    'freya': ('GgfEkEJtxZR7gnpy', 'eb3cd47418349e618408c16bea7153988b3ad04b41a6033039dd474a9a4dcd23'),
+    'pippa': ('uem82D50GRv2Dwma', 'd41a8f01d6e33450f1ce062d332914da10beee99e585dab531750706f187c48a'),
+    'elodie_rose': ('y9bQqIDnyxwqK01t', '21eade9d83b2e66b9364e1b6cd999a3a6704c000a71f27f34e05ace5cdfd58bb'),
+    'imogen': ('gDT1nz7Ie36ZhL-C', '1980ab3c35fa98a25b5f3b5e643fd852e14ca8a12a4a26b06aaf1abf2a8c68b1'),
+    'lottie': ('m9MxpY6IUGXtWp76', 'a906ebf17e43fded12b3d6bd077abb2df33bc86eff51c1beeb82e5d416527db3'),
+    'bryony': ('gfP44RlHwr2kEwk7', 'bcc207a73b7885e45b49ab633d3377a10158292e3a7cef9cd6764ad107f1cb9b'),
+    'alfie': ('X6NceqF285Gr04gb', '4de75497fff3030168e8aa6dca23ffeb332b1bc8c25d0bf3507ceadac953ae9c'),
+    'hugh': ('YyKcxPG7iIgS3jsK', '3169d74b47a54d1eb15e4c243f56393abe9fe90c7e1c308ecf96ee67618b152a'),
+    'edwin': ('zUCxzrOrugTSis03', 'ff1d0735b8b45710462b1d1f846da040f970c6eb62c7c2f36dbfb8e5bde74f1e'),
+    'spencer': ('JOW0vchyswkQUMDS', 'cc9ac1107b0ffce282374a19beb7bfa95847724e6b7afbac991b4ae4277d5e6d'),
+    'toby': ('dME3IWyZBvmh1n1q', '09ab315c7f4b72b4d71e66cb756184cedfb1f14d222d096e115bf95bfe7b29dc'),
+    'teddy': ('Zn7g6NxLqXlJb7Qi', 'baea0ea9506f3237a5ebfc61afb7c72dbd189c5603b199ef42fbb00dbda379e0'),
+    'trevor': ('0zLApsZfVLLNaEGl', 'dc1341c8937af5534e6bbcc5c0fc5e7c10312229b59061228074f93683fe2261'),
+    'russell': ('_6Aslh2DxfmnRLmP', 'beae9e4030efce0a935fcb0f807dc0784d598bcaa87ad4aacb047436b1eaa411'),
+    'preston': ('qIxlZ7Ei8KvWlyQH', '6e04b84d3ae8751b22bca0a4f63936f9cb648f4f2182b2d0788071ea1c0b68a1'),
 }
+# END GENERATED VOICE CATALOG
 
 
 class MissingInput(FileNotFoundError):
@@ -95,7 +112,7 @@ def check_inputs(model_dir: str | os.PathLike, voice_files: dict[str, str | os.P
             mismatched.append(name)
     for voice, path in voice_files.items():
         if voice not in VOICES:
-            raise ValueError(f'unknown voice {voice!r}; PR288 voices: {", ".join(VOICES)}')
+            raise ValueError(f'unknown voice {voice!r}; pinned catalog voices: {", ".join(VOICES)}')
         voice_id, digest = VOICES[voice]
         path = Path(path)
         if not path.is_file():

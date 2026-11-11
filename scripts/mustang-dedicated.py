@@ -51,6 +51,16 @@ def reference(value, root=ROOT):
     return value
 
 
+def frozen_app_inputs_allowed(record, cfg, env, root=ROOT):
+    """One requested attempt may use its exact older signed export, truthfully."""
+    choice = cfg.get('frozenAppInputs') or {}
+    if (env.get('GITHUB_RUN_NUMBER') != str(choice.get('workflowRunNumber'))
+            or cfg.get('appInputsRecord') != choice.get('record')
+            or not route.accepted_app_export(record, cfg.get('appInputsRecord'))):
+        return False
+    return ota.digest(Path(root)/choice['record']) == choice.get('recordSha256')
+
+
 def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     run=controller.invocation(lane,env)
     paths=mustang_paths.layout(lane)
@@ -136,7 +146,7 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
             or allocation.get('sourceSha')!=record['producer']['sourceSha']:
         raise ValueError('app producer allocation binding differs')
     drift=route.app_source_drift(record, run['source'], root, diff)
-    if drift:
+    if drift and not frozen_app_inputs_allowed(record, cfg, env, root):
         raise ValueError('fresh app export omits current app source changes: '+drift[0])
     baseline=cfg.get('baselineTargetFiles')
     factory=cfg.get('baselineFactoryEvidence')

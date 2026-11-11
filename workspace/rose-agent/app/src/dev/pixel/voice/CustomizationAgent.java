@@ -39,6 +39,7 @@ final class CustomizationAgent {
     CustomizationStore.homeAppliedRevision(ctx), CustomizationStore.homeAppliedColumns(ctx))));
   return new JSONObject().put("status", status).put("operation", operation).put("changed", changed)
     .put("customization", new JSONObject(stored.toJson())).put("home", home)
+    .put("conversation", new JSONObject(CustomizationConfig.json(ConversationThemeState.LIVE.snapshot(stored.theme))))
     .put("glassesWear", GlassesWearHookRunner.status(ctx))
     .put("system", new JSONObject(CustomizationConfig.json(CustomizationOutcome.system(stored.theme, AgentTrayService.shownTheme()))));
  }

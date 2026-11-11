@@ -1,5 +1,18 @@
 # Dedicated retained-output delivery
 
+Current policy: Nathan disabled the custom target-files archive validator. The
+runtime passes authenticated, hash-checked target files unchanged to the pinned
+Android signing tools and emits no custom target-validation proof. Executable
+archive, provenance, capacity and signature checks remain. The validator sections
+below describe the prior implementation, which remains unused library code.
+
+For dedicated workflow run number 40 only, Nathan selected the verified
+`frankel-2026111001` apps (voice 370) instead of refreshing the app export.
+The runtime binds the exact record-byte hash to this one run number.
+Later workflow runs do not inherit this choice. The candidate
+app-admission receipt records `sourceChoice`; it does not claim these APKs contain
+the newer Glacier app changes. The full compile/sign/publication path is used.
+
 This is source integration for one producer, not a dispatch or a new OTA claim.
 PR #725 fixes the canonical lock selection. The dedicated workflow's optional
 `retained_compile_run` accepts only `42664204892`; its empty default preserves
@@ -203,3 +216,29 @@ The dedicated native consumer still reruns its own APK tools before use and
 checks freshness against the actual captured run source. This selection does
 not authorize dispatch or admit an old compiled target; a fresh full compile,
 actual output/link validation, signing and publication remain unperformed.
+
+## Observed root debug alias
+
+Full run `42860845139` compiled build `2611101700`, collected its complete
+outputs and passed the unsigned proof. Hosted byte preflight then refused the
+actual entry `ROOT/d -> /sys/kernel/debug` before signer login or secret access.
+The authenticated lifecycle receipt confirms the numeric dedicated VM stopped,
+metadata was removed and the ephemeral runner cleanup succeeded. No OTA was
+signed or published, and the output and consumed allocation remain preserved.
+
+The validator permits only that exact member/target pair as terminal link
+metadata on an unprivileged signer with a protected host root. It does not add
+`sys` to the allowed host namespaces. No archive member may live beneath the
+alias, and no other payload link may reference or traverse it, including through
+chains, case aliases or `..`. Other links into `/sys` or existing host roots
+remain refused, as do all executable-archive links. The hosted receipt explicitly
+lists accepted terminal metadata links in addition to the inventory digest.
+
+This follows the pinned Android writer's `os.symlink`, the pinned
+[`mkbootfs` implementation](https://github.com/GrapheneOS/platform_system_core/blob/322ff5129d865a5e8d958667e6c63ac943449493/mkbootfs/mkbootfs.cpp)
+using `lstat`/`readlink` for symlinks, and the pinned signer's `zip -y` repack.
+It preserves the link text without reading host debug data. Controlled tests
+exercise the exact observed entry, real `zip -y` preservation and adversarial
+references/children/nearby host targets. No original archive is rewritten or
+relabelled, and this source fix does not admit a future input without its normal
+byte, provenance, capacity and freshness checks.
