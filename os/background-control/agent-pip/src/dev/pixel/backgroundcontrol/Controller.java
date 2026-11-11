@@ -20,6 +20,7 @@ public final class Controller {
  static final Executor worker=Executors.newSingleThreadExecutor();
  static Object session; static long generation,started; static String id,target,taskId,status="idle",error="",snapshotId,visualSnapshotId;
  static StopLedger stops=new StopLedger(); static int width,height,operations; static boolean blocked; static IntentSender consent;
+ static VisionInput.Search visionSearch=new VisionInput.Search();
  // The replacement race (Replacement): sessionToken is the start token of the held session; pending is a start's request
  // waiting for the earliest point Android can admit it. Closed sessions stay unconfirmed until Android admits a later request.
  static Replacement replacement=new Replacement(); static long sessionToken,pendingToken; static Runnable pending;
@@ -40,16 +41,17 @@ public final class Controller {
   final int index;Object session;long generation,started,sessionToken,pendingToken,snapshotTime,lastPreview;
   String id,target,taskId,status="idle",error="",snapshotId,visualSnapshotId,observed;StopLedger stops=new StopLedger();int width,height,operations;
   boolean blocked,truncated,anyApp;IntentSender consent;Replacement replacement=new Replacement();Runnable pending;
+  VisionInput.Search visionSearch=new VisionInput.Search();
   Map<Integer,AccessibilityNodeInfo> nodes=new HashMap<>();Map<Integer,Integer> parents=new HashMap<>();Map<Integer,LabelTargets.Node> labels=new LinkedHashMap<>();
   Slot(int index){this.index=index;}
  }
  static final Slot[] slots={new Slot(0),new Slot(1)}; static Slot active=slots[0];
  static void save(Slot s){s.session=session;s.generation=generation;s.started=started;s.sessionToken=sessionToken;s.pendingToken=pendingToken;s.snapshotTime=snapshotTime;s.lastPreview=lastPreview;
   s.id=id;s.target=target;s.taskId=taskId;s.status=status;s.error=error;s.snapshotId=snapshotId;s.visualSnapshotId=visualSnapshotId;s.observed=observed;s.stops=stops;s.width=width;s.height=height;s.operations=operations;
-  s.blocked=blocked;s.truncated=truncated;s.anyApp=anyApp;s.consent=consent;s.replacement=replacement;s.pending=pending;s.nodes=nodes;s.parents=parents;s.labels=labels;}
+  s.blocked=blocked;s.truncated=truncated;s.anyApp=anyApp;s.consent=consent;s.replacement=replacement;s.pending=pending;s.nodes=nodes;s.parents=parents;s.labels=labels;s.visionSearch=visionSearch;}
  static void load(Slot s){session=s.session;generation=s.generation;started=s.started;sessionToken=s.sessionToken;pendingToken=s.pendingToken;snapshotTime=s.snapshotTime;lastPreview=s.lastPreview;
   id=s.id;target=s.target;taskId=s.taskId;status=s.status;error=s.error;snapshotId=s.snapshotId;visualSnapshotId=s.visualSnapshotId;observed=s.observed;stops=s.stops;width=s.width;height=s.height;operations=s.operations;
-  blocked=s.blocked;truncated=s.truncated;anyApp=s.anyApp;consent=s.consent;replacement=s.replacement;pending=s.pending;nodes=s.nodes;parents=s.parents;labels=s.labels;}
+  blocked=s.blocked;truncated=s.truncated;anyApp=s.anyApp;consent=s.consent;replacement=s.replacement;pending=s.pending;nodes=s.nodes;parents=s.parents;labels=s.labels;visionSearch=s.visionSearch;}
  static Slot enter(Slot s){Slot was=active;if(s!=was){save(was);load(s);active=s;}return was;}
  static void leave(Slot was){enter(was);}
  /** r, run later under the lock inside slot s. */
@@ -76,7 +78,7 @@ public final class Controller {
  static void clearNodes(){for(AccessibilityNodeInfo n:nodes.values())n.recycle();nodes.clear();parents.clear();labels.clear();truncated=false;snapshotId=null;visualSnapshotId=null;}
  // Only the owner's Stops (notification, Rose's owner_stop, the viewer's confirmed Stop) are "user"; that also refuses
  // later starts of that task.
- static synchronized void stop(Context c,String why){stops.stopped(why,id,taskId);if(StopLedger.USER.equals(why))announceOwnerStop(c,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken,old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
+ static synchronized void stop(Context c,String why){visionSearch.clear();stops.stopped(why,id,taskId);if(StopLedger.USER.equals(why))announceOwnerStop(c,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken,old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
  // Tells Rose Agent at once, so it can end the task even if the agent makes no further phone call.
  // Shared sender identity lets the receiver check this package and its signing certificate.
  static void announceOwnerStop(Context c,String session,String task){try{Intent i=new Intent("dev.pixel.backgroundcontrol.action.OWNER_STOP").setPackage("dev.pixel.voice").putExtra("sessionId",session).putExtra("taskId",task).putExtra("stoppedAt",System.currentTimeMillis());BroadcastOptions o=BroadcastOptions.makeBasic();o.setShareIdentityEnabled(true);c.sendBroadcast(i,null,o.toBundle());}catch(RuntimeException e){Log.w("BackgroundControl","Owner stop notice not delivered",e);}}
@@ -102,6 +104,7 @@ public final class Controller {
   Context c=context.getApplicationContext();String pkg=p.getString("packageName");String task=taskParam(p);anyApp=anyAppControl(c);
   if(stops.refuses(task))return refusal(task,state(c));
   if(pkg.equals(c.getPackageName())||c.getPackageManager().getLaunchIntentForPackage(pkg)==null)throw new IllegalArgumentException("Target must be an installed launchable app");
+  visionSearch.clear();
   if(session!=null&&pkg.equals(target)&&"ready".equals(status)){if(task!=null)taskId=task;return state(c);}
   stop(c,StopLedger.AGENT);if(session!=null)throw new IllegalStateException("Previous session cleanup is incomplete");stops.started();final long token=++generation;target=pkg;taskId=task;id=UUID.randomUUID().toString();started=SystemClock.elapsedRealtime();operations=0;width=height=0;error="";blocked=false;status="starting";
   final Slot slot=active;final String sid=id;
@@ -177,6 +180,7 @@ public final class Controller {
   require(p);String action=p.getString("action");
   if(action.equals("screenshot"))return capture();if(action.equals("inspect_ui"))return inspect();if(action.equals("app_context"))return base().put("packageName",target);if(action.equals("setup_ui_control"))return base().put("uiControlEnabled",true);if(action.equals("home")){stop(c,StopLedger.AGENT);return state(c);}
   fresh(p);if(operations>=200)throw new IllegalStateException("Session operation limit reached");
+  if(!action.equals("screen_text")&&!action.equals("screen_search"))visionSearch.clear();
   if(action.equals("screen_gesture")){JSONArray points=p.getJSONArray("points");if(points.length()!=2&&points.length()!=4)throw new IllegalArgumentException("Expected point or endpoints");for(int i=0;i<points.length();i++)checkPoint(points.getInt(i),i%2==0?width:height);if(points.length()==2)session.getClass().getMethod("tap",int.class,int.class).invoke(session,points.getInt(0),points.getInt(1));else swipe(points);}
   else if(action.equals("tap")||action.equals("long_press")||action.equals("tap_label")||action.equals("touch_label")||action.equals("touch_point")){
    AccessibilityNodeInfo n=null;
@@ -193,9 +197,16 @@ public final class Controller {
    // only the input focus the text would land in is checked (visionFocus): never a password field.
    if(visualSnapshotId==null||!visualSnapshotId.equals(snapshotId))throw new IllegalArgumentException("Fresh screenshot required for vision text");
    String text=p.getString("text");boolean replace=p.getBoolean("replace");VisionInput.validate(text);
+   String nextSearch=visionSearch.propose(text,p.optString("purpose","text"),replace);visionSearch.clear();
    clearNodes(); // consume the observed frame before dispatch, even if the platform call fails
    visionFocus();
    VisionInput.insert(session,text,replace);
+   visionSearch.accept(nextSearch);
+  }
+  else if(action.equals("screen_search")){
+   if(visualSnapshotId==null||!visualSnapshotId.equals(snapshotId))throw new IllegalArgumentException("Fresh screenshot required for vision search");
+   visionSearch.consume(p.getString("query"));
+   clearNodes();visionFocus();VisionInput.search(session);
   }
   else if(action.equals("set_text")){AccessibilityNodeInfo n=node(p);if(!n.isEditable()||!n.isEnabled()||!n.isVisibleToUser())throw new IllegalArgumentException("Node is not an editable visible control");if(n.isPassword())throw new SecurityException("Password fields require user interaction");String text=p.getString("text");if(text.length()>4000)throw new IllegalArgumentException("Text exceeds limit");if(!n.isFocused()){n.performAction(AccessibilityNodeInfo.ACTION_FOCUS);long focusUntil=SystemClock.elapsedRealtime()+500;while(n.refresh()&&!n.isFocused()&&SystemClock.elapsedRealtime()<focusUntil)SystemClock.sleep(25);if(!n.isFocused())throw new IllegalStateException("Could not focus background field");}session.getClass().getMethod("insertText",String.class,boolean.class,boolean.class).invoke(session,text,true,p.optBoolean("commit",false));}
   else if(action.equals("scroll")){AccessibilityNodeInfo n=node(p);String d=p.optString("direction","forward");if(!d.equals("forward")&&!d.equals("backward"))throw new IllegalArgumentException("direction must be forward or backward");if(!n.isScrollable()||!n.performAction(d.equals("forward")?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD))throw new IllegalStateException("Background scroll rejected");}

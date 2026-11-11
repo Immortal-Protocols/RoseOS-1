@@ -12,3 +12,7 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  "$SRC/BackgroundActivity.java" "$SRC/WorkspaceOverview.java" "$SRC/MiniJson.java" "$SRC/WorkspaceOverviewFeed.java" \
  workspace/rose-agent/app/tests/BackgroundActivityTest.java
 java -cp "$OUT" dev.pixel.voice.BackgroundActivityTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$OUT/vision-input" \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/VisionInput.java os/background-control/tests/VisionInputTest.java
+java -cp "$OUT/vision-input" dev.pixel.backgroundcontrol.VisionInputTest
+python3 os/background-control/tests/test_vision_input_wiring.py

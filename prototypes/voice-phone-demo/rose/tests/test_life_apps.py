@@ -37,8 +37,10 @@ class AppLife(unittest.TestCase):
     def test_host_bound_observation_commit_and_quiet_completion(self):
         run=self.run_context();s=self.start(run)
         self.assertEqual(s.origin,'autonomous')
+        self.assertFalse(self.engine.task_snapshot(s.task)['activity']['executing'])
         result=self.call(s,'open_app',app=s.app)
         self.assertTrue(result['ok'],result)
+        self.assertTrue(self.engine.task_snapshot(s.task)['activity']['executing'])
         ref=result['observation_id']
         observation=self.life.context()['observations'][0]
         self.assertEqual(observation['id'],ref)

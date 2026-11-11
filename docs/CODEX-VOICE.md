@@ -112,6 +112,15 @@ capability; an older controller reports an update requirement and never falls ba
 accessibility. Without `--vision-control` (the default) app threads keep the accessibility
 tools and their send/purchase guard, with screenshots alongside the UI tree.
 
+Vision search additionally negotiates `visionSearch=true`. Only text explicitly
+typed with `purpose=search` in that slot authorizes the additive `screen_search`
+command, on a fresh screenshot and with the same query. It consumes eligibility
+before calling the existing session virtual IME commit; it uses no accessibility
+action and is unavailable for ordinary message drafts. Navigation and Stop clear
+eligibility. Older controllers leave the lookup pending and name the update
+requirement; a decorative magnifier is never a generic Enter replacement. The
+controller source requires the separate normal phone delivery route.
+
 Final messages/posts, purchases and security changes remain owner actions under the
 existing policy. Vision taps declare their effect and describe their target; the server
 rejects final-action effects. Each tap also names the control's visible text (`label`)

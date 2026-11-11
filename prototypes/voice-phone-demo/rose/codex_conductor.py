@@ -504,7 +504,7 @@ class CodexConductor:
         data.update(contract=1, server=s.conversation if s else self.conversation, workspace=binding,
                     activity={'version': 1, 'sample': time.monotonic_ns() // 1000000,
                               'executing': bool(s and s.busy and s.turn and task.status == 'running'
-                                                and task.background)})
+                                                and task.background and (s.origin != 'autonomous' or binding))})
         return redact(data)
 
     def _task_event(self, s):
@@ -973,7 +973,8 @@ class CodexConductor:
         self._task_event(s)
         result = view.execute(name, a)
         result.update(frame_id=view.frame_id, targeting='screenshot_coordinates',
-                      workspace_session_id=view.workspace.bound_id)
+                      workspace_session_id=view.workspace.bound_id,
+                      vision_search_available=view.workspace.capabilities.get('visionSearch') is True)
         if view.image is None:
             result['observation_error'] = view.obs.get('status') or 'No screenshot available'
         s.task.steps.append({'n': len(s.task.steps)+1, 'actions': [result], 'what': name})

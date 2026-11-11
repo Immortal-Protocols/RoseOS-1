@@ -2,6 +2,22 @@ package dev.pixel.backgroundcontrol;
 
 /** Text through the session's virtual input device, into the visually focused editor. */
 final class VisionInput {
+ /** One slot's own visually declared search. A normal draft never authorizes commit. */
+ static final class Search {
+  private String query;
+  String propose(String text,String purpose,boolean replace){
+   validate(text);if(!purpose.equals("text")&&!purpose.equals("search"))throw new IllegalArgumentException("Unknown text purpose");
+   if(!purpose.equals("search"))return null;
+   String next=replace?text:query==null?null:query+text;
+   if(next!=null)validate(next);return next==null||next.trim().isEmpty()?null:next;
+  }
+  void accept(String next){query=next;}
+  void clear(){query=null;}
+  void consume(String expected){
+   if(query==null||!query.equals(expected))throw new IllegalStateException("No matching visually typed search");
+   clear(); // consumed even if the virtual IME reply is lost
+  }
+ }
  static void validate(String text){
   if(text==null||text.length()>4000)throw new IllegalArgumentException("Text exceeds limit");
   // A line break can act as Enter (a send or submit) in the focused editor even with commit false: never carried.
@@ -21,5 +37,11 @@ final class VisionInput {
   // The last argument is commit: false never presses the editor's Send/Search/Enter action.
   session.getClass().getMethod("insertText",String.class,boolean.class,boolean.class)
    .invoke(session,text,replace,false);
+ }
+ static void search(Object session)throws Exception{
+  // Search.consume, a fresh screenshot and the non-password input-focus guard
+  // precede this call. No accessibility action or physical-screen Enter.
+  session.getClass().getMethod("insertText",String.class,boolean.class,boolean.class)
+   .invoke(session,"",false,true);
  }
 }

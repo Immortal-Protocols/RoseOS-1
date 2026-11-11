@@ -25,6 +25,18 @@ public final class VisionInputTest {
   if(!"Password field requires user".equals(VisionInput.refusal(true,false,true)))throw new AssertionError("Password refused first");
   if(VisionInput.refusal(false,false,false)==null||VisionInput.refusal(true,false,false)==null)
    throw new AssertionError("Nothing editable focused fails closed");
+  VisionInput.Search search=new VisionInput.Search(),other=new VisionInput.Search();
+  search.accept(search.propose("ordinary draft","text",true));
+  try{search.consume("ordinary draft");throw new AssertionError("Draft became a submission");}catch(IllegalStateException expected){}
+  search.accept(search.propose("Sunnyvale","search",true));
+  search.accept(search.propose(" cafes","search",false));
+  try{other.consume("Sunnyvale cafes");throw new AssertionError("Cross-slot search accepted");}catch(IllegalStateException expected){}
+  try{search.consume("different");throw new AssertionError("Mismatched query accepted");}catch(IllegalStateException expected){}
+  search.consume("Sunnyvale cafes");VisionInput.search(s);
+  if(!s.submitted||!s.editor.endsWith(" appended"))throw new AssertionError("IME search must not rewrite the query");
+  try{search.consume("Sunnyvale cafes");throw new AssertionError("Search replay accepted");}catch(IllegalStateException expected){}
+  search.accept(search.propose("again","search",true));search.clear();
+  try{search.consume("again");throw new AssertionError("Cleared search accepted");}catch(IllegalStateException expected){}
   System.out.println("VisionInputTest passed");
  }
 }

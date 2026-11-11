@@ -6,6 +6,19 @@ SRC = Path(__file__).resolve().parents[1] / 'agent-pip/src/dev/pixel/backgroundc
 
 
 class VisionInputWiring(unittest.TestCase):
+    def test_search_is_bound_to_one_slots_own_typed_query_and_fresh_visual_frame(self):
+        source=(SRC/'Controller.java').read_text()
+        branch=source.split('else if(action.equals("screen_search")){',1)[1].split('else if(action.equals("set_text"))',1)[0]
+        for forbidden in ('node(', 'inspect(', 'performAction', 'ACTION_IME_ENTER'):
+            self.assertNotIn(forbidden,branch)
+        self.assertIn('visualSnapshotId==null||!visualSnapshotId.equals(snapshotId)',branch)
+        self.assertLess(branch.index('visionSearch.consume('),branch.index('clearNodes();'))
+        self.assertLess(branch.index('visionFocus();'),branch.index('VisionInput.search(session)'))
+        self.assertIn('s.visionSearch=visionSearch;',source)
+        self.assertIn('visionSearch=s.visionSearch;',source)
+        self.assertIn('visionSearch.clear();stops.stopped',source)
+        self.assertIn('.put("visionSearch",true)',(SRC/'AgentProvider.java').read_text())
+
     def test_typing_uses_only_a_consumed_screenshot_from_its_own_slot(self):
         source = (SRC / 'Controller.java').read_text()
         branch = source.split('else if(action.equals("screen_text")){', 1)[1].split('else if(action.equals("set_text"))', 1)[0]
