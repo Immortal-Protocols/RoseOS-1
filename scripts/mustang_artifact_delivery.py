@@ -88,12 +88,12 @@ def require_bundle(bundle,root=ROOT):
     return True
 
 
-def scope(env,event):
+def scope(env,event,*,selected=RUN):
     inputs=event.get('inputs') if isinstance(event,dict) else None
     disabled=lambda v:v is None or v is False or v=='false'
     flags={'publish','dry_run','source_only','hostdeps_only','lock_admin_only','factory_only','vendor_only','otatools_only'}
     if not isinstance(inputs,dict) or set(inputs)-(flags|{'retained_compile_run'}) \
-            or inputs.get('retained_compile_run')!=RUN or env.get('MUSTANG_RETAINED_COMPILE_RUN')!=RUN \
+            or inputs.get('retained_compile_run')!=selected or env.get('MUSTANG_RETAINED_COMPILE_RUN')!=selected \
             or any(not disabled(inputs.get(k)) for k in flags-{'publish'}) \
             or inputs.get('publish') not in (True,'true'):
         raise ValueError('artifact recovery must retain the complete signing/publication scope')
@@ -204,10 +204,10 @@ def authenticate(env,event,*,api=None,root=ROOT,git=None,cleanup_ready=True):
                 payloadBytesVerified=False,signerAdmitted=False)
 
 
-def publisher_context(lane,cfg,env,event,*,root=ROOT,publish=False):
+def publisher_context(lane,cfg,env,event,*,root=ROOT,publish=False,selected=RUN):
     """Artifact publication consumes verified same-delivery bytes, not native inputs."""
     import mustang_controller, mustang_lane, mustang_ota
-    run,source=scope(env,event)
+    run,source=scope(env,event,selected=selected)
     mustang_lane.validate(lane,root)
     mustang_controller.invocation(lane,env)
     compatible(source,root)

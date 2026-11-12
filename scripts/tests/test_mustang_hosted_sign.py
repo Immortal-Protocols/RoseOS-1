@@ -571,7 +571,7 @@ class HostedSignGateTest(unittest.TestCase):
                        if '/mustang-actions/providers/mustang-main' in body and 'id-token: write' in body]
         self.assertEqual(signer_jobs, ['signer'])
         self.assertNotIn('id-token', jobs['guard'])
-        self.assertIn('needs: signer', publisher.split('steps:', 1)[0])
+        self.assertIn('needs: [guard, signer]', publisher.split('steps:', 1)[0])
         self.assertLess(publisher.index('mustang_hosted_sign.py bind-outputs'), publisher.index('verify-staged'))
         self.assertLess(publisher.index('verify-staged'), publisher.index('actions/create-github-app-token'))
         self.assertIn('- signer', cleanup.split('steps:', 1)[0])
