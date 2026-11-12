@@ -90,6 +90,14 @@ still fail. A failed verifier command reports its bounded stderr separately from
 a fingerprint mismatch; this does not change or rotate the expected certificate.
 No signing key was generated or read for the local public-APK reproduction.
 
+Source review also found that the publisher CLI still entered the native-only
+context, which rejects the new artifact producer selection before staged checks.
+Artifact publication now uses its explicit main-workflow scope, clean checkout,
+compatible delivery source and recorded publication/signing authority, then keeps
+the existing full staged verification and exact current delivery run/source checks.
+The stage must carry the fixed original artifact producer, compile source and
+allocation. This is a source-path correction; the prior publisher was skipped.
+
 ## Space protection and the expanded data disk
 
 Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while

@@ -197,6 +197,50 @@ class RecoveryTest(unittest.TestCase):
             recovery.stop_original(owner,self.home/'bad-stop.json',execute=execute,adapter=Adapter())
         self.assertEqual(len(calls),1)
 
+    def test_artifact_publisher_uses_explicit_authority_and_rejects_other_scopes(self):
+        self.env.update(GITHUB_JOB='publisher',MUSTANG_PUBLISH='true')
+        lane=mustang_lane.configuration();cfg=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        self.assertEqual(recovery.publisher_context(lane,cfg,self.env,self.event,publish=True),cfg)
+        for key,value in [('GITHUB_JOB','builder'),('MUSTANG_PUBLISH','false'),('GITHUB_RUN_ATTEMPT','2')]:
+            env=dict(self.env,**{key:value})
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                recovery.publisher_context(lane,cfg,env,self.event,publish=True)
+        with self.assertRaisesRegex(ValueError,'scope'):
+            recovery.publisher_context(lane,cfg,self.env,self.event,publish=False)
+        changed=copy.deepcopy(cfg);changed['publication']['enabled']=False
+        with self.assertRaises(ValueError):recovery.publisher_context(lane,changed,self.env,self.event,publish=True)
+
+    def test_publisher_cli_context_avoids_native_compile_admission_but_keeps_clean_checkout(self):
+        import mustang_ota
+        dedicated=mustang_ota.module('artifact_publisher_context','mustang-dedicated.py')
+        self.env.update(GITHUB_JOB='publisher',MUSTANG_PUBLISH='true')
+        def output(argv,**kwargs):return '' if 'status' in argv else self.source+'\n'
+        with patch.dict(os.environ,self.env),patch.object(dedicated,'guard',side_effect=AssertionError('native guard')), \
+                patch.object(dedicated.subprocess,'check_output',side_effect=output):
+            lane,cfg=dedicated.context(True)
+            self.assertEqual(lane,mustang_lane.configuration())
+            self.assertTrue(cfg['publication']['enabled'])
+        def dirty(argv,**kwargs):return ' M unsafe\n' if 'status' in argv else self.source+'\n'
+        with patch.dict(os.environ,self.env),patch.object(dedicated.subprocess,'check_output',side_effect=dirty), \
+                self.assertRaisesRegex(ValueError,'clean source'):
+            dedicated.context(True)
+
+    def test_artifact_publication_keeps_stage_verification_and_original_compile_identity(self):
+        import mustang_ota
+        dedicated=mustang_ota.module('artifact_publisher_verify','mustang-dedicated.py')
+        self.env.update(GITHUB_JOB='publisher',MUSTANG_PUBLISH='true')
+        lane=mustang_lane.configuration();cfg=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        row=dict(builder=lane['vm'],workflow=recovery.WORKFLOW,runId=self.run,runAttempt='1',recipeSource=self.source,
+                 artifactProducer=copy.deepcopy(recovery.PROOF),compileRunId=recovery.RUN,compileRunAttempt='1',
+                 candidateSource=recovery.SOURCE)
+        with patch.dict(os.environ,self.env),patch.object(dedicated.ota,'verify_staged',return_value=row) as verify:
+            self.assertEqual(dedicated.verify(self.home,lane,cfg,True),row)
+            self.assertTrue(verify.call_args.kwargs['publication'])
+            row['compileRunId']=self.run
+            with self.assertRaisesRegex(ValueError,'producer context'):dedicated.verify(self.home,lane,cfg,True)
+            row['compileRunId']=recovery.RUN;row['artifactProducer']['source']='0'*40
+            with self.assertRaisesRegex(ValueError,'producer proof'):dedicated.verify(self.home,lane,cfg,True)
+
     def test_workflow_uses_existing_signer_and_publisher_with_all_native_jobs_skipped(self):
         jobs=os_release_shape.jobs((ROOT/recovery.WORKFLOW).read_text());signer=jobs['signer']
         self.assertIn("inputs.retained_compile_run != '43074045726'",jobs['controller'])
