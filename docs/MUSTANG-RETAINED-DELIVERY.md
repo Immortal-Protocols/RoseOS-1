@@ -98,6 +98,40 @@ the existing full staged verification and exact current delivery run/source chec
 The stage must carry the fixed original artifact producer, compile source and
 allocation. This is a source-path correction; the prior publisher was skipped.
 
+## Publish the completed signed run49 artifact
+
+Run `43150538877`, source `519ccac3dec495924b7196386408bb319735986d`,
+completed signing, all OTA-specific verification and signed-output upload.
+Its publisher was skipped because the job condition implicitly required successful
+native ancestors, which the artifact route deliberately skips. The publisher now
+uses an explicit cancellation/status condition for both ordinary and recovery runs.
+
+The same workflow accepts `retained_compile_run=43150538877`, `publish=true`, and
+all preparation/dry-run flags false. Guard authenticates the exact successful
+signer job, verification/staging, logout, upload, skipped prior publisher and live
+immutable artifact `13915411398`: 5897358832 bytes, ZIP SHA-256
+`e8c5fdc790ce0883b7f97f183386c003f7d7a9cb7853c4669ebdd96ad6e34c27`.
+Native lifecycle, allocation, compile and signer jobs stay skipped. No OIDC or
+signer secret is used by publication-only recovery.
+
+The standard publisher streams that archive with its existing Actions read token,
+hashes it, checks its exact regular-file inventory and streams both signed target
+and OTA hashes. Only public stage files and the small original hosted receipt are
+extracted. The temporary downloaded archive is removed after verification; the
+original artifact, native outputs and allocation journal are untouched. Peak disk
+admission reserves the ZIP, at most2GiB public OTA and1GiB workspace; no larger
+runner or bound increase is required. API credentials are never forwarded to the
+signed storage redirect; an HTTP denial stops without retry or alternate route.
+
+The authenticated archive binds the hosted receipt hash into later workflow steps.
+Both pre-credential and publication checks require that receipt, the original
+stage hash, original signing run/source, compile46 proof and all existing staged
+checks. Original receipts are not rewritten to claim signing in the publication
+run. Existing publication records separately name producer and publication runs.
+The existing pixel-ota App is invoked only after verification, with metadata-last
+upload/readback and global Latest preservation. The90-minute publisher bound,
+release/tag/feed destination and existing release/rollback protections are unchanged.
+
 ## Space protection and the expanded data disk
 
 Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while

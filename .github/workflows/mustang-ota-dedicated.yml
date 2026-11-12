@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       retained_compile_run:
-        description: Retained42664204892 on native disk, or artifact-only43074045726; no Make or allocation
+        description: Retained42664204892, unsigned43074045726 or signed publication-only43150538877; no new allocation
         type: string
         default: ''
       publish:
@@ -84,7 +84,7 @@ jobs:
         persist-credentials: false
     - id: inputs
       name: Admit exact manual run, routes and actual dedicated inputs before host start
-      if: inputs.retained_compile_run != '43074045726'
+      if: inputs.retained_compile_run != '43074045726' && inputs.retained_compile_run != '43150538877'
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang-dedicated.py guard
@@ -93,12 +93,17 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang_artifact_delivery.py guard
+    - name: Authenticate the already signed run49 OTA for publication only
+      if: inputs.retained_compile_run == '43150538877'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/mustang_signed_delivery.py guard
     - name: Check the fixed read-only otatools observation binding before START
       if: inputs.dry_run
       run: python3 scripts/mustang_otatools_observation.py --check-binding
   controller:
     needs: guard
-    if: inputs.retained_compile_run != '43074045726'
+    if: inputs.retained_compile_run != '43074045726' && inputs.retained_compile_run != '43150538877'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -217,7 +222,7 @@ jobs:
     - guard
     - controller
     - enroll
-    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && inputs.retained_compile_run != '43074045726'
+    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && inputs.retained_compile_run != '43074045726' && inputs.retained_compile_run != '43150538877'
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -391,7 +396,7 @@ jobs:
     - controller
     - guard
     - artifact-admission
-    if: always() && !cancelled() && needs.guard.result == 'success' && inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && ((inputs.retained_compile_run != '43074045726' && needs.builder.result == 'success') || (inputs.retained_compile_run == '43074045726' && needs.artifact-admission.result == 'success'))
+    if: always() && !cancelled() && needs.guard.result == 'success' && inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && ((inputs.retained_compile_run != '43074045726' && inputs.retained_compile_run != '43150538877' && needs.builder.result == 'success') || (inputs.retained_compile_run == '43074045726' && needs.artifact-admission.result == 'success'))
     runs-on:
       group: roseos-mustang-signer
       labels: mustang-signer-4core
@@ -433,7 +438,7 @@ jobs:
         fi
         df -B1 "$RUNNER_TEMP"
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-      if: inputs.retained_compile_run != '43074045726'
+      if: inputs.retained_compile_run != '43074045726' && inputs.retained_compile_run != '43150538877'
       with:
         name: mustang-signing-bundle-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/mustang-signing-bundle
@@ -481,8 +486,8 @@ jobs:
         retention-days: 14
         if-no-files-found: error
   publisher:
-    needs: signer
-    if: inputs.publish && inputs.dry_run == false && needs.signer.result == 'success'
+    needs: [guard, signer]
+    if: ${{ !cancelled() && needs.guard.result == 'success' && inputs.publish && inputs.dry_run == false && (needs.signer.result == 'success' || inputs.retained_compile_run == '43150538877') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -495,12 +500,23 @@ jobs:
         fetch-depth: 0
         persist-credentials: false
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: inputs.retained_compile_run != '43150538877'
       with:
         name: mustang-dedicated-ota-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/mustang-ota
+    - id: signed
+      name: Fetch and verify the immutable signed archive without signing again
+      if: inputs.retained_compile_run == '43150538877'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/mustang_signed_delivery.py fetch --out "$RUNNER_TEMP/mustang-ota"
     - name: Require exact hosted signed outputs before publisher credentials
+      if: inputs.retained_compile_run != '43150538877'
       run: python3 scripts/mustang_hosted_sign.py bind-outputs --dir "$RUNNER_TEMP/mustang-ota"
-    - name: Verify same-run hashes and both proofs before publisher credentials
+    - name: Verify authenticated signed hashes and both proofs before publisher credentials
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EXPECTED_SIGNED_RECEIPT_SHA256: ${{ steps.signed.outputs.receipt_sha256 }}
       run: python3 scripts/mustang-dedicated.py verify-staged --publish --dir "$RUNNER_TEMP/mustang-ota/staged"
     - id: app
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
@@ -513,6 +529,8 @@ jobs:
     - name: Fresh OTA, metadata last, preserve Latest
       env:
         PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        GH_TOKEN: ${{ github.token }}
+        EXPECTED_SIGNED_RECEIPT_SHA256: ${{ steps.signed.outputs.receipt_sha256 }}
       run: python3 scripts/mustang-dedicated.py publish --publish --dir "$RUNNER_TEMP/mustang-ota/staged" --out "$RUNNER_TEMP/mustang-publication"
     - if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

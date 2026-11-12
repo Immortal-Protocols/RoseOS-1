@@ -442,10 +442,14 @@ def fetch_inputs(record_path,out,read=None,lane=None,cfg=None,root=ROOT):
 def context(publish=False):
     lane=mustang_lane.configuration()
     dry=os.environ.get('MUSTANG_DRY_RUN')=='true'
-    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN')=='43074045726':
+    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN') in ('43074045726','43150538877'):
         import mustang_artifact_delivery
         event=load(os.environ['GITHUB_EVENT_PATH'])
-        cfg=mustang_artifact_delivery.publisher_context(lane,load(CONFIG),os.environ,event,root=ROOT,publish=publish)
+        cfg=mustang_artifact_delivery.publisher_context(lane,load(CONFIG),os.environ,event,root=ROOT,publish=publish,
+            selected=os.environ['MUSTANG_RETAINED_COMPILE_RUN'])
+        if os.environ['MUSTANG_RETAINED_COMPILE_RUN']=='43150538877':
+            import mustang_signed_delivery
+            mustang_signed_delivery.authenticate(os.environ,event)
     else:
         cfg=guard(lane,load(CONFIG),os.environ,publish,dry_run=dry)
     if subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=os.environ['GITHUB_SHA'] \
@@ -461,9 +465,14 @@ def verify(directory,lane,cfg,publish=False):
         compile_context=mustang_artifact_delivery.proof_identity(r.get('artifactProducer'))
         if (r.get('compileRunId'),r.get('compileRunAttempt'),r.get('candidateSource'))!=compile_context:
             raise ValueError('staged artifact producer context differs')
+    expected_run,expected_source=os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_SHA']
+    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN')=='43150538877':
+        import mustang_signed_delivery
+        mustang_signed_delivery.bind(Path(directory).parent,os.environ)
+        expected_run,expected_source=mustang_signed_delivery.RUN,mustang_signed_delivery.SOURCE
     if r.get('builder')!=lane['vm'] or r.get('workflow')!=WORKFLOW \
-            or r.get('runId')!=os.environ['GITHUB_RUN_ID'] or r.get('runAttempt')!=os.environ['GITHUB_RUN_ATTEMPT'] \
-            or r.get('recipeSource')!=os.environ['GITHUB_SHA']:
+            or r.get('runId')!=expected_run or r.get('runAttempt')!='1' \
+            or r.get('recipeSource')!=expected_source:
         raise ValueError('staged OTA differs from this dedicated builder/run/source')
     return r
 
