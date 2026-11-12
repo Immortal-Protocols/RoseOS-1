@@ -253,9 +253,19 @@ def observe_components(vendor_props, updater, trust_store, build, epoch, tools, 
         if result.returncode or not re.search(r"package: name='app\.seamlessupdate\.client'", result.stdout):
             raise ValueError('packaged Updater package identity differs')
         result = execute([tools['apksigner'], 'verify', '--print-certs', str(apk)], capture_output=True, text=True, timeout=120)
-        certs = re.findall(r'Signer #[0-9]+ certificate SHA-256 digest: ([0-9a-fA-F]+)', result.stdout)
-        if result.returncode or [x.lower() for x in certs] != [pins['otaCertificateSha256']]:
-            raise ValueError('packaged Updater signer differs from the established Mustang identity')
+        if result.returncode:
+            detail=str(getattr(result,'stderr','')).strip()[:1024]
+            raise ValueError(f'packaged Updater signature verification failed (exit {result.returncode}): '+detail)
+        # Qualified apksigner labels v3 certificates "V3.0 Signer:" rather than "Signer #1".
+        # One certificate can be reported by multiple verified signature schemes.
+        lines=[line.strip() for line in result.stdout.splitlines() if ' certificate SHA-256 digest:' in line]
+        parsed=[re.fullmatch(r'.+ certificate SHA-256 digest: ([0-9a-fA-F]{64})',line) for line in lines]
+        if not parsed or not all(parsed):
+            raise ValueError('packaged Updater verifier reported no well-formed certificate identity')
+        certs=[match.group(1).lower() for match in parsed]
+        if set(certs)!={pins['otaCertificateSha256']}:
+            raise ValueError('packaged Updater signer differs from the established Mustang identity; observed '+
+                             ','.join(sorted(set(certs))))
         trust = []
         with zipfile.ZipFile(io.BytesIO(trust_store)) as certificates:
             for row in certificates.infolist():

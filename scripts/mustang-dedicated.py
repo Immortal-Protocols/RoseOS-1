@@ -442,7 +442,12 @@ def fetch_inputs(record_path,out,read=None,lane=None,cfg=None,root=ROOT):
 def context(publish=False):
     lane=mustang_lane.configuration()
     dry=os.environ.get('MUSTANG_DRY_RUN')=='true'
-    cfg=guard(lane,load(CONFIG),os.environ,publish,dry_run=dry)
+    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN')=='43074045726':
+        import mustang_artifact_delivery
+        event=load(os.environ['GITHUB_EVENT_PATH'])
+        cfg=mustang_artifact_delivery.publisher_context(lane,load(CONFIG),os.environ,event,root=ROOT,publish=publish)
+    else:
+        cfg=guard(lane,load(CONFIG),os.environ,publish,dry_run=dry)
     if subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=os.environ['GITHUB_SHA'] \
             or subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():
         raise ValueError('dedicated checkout differs from the captured clean source')
@@ -451,6 +456,11 @@ def context(publish=False):
 
 def verify(directory,lane,cfg,publish=False):
     r=ota.verify_staged(directory,ota.config(),publication=publish)
+    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN')=='43074045726':
+        import mustang_artifact_delivery
+        compile_context=mustang_artifact_delivery.proof_identity(r.get('artifactProducer'))
+        if (r.get('compileRunId'),r.get('compileRunAttempt'),r.get('candidateSource'))!=compile_context:
+            raise ValueError('staged artifact producer context differs')
     if r.get('builder')!=lane['vm'] or r.get('workflow')!=WORKFLOW \
             or r.get('runId')!=os.environ['GITHUB_RUN_ID'] or r.get('runAttempt')!=os.environ['GITHUB_RUN_ATTEMPT'] \
             or r.get('recipeSource')!=os.environ['GITHUB_SHA']:

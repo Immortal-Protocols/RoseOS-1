@@ -204,6 +204,31 @@ def authenticate(env,event,*,api=None,root=ROOT,git=None,cleanup_ready=True):
                 payloadBytesVerified=False,signerAdmitted=False)
 
 
+def publisher_context(lane,cfg,env,event,*,root=ROOT,publish=False):
+    """Artifact publication consumes verified same-delivery bytes, not native inputs."""
+    import mustang_controller, mustang_lane, mustang_ota
+    run,source=scope(env,event)
+    mustang_lane.validate(lane,root)
+    mustang_controller.invocation(lane,env)
+    compatible(source,root)
+    if env.get('GITHUB_JOB')!='publisher' or env.get('MUSTANG_PUBLISH')!='true' or not publish \
+            or cfg.get('schema')!='roseos.mustang-dedicated-runtime.v1' or cfg.get('status')!='bound' \
+            or cfg.get('publication',{}).get('enabled') is not True:
+        raise ValueError('artifact publisher scope or runtime differs')
+    path=Path(str(cfg['publication'].get('authorityRecord','')))
+    if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0]!='os' \
+            or (Path(root)/path).is_symlink() or not (Path(root)/path).is_file() \
+            or not (Path(root)/path).resolve().is_relative_to(Path(root).resolve()):
+        raise ValueError('artifact publication authority record differs')
+    authority=json.loads((Path(root)/path).read_text())
+    if authority.get('approved') is not True or authority.get('device')!='mustang' \
+            or authority.get('workflow')!=WORKFLOW or not authority.get('approvalRef') \
+            or authority.get('automatic') is not False:
+        raise ValueError('artifact public publication remains disabled')
+    mustang_ota.guard(mustang_ota.config(),access=True,publication=True)
+    return cfg
+
+
 def recover_owner(env,event,out,*,api=None,root=ROOT,git=None):
     authenticate(env,event,api=api,root=root,git=git,cleanup_ready=False)
     import mustang_controller, mustang_lane
