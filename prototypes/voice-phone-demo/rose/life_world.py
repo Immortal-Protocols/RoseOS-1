@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import functools
 import hashlib
 import json
 import os
 import platform
 from pathlib import Path
 import sqlite3
+import subprocess
 import threading
 import time
 import uuid
@@ -108,8 +110,33 @@ class WorldStore(Diary):
             db.execute('INSERT OR IGNORE INTO world VALUES (1,?)', (_json(seed),))
             db.execute("INSERT OR IGNORE INTO life_authority VALUES (1,?,'active',1)",(self.host_id(),))
 
+    def legacy_host_id(self, hostname=None):
+        return hashlib.sha256(_json([platform.node() if hostname is None else hostname,
+                                    os.getuid(),str(self.directory.resolve())]).encode()).hexdigest()
+
+    @staticmethod
+    @functools.cache
+    def machine_id():
+        # DHCP and VPN connections can change platform.node() on a running Mac.
+        # Use OS machine identity, keeping the value private and out of logs.
+        if platform.system() == 'Darwin':
+            import plistlib
+            rows = plistlib.loads(subprocess.check_output(
+                ['/usr/sbin/ioreg', '-a', '-rd1', '-c', 'IOPlatformExpertDevice'], timeout=5))
+            value = rows[0].get('IOPlatformUUID', '')
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError('Machine identity unavailable')
+            return 'mac:' + value.strip()
+        if platform.system() == 'Linux':
+            value = Path('/etc/machine-id').read_text().strip()
+            if not value:
+                raise ValueError('Machine identity unavailable')
+            return 'linux:' + value
+        raise ValueError('Stable machine identity unsupported on this platform')
+
     def host_id(self):
-        return hashlib.sha256(_json([platform.node(),os.getuid(),str(self.directory.resolve())]).encode()).hexdigest()
+        return hashlib.sha256(_json([self.machine_id(), os.getuid(),
+                                    str(self.directory.resolve())]).encode()).hexdigest()
 
     def acquire(self):
         """OS lifetime lease, plus DB fencing. A copied profile requires explicit handoff."""
@@ -126,6 +153,12 @@ class WorldStore(Diary):
             with self._db() as db:
                 db.execute('BEGIN IMMEDIATE')
                 authority=db.execute('SELECT * FROM life_authority WHERE id=1').fetchone()
+                # Same old host/path under its original hostname can upgrade in
+                # place. A hostname mismatch still requires explicit migration.
+                if authority['state']=='active' and authority['host']==self.legacy_host_id():
+                    db.execute('UPDATE life_authority SET host=?,generation=generation+1 WHERE id=1',
+                               (self.host_id(),))
+                    authority=db.execute('SELECT * FROM life_authority WHERE id=1').fetchone()
                 if authority['host']!=self.host_id() or authority['state']!='active':
                     raise Conflict('Explicit profile transfer/writer handoff required')
                 db.execute('UPDATE world_meta SET writer=? WHERE id=1', (self.writer,))
