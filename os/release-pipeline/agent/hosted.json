@@ -1,6 +1,6 @@
 {
   "schema": "roseos.agent-hosted-release.v1",
-  "basis": "The off-builder (hosted) Agent route of scripts/host-app-release.py --hosted. Source only and unbound: it builds, signs or publishes nothing until every null below is bound by its owner and the route is separately authorized. The signing values and pin are the committed Frankel route's, unchanged (os/release-pipeline/frankel.json; Signing's #608 contract). App owns the portable SDK, JDK, public connection inputs and tools: absolute paths on the hosted runner, with no builder source root. The reservation store is the off-builder atomic app version ledger Frankel and Agent share; its location and write credential are pending a decision. No value here is a placeholder, and nothing is inferred from a field name.",
+  "basis": "The off-builder (hosted) Agent route of scripts/host-app-release.py --hosted, run by os-release.yml modes agent-hosted and agent-hosted-probe on GitHub-hosted runners (scripts/agent-hosted.py). The signing values and pin are the committed Frankel route's, unchanged (os/release-pipeline/frankel.json; Signing's #608 contract). App owns the portable SDK, JDK and tools: absolute paths on the hosted runner, bound at run time by App's portable-build.py inputs record, with no builder source root, so they stay null here. The public connection inputs are the pinned public Rose Agent APK's (publicInputs). The reservation store is the off-builder atomic app version ledger Frankel and Agent share (decision D1); a hosted allocation refuses until the Frankel builder has recorded its own consumed versions there as a floor (decision D2). No value here is a placeholder, and nothing is inferred from a field name.",
   "identities": {
     "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
   },
@@ -32,6 +32,27 @@
     }
   },
   "reservation": {
-    "store": null
+    "store": {
+      "kind": "github-annotated-tags",
+      "repository": "Immortal-Protocols/pixel-ota",
+      "reservationPrefix": "refs/tags/app-reservations/dev.pixel.voice/",
+      "floorPrefix": "refs/tags/app-floors/dev.pixel.voice/"
+    },
+    "basis": "Decision D1 (Release, 2026-11-07, under Chief's delegation of access, credentials, signing and publishing): one annotated tag per versionCode in pixel-ota, the repository whose rose-agent-N releases the versions name. The ref is created only if absent (HTTP 422 otherwise), so one run ever holds a version, whichever lane asks first. It is written with the existing pixel-ota publisher App (contents: write), whose token is minted only in hosted jobs and never reaches a builder, and read with git, anonymously, by any lane. pixel-ota has no workflows, so a ledger tag triggers nothing; ledger tags are not releases, so the OTA feed, Latest and the app's release listing never see them. scripts/app_reservation_store.py holds the format."
+  },
+  "publicInputs": {
+    "sourceApk": {
+      "url": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-352/dev.pixel.voice-352.apk",
+      "size": 1897716,
+      "sha256": "a1b0e39a9593d382925ad586012acd05639e81b7a9fd4ea3024a98ab37fa1ce4"
+    },
+    "digests": {
+      "workspace/pixel-clipboard/clipboard-connection.json": "8eb2e3cfaba1461f8b19c8a253d0d1524aadfaaf62ea7fd065718caacea033d3",
+      "workspace/rose-agent/app/assets/connection.json": "685f56d34150f4f71768fc4835409beca2fdd2ba05a5a94a6c2037045b040ac8",
+      "workspace/rose-agent/app/res/raw/mac_screen_cert.pem": "46a9fa7bf49473cf3caf7fe05e59c2985f03c43dd7750aa66e8ac434d3393cd6",
+      "workspace/rose-agent/app/res/xml/mac_screen_network.xml": "08699743859384aa0e9407f16b50d046ec3d36e12d4eca9c8efeb41130bbcf58"
+    },
+    "compiledNetworkSha256": "cb0863533b65e02856a0332404c31172c3a85219868113b8978371887e57abbd",
+    "basis": "The connection inputs every published Rose Agent carries, taken from one public, immutable release asset instead of a builder directory or Git (the five stay git-ignored deployment files): rose-agent-352 (352-auto-beta, candidate ff26d75c, published prerelease, the newest rose-agent release on 2026-11-07). Its stored entries (connection, clipboard and the raw certificate) are byte-identical to those of the Rose Agent 368 that Frankel 2026110704 and 2026110705 bundle (signed-apps of app-inputs-export run 42408244069), and both APKs' compiled res/xml/mac_screen_network.xml are byte-identical (cb086353...). The network security config source is regenerated with App's scripts/configure-local.py template for the endpoint host, and every hosted build must compile it back to that exact entry (agent-hosted.py check-apk), so the hosted Agent carries the same connection inputs as the published one. A new endpoint or input set is a new pin. mac-screen-connection.json left the public inputs in #684 (host-app-build.RETIRED_ASSETS); the pinned APK still carries it, but nothing reads it there and the hosted build neither restores nor checks it."
   }
 }

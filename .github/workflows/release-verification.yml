@@ -95,6 +95,9 @@ on:
       - 'scripts/tests/test_app_inputs_export.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/app_reservation.py'
+      - 'scripts/app_reservation_store.py'
+      - 'scripts/agent-hosted.py'
+      - 'scripts/configure-local.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
       - 'scripts/alpha_image.py'
@@ -142,6 +145,8 @@ on:
       - 'scripts/tests/test_app_release_publisher.py'
       - 'scripts/tests/test_hosted_app_signing_reuse.py'
       - 'scripts/tests/test_agent_hosted_release.py'
+      - 'scripts/tests/test_app_reservation_store.py'
+      - 'scripts/tests/test_agent_hosted.py'
       - 'workspace/rose-agent/portable-build.py'
       - 'workspace/rose-agent/tests/test_portable_build.py'
       - 'scripts/tests/test_emulator_alpha.py'
@@ -289,6 +294,9 @@ on:
       - 'scripts/tests/test_app_inputs_export.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/app_reservation.py'
+      - 'scripts/app_reservation_store.py'
+      - 'scripts/agent-hosted.py'
+      - 'scripts/configure-local.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
       - 'scripts/alpha_image.py'
@@ -336,6 +344,8 @@ on:
       - 'scripts/tests/test_app_release_publisher.py'
       - 'scripts/tests/test_hosted_app_signing_reuse.py'
       - 'scripts/tests/test_agent_hosted_release.py'
+      - 'scripts/tests/test_app_reservation_store.py'
+      - 'scripts/tests/test_agent_hosted.py'
       - 'workspace/rose-agent/portable-build.py'
       - 'workspace/rose-agent/tests/test_portable_build.py'
       - 'scripts/tests/test_emulator_alpha.py'
@@ -464,6 +474,8 @@ jobs:
           python3 scripts/tests/test_app_release_publisher.py
           python3 scripts/tests/test_hosted_app_signing_reuse.py
           python3 scripts/tests/test_agent_hosted_release.py
+          python3 scripts/tests/test_app_reservation_store.py
+          python3 scripts/tests/test_agent_hosted.py
           python3 workspace/rose-agent/tests/test_portable_build.py
           python3 scripts/tests/test_emulator_alpha.py
           python3 scripts/tests/test_alpha_source.py
