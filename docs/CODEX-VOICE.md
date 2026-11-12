@@ -145,6 +145,9 @@ so a newly installed app is discoverable immediately. Reconnection invalidates
 the cache age without blocking the socket callback. An unresolved app fails with
 `app_unavailable` before a controller launch; a queued task alone does not prove
 that an app or search has started.
+Workspace allocation also uses the resolved package identity, so aliases such as
+Maps and Google Maps reuse one worker and controller task binding. They cannot
+reserve two workers that invalidate each other's targeted Stop receipts.
 
 App threads and their workspaces are reused for follow-ups during a backend run. Reconnect rechecks each bound session. Stop latches against late tool calls. Reset starts a new conversation without deleting earlier logs. A backend restart explicitly creates new Codex threads, leaving prior transcripts available. Codex threads are **ephemeral** to avoid native rollout persistence of private reasoning or screenshots; prior transcripts are not silently uploaded or replayed as commands.
 

@@ -82,6 +82,7 @@ class Session:
     name: str
     task: object = None
     app: str = ''
+    package: str | None = None
     conversation: str = ''
     thread: str | None = None
     turn: str | None = None
@@ -262,15 +263,13 @@ class CodexConductor:
 
     def start_phone(self, app, goal, *, origin='user', wake_id=None, action_id=None):
         from .tasks import Task
+        # Resolve before allocation, off the shared state lock. Labels/aliases
+        # such as Maps and Google Maps must reserve one canonical app slot.
+        package = self.phone.resolve_app(app)[0] if getattr(self.phone, 'real', False) else None
         def same_app(session):
             if session.app.casefold() == app.casefold(): return True
             if not session.app or not getattr(self.phone, 'real', False): return False
-            # No network wait under the shared allocator lock.
-            inventory = list(getattr(self.phone, '_apps', []))
-            def cached(name):
-                return next((r.get('packageName') for r in inventory if name.casefold() in
-                             (str(r.get('packageName','')).casefold(),str(r.get('label','')).casefold())), None)
-            package, held = cached(app), cached(session.app)
+            held = session.package or getattr(getattr(session.view, 'workspace', None), 'package', None)
             return bool(package and package == held)
         # Serialize allocation through confirmed cleanup. The event worker and
         # the other app's actions remain independent of this network wait.
@@ -312,7 +311,7 @@ class CodexConductor:
             with self._lock:
                 tid = next(self._ids)
                 task = Task(tid, 'phone', goal)
-                s = Session(f'app-{tid}', task=task, app=app, conversation=self.conversation,
+                s = Session(f'app-{tid}', task=task, app=app, package=package, conversation=self.conversation,
                             origin=origin, wake_id=wake_id, action_id=action_id)
                 if origin == 'autonomous':
                     self.life.diary.action_state(action_id, 'dispatched', tid)
@@ -331,7 +330,7 @@ class CodexConductor:
                               and getattr(self.phone, 'vision_control', False))
                 s.view = self.phone.session(s.name, independent=True, visual=visual) if getattr(self.phone, 'real', False) else self.phone.session(s.name)
                 if getattr(s.view, 'workspace', None):
-                    package, _ = self.phone.resolve_app(s.app)
+                    package = s.package or self.phone.resolve_app(s.app)[0]
                     if not package:
                         raise PhoneTaskError('app_unavailable',
                                              "The requested app could not be found in the phone's installed-app list. Nothing was opened.")
