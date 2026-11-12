@@ -72,6 +72,24 @@ Tool read failures include bounded stderr instead of hiding the actual error.
 This changes inspection compatibility, not the Updater contract, signing
 identity, target archive policy or accepted artifact hashes.
 
+## Qualified APK verifier certificate labels
+
+Artifact recovery `43116309683` passed the corrected AAPT2 resource check,
+completed target-files signing and signed its payload at23:29:39Z. It then stopped
+at23:31:27Z on the packaged Updater certificate parser; publication was skipped
+and signer logout succeeded. The original artifact/allocation remain unchanged.
+
+The exact qualified `apksigner` script/JAR, executed with the pinned JDK against
+an already signed verified voice370 APK, returned exit0 and the established app
+certificate under `V3.0 Signer: certificate SHA-256 digest:`. The observer only
+recognized `Signer #1 certificate SHA-256 digest:`. Resource/identity verification
+now recognizes the certificate-digest field across these verified scheme labels,
+accepting repeated reports only when every reported certificate is exactly the
+established Mustang OTA certificate. Foreign, missing and malformed identities
+still fail. A failed verifier command reports its bounded stderr separately from
+a fingerprint mismatch; this does not change or rotate the expected certificate.
+No signing key was generated or read for the local public-APK reproduction.
+
 ## Space protection and the expanded data disk
 
 Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while

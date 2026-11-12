@@ -382,6 +382,38 @@ class ObserverTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"unknown option '--values'"):
             self.observe(execute=execute)
 
+    def test_qualified_apksigner_v3_labels_keep_the_exact_certificate_pin(self):
+        actual=(ota.ROOT/'scripts/tests/fixtures/mustang-apksigner-v3.txt').read_text().replace(
+            '650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb',self.pin)
+        for output in (actual,
+                       'V3.1 Signer: certificate SHA-256 digest: '+self.pin.upper(),
+                       'V3.0 Signer: certificate SHA-256 digest: '+self.pin+'\n'+
+                       'V3.1 Signer: certificate SHA-256 digest: '+self.pin):
+            def execute(argv,**kwargs):
+                if argv[0]=='apksigner':return SimpleNamespace(returncode=0,stdout=output,stderr='')
+                return self.execute(argv,**kwargs)
+            with self.subTest(output=output):self.assertTrue(self.observe(execute=execute)['packagedUpdaterVerified'])
+
+    def test_foreign_missing_and_malformed_apk_identities_stay_closed(self):
+        for output in ('V3.0 Signer: certificate SHA-256 digest: '+'0'*64,
+                       'V3.0 Signer: certificate SHA-256 digest: '+self.pin+'\n'+
+                       'V3.1 Signer: certificate SHA-256 digest: '+'0'*64,
+                       'V3.0 Signer: certificate SHA-256 digest: '+self.pin+'not-hex',
+                       'V3.0 Signer: public key SHA-256 digest: '+self.pin,
+                       '', 'Signer #1 certificate SHA-256 digest: '+self.pin+'\n'+
+                       'V3.1 Signer: certificate SHA-256 digest: short'):
+            def execute(argv,**kwargs):
+                if argv[0]=='apksigner':return SimpleNamespace(returncode=0,stdout=output,stderr='')
+                return self.execute(argv,**kwargs)
+            with self.subTest(output=output),self.assertRaises(ValueError):self.observe(execute=execute)
+
+    def test_apk_verification_error_is_not_reported_as_a_certificate_mismatch(self):
+        def execute(argv,**kwargs):
+            if argv[0]=='apksigner':return SimpleNamespace(returncode=1,stdout='',stderr='actual verifier failure')
+            return self.execute(argv,**kwargs)
+        with self.assertRaisesRegex(ValueError,'signature verification failed.*actual verifier failure'):
+            self.observe(execute=execute)
+
     def test_installed_pre548_baseline_is_not_subject_to_the_new_edge_gate(self):
         baseline=ota.config()['baseline']
         with zipfile.ZipFile(self.path) as archive:
@@ -427,7 +459,7 @@ class ObserverTest(unittest.TestCase):
     def test_bad_apk_signature_or_wrong_trust_stops(self):
         def bad(argv,**kwargs):
             return SimpleNamespace(returncode=1,stdout='') if argv[0]=='apksigner' else self.execute(argv,**kwargs)
-        with self.assertRaisesRegex(ValueError,'signer'):self.observe(execute=bad)
+        with self.assertRaisesRegex(ValueError,'signature verification failed'):self.observe(execute=bad)
         self.pin='f'*64
         with self.assertRaisesRegex(ValueError,'OTA trust'):self.observe()
 
