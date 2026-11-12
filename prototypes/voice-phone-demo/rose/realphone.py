@@ -944,13 +944,14 @@ class RealPhone:
         Runs on the server's event loop, so nothing here waits on the phone."""
 
         self._bg = None
+        self._apps_at = 0.0
         for unit in [*self.workspaces.units, *self._scoped()]:
             unit.forget()
         self._changed("link", {"connected": self.link.connected})
 
     # ----- apps --------------------------------------------------------
-    def apps(self) -> list[dict]:
-        if not self._apps or time.monotonic() - self._apps_at > 300:
+    def apps(self, *, refresh: bool = False) -> list[dict]:
+        if refresh or not self._apps or time.monotonic() - self._apps_at > 300:
             r = self.link.call("list_apps")
             if r.get("status") == "ok" or r.get("apps"):
                 self._apps, self._apps_at = list(r.get("apps") or []), time.monotonic()
@@ -985,9 +986,14 @@ class RealPhone:
 
     def resolve_app(self, name: str) -> tuple[str | None, str]:
         want = _clean(name).lower()
+        cached = bool(self._apps) and time.monotonic() - self._apps_at <= 300
         apps = self.apps()
         if re.fullmatch(r"[a-z][\w]*(\.[\w]+)+", want):
             return want, name
+        # An install can happen inside the cache's five-minute lifetime. Refresh
+        # before declaring an app absent or choosing a loose word-only match.
+        if cached and not any(str(a.get('label', '')).lower() == want for a in apps):
+            apps = self.apps(refresh=True)
         for test in (lambda l: l == want, lambda l: l.startswith(want), lambda l: want in l,
                      lambda l: any(w and w in l for w in want.split())):
             hits = [a for a in apps if test(str(a.get("label", "")).lower())]
