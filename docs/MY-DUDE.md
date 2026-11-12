@@ -44,6 +44,21 @@ Pause/resume establishes a new schedule floor, with no fictional catch-up.
 SQLite uniquely claims agent/local-date/slot and saves intention before app
 dispatch. One OS lifetime lease and a database writer fence protect the profile.
 A copied database cannot become a second live writer on another host/path.
+The host binding uses macOS's platform UUID or Linux's machine ID, plus the OS
+user and profile path, so DHCP/VPN hostname changes do not disable memory. Legacy
+profiles upgrade in place only when their original hostname still matches. If
+it changed, stop the backend, make a private backup, verify the original hostname
+against the prior deployment, then explicitly migrate that same profile:
+
+```sh
+.venv/bin/python -m rose.life_profile migrate-host /private/config/rosie-life --accept-agent-id AGENT_ID --previous-hostname ORIGINAL_HOSTNAME
+```
+
+The migration refuses a live writer, mismatched agent/old host/path, or exported
+profile. It changes only the host binding and authority generation; memory,
+enablement, pairing and chosen identity remain intact. Other-machine or other-path
+transfers still use the export/import procedure below.
+
 Wake revision and cancellation epoch are rechecked before UI actions and atomic
 world/event/outcome commit. Stale models retrieve/replan against existing receipts;
 identical app goals within a wake are not dispatched twice.

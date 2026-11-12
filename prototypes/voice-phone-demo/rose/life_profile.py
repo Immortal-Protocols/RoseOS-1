@@ -5,6 +5,7 @@ lease refuses concurrent export. Backup is read-only and may run live. Never
 contains pairing credentials, transcripts, TLS material or authentication.
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -75,12 +76,44 @@ def import_profile(bundle,destination,accept_agent_id):
         (destination/'transferred-identity.json').chmod(0o600)
     return manifest
 
+def migrate_host(source, accept_agent_id, previous_hostname):
+    """Explicit local migration after a verified hostname change, backend stopped.
+
+    This is not import/recovery for exported profiles. Match the exact original
+    hostname, profile path, OS user and agent, then bind to stable machine ID.
+    """
+    if not accept_agent_id or not previous_hostname:
+        raise ValueError('Explicit agent and original hostname acceptance required')
+    store=WorldStore(source)
+    fd=os.open(store.directory/'writer.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    try:
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        with store._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            meta=db.execute('SELECT agent_id FROM world_meta WHERE id=1').fetchone()
+            authority=db.execute('SELECT * FROM life_authority WHERE id=1').fetchone()
+            if (meta['agent_id']!=accept_agent_id or authority['state']!='active' or
+                    authority['host']!=store.legacy_host_id(previous_hostname)):
+                raise ValueError('Original profile authority does not match; migration refused')
+            db.execute('UPDATE life_authority SET host=?,generation=generation+1 WHERE id=1',
+                       (store.host_id(),))
+        return {'schema':2,'agent_id':accept_agent_id,'transfer':False}
+    finally:
+        os.close(fd)
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('backup','export','import'))
-    p.add_argument('source',type=Path);p.add_argument('destination',type=Path)
+    p.add_argument('action',choices=('backup','export','import','migrate-host'))
+    p.add_argument('source',type=Path);p.add_argument('destination',type=Path,nargs='?')
     p.add_argument('--accept-agent-id')
+    p.add_argument('--previous-hostname')
     a=p.parse_args()
+    if a.action=='migrate-host':
+        if a.destination is not None:p.error('migrate-host operates on the original profile, without a destination')
+        result=migrate_host(a.source,a.accept_agent_id,a.previous_hostname)
+        print(json.dumps({'schema':result['schema'],'migration':'stable_machine_identity'}))
+        return
+    if a.destination is None:p.error('destination is required')
     result=(import_profile(a.source,a.destination,a.accept_agent_id) if a.action=='import'
             else export(a.source,a.destination) if a.action=='export' else backup(a.source,a.destination))
     print(json.dumps({'schema':result['schema'],'agent_id':result.get('agent_id'),'transfer':result['transfer']}))
