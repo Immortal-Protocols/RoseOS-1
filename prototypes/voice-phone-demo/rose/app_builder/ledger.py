@@ -79,6 +79,8 @@ class Ledger:
         with self.lock:
             existing = self._existing(key)
             if existing:
+                if self.job(existing['jobId'])['kind'] != 'create':
+                    raise LedgerError('clientRequestId was used for another request')
                 return existing
             project, job, now = _id(), _id(), self.clock()
             self.db.execute('BEGIN IMMEDIATE')
@@ -97,16 +99,14 @@ class Ledger:
         with self.lock:
             existing = self._existing(key)
             if existing:
-                if existing['projectId'] != project:
-                    raise LedgerError('clientRequestId was used for another project')
+                if existing['projectId'] != project or self.job(existing['jobId'])['kind'] != 'revise':
+                    raise LedgerError('clientRequestId was used for another request')
                 return {'jobId': existing['jobId']}
             if self.project(project) is None:
                 raise LedgerError('unknown project')
-            if self.db.execute('SELECT 1 FROM jobs WHERE project_id=? AND state IN (%s)' % ','.join('?' * len(ACTIVE)),
-                               (project, *ACTIVE)).fetchone():
+            if self._active(project):
                 raise LedgerError('this project already has a build in progress')
-            if not self.versions(project):
-                raise LedgerError('this project has no delivered version to revise yet')
+            # A project whose first build failed can still be revised: it starts again from the skeleton.
             job = _id()
             self.db.execute('BEGIN IMMEDIATE')
             try:
@@ -125,10 +125,17 @@ class Ledger:
                 raise LedgerError('unknown job')
             if job['state'] != 'failed' or not (job.get('failure') or {}).get('retryable'):
                 raise LedgerError('only a failed, retryable job can be retried')
+            if self._active(job['projectId']):
+                raise LedgerError('this project already has a build in progress')
+            now = self.clock()  # queued again now, so it runs in submission order and is the project's activeJob
             self.db.execute("UPDATE jobs SET attempt=attempt+1, state='queued', stage='queued', message='Queued.', "
-                            "failure=NULL, cancel_requested=0, version_code=NULL, updated=? WHERE job_id=?",
-                            (self.clock(), job_id))
+                            "failure=NULL, cancel_requested=0, version_code=NULL, started=?, updated=? "
+                            "WHERE job_id=?", (now, now, job_id))
             return self.job(job_id)
+
+    def _active(self, project: str) -> bool:
+        return self.db.execute('SELECT 1 FROM jobs WHERE project_id=? AND state IN (%s)' % ','.join('?' * len(ACTIVE)),
+                               (project, *ACTIVE)).fetchone() is not None
 
     def _insert_job(self, job, project, kind, request, key, now):
         self.db.execute('INSERT INTO jobs (job_id, project_id, kind, request, client_key, attempt, state, stage, '

@@ -39,7 +39,8 @@ class Base(unittest.TestCase):
 class LedgerTest(Base):
     def setUp(self):
         super().setUp()
-        self.l = L.Ledger(self.root, clock=Clock())
+        self.clock = Clock()
+        self.l = L.Ledger(self.root, clock=self.clock)
 
     def tearDown(self):
         self.l.close()
@@ -58,7 +59,9 @@ class LedgerTest(Base):
     def test_versions_grow_and_signer_is_fixed(self):
         a = self.l.create('d', 'r', 'x', 'X')
         with self.assertRaises(L.LedgerError):
-            self.l.revise('d', a['projectId'], 'r2', 'more')  # nothing delivered yet
+            self.l.revise('d', a['projectId'], 'r2', 'more')  # the first build is still active
+        with self.assertRaises(L.LedgerError):
+            self.l.revise('d', a['projectId'], 'r', 'x')  # a create's clientRequestId
         for state in ('preparing', 'building'):
             self.assertTrue(self.l.advance(a['jobId'], state, state, state))
         self.assertEqual(self.l.allocate_version(a['jobId']), 1)
@@ -96,15 +99,23 @@ class LedgerTest(Base):
         self.l.advance(c['jobId'], 'signing', 's', 's')
         q = self.l.create('d', 'r4', 'q', 'Q')
         self.l.close()
-        self.l = L.Ledger(self.root, clock=Clock())
+        self.l = L.Ledger(self.root, clock=self.clock)  # the same clock: time goes on across a restart
         self.assertEqual(self.l.recover(), 2)
         self.assertEqual(self.l.job(b['jobId'])['state'], 'cancelled')
         failure = self.l.job(c['jobId'])['failure']
         self.assertEqual((failure['category'], failure['retryable']), ('internal', True))
         self.assertIn('outcome unknown', failure['summary'])
         self.assertEqual(self.l.job(q['jobId'])['state'], 'queued')  # never started: still queued
+        self.l.finish_failed(q['jobId'], 'timeout', 'slow', True)
         retried = self.l.retry(c['jobId'])
         self.assertEqual((retried['state'], retried['attempt']), ('queued', 2))
+        self.assertGreater(retried['startedAt'], self.l.job(q['jobId'])['startedAt'])  # queued again now
+        d = self.l.create('d', 'r5', 'w', 'W')
+        self.l.finish_failed(d['jobId'], 'timeout', 'slow', True)
+        r = self.l.revise('d', d['projectId'], 'r6', 'again')  # allowed after a failed first build
+        with self.assertRaises(L.LedgerError):
+            self.l.retry(d['jobId'])  # not while another job of the project is active
+        self.l.cancel(r['jobId'])
         with self.assertRaises(L.LedgerError):
             self.l.retry(b['jobId'])  # cancelled is not retryable
 
@@ -155,6 +166,15 @@ class TemplateTest(Base):
             'unicode escape hides package': lambda s: next(s.glob('src/**/MainActivity.java')).write_text(
                 '/*\\u002a/ package dev.pixel.voice; /* */ package ' + self.PKG + '; class A {}'),
             'hard link': lambda s: os.link(s / 'res/values/strings.xml', s / 'res/values/copy.xml'),
+            'key-sets': lambda s: (s / 'AndroidManifest.xml').write_text(
+                (s / 'AndroidManifest.xml').read_text().replace('<application', '<key-sets><upgrade-key-set '
+                                                                'android:name="a"/></key-sets><application')),
+            'original-package': lambda s: (s / 'AndroidManifest.xml').write_text(
+                (s / 'AndroidManifest.xml').read_text().replace('<application',
+                                                                '<original-package android:name="x.y"/><application')),
+            'versionCodeMajor': lambda s: (s / 'AndroidManifest.xml').write_text(
+                (s / 'AndroidManifest.xml').read_text().replace('package=', 'android:versionCodeMajor="1" package=')),
+            'java dir': lambda s: (s / 'src/Dir.java').mkdir(),
             'comment hides package': lambda s: next(s.glob('src/**/MainActivity.java')).write_text(
                 '/* package ' + self.PKG + '; */ package dev.pixel.voice; class A {}'),
         }
@@ -183,8 +203,9 @@ class ApiTest(Base):
         job = self.b.job(out['jobId'])
         self.assertEqual((job['state'], job['attempt']), ('queued', 1))
         self.assertEqual(self.b.cancel(out['jobId'], {'schemaVersion': 1}), {'status': 'accepted'})
-        with self.assertRaises(Refused):
-            self.b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        # A cancelled first build can still be revised (it starts again from the skeleton).
+        self.assertIn('jobId', self.b.revise('d', out['projectId'],
+                                             {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'}))
         self.assertIsNone(self.b.artifact('../../etc/passwd'))
         self.assertIsNone(self.b.job('nope'))
         with self.assertRaises(Refused):
@@ -360,6 +381,55 @@ class BuildTest(Base):
         rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r3', 'request': 'y'})
         b.run_next()
         self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+
+    def test_a_fifo_from_a_failed_attempt_is_cleared(self):
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        b.generate = lambda source, *a: os.mkfifo(source / 'res/pipe')
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'failed')
+        b.generate = self.label_generator('two')
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r3', 'request': 'y'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+
+    def test_a_failed_first_build_can_be_revised_from_the_skeleton(self):
+        seen = []
+
+        def broken_once(source, kind, request, cancelled):
+            seen.append((kind, request))
+            if len(seen) == 1:
+                raise toolchain.StepFailed('compile', 'java failed.')
+        b = self.builder(broken_once)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'A timer'})
+        b.run_next()
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'fix it'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+        self.assertEqual(seen[1], ('create', 'A timer\n\nChange requested: fix it'))
+
+    def test_an_interrupted_first_preparation_starts_again(self):
+        b = self.builder(self.label_generator('x'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        from rose.app_builder.service import _git
+        source = self.root / 'projects' / out['projectId'] / 'source'
+        source.mkdir(parents=True)
+        _git(source, 'init', '-q')  # as if the server stopped right after git init
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready', b.job(out['jobId']))
+
+    def test_missing_libraries_are_a_dependency_failure(self):
+        def androidx(source, kind, request, cancelled):
+            java = next(source.glob('src/**/MainActivity.java'))
+            java.write_text(java.read_text().replace('import android.app.Activity;',
+                                                     'import android.app.Activity;\nimport androidx.core.Thing;'))
+        for generate in (androidx, lambda source, *a: (source / 'src/Helper.kt').write_text('fun x() {}')):
+            b = self.builder(generate)
+            out = b.create('d', {'schemaVersion': 1, 'clientRequestId': str(id(generate)), 'description': 'x'})
+            b.run_next()
+            self.assertEqual(b.job(out['jobId'])['failure']['category'], 'dependency', b.job(out['jobId']))
 
     def test_a_retryable_failure_can_be_retried_as_the_next_attempt(self):
         calls = []

@@ -112,6 +112,8 @@ class Call(unittest.TestCase):
         self.assertEqual(r['message'], composer.MESSAGES['unsupported'])
         r = composer.call(phone(Link(reply={'status': 'offline'})), 'p', 'r', {'kind': 'arrange'})
         self.assertEqual((r['outcome'], r['message']), ('unavailable', composer.MESSAGES['offline']))
+        r = composer.call(phone(Link(reply={'status': 'disconnected'})), 'p', 'r', {'kind': 'arrange'})
+        self.assertEqual(r['outcome'], 'uncertain')  # dropped after sending: it may have composed
 
     def test_a_lost_link_during_compose_is_uncertain_and_not_resent(self):
         link = Link(fail='workspace_compose')

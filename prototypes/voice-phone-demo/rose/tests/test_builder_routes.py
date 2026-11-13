@@ -102,6 +102,11 @@ class Routes(unittest.TestCase):
         h = self.device.headers('POST', '/builder/v1/projects', self.remote.identity.pin)
         big = self.client.post('/builder/v1/projects', content=b'{' + b' ' * 20000 + b'}', headers=h)
         self.assertEqual(big.status_code, 400)
+        h = self.device.headers('POST', '/builder/v1/projects', self.remote.identity.pin)
+        deep = self.client.post('/builder/v1/projects', content=b'[' * 16000, headers=h)
+        self.assertEqual(deep.status_code, 400)
+        r = self.client.get('/builder/v1/projects')
+        self.assertEqual((r.status_code, r.json()['schemaVersion']), (401, 1))
 
     def test_artifact_paths_are_not_files(self):
         for sha in ('0' * 64, '..%2F..%2Fetc%2Fpasswd', 'A' * 64):

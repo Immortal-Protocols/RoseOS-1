@@ -22,11 +22,21 @@ FORBIDDEN_NAMES = {'.git', '.gitignore', '.gitattributes', '.gitmodules'}
 MAX_FILE = 4 * 1024 * 1024
 FORBIDDEN_SUFFIXES = ('.gradle', '.kts', '.kt', '.so', '.jar', '.aar', '.sh', '.py', '.mk', '.cmake', '.c', '.cpp',
                       '.h', '.jks', '.keystore', '.p12', '.pk8', '.apk', '.dex')
-OWNED_ATTRIBUTES = ('versionCode', 'versionName', 'sharedUserId', 'sharedUserLabel')
+OWNED_ATTRIBUTES = ('versionCode', 'versionCodeMajor', 'versionName', 'sharedUserId', 'sharedUserLabel')
+# Manifest elements a generated app may declare. Anything else (key-sets and upgrade-key-set, original-package,
+# adopt-permissions, uses-sdk, instrumentation, ...) could change how Android identifies, updates or trusts the app.
+MANIFEST_CHILDREN = {'application', 'uses-permission', 'uses-feature', 'queries', 'supports-screens',
+                     'uses-configuration', 'compatible-screens', 'permission', 'permission-group'}
+DEPENDENCY_SUFFIXES = ('.gradle', '.kts', '.kt', '.jar', '.aar', '.so')
 
 
 class TemplateRefused(ValueError):
-    """Generated source the builder will not compile; the summary is safe to show the owner."""
+    """Generated source the builder will not compile; the summary is safe to show the owner. ``dependency`` marks a
+    refusal caused by a library or language the framework-only toolchain does not have."""
+
+    def __init__(self, message: str, dependency: bool = False):
+        super().__init__(message)
+        self.dependency = dependency
 
 
 def android_string(text: str) -> str:
@@ -104,9 +114,12 @@ def check(source: Path, package: str) -> None:
             raise TemplateRefused(f'{name} is a hard link; it is not built.')
         if stat.S_ISREG(mode) and os.lstat(path).st_size > MAX_FILE:
             raise TemplateRefused(f'{name} is larger than {MAX_FILE // (1024 * 1024)} MB.')
+        if path.name.lower().endswith(('.java',) + FORBIDDEN_SUFFIXES) and not stat.S_ISREG(mode):
+            raise TemplateRefused(f'{name} is a directory with a source file name; it is not built.')
         if stat.S_ISREG(mode) and path.name.lower().endswith(FORBIDDEN_SUFFIXES):
             raise TemplateRefused(f'{name} is not supported: generated apps use framework '
-                                  'Java only, with no build scripts, libraries or native code.')
+                                  'Java only, with no build scripts, libraries or native code.',
+                                  dependency=path.name.lower().endswith(DEPENDENCY_SUFFIXES))
     manifest = source / 'AndroidManifest.xml'
     if not manifest.is_file():
         raise TemplateRefused('AndroidManifest.xml is missing.')
@@ -125,6 +138,9 @@ def check(source: Path, package: str) -> None:
             raise TemplateRefused(f'android:{name} is set by the builder, not the app.')
     if root.find('uses-sdk') is not None:
         raise TemplateRefused('SDK levels are set by the builder, not the app.')
+    for child in root:
+        if child.tag not in MANIFEST_CHILDREN:
+            raise TemplateRefused(f'<{child.tag}> is not allowed in a generated app\'s manifest.')
     application = root.find('application')
     if application is not None and application.get(ANDROID + 'debuggable') is not None:
         raise TemplateRefused('android:debuggable is not allowed.')

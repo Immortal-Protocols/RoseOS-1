@@ -53,7 +53,9 @@ apps.
 directory beside it in `repo.git`), outside
    `workspace/`. Every version records the commit it was built from
    (`sourceRevision`). A revision starts from the last **delivered** version's
-   commit, never from a failed attempt.
+   commit, never from a failed attempt. If nothing has been delivered yet, it
+   starts from the skeleton with the original description plus the change.
+   So a failed first build is never a dead end.
 4. **Generate.** A per-job Codex thread with `sandbox: workspace-write`, cwd =
    that project's source and no access to `ROSE_CONFIG_DIR`, writes code into a
    fixed framework-only skeleton: Java 8 source level, android.jar APIs only,
@@ -64,7 +66,11 @@ directory beside it in `repo.git`), outside
 5. **Build.** Before git or any tool touches the generated tree, the builder
    refuses `.git`, `.gitignore`, `.gitattributes`, symbolic and hard links, and
    non-regular files, anywhere in the tree. Compiled classes must sit in the
-   app's own package, whatever the source text claims.
+   app's own package, whatever the source text claims. The manifest may hold
+   only `application`, permissions, features, `queries` and screen-support
+   elements. So `key-sets`/`upgrade-key-set`, `original-package` and
+   `adopt-permissions`, which could hand the installed app's updates to another
+   signer, are refused, and the built binary is checked for them again.
    The project's git directory sits beside the tree, out of the generator's
    reach, and git runs with hooks, fsmonitor and excludes disabled. The
    builder, not Codex, runs the pinned recipe (aapt v1 → javac → d8 →
@@ -78,8 +84,8 @@ directory beside it in `repo.git`), outside
    a revision can never change identity.
 7. **Deliver.** The signed APK is written once and content-addressed. Its record
    carries `projectId, versionCode, versionName, sourceRevision, jobId, sha256,
-   size, signerSha256`. It is offered only to the requesting owner's device and
-   installed only on an explicit owner tap.
+   size, signerSha256`. It is served only to the server owner's paired devices,
+   over the signed link, and installed only on an explicit owner tap.
 8. **Install.** The phone verifies the sha256, then reads the archive with
    `getPackageArchiveInfo` and checks the package, the signer (it must equal the
    project's `signerSha256` and, if installed, the installed signer) and that
@@ -124,7 +130,7 @@ All requests use the paired device's `rose-auth-v1` signature, under the
 The routes are mounted only when the server has an app builder enabled, and
 `rose.app` enables none today. The signature covers the method, path, time and
 nonce. Body integrity comes from the pinned TLS link. Every JSON response is an
-object carrying `schemaVersion: 1`. The library response is `{schemaVersion,
+object carrying `schemaVersion: 1`, including a 401 refusal. The library response is `{schemaVersion,
 projects: [...]}`. Every paired device of the server's owner sees the same
 library. Every body carries
 `schemaVersion: 1`. Unknown request fields and versions are refused (`400`).
@@ -160,6 +166,13 @@ updatedAt, failure?}`
   failed | cancelled`.
 - **failure:** `{category: toolchain | dependency | compile | test | signing |
   timeout | cancelled | internal, summary, retryable}`.
+  - `dependency`: a library or language the framework-only toolchain lacks
+    (Kotlin, Gradle, a jar or aar, an import of a missing package).
+  - `compile`: anything else in the generated source.
+  - `test`: reserved; no tests run yet.
+- **Concurrency:** a project has at most one queued or running job. Revise and
+  retry are refused while one is active. A retried job is queued again at the
+  time of the retry.
 - **Server restart:** a running job becomes `failed {internal, "interrupted;
   outcome unknown", retryable: true}`. It is never silently re-run; the owner can retry it (`POST ./retry`).
 - **Logs:** `logTail` holds redacted build output only, never paths under
@@ -176,7 +189,7 @@ apk: {sha256, size}, notes}]}]`
 - `activeJob` is the project's queued or running job, so a restarted client or
   a second phone can show progress and Cancel.
 - `apk.size` is the exact byte count.
-- The APK is fetched only through the creator's signed
+- The APK is fetched only through a paired device's signed
   `GET /builder/v1/artifacts/<sha256>`. Public share links come separately from
   hosting (Level 3) and never grant backend or account access.
 
@@ -247,8 +260,10 @@ of:
 The conversation's `ok` is true only for `shown` and `prepared`, never for a
 mere submission.
 
-- A lost link or a late answer is `uncertain`. It is reported and never re-sent;
-  v1 has no read operation, so the owner asks again if they want to.
+- A link that drops after the request was sent, or a late answer, is
+  `uncertain`. It is reported and never re-sent; v1 has no read operation, so
+  the owner asks again if they want to. Only a link that reports the request
+  was never sent (`offline`) means nothing changed.
 - The server waits 25 s, longer than Rose Agent's 20 s `app_command` wait, so a
   slow composition's answer is not dropped.
 - Rose Agent relays `app_command` only to same-signer or allowlisted packages,

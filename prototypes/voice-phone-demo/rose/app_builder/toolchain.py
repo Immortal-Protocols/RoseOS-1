@@ -113,7 +113,7 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     try:
         template.check(source, package)
     except template.TemplateRefused as refused:
-        raise StepFailed('compile', str(refused)) from None
+        raise StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
     for d in ('classes', 'generated', 'dex', 'home'):
         (work / d).mkdir(parents=True, exist_ok=True)
     home, log = work / 'home', []
@@ -126,10 +126,17 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
         aapt[5:5] = ['-A', source / 'assets']
     log.append(run(aapt, work, home, tools, cancelled, 'compile', hidden))
     sources = sorted(str(p) for p in [*source.glob('src/**/*.java'), *(work / 'generated').rglob('*.java')])
-    log.append(run([tools.java(), '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-encoding', 'UTF-8', '-source', '8',
-                    '-target', '8', '-Xlint:-options', '-proc:none', '-bootclasspath',
-                    f'{tools.android_jar}:{tools.bt / "core-lambda-stubs.jar"}', '-d', work / 'classes', *sources],
-                   work, home, tools, cancelled, 'compile', hidden))
+    try:
+        log.append(run([tools.java(), '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-encoding', 'UTF-8', '-source',
+                        '8', '-target', '8', '-Xlint:-options', '-proc:none', '-bootclasspath',
+                        f'{tools.android_jar}:{tools.bt / "core-lambda-stubs.jar"}', '-d', work / 'classes',
+                        *sources], work, home, tools, cancelled, 'compile', hidden))
+    except StepFailed as failed:
+        # An import of a library the framework-only toolchain lacks (androidx, kotlin, ...) is a dependency failure.
+        if failed.category == 'compile' and re.search(r'error: package [\w.]+ does not exist', failed.log):
+            raise StepFailed('dependency', 'The app needs a library this builder does not provide (it builds with '
+                             'Android framework APIs only).', log=failed.log) from None
+        raise
     classes = sorted(str(p) for p in (work / 'classes').rglob('*.class'))
     own = package.replace('.', '/') + '/'
     for c in classes:  # whatever the source text claimed, compiled classes live in the app's own package
@@ -152,8 +159,11 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     # Checked again on the built binary, by attribute id, whatever namespace prefix the source used.
     tree = run([tools.bt / 'aapt', 'dump', 'xmltree', unsigned, 'AndroidManifest.xml'], work, home, tools, cancelled,
                'compile', hidden)
-    if 'application-debuggable' in badging or re.search(r'\((0x0101000b|0x0101000f|0x01010261)\)', tree):
-        raise StepFailed('compile', 'The app asks to be debuggable or to share a user id, which is not allowed.')
+    # sharedUserId, debuggable, sharedUserLabel, versionCodeMajor; and identity elements by name.
+    if ('application-debuggable' in badging or re.search(r'\((0x0101000b|0x0101000f|0x01010261|0x01010576)\)', tree)
+            or re.search(r'E: (key-sets|upgrade-key-set|original-package|adopt-permissions)\b', tree)):
+        raise StepFailed('compile', 'The app tries to set its own identity, debuggability or update keys, '
+                         'which is not allowed.')
     return unsigned, '\n'.join(x for x in log if x)
 
 

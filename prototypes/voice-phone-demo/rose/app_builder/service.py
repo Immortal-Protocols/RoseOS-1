@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -55,7 +56,8 @@ def _git(source: Path, *args) -> str:
            'GIT_AUTHOR_NAME': 'Rose builder', 'GIT_AUTHOR_EMAIL': 'builder@localhost',
            'GIT_COMMITTER_NAME': 'Rose builder', 'GIT_COMMITTER_EMAIL': 'builder@localhost'}
     safe = ['-c', 'core.hooksPath=' + os.devnull, '-c', 'core.fsmonitor=false', '-c', 'core.excludesFile=' + os.devnull,
-            '-c', 'core.attributesFile=' + os.devnull, '-c', 'core.symlinks=false', '-c', 'commit.gpgSign=false']
+            '-c', 'core.attributesFile=' + os.devnull, '-c', 'core.symlinks=false', '-c', 'commit.gpgSign=false',
+            '-c', 'core.fsync=all', '-c', 'core.fsyncObjectFiles=true']  # a delivered revision survives a crash
     result = subprocess.run(['git', *safe, *args], capture_output=True, text=True, env=env, cwd=source.parent)
     if result.returncode:
         raise toolchain.StepFailed('internal', 'The project source could not be recorded.')
@@ -193,13 +195,17 @@ class Builder:
             self._step(job, 'preparing', 'source', 'Preparing the project source.')
             self._prepare(source, project, job)
             self._step(job, 'preparing', 'generating', 'Writing the app.')
-            self.generate(source, job['kind'], job['request'], cancelled)
+            kind, request = job['kind'], job['request']
+            if kind == 'revise' and not self.ledger.versions(project_id):
+                # Nothing delivered yet: this starts from the skeleton, so the generator writes the whole app.
+                kind, request = 'create', project['description'] + '\n\nChange requested: ' + request
+            self.generate(source, kind, request, cancelled)
             if cancelled():
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
             try:  # before git touches anything the generator wrote
                 template.check(source, package)
             except template.TemplateRefused as refused:
-                raise toolchain.StepFailed('compile', str(refused)) from None
+                raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
             _git(source, 'add', '-A')
             if _git(source, 'status', '--porcelain'):
                 _git(source, 'commit', '-q', '-m', f'{job["kind"]} {job_id} attempt {job["attempt"]}')
@@ -242,7 +248,13 @@ class Builder:
             self.ledger.finish_failed(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
 
     def _prepare(self, source: Path, project: dict, job: dict):
-        if not (source.parent / 'repo.git').exists():
+        gitdir = source.parent / 'repo.git'
+        if gitdir.exists() and not self._has_commit(source):
+            # An interrupted first preparation: nothing was delivered from it, so start the project afresh.
+            shutil.rmtree(gitdir)
+            if source.exists():
+                shutil.rmtree(source)
+        if not gitdir.exists():
             source.mkdir(mode=0o700, parents=True, exist_ok=True)
             _git(source, 'init', '-q')
             template.write_skeleton(source, project['packageName'], project['name'])
@@ -250,6 +262,14 @@ class Builder:
             _git(source, 'commit', '-q', '-m', 'skeleton')
         else:
             self._reset(source, project['projectId'])
+
+    @staticmethod
+    def _has_commit(source: Path) -> bool:
+        try:
+            _git(source, 'rev-parse', '--verify', '-q', 'HEAD')
+            return True
+        except toolchain.StepFailed:
+            return False
 
     def _safe_reset(self, source: Path, project_id: str):
         try:
@@ -269,5 +289,7 @@ class Builder:
         _git(source, 'reset', '-q', '--hard', target)
         _git(source, 'clean', '-q', '-ffdx')  # twice: also nested repositories git would otherwise keep
         for path in sorted(source.rglob('*'), key=lambda p: len(p.parts), reverse=True):
-            if path.name in template.FORBIDDEN_NAMES:  # whatever git left, never into the next attempt
-                path.unlink() if path.is_symlink() or not path.is_dir() else shutil.rmtree(path)
+            mode = os.lstat(path).st_mode
+            if path.name in template.FORBIDDEN_NAMES or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                # whatever git left (metadata, FIFOs, sockets, links), never into the next attempt
+                path.unlink() if not stat.S_ISDIR(mode) else shutil.rmtree(path)

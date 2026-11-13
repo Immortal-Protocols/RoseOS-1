@@ -35,13 +35,13 @@ def add_routes(app: FastAPI, remote: Any, builder: Builder, peer: Callable[[Any]
     def signed(request: Request):
         auth = remote.authenticate(request.method, request_path(request.scope), request.headers, peer(request))
         if auth.device is None:
-            return None, JSONResponse({'error': auth.reason, 'final': auth.final}, 401,
+            return None, JSONResponse({'schemaVersion': 1, 'error': auth.reason, 'final': auth.final}, 401,
                                       headers=refusal_headers(auth))
         return auth.device, None
 
     async def body(request: Request):
         length = request.headers.get('content-length')
-        if length is not None and (not length.isdigit() or int(length) > BODY_MAX):
+        if length is not None and (not (length.isascii() and length.isdigit()) or int(length) > BODY_MAX):
             raise Refused('body too large')
         raw = b''
         async for chunk in request.stream():
@@ -50,7 +50,7 @@ def add_routes(app: FastAPI, remote: Any, builder: Builder, peer: Callable[[Any]
                 raise Refused('body too large')
         try:
             return json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             raise Refused('body must be JSON') from None
 
     async def call(request: Request, fn, *args, with_body: bool = True):

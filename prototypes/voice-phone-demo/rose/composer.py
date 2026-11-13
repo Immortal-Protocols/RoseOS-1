@@ -139,6 +139,7 @@ def call(phone, provider: str | None, request_id: str, args) -> dict:
         result = send('app_command', timeout=TIMEOUT_S, packageName=provider, operation=OPERATION, params=request)
     except Exception:  # a lost link is not success, and it may or may not have composed: never re-send
         result = None
-    if isinstance(result, dict) and result.get('status') in ('offline', 'disconnected'):
-        return offline  # the link says the command never reached the phone
+    if isinstance(result, dict) and result.get('status') == 'offline':
+        return offline  # the link says the command was never sent
+    # 'disconnected' means the link dropped after sending: the phone may have composed it, so that is uncertain.
     return outcome(request_id, result)
