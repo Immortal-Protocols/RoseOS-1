@@ -6,7 +6,9 @@ from RoseOS. Builds run on the owner's Mac or builder; nothing is compiled on th
 
 Status: **source skeleton only.** It runs against `FakeBuilderApi`, an in-memory stand-in with no network, no APKs
 and no share links. The real build/job/artifact contract belongs to App Core, and hosting belongs to the Chariot owner.
-`BuilderApi` follows Home's proposal to App Core and will change to match their contract. The package ID
+`BuilderApi` is the working contract App Core accepted on Nov 13. App Core added `sourceRevision` per version and
+`attempt` per job. App Core's contract doc and schema in this repo will be the single source of truth, and this module
+mirrors it. The package ID
 `dev.pixel.builder` and the name "Rose App Builder" are provisional. They must be settled before the first release,
 because the package ID can't change after that.
 

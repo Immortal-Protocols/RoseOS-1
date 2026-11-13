@@ -16,14 +16,23 @@ final class BuildJob {
   Failure(Category category, String summary, boolean retryable) { this.category = category; this.summary = summary; this.retryable = retryable; }
  }
 
- final String jobId; final Stage stage; final String message; final Failure failure;
- BuildJob(String jobId, Stage stage, String message, Failure failure) { this.jobId = jobId; this.stage = stage; this.message = message; this.failure = failure; }
+ /** attempt: App Core's retry count for this job, from 1, so a retry is visible rather than silent. */
+ final String jobId; final Stage stage; final String message; final Failure failure; final int attempt;
+ BuildJob(String jobId, Stage stage, String message, Failure failure) { this(jobId, stage, message, failure, 1); }
+ BuildJob(String jobId, Stage stage, String message, Failure failure, int attempt) {
+  this.jobId = jobId; this.stage = stage; this.message = message; this.failure = failure; this.attempt = Math.max(1, attempt);
+ }
 
  boolean terminal() { return stage == Stage.READY || stage == Stage.FAILED || stage == Stage.CANCELLED; }
  boolean cancellable() { return !terminal(); }
 
- /** The one-line status the phone shows. */
+ /** The one-line status the phone shows; a live retry says which attempt it is. */
  static String status(BuildJob j) {
+  String s = stageText(j);
+  return j.attempt > 1 && !j.terminal() ? s + " (attempt " + j.attempt + ")" : s;
+ }
+
+ private static String stageText(BuildJob j) {
   switch (j.stage) {
    case QUEUED: return "Waiting for the builder";
    case PREPARING: return "Setting up the project";

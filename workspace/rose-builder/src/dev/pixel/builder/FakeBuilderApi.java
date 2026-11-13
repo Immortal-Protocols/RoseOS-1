@@ -28,7 +28,7 @@ final class FakeBuilderApi implements BuilderApi {
   if (s == BuildJob.Stage.READY) {
    versions = new ArrayList<>(p.versions);
    long code = versions.size() + 1;
-   versions.add(new Version(code, "1." + (code - 1), null, null, 0));
+   versions.add(new Version(code, "1." + (code - 1), "fake-" + code, null, null, 0));
   }
   Project q = new Project(p.projectId, p.name, p.description, p.packageName, p.signerSha256, versions, new BuildJob(p.job.jobId, s, null, null));
   projects.put(id, q);

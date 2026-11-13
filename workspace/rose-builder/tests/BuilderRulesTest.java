@@ -19,6 +19,9 @@ public final class BuilderRulesTest {
         expect("Building the app".equals(BuildJob.status(building)), "building status");
         BuildJob ready = new BuildJob("j1", BuildJob.Stage.READY, null, null);
         expect(!ready.cancellable() && "Ready to install".equals(BuildJob.status(ready)), "ready status");
+        expect("Building the app (attempt 2)".equals(BuildJob.status(new BuildJob("j1", BuildJob.Stage.BUILDING, null, null, 2))), "a retry is visible");
+        expect("Ready to install".equals(BuildJob.status(new BuildJob("j1", BuildJob.Stage.READY, null, null, 2))), "a finished retry reads as its result");
+        expect(new BuildJob("j1", BuildJob.Stage.QUEUED, null, null, 0).attempt == 1, "attempts count from 1");
 
         // Failures are named, and retry is offered only when the server says it can help.
         BuildJob.Failure compile = new BuildJob.Failure(BuildJob.Category.COMPILE, "Main.java:12", false);

@@ -4,15 +4,18 @@ import java.util.List;
 
 /**
  * Project 1: the phone's view of the Rose build service. App Core owns orchestration, builds, signing and artifacts;
- * this client only asks and shows. The shape follows Home's contract proposal to App Core (Nov 13) and is provisional
- * until App Core publishes the real contract: until then the app runs against {@link FakeBuilderApi} only, and no
+ * this client only asks and shows. The shape is the working contract App Core accepted on Nov 13 (with its additions:
+ * sourceRevision per version, attempt per job); App Core's contract doc and schema will be the single source of truth
+ * and this mirrors it: until then the app runs against {@link FakeBuilderApi} only, and no
  * network transport exists in this module.
  */
 interface BuilderApi {
+ /** sourceRevision: App Core's immutable id for this version's source (its contract addition, Nov 13). */
  final class Version {
-  final long versionCode; final String versionName, apkUrl, apkSha256; final long apkSize;
-  Version(long versionCode, String versionName, String apkUrl, String apkSha256, long apkSize) {
-   this.versionCode = versionCode; this.versionName = versionName; this.apkUrl = apkUrl; this.apkSha256 = apkSha256; this.apkSize = apkSize;
+  final long versionCode; final String versionName, sourceRevision, apkUrl, apkSha256; final long apkSize;
+  Version(long versionCode, String versionName, String sourceRevision, String apkUrl, String apkSha256, long apkSize) {
+   this.versionCode = versionCode; this.versionName = versionName; this.sourceRevision = sourceRevision;
+   this.apkUrl = apkUrl; this.apkSha256 = apkSha256; this.apkSize = apkSize;
   }
  }
  final class Project {
