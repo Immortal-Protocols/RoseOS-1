@@ -56,7 +56,8 @@ final class BuildJob {
   if (f == null) return "The build failed";
   switch (f.category) {
    case TOOLCHAIN: return "The builder's Android tools aren't working";
-   case DEPENDENCY: return "A library the app needs couldn't be downloaded";
+   // builder API v1: generated apps use framework APIs only; AndroidX, Kotlin, Gradle or other libraries fail here.
+   case DEPENDENCY: return "The app needs a library or tool the builder doesn't support";
    case COMPILE: return "The app's code didn't compile";
    case TEST: return "The app's tests failed";
    case SIGNING: return "The app couldn't be signed";
