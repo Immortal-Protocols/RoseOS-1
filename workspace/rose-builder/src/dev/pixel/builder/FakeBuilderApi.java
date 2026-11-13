@@ -84,16 +84,16 @@ final class FakeBuilderApi implements BuilderApi {
   return CancelStatus.UNKNOWN_JOB;
  }
 
- @Override public synchronized int retry(String jobId) {
+ @Override public synchronized int retry(String jobId) throws Refused {
   for (Map.Entry<String, Project> e : projects.entrySet()) {
    Project p = e.getValue();
    if (p.job == null || !p.job.jobId.equals(jobId)) continue;
-   if (!BuildJob.offerRetry(p.job, p.newestVersionAt())) throw new IllegalArgumentException("not a retryable failed job, or a newer version exists");
+   if (!BuildJob.offerRetry(p.job, p.newestVersionAt())) throw new Refused("not a retryable failed job, or a newer version exists");
    int attempt = p.job.attempt + 1;
    projects.put(e.getKey(), new Project(p.projectId, p.name, p.packageName, p.signerSha256, p.versions, new BuildJob(jobId, BuildJob.Stage.QUEUED, null, null, attempt, p.job.startedAt)));
    return attempt;
   }
-  throw new IllegalArgumentException("unknown job");
+  throw new Refused("unknown job");
  }
 
  @Override public void download(String apkSha256, long size, File dest) throws FileNotFoundException {

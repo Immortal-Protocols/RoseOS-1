@@ -45,6 +45,9 @@ interface BuilderApi {
  }
  /** The builder can't be reached: shown as UNREACHABLE, never as an empty library. */
  final class Unreachable extends Exception { Unreachable(String m) { super(m); } }
+ /** The builder answered 400: the request no longer applies (for retry, the job isn't retryable or a newer version
+  * exists). The client refreshes and shows the project as it now is. */
+ final class Refused extends Exception { Refused(String m) { super(m); } }
 
  List<Project> projects() throws Unreachable;
  Project project(String projectId) throws Unreachable;
@@ -57,7 +60,7 @@ interface BuilderApi {
  void download(String apkSha256, long size, File dest) throws Exception;
  /** POST jobs/<jobId>/retry: a retryable failed job runs again under the same jobId as attempt + 1; anything else is
   * refused by the builder. Returns the job's new attempt. */
- int retry(String jobId) throws Unreachable;
+ int retry(String jobId) throws Unreachable, Refused;
  void reportInstall(InstallReceipt receipt) throws Unreachable;
  /** Public download link for sharing (Level 3, the Chariot owner's hosting; not part of builder API v1): one
   * immutable per version, or the latest when versionCode is null. Null until hosting exists. */

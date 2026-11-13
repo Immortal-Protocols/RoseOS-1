@@ -140,7 +140,9 @@ public final class MainActivity extends Activity {
     body(BuildJob.failureAdvice(p.job.failure));
     // Only when the builder says a retry can help and no newer version exists; it runs the same job again.
     if (BuildJob.offerRetry(p.job, p.newestVersionAt())) button("Try again", x -> {
-     try { api.retry(p.job.jobId); } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder"); }
+     try { api.retry(p.job.jobId); }
+     catch (BuilderApi.Unreachable e) { toast("Can't reach your builder"); }
+     catch (BuilderApi.Refused e) { toast("That build can't be retried now; showing the latest"); }
      showProject(id);
     });
    }
