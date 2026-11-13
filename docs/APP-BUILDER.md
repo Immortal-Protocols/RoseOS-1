@@ -48,7 +48,8 @@ apps.
    carries first-party signature permissions), and a per-project signer. Both
    are fixed for the project's life.
 3. **Source.** Each project's source is a private git repository under
-   `ROSE_CONFIG_DIR/app-builder/projects/<projectId>/source` (0700), outside
+   `ROSE_CONFIG_DIR/app-builder/projects/<projectId>/source` (0700, with its git
+directory beside it in `repo.git`), outside
    `workspace/`. Every version records the commit it was built from
    (`sourceRevision`). A revision starts from the last **delivered** version's
    commit, never from a failed attempt.
@@ -58,9 +59,14 @@ apps.
    aapt v1 resources, min API 26 and target 35. It cannot change the package,
    versionCode or signing. Enabling this thread on the Mac is a
    security-relevant runtime change; see §5.
-5. **Build.** The builder, not Codex, runs the pinned recipe (aapt v1 → javac
-   → d8 → zipalign) in a job-owned output directory with a scrubbed
-   environment. `versionCode` comes from the project ledger and is injected at
+5. **Build.** Before git or any tool touches the generated tree, the builder
+   refuses `.git`, `.gitignore`, `.gitattributes`, links and non-regular files.
+   The project's git directory sits beside the tree, out of the generator's
+   reach, and git runs with hooks, fsmonitor and excludes disabled. The
+   builder, not Codex, runs the pinned recipe (aapt v1 → javac → d8 →
+   zipalign) in a job-owned output directory with a scrubbed environment.
+   After the build, the binary manifest is checked again for debuggable and
+   shared-uid attributes, by attribute id. `versionCode` comes from the project ledger and is injected at
    packaging. Generated code is compiled, never executed on the host. No
    generated scripts, Gradle builds or annotation processors run.
 6. **Sign.** `scripts/sign-apk.py` runs outside the generation sandbox with the
@@ -225,8 +231,14 @@ of:
 - `uncertain`: no definite answer.
 
 The conversation's `ok` is true only for `shown` and `prepared`, never for a
-mere submission. There is no retry on a lost link: `uncertain` is reported and
-state is re-read, never re-sent.
+mere submission.
+
+- A lost link or a late answer is `uncertain`. It is reported and never re-sent;
+  v1 has no read operation, so the owner asks again if they want to.
+- The server waits 25 s, longer than Rose Agent's 20 s `app_command` wait, so a
+  slow composition's answer is not dropped.
+- Rose Agent relays `app_command` only to same-signer or allowlisted packages,
+  so the composer provider must be one of those.
 
 ### 4.3 Agent tasks chosen on the page
 
@@ -248,8 +260,9 @@ phone.
      owner must uninstall and loses data.
 
    Creating or storing keys is not authorized by this plan. Source refuses to
-   create keys unless `app_builder.signing.key_creation` is explicitly enabled
-   by the host owner.
+   create keys unless the host owner explicitly enables it
+   (`toolchain.Tools(key_creation=True)`, off by default). Once a project's
+   signer is bound, a missing key is never silently replaced.
 2. **Build host (decision: Nathan, operated by the Local RoseOS Server Worker).**
    The pinned toolchain is Linux-only and the Mac's toolchain is unpinned.
    Either the Server Worker pins and hands back a macOS toolchain (build-tools

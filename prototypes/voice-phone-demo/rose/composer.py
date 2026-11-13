@@ -22,7 +22,7 @@ KINDS = ('prompt', 'arrange', 'regenerate', 'undo')
 STATUSES = ('shown', 'prepared', 'rejected', 'unavailable', 'uncertain')
 MAX_TEXT = 500
 MAX_REQUEST_ID = 64
-TIMEOUT_S = 12.0
+TIMEOUT_S = 25.0  # longer than Rose Agent's 20 s app_command wait, so a slow composition's answer is not dropped
 
 TOOL = {
     'type': 'function', 'name': 'compose_workspace',
@@ -44,6 +44,7 @@ MESSAGES = {
     'prepared': 'Ready: the workspace page is prepared and shows it when the owner swipes to it.',
     'rejected': 'The phone refused it, so the workspace page did not change.',
     'unavailable': 'The workspace page is not available on this phone, so nothing changed.',
+    'offline': 'The phone is not connected or did not answer, so nothing was changed.',
     'uncertain': 'The phone did not confirm it; the workspace page may or may not have changed.',
 }
 
@@ -116,13 +117,18 @@ def call(phone, provider: str | None, request_id: str, args) -> dict:
         return {'ok': False, 'outcome': 'rejected', 'requestId': request_id,
                 'message': str(refused) + '. Nothing was sent to the phone.'}
     send = getattr(getattr(phone, 'link', None), 'call', None)
-    if not provider or send is None:
+    if not provider:
         return {'ok': False, 'outcome': 'unavailable', 'requestId': request_id, 'message': MESSAGES['unavailable']}
+    offline = {'ok': False, 'outcome': 'unavailable', 'requestId': request_id, 'message': MESSAGES['offline']}
+    if send is None:
+        return offline
     try:
         capabilities = send('app_command', timeout=TIMEOUT_S, packageName=provider, operation='capabilities',
                             params={})
     except Exception:
-        capabilities = None
+        return offline
+    if isinstance(capabilities, dict) and capabilities.get('status') in ('timeout', 'offline', 'disconnected'):
+        return offline
     if not supports(capabilities, request['kind']):
         return {'ok': False, 'outcome': 'unavailable', 'requestId': request_id, 'message': MESSAGES['unavailable']}
     try:

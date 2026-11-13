@@ -8,13 +8,18 @@ scripts or native code is refused before anything is compiled.
 """
 from __future__ import annotations
 
+import os
 import re
+import stat
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ANDROID = '{http://schemas.android.com/apk/res/android}'
 MIN_SDK, TARGET_SDK = 26, 35
-ALLOWED_TOP = {'AndroidManifest.xml', 'src', 'res', 'assets', 'README.md', '.gitignore'}
+ALLOWED_TOP = {'AndroidManifest.xml', 'src', 'res', 'assets', 'README.md'}
+# git metadata is the builder's, kept outside the generated tree; none of it may appear inside.
+FORBIDDEN_NAMES = {'.git', '.gitignore', '.gitattributes', '.gitmodules'}
+MAX_FILE = 4 * 1024 * 1024
 FORBIDDEN_SUFFIXES = ('.gradle', '.kts', '.kt', '.so', '.jar', '.aar', '.sh', '.py', '.mk', '.cmake', '.c', '.cpp',
                       '.h', '.jks', '.keystore', '.p12', '.pk8', '.apk', '.dex')
 OWNED_ATTRIBUTES = ('versionCode', 'versionName', 'sharedUserId', 'sharedUserLabel')
@@ -24,10 +29,19 @@ class TemplateRefused(ValueError):
     """Generated source the builder will not compile; the summary is safe to show the owner."""
 
 
+def android_string(text: str) -> str:
+    """Text as an aapt string resource: XML-escaped, with aapt's own escapes for quotes, backslashes and a
+    leading @ or ? (which would otherwise be read as a resource reference)."""
+    text = text.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\"')
+    if text[:1] in ('@', '?'):
+        text = '\\' + text
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
 def skeleton(package: str, label: str) -> dict[str, str]:
     """Files of a new project: one launcher activity and one string, framework APIs only."""
     path = package.replace('.', '/')
-    label = label.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    label = android_string(label)
     return {
         'AndroidManifest.xml': (
             '<?xml version="1.0" encoding="utf-8"?>\n'
@@ -55,7 +69,6 @@ def skeleton(package: str, label: str) -> dict[str, str]:
             '        setContentView(text);\n'
             '    }\n'
             '}\n'),
-        '.gitignore': 'build/\n',
     }
 
 
@@ -70,17 +83,21 @@ def check(source: Path, package: str) -> None:
     """Refuse generated source that could change the app's identity or escape the framework-only toolchain."""
     source = Path(source)
     for entry in source.iterdir():
-        if entry.name == '.git':
-            continue
         if entry.name not in ALLOWED_TOP:
             raise TemplateRefused(f'Unexpected top-level entry {entry.name!r}; only the app skeleton is built.')
     for path in source.rglob('*'):
-        if '.git' in path.relative_to(source).parts:
-            continue
-        if path.is_symlink():
+        mode = os.lstat(path).st_mode  # never follow or open anything that is not a plain file or directory
+        name = path.relative_to(source)
+        if path.name in FORBIDDEN_NAMES:
+            raise TemplateRefused(f'{name} is not allowed; the builder keeps the project history itself.')
+        if stat.S_ISLNK(mode):
             raise TemplateRefused('Source contains a symbolic link; it is not built.')
-        if path.is_file() and path.name.lower().endswith(FORBIDDEN_SUFFIXES):
-            raise TemplateRefused(f'{path.relative_to(source)} is not supported: generated apps use framework '
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            raise TemplateRefused(f'{name} is not a regular file; it is not built.')
+        if stat.S_ISREG(mode) and os.lstat(path).st_size > MAX_FILE:
+            raise TemplateRefused(f'{name} is larger than {MAX_FILE // (1024 * 1024)} MB.')
+        if stat.S_ISREG(mode) and path.name.lower().endswith(FORBIDDEN_SUFFIXES):
+            raise TemplateRefused(f'{name} is not supported: generated apps use framework '
                                   'Java only, with no build scripts, libraries or native code.')
     manifest = source / 'AndroidManifest.xml'
     if not manifest.is_file():
@@ -89,6 +106,10 @@ def check(source: Path, package: str) -> None:
         root = ET.parse(manifest).getroot()
     except ET.ParseError:
         raise TemplateRefused('AndroidManifest.xml is not valid XML.') from None
+    for element in root.iter():
+        for key in element.attrib:
+            if key.startswith('{') and not key.startswith(ANDROID):
+                raise TemplateRefused('The manifest may use only the android namespace.')
     if root.tag != 'manifest' or root.get('package') != package:
         raise TemplateRefused('The manifest package must stay ' + package + '.')
     for name in OWNED_ATTRIBUTES:
@@ -100,7 +121,8 @@ def check(source: Path, package: str) -> None:
     if application is not None and application.get(ANDROID + 'debuggable') is not None:
         raise TemplateRefused('android:debuggable is not allowed.')
     for java in source.glob('src/**/*.java'):
-        head = java.read_text(encoding='utf-8', errors='replace')[:4000]
-        match = re.search(r'^\s*package\s+([\w.]+)\s*;', head, re.M)
+        text = java.read_text(encoding='utf-8', errors='replace')
+        code = re.sub(r'/\*.*?\*/|//[^\n]*', ' ', text, flags=re.S)  # comments cannot hide the declaration
+        match = re.match(r'\s*package\s+([\w.]+)\s*;', code)
         if not match or not (match.group(1) == package or match.group(1).startswith(package + '.')):
             raise TemplateRefused(f'{java.relative_to(source)} must be in package {package}.')

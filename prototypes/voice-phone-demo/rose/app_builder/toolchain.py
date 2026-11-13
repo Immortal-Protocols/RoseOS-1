@@ -141,6 +141,11 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     found = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']*)'", badging)
     if not found or found.groups() != (package, str(version_code), version_name):
         raise StepFailed('internal', 'The built APK does not carry the identity the builder set.')
+    # Checked again on the built binary, by attribute id, whatever namespace prefix the source used.
+    tree = run([tools.bt / 'aapt', 'dump', 'xmltree', unsigned, 'AndroidManifest.xml'], work, home, tools, cancelled,
+               'compile', hidden)
+    if 'application-debuggable' in badging or re.search(r'\((0x0101000b|0x0101000f|0x01010261)\)', tree):
+        raise StepFailed('compile', 'The app asks to be debuggable or to share a user id, which is not allowed.')
     return unsigned, '\n'.join(x for x in log if x)
 
 
@@ -150,15 +155,23 @@ def _private(path: Path, data: str):
         f.write(data)
 
 
-def ensure_key(keys: Path, package: str, tools: Tools, cancelled=lambda: False) -> Path:
-    """The project's signing config; a new key only when the host owner enabled key creation."""
+def ensure_key(keys: Path, package: str, tools: Tools, cancelled=lambda: False, signer_bound: bool = False) -> Path:
+    """The project's signing config; a new key only when the host owner enabled key creation.
+
+    config.json is written last, so without it any key material is an interrupted creation. It is cleared and made
+    again only while the project has no signer; once one is bound, a missing key is never silently replaced."""
     config = keys / 'config.json'
     if config.exists():
         return config
+    if signer_bound:
+        raise StepFailed('signing', 'This app\'s signing key is missing, so it cannot be updated in place; '
+                         'nothing was signed.')
     if not tools.key_creation:
         raise StepFailed('signing', 'This project has no signing key, and creating keys is not enabled on this '
                          'server, so nothing was signed.')
-    keys.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if keys.exists():
+        shutil.rmtree(keys)
+    keys.mkdir(mode=0o700, parents=True)
     os.chmod(keys, 0o700)
     password = keys / 'store.pass'
     _private(password, secrets.token_urlsafe(32) + '\n')
@@ -179,7 +192,11 @@ def sign(unsigned: Path, output: Path, keys: Path, expected_signer: str | None, 
     if expected_signer:
         args += ['--expected-cert-sha256', expected_signer]
     env = {'PATH': '/usr/bin:/bin', 'ANDROID_SDK_ROOT': str(tools.sdk), 'LANG': 'C.UTF-8'}
-    result = subprocess.run([str(a) for a in args], capture_output=True, text=True, env=env, timeout=tools.timeout_s)
+    try:
+        result = subprocess.run([str(a) for a in args], capture_output=True, text=True, env=env,
+                                timeout=tools.timeout_s)
+    except subprocess.TimeoutExpired:
+        raise StepFailed('timeout', f'Signing took longer than {int(tools.timeout_s)} s.', retryable=True) from None
     if result.returncode:
         category = (result.stderr.strip().rsplit(': ', 1) + [''])[1] or 'signing_failed'
         summary = ('The build was signed by a different key than this app, so it was not delivered.'

@@ -120,6 +120,11 @@ class TemplateTest(Base):
     def test_skeleton_passes(self):
         template.check(self.source(), self.PKG)
 
+    def test_labels_are_escaped_for_aapt(self):
+        self.assertEqual(template.android_string("Don't @x"), "Don\\'t @x")
+        self.assertEqual(template.android_string('@home'), '\\@home')
+        self.assertEqual(template.android_string('?q "a" & <b>'), '\\?q \\"a\\" &amp; &lt;b&gt;')
+
     def test_refusals(self):
         cases = {
             'package': lambda s: (s / 'AndroidManifest.xml').write_text(
@@ -138,6 +143,16 @@ class TemplateTest(Base):
             'symlink': lambda s: (s / 'res/link').symlink_to('/etc/passwd'),
             'other package': lambda s: (s / 'src/Other.java').write_text('package dev.pixel.voice;\nclass Other {}'),
             'bad xml': lambda s: (s / 'AndroidManifest.xml').write_text('<manifest'),
+            'prv namespace': lambda s: (s / 'AndroidManifest.xml').write_text(
+                (s / 'AndroidManifest.xml').read_text().replace(
+                    'package=', 'xmlns:p="http://schemas.android.com/apk/prv/res/android" p:sharedUserId="x.y" package=')),
+            'git dir': lambda s: (s / '.git').mkdir(),
+            'nested git': lambda s: (s / 'res/.git').mkdir(),
+            'gitignore': lambda s: (s / 'res/.gitignore').write_text('*'),
+            'gitattributes': lambda s: (s / 'src/.gitattributes').write_text('* filter=x'),
+            'fifo': lambda s: os.mkfifo(s / 'src/Stuck.java'),
+            'comment hides package': lambda s: next(s.glob('src/**/MainActivity.java')).write_text(
+                '/* package ' + self.PKG + '; */ package dev.pixel.voice; class A {}'),
         }
         for name, change in cases.items():
             s = self.source()
@@ -266,6 +281,62 @@ class BuildTest(Base):
         self.assertIn('not enabled', job['failure']['summary'])
         self.assertFalse((self.root / 'keys' / out['projectId']).exists())
         self.assertEqual(b.projects()[0]['versions'], [])
+
+    def test_generated_git_metadata_never_runs_or_records_keys(self):
+        marker = self.root.parent / 'hook-ran'
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': "Don't forget: reminders"})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready', b.job(out['jobId']))  # an apostrophe builds
+
+        def hostile(source, kind, request, cancelled):
+            hooks = source / '.git/hooks'
+            hooks.mkdir(parents=True)
+            (hooks / 'pre-commit').write_text('#!/bin/sh\ntouch ' + str(marker) + '\n')
+            (hooks / 'pre-commit').chmod(0o755)
+            (source / '.git/config').write_text('[core]\n\tworktree = ' + str(self.root) + '\n')
+        b.generate = hostile
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        b.run_next()
+        job = b.job(rev['jobId'])
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'compile'), job)
+        self.assertFalse(marker.exists())
+        source = self.root / 'projects' / out['projectId'] / 'source'
+        self.assertFalse((source / '.git').exists())  # dropped on reset
+        from rose.app_builder.service import _git
+        tracked = _git(source, 'ls-tree', '-r', '--name-only', 'HEAD').split()
+        self.assertFalse([p for p in tracked if 'keys' in p or p.endswith('.p12') or 'sqlite' in p], tracked)
+
+    def test_an_interrupted_key_creation_is_cleared_before_any_signer(self):
+        b = self.builder(self.label_generator('x'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        keys = self.root / 'keys' / out['projectId']
+        keys.mkdir(parents=True)
+        (keys / 'store.pass').write_text('left over\n')
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready', b.job(out['jobId']))
+
+    def test_shutdown_is_retryable_not_an_owner_cancel(self):
+        holder = {}
+
+        def stop(source, kind, request, cancelled):
+            holder['b'].stopping.set()
+        b = self.builder(stop)
+        holder['b'] = b
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        job = b.job(out['jobId'])
+        self.assertEqual((job['state'], job['failure']['category'], job['failure']['retryable']),
+                         ('failed', 'internal', True), job)
+
+    def test_a_failing_reset_still_records_the_failure(self):
+        def broken(source, kind, request, cancelled):
+            raise toolchain.StepFailed('compile', 'nope')
+        b = self.builder(broken)
+        b._reset = lambda *a: (_ for _ in ()).throw(RuntimeError('git gone'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'failed')
 
     def test_cancel_during_generation(self):
         holder = {}

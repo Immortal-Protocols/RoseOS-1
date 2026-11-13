@@ -8,6 +8,7 @@ on an authorized host) is injected: this module never decides how code is writte
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
@@ -26,7 +27,7 @@ class Refused(ValueError):
 
 
 def _body(body, keys: dict) -> dict:
-    if not isinstance(body, dict) or body.get('schemaVersion') != SCHEMA_VERSION:
+    if not isinstance(body, dict) or type(body.get('schemaVersion')) is not int or body['schemaVersion'] != 1:
         raise Refused('schemaVersion must be 1')
     extra = set(body) - set(keys) - {'schemaVersion'}
     if extra:
@@ -46,13 +47,30 @@ def _body(body, keys: dict) -> dict:
 
 
 def _git(source: Path, *args) -> str:
-    env = {'PATH': '/usr/bin:/bin', 'HOME': str(source.parent), 'GIT_CONFIG_NOSYSTEM': '1', 'LANG': 'C.UTF-8',
+    """git on a project's source with the repository kept beside it (repo.git), out of the generator's reach,
+    and with hooks, fsmonitor, attributes and excludes switched off: nothing in the tree can make git run code."""
+    gitdir = source.parent / 'repo.git'
+    env = {'PATH': '/usr/bin:/bin', 'HOME': str(source.parent), 'GIT_CONFIG_NOSYSTEM': '1',
+           'GIT_CONFIG_GLOBAL': os.devnull, 'LANG': 'C.UTF-8', 'GIT_DIR': str(gitdir), 'GIT_WORK_TREE': str(source),
            'GIT_AUTHOR_NAME': 'Rose builder', 'GIT_AUTHOR_EMAIL': 'builder@localhost',
            'GIT_COMMITTER_NAME': 'Rose builder', 'GIT_COMMITTER_EMAIL': 'builder@localhost'}
-    result = subprocess.run(['git', '-C', str(source), *args], capture_output=True, text=True, env=env)
+    safe = ['-c', 'core.hooksPath=' + os.devnull, '-c', 'core.fsmonitor=false', '-c', 'core.excludesFile=' + os.devnull,
+            '-c', 'core.attributesFile=' + os.devnull, '-c', 'core.symlinks=false', '-c', 'commit.gpgSign=false']
+    result = subprocess.run(['git', *safe, *args], capture_output=True, text=True, env=env, cwd=source.parent)
     if result.returncode:
         raise toolchain.StepFailed('internal', 'The project source could not be recorded.')
     return result.stdout.strip()
+
+
+def _place(src: Path, dst: Path):
+    """Copy to a temporary name, fsync, then rename: a crash never leaves a partial artifact under its hash."""
+    if dst.exists():
+        return
+    tmp = dst.with_name(dst.name + '.tmp')
+    shutil.copyfile(src, tmp)
+    with open(tmp, 'rb') as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, dst)
 
 
 class Builder:
@@ -130,7 +148,11 @@ class Builder:
 
     def serve_forever(self):
         while not self.stopping.is_set():
-            if not self.run_next():
+            try:
+                ran = self.run_next()
+            except Exception:  # one job's failure never stops the worker; _run already recorded it
+                ran = True
+            if not ran:
                 self.wake.wait(5.0)
                 self.wake.clear()
 
@@ -163,6 +185,10 @@ class Builder:
             self.generate(source, job['kind'], job['request'], cancelled)
             if cancelled():
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
+            try:  # before git touches anything the generator wrote
+                template.check(source, package)
+            except template.TemplateRefused as refused:
+                raise toolchain.StepFailed('compile', str(refused)) from None
             _git(source, 'add', '-A')
             if _git(source, 'status', '--porcelain'):
                 _git(source, 'commit', '-q', '-m', f'{job["kind"]} {job_id} attempt {job["attempt"]}')
@@ -176,7 +202,7 @@ class Builder:
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
             self._step(job, 'signing', 'signing', 'Signing the app.')
             keys = self.root / 'keys' / project_id
-            toolchain.ensure_key(keys, package, self.tools, cancelled)
+            toolchain.ensure_key(keys, package, self.tools, cancelled, signer_bound=bool(project['signerSha256']))
             signed = work / 'signed.apk'
             receipt = toolchain.sign(unsigned, signed, keys, project['signerSha256'], self.tools)
             try:
@@ -186,24 +212,26 @@ class Builder:
                                            'was not delivered.') from None
             artifacts = self.root / 'artifacts'
             artifacts.mkdir(mode=0o700, exist_ok=True)
-            final = artifacts / f'{receipt["sha256"]}.apk'
-            if not final.exists():
-                shutil.copyfile(signed, final)
-                idsig = signed.with_suffix('.apk.idsig')
-                if idsig.exists():
-                    shutil.copyfile(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
+            idsig = signed.with_suffix('.apk.idsig')
+            if idsig.exists():
+                _place(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
+            _place(signed, artifacts / f'{receipt["sha256"]}.apk')  # durable before the version row exists
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
                                        job['request'][:200]):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
         except toolchain.StepFailed as failed:
-            self._reset(source, project_id)
-            self.ledger.finish_failed(job_id, failed.category, failed.summary, failed.retryable, failed.log)
+            self._safe_reset(source, project_id)
+            category, summary, retryable = failed.category, failed.summary, failed.retryable
+            if category == 'cancelled' and not self.ledger.cancel_requested(job_id):
+                # Stopped by a server shutdown, not by the owner: the outcome is unknown and it can be retried.
+                category, summary, retryable = 'internal', 'Stopped by a server shutdown; outcome unknown.', True
+            self.ledger.finish_failed(job_id, category, summary, retryable, failed.log)
         except Exception as error:  # never leave a job running; the summary carries no paths or tool output
-            self._reset(source, project_id)
+            self._safe_reset(source, project_id)
             self.ledger.finish_failed(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
 
     def _prepare(self, source: Path, project: dict, job: dict):
-        if not (source / '.git').exists():
+        if not (source.parent / 'repo.git').exists():
             source.mkdir(mode=0o700, parents=True, exist_ok=True)
             _git(source, 'init', '-q')
             template.write_skeleton(source, project['packageName'], project['name'])
@@ -212,10 +240,19 @@ class Builder:
         else:
             self._reset(source, project['projectId'])
 
+    def _safe_reset(self, source: Path, project_id: str):
+        try:
+            self._reset(source, project_id)
+        except Exception:  # the job is still recorded as failed; the next attempt resets again before it starts
+            pass
+
     def _reset(self, source: Path, project_id: str):
         """Back to the last delivered version's commit (or the skeleton): a failed attempt never carries over."""
-        if not (source / '.git').exists():
+        if not (source.parent / 'repo.git').exists():
             return
+        if (source / '.git').exists() or (source / '.git').is_symlink():  # never the builder's; drop it unread
+            path = source / '.git'
+            path.unlink() if path.is_symlink() or path.is_file() else shutil.rmtree(path)
         versions = self.ledger.versions(project_id)
         target = versions[-1]['sourceRevision'] if versions else _git(source, 'rev-list', '--max-parents=0', 'HEAD')
         _git(source, 'reset', '-q', '--hard', target)
