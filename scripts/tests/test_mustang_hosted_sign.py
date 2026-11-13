@@ -474,6 +474,36 @@ class HostedSignGateTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'hosted signing receipt is not this run'):
                 hosted.bind_outputs(directory, env=ENV)
 
+    def test_upload_confirmation_waits_only_for_successful_incomplete_index_snapshots(self):
+        import mustang_bootstrap_collector as collector
+        bundle,files,_pin=self.tiny_bundle();root=self.checkout(files['generateRelease'].read_bytes())
+        directory=self.write_bundle(bundle,files);env=dict(ENV,GITHUB_JOB='builder')
+        rows=[dict(id=i+1,name='mustang-signing-'+kind+'-123-1',expired=False,size_in_bytes=100,
+            digest='sha256:'+'a'*64,workflow_run=dict(id=123,head_sha=ENV['GITHUB_SHA'],
+            repository_id=1428996648,head_repository_id=1428996648)) for i,kind in enumerate(('bundle','inputs'))]
+        calls=[];pauses=[]
+        snapshots=[dict(total_count=3,artifacts=rows),dict(total_count=1,artifacts=rows[:1]),
+                   dict(total_count=2,artifacts=rows)]
+        def api(path):calls.append(path);return snapshots.pop(0)
+        result=hosted.confirm_uploads(directory,env,api=api,root=root,wait=pauses.append)
+        self.assertEqual(len(calls),3);self.assertEqual(pauses,[5,5])
+        self.assertFalse(result['payloadBytesVerified']);self.assertFalse(result['signerAdmitted'])
+        for failure in (collector.git.Refused('collector-api-http-403'),ValueError('transport failed')):
+            calls.clear();pauses.clear()
+            def denied(path):calls.append(path);raise failure
+            with self.assertRaises(type(failure)):
+                hosted.confirm_uploads(directory,env,api=denied,root=root,wait=pauses.append)
+            self.assertEqual(len(calls),1);self.assertFalse(pauses)
+        calls.clear();pauses.clear()
+        def incomplete(path):calls.append(path);return dict(total_count=3,artifacts=rows)
+        with self.assertRaisesRegex(ValueError,'listed=2 reported=3'):
+            hosted.confirm_uploads(directory,env,api=incomplete,root=root,poll_attempts=3,wait=pauses.append)
+        self.assertEqual(len(calls),3);self.assertEqual(pauses,[5,5])
+        pauses.clear()
+        with self.assertRaises(collector.git.Refused):
+            hosted.confirm_uploads(directory,env,api=lambda _:dict(total_count='2',artifacts=rows),root=root,wait=pauses.append)
+        self.assertFalse(pauses)
+
     def test_finalized_upload_confirmation_requires_both_current_artifacts_and_never_admits_payload(self):
         bundle,files,pin=self.tiny_bundle()
         root=self.checkout(files['generateRelease'].read_bytes())
@@ -487,7 +517,7 @@ class HostedSignGateTest(unittest.TestCase):
         def api(path):
             calls.append(path)
             return dict(total_count=len(rows),artifacts=rows)
-        result=hosted.confirm_uploads(directory,env,api=api,root=root)
+        result=hosted.confirm_uploads(directory,env,api=api,root=root,poll_attempts=1)
         self.assertEqual(calls,['/repos/Immortal-Protocols/RoseOS-1/actions/runs/123/artifacts?per_page=100'])
         self.assertEqual(set(result['finalizedArtifacts']),{'bundle','inputs'})
         self.assertFalse(result['payloadBytesVerified']);self.assertFalse(result['signerAdmitted'])
@@ -495,15 +525,15 @@ class HostedSignGateTest(unittest.TestCase):
         for key,value in [('expired',True),('digest',None),('size_in_bytes',0),('id',False)]:
             rows[:]=copy.deepcopy(original);rows[1][key]=value
             with self.assertRaisesRegex(ValueError,'identity differs'):
-                hosted.confirm_uploads(directory,env,api=api,root=root)
+                hosted.confirm_uploads(directory,env,api=api,root=root,poll_attempts=1)
         for key,value in [('id',124),('head_sha','b'*40),('repository_id',1),('head_repository_id',1)]:
             rows[:]=copy.deepcopy(original);rows[1]['workflow_run'][key]=value
             with self.assertRaisesRegex(ValueError,'identity differs'):
-                hosted.confirm_uploads(directory,env,api=api,root=root)
+                hosted.confirm_uploads(directory,env,api=api,root=root,poll_attempts=1)
         for invalid in (original[:1],original+[original[1]]):
             rows[:]=copy.deepcopy(invalid)
             with self.assertRaisesRegex(ValueError,'missing or ambiguous'):
-                hosted.confirm_uploads(directory,env,api=api,root=root)
+                hosted.confirm_uploads(directory,env,api=api,root=root,poll_attempts=1)
         rows[:]=copy.deepcopy(original)
         files['unsigned'].write_bytes(b'corrupt after an apparently successful upload')
         with self.assertRaisesRegex(ValueError,'hash differs'):

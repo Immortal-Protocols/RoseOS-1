@@ -713,6 +713,11 @@ class RetainedDeliveryTest(unittest.TestCase):
             with self.subTest(path=changed),self.assertRaises(ValueError):
                 self.live_compatible(self.sha,self.root,git=lambda args:SimpleNamespace(returncode=0,
                     stdout=changed+'\n' if args[0]=='diff' else ''))
+        self.live_compatible(self.sha,self.root,git=lambda args:SimpleNamespace(returncode=0,
+            stdout='workspace/models/local-composer/composer/compose.py\n' if args[0]=='diff' else ''))
+        with self.assertRaises(ValueError):
+            self.live_compatible(self.sha,self.root,git=lambda args:SimpleNamespace(returncode=0,
+                stdout='workspace/models/other-module/code.py\n' if args[0]=='diff' else ''))
         with self.assertRaises(ValueError):retained.selected(dict(MUSTANG_RETAINED_COMPILE_RUN='any-other-run'))
         with self.assertRaises(collector.git.Refused):collector.full_invocation(self.lane,self.env,self.event)
         bad=dict(inputs=dict(self.event['inputs'],dry_run=True))
