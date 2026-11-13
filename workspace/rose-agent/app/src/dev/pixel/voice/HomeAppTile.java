@@ -76,7 +76,7 @@ final class HomeAppTile {
   name.setTextSize(11.5f);
   name.setTextColor(RoseThemeNow.c(0xffd2b9ab)); // plan 1E: the theme's label ink (identity in Oxblood)
   name.setTypeface(CustomizationVisuals.labelTypeface(context, 500)); // 1O font choice; default SANS_SERIF 500
-  name.setShadowLayer(dp(density, 2), 0, dp(density, 1), 0xb3000000);
+  name.setShadowLayer(dp(density, 2), 0, dp(density, 1), RoseThemeNow.c(0xb3000000)); // plan 1E: a white halo in Winds
   name.setIncludeFontPadding(false);
   name.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
   name.setMaxLines(HomeAppLayout.LABEL_LINES);

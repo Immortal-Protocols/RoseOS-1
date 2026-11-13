@@ -65,35 +65,42 @@ final class RoseThemeSetting {
         LISTENERS.remove(listener);
     }
 
-    // Plan 1E: Glacier's raster field, decoded once per process off the UI thread and shared by every strip.
-    private static volatile android.graphics.Bitmap sField;
-    private static volatile boolean sFieldLoading, sFieldFailed;
+    // Plan 1E: each raster theme's field, decoded once per process off the UI thread and shared by every strip.
+    private static final java.util.Map<String, android.graphics.Bitmap> sFields = new java.util.HashMap<>();
+    private static final java.util.Set<String> sFieldLoading = new java.util.HashSet<>(), sFieldFailed =
+            new java.util.HashSet<>();
 
     /**
-     * The decoded Glacier field, or null while it loads (or if it cannot be loaded). The first call starts one
-     * background decode; ready runs on the main thread when it finishes, so the caller redraws. Never blocks.
+     * The decoded field of a raster theme (its RoseTheme.wallpaperDrawable), or null while it loads, if it cannot be
+     * loaded, or for a procedural theme. The first call for a theme starts one background decode; ready runs on the
+     * main thread when it finishes, so the caller redraws. Never blocks.
      */
-    static android.graphics.Bitmap glacierField(Context context, Runnable ready) {
-        android.graphics.Bitmap field = sField;
-        if (field != null || sFieldFailed || sFieldLoading) return field;
-        sFieldLoading = true;
+    static android.graphics.Bitmap field(Context context, String theme, Runnable ready) {
+        final String drawable = RoseTheme.wallpaperDrawable(theme);
+        if (drawable == null) return null;
+        synchronized (sFields) {
+            android.graphics.Bitmap field = sFields.get(drawable);
+            if (field != null || sFieldFailed.contains(drawable) || sFieldLoading.contains(drawable)) return field;
+            sFieldLoading.add(drawable);
+        }
         final Context app = context.getApplicationContext() != null ? context.getApplicationContext() : context;
         final Handler main = new Handler(Looper.getMainLooper());
         new Thread(() -> {
             android.graphics.Bitmap decoded = null;
             try {
-                int id = app.getResources().getIdentifier("rose_glacier_field", "drawable", app.getPackageName());
+                int id = app.getResources().getIdentifier(drawable, "drawable", app.getPackageName());
                 android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
                 options.inScaled = false;
                 decoded = id == 0 ? null : android.graphics.BitmapFactory.decodeResource(app.getResources(), id, options);
             } catch (RuntimeException | OutOfMemoryError e) {
                 decoded = null;
             }
-            sField = decoded;
-            sFieldFailed = decoded == null;
-            sFieldLoading = false;
+            synchronized (sFields) {
+                if (decoded != null) sFields.put(drawable, decoded); else sFieldFailed.add(drawable);
+                sFieldLoading.remove(drawable);
+            }
             if (ready != null) main.post(ready);
-        }, "rose-glacier-field").start();
+        }, "rose-theme-field").start();
         return null;
     }
 }

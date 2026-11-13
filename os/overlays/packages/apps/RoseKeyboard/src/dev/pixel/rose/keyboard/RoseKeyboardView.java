@@ -163,7 +163,18 @@ public final class RoseKeyboardView extends View {
         preview.setColor(tok(RoseTheme.Keyboard.KEY_TOP));
         if (getHeight() > 0) buildShaders(getHeight());  // before the first size, onSizeChanged builds them
         invalidate();
+        // A light theme (Winds) draws the navigation handle under the board dark (attach and live changes run here);
+        // other themes leave the window's appearance alone unless this view had made it light.
+        boolean light = RoseTheme.light(theme);
+        android.view.WindowInsetsController bars = getWindowInsetsController();
+        if (bars != null && (light || lightNav)) {
+            int flag = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            bars.setSystemBarsAppearance(light ? flag : 0, flag);
+            lightNav = light;
+        }
     }
+
+    private boolean lightNav;
 
     private void buildShaders(int h) {
         board.setShader(new LinearGradient(0, 0, 0, h, tok(RoseTheme.Keyboard.BOARD_TOP),

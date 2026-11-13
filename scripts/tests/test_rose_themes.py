@@ -89,14 +89,27 @@ class GlacierAssetTest(unittest.TestCase):
         portrait = next(f for f in manifest['files'] if f['name'] == 'glacier-portrait.png')
         self.assertEqual(portrait['sha256'], wp['sha256'])
 
-    def test_the_app_carries_the_same_bytes(self):
-        a = (themes.THEMES / 'glacier' / 'field.png').read_bytes()
-        b = (ROOT / 'workspace/rose-agent/app/res/drawable-nodpi/rose_glacier_field.png').read_bytes()
-        self.assertEqual(a, b)
+    def test_every_package_carries_each_raster_theme_as_its_drawable(self):
+        # Rose Agent and Launcher3 load a raster theme's wallpaper by its drawable name (RoseTheme.wallpaperDrawable).
+        rasters = [t for t in D['themes'] if t['wallpapers']['kind'] == 'raster']
+        self.assertTrue(rasters)
+        for t in rasters:
+            wp = t['wallpapers']
+            source = (themes.THEMES / wp['asset']).read_bytes()
+            for folder in themes.RASTER_DIRS:
+                copy = ROOT / folder / (wp['drawable'] + '.png')
+                self.assertTrue(copy.is_file(), copy)
+                self.assertEqual(copy.read_bytes(), source, copy)
+        for src in ('workspace/rose-agent/app/src/dev/pixel/voice/RoseThemeNow.java',
+                    'os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java'):
+            text = (ROOT / src).read_text()
+            self.assertIn('RoseTheme.wallpaperDrawable(', text, src)
+            self.assertNotIn('rose_glacier_field', text, src + ': no theme is named in loader code')
 
     def test_the_tokens_are_the_illustrators(self):
         tokens = json.loads((themes.THEMES / 'glacier' / 'glacier.tokens.json').read_text())['colors']
-        allowed = {('#FF' + v[1:]).upper() for v in tokens.values()} | {'#FF0F1B27', '#8C000000'}
+        # #0F1B27 is the prototype's keyboard top; the text table keeps today's white Rose text in Glacier.
+        allowed = {('#FF' + v[1:]).upper() for v in tokens.values()} | {'#FF0F1B27', '#8C000000', '#FFFFFFFF', '#C7FFFFFF'}
         for surface, values in BY_ID['glacier']['surfaces'].items():
             for k, v in values.items():
                 self.assertIn(v, allowed, 'glacier.%s.%s %s is not an approved token' % (surface, k, v))
@@ -151,7 +164,8 @@ class GlacierContrastTest(unittest.TestCase):
     def test_every_glacier_surface_colour_is_opaque_except_the_scrim(self):
         for surface, values in self.S.items():
             for k, v in values.items():
-                if k != 'scrim':
+                # The scrim, and Rose's secondary text (today's translucent white, unchanged), are translucent.
+                if k != 'scrim' and (surface, k) != ('text', 'secondary'):
                     self.assertEqual(v[1:3], 'FF', 'glacier.%s.%s' % (surface, k))
 
     def test_shade(self):
@@ -191,6 +205,89 @@ class GlacierContrastTest(unittest.TestCase):
             h, l, s = hue('#FF' + out[1:])
             self.assertTrue(h >= 300 or h <= 30, (v, out))
         self.assertEqual(ref.warm_colors('#ff8c9a'), '#ffabac')
+
+
+class WindsTest(unittest.TestCase):
+    """Winds (WINDS-SELECTED-1111): a light theme, judged against the Illustrator's board, never guessed."""
+    T = BY_ID['winds']
+    S = T['surfaces']
+    BOARD = themes.THEMES / 'winds' / 'reference-board.png'
+
+    def test_the_reference_board_is_the_selected_original(self):
+        data = self.BOARD.read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(),
+                         '0d28d90d49504346794646ad4f880356b0a7a9894c96533410154313ca329d58')
+        self.assertEqual(struct.unpack('>II', data[16:24]), (1672, 941))
+
+    def test_winds_is_light_and_the_others_are_not(self):
+        self.assertIs(self.T['light'], True)
+        self.assertFalse(BY_ID['oxblood'].get('light', False) or BY_ID['glacier'].get('light', False))
+
+    def test_text_and_controls_read_on_light_surfaces(self):
+        s, k, r, t = self.S['shade'], self.S['keyboard'], self.S['returnControl'], self.S['text']
+        field = self.S['field']['background']
+        for ink in (t['primary'], t['secondary']):
+            self.assertGreaterEqual(contrast(ink, field), 4.5, ink)
+        for bg in ('panel', 'card', 'tile'):
+            for ink in ('text', 'text2', 'error', 'accentInk'):
+                self.assertGreaterEqual(contrast(s[ink], s[bg]), 4.5, (ink, bg))
+            self.assertGreaterEqual(contrast(s['line'], s[bg]), 3.0, bg)
+        self.assertGreaterEqual(contrast(s['accentInk'], s['accent']), 4.5)
+        for bg in ('keyTop', 'keyBottom', 'function', 'boardTop', 'boardBottom'):
+            self.assertGreaterEqual(contrast(k['text'], k[bg]), 4.5, bg)
+        self.assertGreaterEqual(contrast(k['actionInk'], k['actionTop']), 4.5)
+        for ink in ('ink', 'pendingInk', 'cancelInk'):
+            self.assertGreaterEqual(contrast(r[ink], r['plateTop']), 4.5, ink)
+            self.assertGreaterEqual(contrast(r[ink], r['pressed']), 4.5, ink)
+
+    def test_the_tokens_are_the_board_and_guidance_palette(self):
+        palette = set(self.T['palette'].values())
+        for surface, values in self.S.items():
+            for key, value in values.items():
+                if key != 'scrim':
+                    self.assertIn(value, palette, (surface, key))
+
+    def test_every_native_artwork_colour_has_a_reviewed_winds_value(self):
+        # map() looks Winds colours up exactly and never guesses; a literal missing here would draw Oxblood on a light
+        # field. Every literal in a theme-aware renderer is in the table or excluded with its reason.
+        der = self.T['derive']
+        known = set(der['table']) | set(der['excluded'])
+        self.assertFalse(set(der['table']) & set(der['excluded']))
+        missing = []
+        for root in themes.GOLDEN_SOURCES[:5]:
+            for f in sorted((ROOT / root).rglob('*.java')):
+                text = f.read_text(errors='replace')
+                if f.name == 'RoseTheme.java' or ('RoseTheme' not in text and 'RoseThemeNow' not in text):
+                    continue
+                for m in re.finditer(r'0x([0-9a-fA-F]{8})\b', text):
+                    if '#' + m.group(1).upper() not in known:
+                        missing.append('%s %s' % (f.name, m.group(0)))
+        self.assertEqual(missing, [])
+        for k, reason in der['excluded'].items():
+            self.assertTrue(reason.strip(), k)
+
+    def test_the_palette_matches_what_the_board_draws(self):
+        # Measured here from the committed board (LEFT Winds pair), so the check is reproducible: median colours of
+        # open field, frosted surfaces, glyph ink and the yellow action pills, against the palette roles that draw them.
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('Pillow is not installed')
+        im = Image.open(self.BOARD).convert('RGB')
+        def median(box):
+            px = list(im.crop(box).getdata())
+            return tuple(sorted(p[i] for p in px)[len(px) // 2] for i in range(3))
+        def close(rgb, hexv, tol):
+            want = tuple(int(hexv[i:i + 2], 16) for i in (3, 5, 7))
+            return max(abs(a - b) for a, b in zip(rgb, want)) <= tol, (rgb, hexv)
+        pal = self.T['palette']
+        for box, role, tol in [((50, 275, 180, 335), 'field', 12),         # Home field, upper left
+                               ((445, 270, 790, 290), 'field', 12),        # Rose field
+                               ((457, 485, 770, 625), 'surface', 14),      # Rose card (frosted surface)
+                               ((500, 575, 730, 610), 'action', 14),       # Review pill
+                               ((530, 708, 700, 748), 'action', 14)]:      # Connect pill
+            ok, why = close(median(box), pal[role], tol)
+            self.assertTrue(ok, (role,) + why)
 
 
 class GoldenTest(unittest.TestCase):

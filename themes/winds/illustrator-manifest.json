@@ -1,0 +1,60 @@
+[
+  {
+    "name": "HANDOFF.md",
+    "bytes": 4296,
+    "sha256": "b278f4c6ac394061f4d17cac9284efc52a0ffb6d7c17a9718272bbccf9725391"
+  },
+  {
+    "name": "artwork-prompt.txt",
+    "bytes": 992,
+    "sha256": "7aba529be45d9654a0cc5e218babc9c59ccfa9827720c83b30a40ba99e439d1d"
+  },
+  {
+    "name": "build.py",
+    "bytes": 1750,
+    "sha256": "f9c06df688120166fc9289e8c9f88de24d6de2f9b1fc90df6140258c4e4e8e06"
+  },
+  {
+    "name": "contrast.json",
+    "bytes": 214,
+    "sha256": "7a76362f3fe6dba984de76877d5fdaa6a58049667b0705846b429501b4fe84db"
+  },
+  {
+    "name": "selected-reference.png",
+    "bytes": 1696718,
+    "sha256": "0d28d90d49504346794646ad4f880356b0a7a9894c96533410154313ca329d58",
+    "size": [
+      1672,
+      941
+    ]
+  },
+  {
+    "name": "winds-home-reference.svg",
+    "bytes": 2262452,
+    "sha256": "7ea13657d0163ed28aa3fb9a4eb4c9630ab29adea21b3466950c92bad8c37679"
+  },
+  {
+    "name": "winds-rose-reference.svg",
+    "bytes": 2262453,
+    "sha256": "7902f35a216e5cf9fe7f3db4347b78135f27e8d9191f4d5014dbb552a2b99509"
+  },
+  {
+    "name": "winds-wallpaper.png",
+    "bytes": 1465367,
+    "sha256": "eda482df9c5ac5525b91a01ceca38a171729fd4b640009f03e721f6cba77fd1d",
+    "size": [
+      898,
+      1751
+    ]
+  },
+  {
+    "name": "winds.tokens.css",
+    "bytes": 474,
+    "sha256": "cb18570c33e0b14bb10961944b58e5435a40578a27c76ef19a7b42f41be114a2"
+  },
+  {
+    "name": "winds.tokens.json",
+    "bytes": 605,
+    "sha256": "a5e8f6e063c2cf81e4c68b920a7fbbf4dce7daf31daf7c1a912ed2b49759f7b9"
+  }
+]

@@ -410,7 +410,7 @@ python3 -I scripts/tests/test_rose_themes.py
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseTheme" \
  workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java \
  workspace/rose-agent/app/tests/RoseThemeTest.java
-java -cp "$JAVA_TESTS/RoseTheme" dev.pixel.voice.RoseThemeTest themes/reference/glacier-map-golden.txt
+java -cp "$JAVA_TESTS/RoseTheme" dev.pixel.voice.RoseThemeTest themes/reference/glacier-map-golden.txt themes/reference/table-themes-golden.txt
 # Nov 7 plan 1O: the shared customization catalog and model, curated Oxblood variants, and the glasses-on hook.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CustomizationConfig" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \

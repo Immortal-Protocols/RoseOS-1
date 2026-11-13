@@ -137,16 +137,21 @@ final class OxbloodField extends Drawable {
   canvas.restoreToCount(save);
  }
 
- /** The theme's raster wallpaper: its field colour, then the image scaled to cover, centred across, top-aligned. */
+ /** The theme's raster wallpaper: its field colour, then the image scaled to cover, centred across, top-aligned or
+  * centred (RoseTheme.wallpaperCentred); Rose adds the theme's scrim (RoseTheme.roseScrim). */
  private void paintArt(Canvas canvas) {
   Rect b = getBounds();
   paint.reset();
   paint.setColor(RoseTheme.Field.color(theme, RoseTheme.Field.BACKGROUND));
   canvas.drawRect(b, paint);
   float s = Math.max(b.width() / (float) art.getWidth(), b.height() / (float) art.getHeight());
-  float w = art.getWidth() * s, left = b.left + (b.width() - w) / 2f;
+  float w = art.getWidth() * s, h = art.getHeight() * s, left = b.left + (b.width() - w) / 2f;
+  float top = RoseTheme.wallpaperCentred(theme) ? b.top + (b.height() - h) / 2f : b.top;
   paint.reset(); paint.setFilterBitmap(true); paint.setDither(true);
-  canvas.drawBitmap(art, null, new RectF(left, b.top, left + w, b.top + art.getHeight() * s), paint);
+  canvas.drawBitmap(art, null, new RectF(left, top, left + w, top + h), paint);
+  // Rose's quieter field: the theme's uniform scrim over the same art (Winds: pale mint), none for Glacier.
+  int scrim = kind == ROSE ? RoseTheme.roseScrim(theme) : 0;
+  if (scrim != 0) { paint.reset(); paint.setColor(scrim); canvas.drawRect(b, paint); }
  }
 
  // ---- oxblood-home.svg ----

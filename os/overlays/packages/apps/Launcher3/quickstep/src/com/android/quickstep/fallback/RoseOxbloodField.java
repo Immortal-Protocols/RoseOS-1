@@ -41,7 +41,8 @@ import android.graphics.drawable.Drawable;
  *
  * <p>Plan 1E: the field follows the theme its owner gives it (setTheme; RoseThemeSetting). Oxblood draws the geometry
  * above unchanged. A theme with a raster wallpaper (Glacier) draws that raster instead, the package's
- * rose_glacier_field, on the theme's field colour, scaled to cover, centred across and top-aligned like the geometry;
+ * own drawable (RoseTheme.wallpaperDrawable), on the theme's field colour, scaled to cover, centred across and
+ * top-aligned like the geometry;
  * if it cannot be loaded, the geometry is drawn in the theme's colours (RoseTheme.map).
  */
 final class RoseOxbloodField extends Drawable {
@@ -120,12 +121,12 @@ final class RoseOxbloodField extends Drawable {
 
     /**
      * The theme's raster wallpaper, or null to draw the geometry (Oxblood, no context, not decoded yet or unloadable).
-     * The image is decoded once per process off the UI thread (RoseThemeSetting.glacierField), never in draw; until it
+     * The image is decoded once per process off the UI thread (RoseThemeSetting.field), never in draw; until it
      * is ready the geometry draws in the theme's own colours, and onRaster redraws the surface when it arrives.
      */
     private Bitmap raster() {
         if (!RoseTheme.rasterWallpaper(theme) || resources == null) return null;
-        return RoseThemeSetting.glacierField(resources, () -> {
+        return RoseThemeSetting.field(resources, theme, () -> {
             invalidateSelf();
             if (onRaster != null) onRaster.run();
         });
@@ -167,17 +168,25 @@ final class RoseOxbloodField extends Drawable {
         canvas.clipRect(b);
         Bitmap image = raster();
         if (image != null) {
-            // The raster theme: its field colour, then the image scaled to cover, centred across, top-aligned.
+            // The raster theme: its field colour, then the image scaled to cover, centred across, top-aligned or
+            // centred (RoseTheme.wallpaperCentred), then the theme's Rose scrim (this is the switcher's Rose field).
             art.setShader(null);
             art.setColor(RoseTheme.Field.color(theme, RoseTheme.Field.BACKGROUND));
             art.setAlpha(Math.round(Color.alpha(art.getColor()) * alpha / 255f));
             canvas.drawRect(b, art);
             float s = Math.max(b.width() / (float) image.getWidth(), b.height() / (float) image.getHeight());
-            float w = image.getWidth() * s, left = b.left + (b.width() - w) / 2f;
-            artBounds.set(left, b.top, left + w, b.top + image.getHeight() * s);
+            float w = image.getWidth() * s, h = image.getHeight() * s, left = b.left + (b.width() - w) / 2f;
+            float top = RoseTheme.wallpaperCentred(theme) ? b.top + (b.height() - h) / 2f : b.top;
+            artBounds.set(left, top, left + w, top + h);
             art.setColor(Color.BLACK);
             art.setAlpha(alpha);
             canvas.drawBitmap(image, null, artBounds, art);
+            int scrim = RoseTheme.roseScrim(theme);
+            if (scrim != 0) {
+                art.setColor(scrim);
+                art.setAlpha(Math.round(Color.alpha(scrim) * alpha / 255f));
+                canvas.drawRect(b, art);
+            }
             canvas.restoreToCount(save);
             return;
         }
