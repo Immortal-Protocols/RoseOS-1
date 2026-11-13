@@ -1,0 +1,106 @@
+"""The skeleton a generated app is written into, and the checks that keep its identity out of generated code's reach.
+
+The toolchain is the repository's pinned one (aapt v1, javac at the Java 8 source level, d8), so a generated app uses
+framework APIs only: no Gradle, AndroidX, Kotlin or third-party libraries. The builder owns the package name,
+versionCode, versionName and SDK levels. Generated code may change activities, resources and Java sources, but a
+manifest that sets or changes any of those, asks for a shared user id or debuggability, or a source tree with build
+scripts or native code is refused before anything is compiled.
+"""
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+ANDROID = '{http://schemas.android.com/apk/res/android}'
+MIN_SDK, TARGET_SDK = 26, 35
+ALLOWED_TOP = {'AndroidManifest.xml', 'src', 'res', 'assets', 'README.md', '.gitignore'}
+FORBIDDEN_SUFFIXES = ('.gradle', '.kts', '.kt', '.so', '.jar', '.aar', '.sh', '.py', '.mk', '.cmake', '.c', '.cpp',
+                      '.h', '.jks', '.keystore', '.p12', '.pk8', '.apk', '.dex')
+OWNED_ATTRIBUTES = ('versionCode', 'versionName', 'sharedUserId', 'sharedUserLabel')
+
+
+class TemplateRefused(ValueError):
+    """Generated source the builder will not compile; the summary is safe to show the owner."""
+
+
+def skeleton(package: str, label: str) -> dict[str, str]:
+    """Files of a new project: one launcher activity and one string, framework APIs only."""
+    path = package.replace('.', '/')
+    label = label.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return {
+        'AndroidManifest.xml': (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            f'<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{package}">\n'
+            '  <application android:label="@string/app_name" android:allowBackup="true">\n'
+            '    <activity android:name=".MainActivity" android:exported="true">\n'
+            '      <intent-filter>\n'
+            '        <action android:name="android.intent.action.MAIN"/>\n'
+            '        <category android:name="android.intent.category.LAUNCHER"/>\n'
+            '      </intent-filter>\n'
+            '    </activity>\n'
+            '  </application>\n'
+            '</manifest>\n'),
+        'res/values/strings.xml': (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            f'<resources><string name="app_name">{label}</string></resources>\n'),
+        f'src/{path}/MainActivity.java': (
+            f'package {package};\n\n'
+            'import android.app.Activity;\nimport android.os.Bundle;\nimport android.widget.TextView;\n\n'
+            'public final class MainActivity extends Activity {\n'
+            '    @Override protected void onCreate(Bundle state) {\n'
+            '        super.onCreate(state);\n'
+            '        TextView text = new TextView(this);\n'
+            '        text.setText(R.string.app_name);\n'
+            '        setContentView(text);\n'
+            '    }\n'
+            '}\n'),
+        '.gitignore': 'build/\n',
+    }
+
+
+def write_skeleton(source: Path, package: str, label: str):
+    for name, text in skeleton(package, label).items():
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding='utf-8')
+
+
+def check(source: Path, package: str) -> None:
+    """Refuse generated source that could change the app's identity or escape the framework-only toolchain."""
+    source = Path(source)
+    for entry in source.iterdir():
+        if entry.name == '.git':
+            continue
+        if entry.name not in ALLOWED_TOP:
+            raise TemplateRefused(f'Unexpected top-level entry {entry.name!r}; only the app skeleton is built.')
+    for path in source.rglob('*'):
+        if '.git' in path.relative_to(source).parts:
+            continue
+        if path.is_symlink():
+            raise TemplateRefused('Source contains a symbolic link; it is not built.')
+        if path.is_file() and path.name.lower().endswith(FORBIDDEN_SUFFIXES):
+            raise TemplateRefused(f'{path.relative_to(source)} is not supported: generated apps use framework '
+                                  'Java only, with no build scripts, libraries or native code.')
+    manifest = source / 'AndroidManifest.xml'
+    if not manifest.is_file():
+        raise TemplateRefused('AndroidManifest.xml is missing.')
+    try:
+        root = ET.parse(manifest).getroot()
+    except ET.ParseError:
+        raise TemplateRefused('AndroidManifest.xml is not valid XML.') from None
+    if root.tag != 'manifest' or root.get('package') != package:
+        raise TemplateRefused('The manifest package must stay ' + package + '.')
+    for name in OWNED_ATTRIBUTES:
+        if root.get(ANDROID + name) is not None:
+            raise TemplateRefused(f'android:{name} is set by the builder, not the app.')
+    if root.find('uses-sdk') is not None:
+        raise TemplateRefused('SDK levels are set by the builder, not the app.')
+    application = root.find('application')
+    if application is not None and application.get(ANDROID + 'debuggable') is not None:
+        raise TemplateRefused('android:debuggable is not allowed.')
+    for java in source.glob('src/**/*.java'):
+        head = java.read_text(encoding='utf-8', errors='replace')[:4000]
+        match = re.search(r'^\s*package\s+([\w.]+)\s*;', head, re.M)
+        if not match or not (match.group(1) == package or match.group(1).startswith(package + '.')):
+            raise TemplateRefused(f'{java.relative_to(source)} must be in package {package}.')

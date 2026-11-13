@@ -77,6 +77,28 @@ apps.
    session. A changed signer is refused, never offered as
    uninstall-and-reinstall. The phone reports the outcome back (§3.5).
 
+**Implemented so far** (`prototypes/voice-phone-demo/rose/app_builder/`, tests
+`rose/tests/test_app_builder.py`):
+
+- **Ledger:** projects, versions, jobs and installs in a 0600 SQLite file, with
+  idempotent requests, versionCode allocation and a fixed signer.
+- **Template:** the framework-only skeleton plus its refusals: package,
+  version, SDK, shared uid, debuggable, build scripts, native code, symlinks
+  and foreign packages.
+- **Toolchain:** the pinned build with injected identity, a scrubbed
+  environment, timeout and cancel. Signing goes through `sign-apk.py` with the
+  project pin. Key creation is off unless the host owner enables it.
+- **Service:** API v1 validation and the single worker, with git-recorded
+  source revisions and a reset to the last delivered version after any failure.
+
+Proof levels:
+
+- **Container:** create, revise and a refused key change were built, signed and
+  verified with throwaway keys. CI repeats this with a freshly fetched pinned
+  SDK.
+- **Not done:** listener routes, the Codex generator and the install client.
+  Nothing has been installed.
+
 Data survives an update because the package, signer and higher versionCode keep
 Android's update path; the revise prompt also requires keeping storage keys
 and schema migrations. Acceptance still needs a seeded-data → update →
