@@ -166,8 +166,9 @@ public final class MainActivity extends Activity {
    if (v.apkSha256 == null) { body("Version " + v.versionName + " isn't downloadable yet."); continue; }
    button(InstallPlan.label(offer) + " version " + v.versionName, x -> download(p, v, installed));
   }
-  // Changes build on a delivered version; a first build that failed is retried, not revised.
-  if ((p.job == null || p.job.terminal()) && p.latest() != null) {
+  // One active job per project: a change can be asked whenever none is queued or running, including after a failed
+  // first build (the builder starts again from the original description plus the change).
+  if (p.job == null || p.job.terminal()) {
    EditText change = input("What should change?");
    button("Request change", x -> {
     String c = change.getText().toString().trim();
