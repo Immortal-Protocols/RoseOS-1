@@ -167,6 +167,9 @@ updatedAt, failure?}`
 
 - **state:** `queued | preparing | building | testing | signing | ready |
   failed | cancelled`.
+- **Times:** `startedAt`, `updatedAt` and every version's `createdAt` are Unix
+  epoch seconds (UTC), sent as JSON numbers with a fractional part. A retry
+  sets `startedAt` to the time of the retry.
 - **failure:** `{category: toolchain | dependency | compile | test | signing |
   timeout | cancelled | internal, summary, retryable}`.
   - `dependency`: a library or language the framework-only toolchain lacks
