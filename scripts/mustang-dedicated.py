@@ -223,7 +223,7 @@ def infrastructure_tool_paths():
     return (mustang_ephemeral.NODE['install'], mustang_ephemeral.SDK['aapt'], mustang_ephemeral.SDK['apksigner'])
 
 
-def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
+def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run,*,collection_only=False):
     observed=observe_id()
     paths=host_identity(lane,cfg['dataFilesystemUuid'],lambda:observed,execute,cfg.get('dataMount'))
     space=os.statvfs(paths['home'])
@@ -232,7 +232,8 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     frsize=getattr(space,'f_frsize',0) or getattr(space,'f_bsize',0)
     if not frsize: raise ValueError('dedicated data filesystem has no available bytes/inodes')
     route.evaluate_guest(dict(instanceId=observed,filesystemUuid=cfg['dataFilesystemUuid'],mount=cfg.get('dataMount'),
-        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid()),lane,cfg)
+        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid()),lane,cfg,
+        phase='collection' if collection_only else 'full')
     if not paths['sourceRoot'].is_dir() or not paths['storageRoot'].is_dir():
         raise ValueError('dedicated source/storage must already be prepared')
     if any(os.stat(paths[key]).st_dev!=os.stat(paths['home']).st_dev for key in ('sourceRoot','storageRoot')):
@@ -590,7 +591,8 @@ def main():
             if path.is_file() and not path.is_symlink(): shutil.copyfile(path,out/name)
         if args.dir and Path(args.dir).is_file(): shutil.copyfile(args.dir,out/'baseline.json')
     else:
-        facts=host_check(lane,cfg)
+        import mustang_retained
+        facts=host_check(lane,cfg,collection_only=(args.action in ('collect','recover') or mustang_retained.selected(os.environ)))
         if args.action=='host-check': return 0
         if args.action=='recover':
             import mustang_retained, mustang_bootstrap_collector

@@ -1,5 +1,34 @@
 # Dedicated retained-output delivery
 
+## Completed compile51 and phase-aware disk admission (2026-11-13)
+
+Run43486889593/source8103ca2f completed native Make and all four output hashes at
+20:55:56Z, build2611131800/timestamp1794599326, using voice374/calculator6/background43.
+Its compiler cache reported70859 hits and zero misses. The subsequent collection CLI
+incorrectly required another full906238099456-byte source/metadata/vendor/lunch/compile
+budget against884227551232 free bytes. No collection/bundle/signing was started.
+Cleanup succeeded and stopped the VM; the completed compile and journal remain intact.
+
+Collection now retains the existing300GiB reserve plus250GiB compile allowance
+(590558003200 bytes), with unchanged VM/disk/UUID/inode/nonroot checks. Initial full
+build admission still requires906238099456 bytes. This is a phase correction, not a
+reserve reduction or new disk purchase. It also applies to explicit retained-output
+host checks and signer verification of the recorded native guest facts.
+
+The explicit retained selector is now43486889593, replacing the obsolete42664204892
+case whose apps/source no longer match current inputs. It authenticates completed
+failed producer51, successful Make and owned cleanup, skipped signer/publisher, and
+receipt artifact14077115670:25576 bytes, SHA-256
+`58ac9c8dbf8b8c70ad79d2fe516078e1b9ed1bb3c31c8a09344fc77f437451d0`.
+Its hash-bound candidate, successful compile and allocation receipts must agree;
+no earlier collection receipt is adopted or invented. A fresh attempt reads and
+rehashes original native outputs and the current allocation journal under the shared
+lock, creates a new unsigned edge proof and bundles qualified tools, then signs,
+verifies and publishes automatically. It performs no Make/new allocation, old-output
+mutation, deletion, IAM/credential change or resource increase. Original and delivery
+run/source identities remain distinct; unchanged OS/app/input/tool source is required.
+The older recovery sections below are historical receipts, not active selector pins.
+
 ## Finalized artifact recovery for run 46
 
 Nathan selected salvage of run `43074045726`, build `2611111800`, rather than
