@@ -27,6 +27,15 @@ interface BuilderApi {
   }
   Version latest() { return versions.isEmpty() ? null : versions.get(versions.size() - 1); }
  }
+ /** What Android actually did with an install, reported back so the builder never calls a version "installed" from
+  * publishing alone (App Core, Nov 13). status: installed, cancelled or failed; the rest is what the phone now has
+  * for the package (null/-1 when nothing is installed). */
+ final class InstallReport {
+  final String status, packageName, signerSha256; final long installedVersionCode;
+  InstallReport(String status, String packageName, long installedVersionCode, String signerSha256) {
+   this.status = status; this.packageName = packageName; this.installedVersionCode = installedVersionCode; this.signerSha256 = signerSha256;
+  }
+ }
  /** Thrown when the builder can't be reached: shown as UNREACHABLE, never as an empty library. */
  final class Unreachable extends Exception { Unreachable(String m) { super(m); } }
 
@@ -36,7 +45,9 @@ interface BuilderApi {
  Project create(String description) throws Unreachable;
  /** Requests a change to an existing app; a new version keeps the project's package and signer. */
  Project revise(String projectId, String change) throws Unreachable;
+ /** Asks the builder to stop: accepted means stopping, not stopped. Only the job's own CANCELLED state confirms it. */
  void cancel(String projectId, String jobId) throws Unreachable;
+ void reportInstall(String projectId, InstallReport report) throws Unreachable;
  /** Public download links for sharing: one immutable per version, one that always serves the newest. Null until
   * hosting exists (Level 3 depends on the Chariot owner). */
  String shareUrl(String projectId, Long versionCode) throws Unreachable;

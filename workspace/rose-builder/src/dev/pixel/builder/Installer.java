@@ -21,7 +21,7 @@ import java.security.MessageDigest;
  * Android only after {@link InstallPlan#verify} accepts its hash, package, version and signer.
  */
 final class Installer {
- static final String ACTION_STATUS = "dev.pixel.builder.INSTALL_STATUS";
+ static final String ACTION_STATUS = "dev.pixel.builder.INSTALL_STATUS", EXTRA_PROJECT = "dev.pixel.builder.PROJECT";
  private Installer() {}
 
  /** What the phone has installed for a package, or null. */
@@ -47,7 +47,7 @@ final class Installer {
  }
 
  /** Opens an install session for a verified file; Android reports back to the activity, which shows its prompt. */
- static void install(Context c, File apk, String packageName) throws Exception {
+ static void install(Context c, File apk, String packageName, String projectId) throws Exception {
   PackageInstaller pi = c.getPackageManager().getPackageInstaller();
   PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
   params.setAppPackageName(packageName);
@@ -59,7 +59,9 @@ final class Installer {
     for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
     session.fsync(out);
    }
-   Intent status = new Intent(ACTION_STATUS).setPackage(c.getPackageName()).setClass(c, MainActivity.class);
+   // The project rides on the report, so its outcome reaches the builder even if this activity was recreated.
+   Intent status = new Intent(ACTION_STATUS).setPackage(c.getPackageName()).setClass(c, MainActivity.class)
+     .putExtra(EXTRA_PROJECT, projectId).putExtra(PackageInstaller.EXTRA_PACKAGE_NAME, packageName);
    int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
    session.commit(PendingIntent.getActivity(c, id, status, flags).getIntentSender());
   } catch (Exception e) {

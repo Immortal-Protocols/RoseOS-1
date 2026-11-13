@@ -23,6 +23,16 @@ public final class BuilderRulesTest {
         expect("Ready to install".equals(BuildJob.status(new BuildJob("j1", BuildJob.Stage.READY, null, null, 2))), "a finished retry reads as its result");
         expect(new BuildJob("j1", BuildJob.Stage.QUEUED, null, null, 0).attempt == 1, "attempts count from 1");
 
+        // Cancel means stopping until the job confirms; a job that finished first keeps its real result.
+        expect("Stopping the build…".equals(BuildJob.status(building, true)), "cancel requested: stopping, not stopped");
+        expect("Build cancelled".equals(BuildJob.status(new BuildJob("j1", BuildJob.Stage.CANCELLED, null, null), true)), "cancel confirmed by the job");
+        expect("Ready to install".equals(BuildJob.status(ready, true)), "a job that finished first keeps its result");
+
+        // A builder restart: an interrupted job is an honest, retryable unknown outcome.
+        BuildJob.Failure interrupted = new BuildJob.Failure(BuildJob.Category.INTERNAL, "Interrupted, outcome unknown", true);
+        BuildJob lost = new BuildJob("j3", BuildJob.Stage.FAILED, null, interrupted);
+        expect("The builder hit an internal error".equals(BuildJob.status(lost)) && BuildJob.failureAdvice(interrupted).startsWith("Try again"), "interrupted: named, retry offered");
+
         // Failures are named, and retry is offered only when the server says it can help.
         BuildJob.Failure compile = new BuildJob.Failure(BuildJob.Category.COMPILE, "Main.java:12", false);
         BuildJob failed = new BuildJob("j2", BuildJob.Stage.FAILED, null, compile);

@@ -40,6 +40,8 @@ public final class MainActivity extends Activity {
  final ExecutorService io = Executors.newSingleThreadExecutor();
  LinearLayout root;
  String openProject;
+ /** Jobs the owner asked to stop; they read "Stopping…" until the job itself reports its end. */
+ final java.util.Set<String> stopRequested = new java.util.HashSet<>();
  final Runnable poll = new Runnable() { @Override public void run() { if (openProject != null) showProject(openProject); } };
 
  @Override protected void onCreate(Bundle state) {
@@ -77,6 +79,14 @@ public final class MainActivity extends Activity {
   if (status == PackageInstaller.STATUS_SUCCESS) toast("Installed");
   else if (status == PackageInstaller.STATUS_FAILURE_ABORTED) toast("Install cancelled");
   else toast("Android didn't install it: " + ShareMessage.clean(intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE), "no reason given"));
+  // Report what Android actually did, with what the phone now has for the package, never what was intended.
+  String project = intent.getStringExtra(Installer.EXTRA_PROJECT), pkg = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME);
+  if (project != null && pkg != null) {
+   InstallPlan.Installed now = Installer.installed(this, pkg);
+   String outcome = status == PackageInstaller.STATUS_SUCCESS ? "installed" : status == PackageInstaller.STATUS_FAILURE_ABORTED ? "cancelled" : "failed";
+   BuilderApi.InstallReport r = new BuilderApi.InstallReport(outcome, pkg, now == null ? -1 : now.versionCode, now == null ? null : now.signerSha256);
+   io.execute(() -> { try { api.reportInstall(project, r); } catch (BuilderApi.Unreachable e) { main.post(() -> toast("Your builder couldn't be told the install result yet")); } });
+  }
   if (openProject != null) showProject(openProject);
  }
 
@@ -119,14 +129,15 @@ public final class MainActivity extends Activity {
   if (p == null) { showLibrary(); return; }
   title(p.name);
   if (p.job != null) {
-   body(BuildJob.status(p.job));
+   body(BuildJob.status(p.job, stopRequested.contains(p.job.jobId)));
    if (p.job.stage == BuildJob.Stage.FAILED) {
     if (p.job.failure != null && p.job.failure.summary != null) body(p.job.failure.summary);
     body(BuildJob.failureAdvice(p.job.failure));
    }
    if (p.job.cancellable()) {
-    button("Cancel build", x -> {
-     try { api.cancel(p.projectId, p.job.jobId); } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder to cancel"); }
+    if (!stopRequested.contains(p.job.jobId)) button("Cancel build", x -> {
+     try { api.cancel(p.projectId, p.job.jobId); stopRequested.add(p.job.jobId); }
+     catch (BuilderApi.Unreachable e) { toast("Can't reach your builder to cancel"); }
      showProject(id);
     });
     main.postDelayed(poll, POLL_MS);
@@ -177,7 +188,7 @@ public final class MainActivity extends Activity {
     InstallPlan.Apk expected = new InstallPlan.Apk(p.packageName, p.signerSha256, v.apkSha256, v.versionCode);
     InstallPlan plan = InstallPlan.verify(expected, Installer.inspect(this, f), installed);
     if (plan.action == InstallPlan.Action.REFUSE) error = plan.reason;
-    else if (plan.action != InstallPlan.Action.OPEN) Installer.install(this, f, p.packageName);
+    else if (plan.action != InstallPlan.Action.OPEN) Installer.install(this, f, p.packageName, p.projectId);
    } catch (Exception e) {
     // The exception's class only: a message could carry a token-bearing URL.
     error = "The download failed (" + e.getClass().getSimpleName() + "). Check your connection and try again.";

@@ -27,7 +27,12 @@ final class BuildJob {
  boolean cancellable() { return !terminal(); }
 
  /** The one-line status the phone shows; a live retry says which attempt it is. */
- static String status(BuildJob j) {
+ static String status(BuildJob j) { return status(j, false); }
+
+ /** stopRequested: the owner pressed Cancel. App Core's cancel only means "stopping"; the build reads as cancelled
+  * only once the job itself reports CANCELLED, and a job that finished first keeps its real result. */
+ static String status(BuildJob j, boolean stopRequested) {
+  if (stopRequested && !j.terminal()) return "Stopping the build…";
   String s = stageText(j);
   return j.attempt > 1 && !j.terminal() ? s + " (attempt " + j.attempt + ")" : s;
  }

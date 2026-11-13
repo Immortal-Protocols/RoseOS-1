@@ -12,6 +12,8 @@ import java.util.Map;
  */
 final class FakeBuilderApi implements BuilderApi {
  private final Map<String, Project> projects = new LinkedHashMap<>();
+ private final java.util.Set<String> stopping = new java.util.HashSet<>(), interrupted = new java.util.HashSet<>();
+ final List<InstallReport> reports = new ArrayList<>();
  private int next = 1;
 
  @Override public synchronized List<Project> projects() {
@@ -23,14 +25,23 @@ final class FakeBuilderApi implements BuilderApi {
  @Override public synchronized Project project(String id) {
   Project p = projects.get(id);
   if (p == null || p.job == null || p.job.terminal()) return p;
-  BuildJob.Stage s = BuildJob.Stage.values()[p.job.stage.ordinal() + 1];
+  // Like App Core: a cancel is confirmed by the job on a later poll, not by the request.
+  BuildJob.Stage s = stopping.remove(p.job.jobId) ? BuildJob.Stage.CANCELLED : BuildJob.Stage.values()[p.job.stage.ordinal() + 1];
   List<Version> versions = p.versions;
+  if (s == BuildJob.Stage.READY && p.versions.size() == 2 && interrupted.add(id)) {
+   // A project's third build is interrupted once, as after a builder restart: an honest unknown outcome, never a
+   // silent re-run. Asking again builds normally.
+   BuildJob.Failure f = new BuildJob.Failure(BuildJob.Category.INTERNAL, "Interrupted, outcome unknown", true);
+   Project q = new Project(p.projectId, p.name, p.description, p.packageName, p.signerSha256, p.versions, new BuildJob(p.job.jobId, BuildJob.Stage.FAILED, null, f, p.job.attempt));
+   projects.put(id, q);
+   return q;
+  }
   if (s == BuildJob.Stage.READY) {
    versions = new ArrayList<>(p.versions);
    long code = versions.size() + 1;
    versions.add(new Version(code, "1." + (code - 1), "fake-" + code, null, null, 0));
   }
-  Project q = new Project(p.projectId, p.name, p.description, p.packageName, p.signerSha256, versions, new BuildJob(p.job.jobId, s, null, null));
+  Project q = new Project(p.projectId, p.name, p.description, p.packageName, p.signerSha256, versions, new BuildJob(p.job.jobId, s, null, null, p.job.attempt));
   projects.put(id, q);
   return q;
  }
@@ -56,9 +67,10 @@ final class FakeBuilderApi implements BuilderApi {
  @Override public synchronized void cancel(String id, String jobId) {
   Project p = projects.get(id);
   if (p == null || p.job == null || !p.job.jobId.equals(jobId) || p.job.terminal()) return;
-  projects.put(id, new Project(p.projectId, p.name, p.description, p.packageName, p.signerSha256, p.versions,
-    new BuildJob(jobId, BuildJob.Stage.CANCELLED, null, null)));
+  stopping.add(jobId);
  }
+
+ @Override public synchronized void reportInstall(String id, InstallReport report) { reports.add(report); }
 
  @Override public String shareUrl(String id, Long versionCode) { return null; }
 }
