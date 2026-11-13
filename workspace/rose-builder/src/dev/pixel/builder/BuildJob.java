@@ -25,6 +25,8 @@ final class BuildJob {
 
  boolean terminal() { return stage == Stage.READY || stage == Stage.FAILED || stage == Stage.CANCELLED; }
  boolean cancellable() { return !terminal(); }
+ /** builder API v1 retry: only a failed job whose failure says a retry can help; it runs again as attempt + 1. */
+ boolean retryable() { return stage == Stage.FAILED && failure != null && failure.retryable; }
 
  /** The one-line status the phone shows; a live retry says which attempt it is. */
  static String status(BuildJob j) { return status(j, false); }

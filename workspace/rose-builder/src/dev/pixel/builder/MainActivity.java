@@ -138,6 +138,11 @@ public final class MainActivity extends Activity {
    if (p.job.stage == BuildJob.Stage.FAILED) {
     if (p.job.failure != null && p.job.failure.summary != null) body(p.job.failure.summary);
     body(BuildJob.failureAdvice(p.job.failure));
+    // Only when the builder says a retry can help; it runs the same job again as its next attempt.
+    if (p.job.retryable()) button("Try again", x -> {
+     try { api.retry(p.job.jobId); } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder"); }
+     showProject(id);
+    });
    }
    if (p.job.cancellable()) {
     if (!stopRequested.contains(p.job.jobId)) button("Cancel build", x -> {
@@ -161,7 +166,8 @@ public final class MainActivity extends Activity {
    if (v.apkSha256 == null) { body("Version " + v.versionName + " isn't downloadable yet."); continue; }
    button(InstallPlan.label(offer) + " version " + v.versionName, x -> download(p, v, installed));
   }
-  if (p.job == null || p.job.terminal()) {
+  // Changes build on a delivered version; a first build that failed is retried, not revised.
+  if ((p.job == null || p.job.terminal()) && p.latest() != null) {
    EditText change = input("What should change?");
    button("Request change", x -> {
     String c = change.getText().toString().trim();

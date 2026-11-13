@@ -82,6 +82,18 @@ final class FakeBuilderApi implements BuilderApi {
   return CancelStatus.UNKNOWN_JOB;
  }
 
+ @Override public synchronized int retry(String jobId) {
+  for (Map.Entry<String, Project> e : projects.entrySet()) {
+   Project p = e.getValue();
+   if (p.job == null || !p.job.jobId.equals(jobId)) continue;
+   if (!p.job.retryable()) throw new IllegalArgumentException("not a retryable failed job");
+   int attempt = p.job.attempt + 1;
+   projects.put(e.getKey(), new Project(p.projectId, p.name, p.packageName, p.signerSha256, p.versions, new BuildJob(jobId, BuildJob.Stage.QUEUED, null, null, attempt)));
+   return attempt;
+  }
+  throw new IllegalArgumentException("unknown job");
+ }
+
  @Override public void download(String apkSha256, long size, File dest) throws FileNotFoundException {
   throw new FileNotFoundException("the stand-in builder makes no APKs");
  }

@@ -54,6 +54,9 @@ interface BuilderApi {
  /** Fetches one version's APK by SHA-256 over the same signed link (§3.1 artifacts), stopping at its exact size
   * (apk.size, exact bytes): anything longer is refused. */
  void download(String apkSha256, long size, File dest) throws Exception;
+ /** POST jobs/<jobId>/retry: a retryable failed job runs again under the same jobId as attempt + 1; anything else is
+  * refused by the builder. Returns the job's new attempt. */
+ int retry(String jobId) throws Unreachable;
  void reportInstall(InstallReceipt receipt) throws Unreachable;
  /** Public download link for sharing (Level 3, the Chariot owner's hosting; not part of builder API v1): one
   * immutable per version, or the latest when versionCode is null. Null until hosting exists. */

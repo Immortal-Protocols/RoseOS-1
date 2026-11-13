@@ -41,6 +41,9 @@ public final class BuilderRulesTest {
         expect(BuildJob.failureAdvice(new BuildJob.Failure(BuildJob.Category.TIMEOUT, "", true)).startsWith("Try again"), "retry advice when retryable");
         expect(BuildJob.failureAdvice(new BuildJob.Failure(BuildJob.Category.UNREACHABLE, "", true)).contains("reconnect"), "unreachable: reconnect");
         expect("The build failed".equals(BuildJob.failureTitle(null)), "unknown failure still honest");
+        expect(!failed.retryable(), "a non-retryable failure offers no retry");
+        expect(new BuildJob("j4", BuildJob.Stage.FAILED, null, new BuildJob.Failure(BuildJob.Category.TIMEOUT, "", true)).retryable(), "a retryable failure offers retry");
+        expect(!building.retryable() && !ready.retryable(), "only failed jobs are retried");
 
         // Install/update continuity: same package, same signer, higher version.
         String pkg = "dev.rose.app.tipcalc", signer = "AB12", other = "CD34";
