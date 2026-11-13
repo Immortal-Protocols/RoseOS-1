@@ -102,8 +102,10 @@ Proof levels:
 - **Container:** create, revise and a refused key change were built, signed and
   verified with throwaway keys. CI repeats this with a freshly fetched pinned
   SDK.
-- **Not done:** listener routes, the Codex generator and the install client.
-  Nothing has been installed.
+- **Container:** the signed routes, from pairing to a signed artifact
+  download, are covered by tests against the real listener app.
+- **Not done:** enabling the builder on a host, the Codex generator, and
+  Home/App's install client against the real API. Nothing has been installed.
 
 Data survives an update because the package, signer and higher versionCode keep
 Android's update path; the revise prompt also requires keeping storage keys
@@ -113,7 +115,13 @@ read-back test on a stock-Android phone and a RoseOS phone, run separately.
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 
 All requests use the paired device's `rose-auth-v1` signature, under the
-`/builder/v1/` prefix on the remote listener. Every body carries
+`/builder/v1/` prefix on the remote listener (`rose/app_builder/routes.py`).
+The routes are mounted only when the server has an app builder enabled, and
+`rose.app` enables none today. The signature covers the method, path, time and
+nonce. Body integrity comes from the pinned TLS link. Every JSON response is an
+object carrying `schemaVersion: 1`. The library response is `{schemaVersion,
+projects: [...]}`. Every paired device of the server's owner sees the same
+library. Every body carries
 `schemaVersion: 1`. Unknown request fields and versions are refused (`400`).
 Responses may gain fields within version 1, so clients ignore fields they don't
 know. A removed or changed field means a new version. A second client package
@@ -129,7 +137,7 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 | `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId}` |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
 | `GET /builder/v1/jobs/<jobId>` | | job (§3.2) |
-| `GET /builder/v1/projects` | | library (§3.3) |
+| `GET /builder/v1/projects` | | `{schemaVersion, projects: [...]}` (§3.3) |
 | `GET /builder/v1/artifacts/<sha256>` | | APK bytes (same signature) |
 | `POST /builder/v1/installs` | install receipt (§3.5) | `{recorded: true}` |
 

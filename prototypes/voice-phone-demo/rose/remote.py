@@ -734,7 +734,8 @@ async def _close(ws: Any) -> None:
 
 # --------------------------------------------------------------------- apps
 def build_remote_app(server: Any, remote: Remote) -> FastAPI:
-    """The TLS listener's app: /pair, /hello and the three websockets, nothing else."""
+    """The TLS listener's app: /pair, /hello and the three websockets, nothing else, plus the signed
+    /builder/v1 routes only when the server has an app builder enabled."""
 
     from .realphone import RealPhone
 
@@ -801,6 +802,10 @@ def build_remote_app(server: Any, remote: Remote) -> FastAPI:
     app.websocket("/ws/audio")(guarded(server.serve_audio))
     app.websocket("/ws/events")(guarded(server.serve_events))
     app.websocket("/ws/phone")(guarded(phone))
+    builder = getattr(server, "app_builder", None)
+    if builder is not None:  # only on a host whose owner enabled the app builder (docs/APP-BUILDER.md)
+        from .app_builder.routes import add_routes
+        add_routes(app, remote, builder, peer, refusal_headers, request_path)
     return app
 
 
