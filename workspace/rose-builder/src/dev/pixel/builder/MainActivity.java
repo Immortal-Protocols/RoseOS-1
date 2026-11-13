@@ -188,9 +188,10 @@ public final class MainActivity extends Activity {
    File f = new File(getCacheDir(), "download.apk");
    String error = null;
    try {
-    api.download(v.apkSha256, f);
+    api.download(v.apkSha256, v.apkSize, f);
     InstallPlan.Apk expected = new InstallPlan.Apk(p.packageName, p.signerSha256, v.apkSha256, v.versionCode);
-    InstallPlan plan = InstallPlan.verify(expected, Installer.inspect(this, f), installed);
+    // A file of the wrong length is refused as a mismatch without parsing it.
+    InstallPlan plan = InstallPlan.verify(expected, f.length() == v.apkSize ? Installer.inspect(this, f) : null, installed);
     if (plan.action == InstallPlan.Action.REFUSE) {
      error = plan.reason;
      // Refused before Android saw it: the builder is told, with the signer the phone has now.

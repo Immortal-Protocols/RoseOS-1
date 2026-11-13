@@ -82,7 +82,7 @@ final class FakeBuilderApi implements BuilderApi {
   return CancelStatus.UNKNOWN_JOB;
  }
 
- @Override public void download(String apkSha256, File dest) throws FileNotFoundException {
+ @Override public void download(String apkSha256, long size, File dest) throws FileNotFoundException {
   throw new FileNotFoundException("the stand-in builder makes no APKs");
  }
 

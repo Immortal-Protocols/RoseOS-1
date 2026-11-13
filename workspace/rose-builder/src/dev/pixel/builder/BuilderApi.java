@@ -7,7 +7,8 @@ import java.util.List;
  * Project 1: the phone's view of the Rose build service, mirroring App Core's builder API v1
  * (docs/APP-BUILDER.md §3). App Core owns orchestration, builds, signing, artifacts and the contract; this client only
  * asks and shows. The real transport (rose-auth-v1 signed requests under /builder/v1/, the app pairing as its own
- * device) is not in this module yet: the app runs against {@link FakeBuilderApi} only.
+ * device) is not in this module yet: the app runs against {@link FakeBuilderApi} only. Responses may gain fields
+ * within v1 and a transport ignores unknown ones; requests carry exactly v1's fields.
  */
 interface BuilderApi {
  /** §3.3 version: sourceRevision is the immutable id of its source; the APK is fetched by its SHA-256. */
@@ -18,7 +19,8 @@ interface BuilderApi {
    this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
   }
  }
- /** §3.3 project, plus its current job (§3.2) when there is one. packageName and signerSha256 never change. */
+ /** §3.3 project. job: its activeJob (queued or running) from the library, or else the last job this client followed
+  * (GET jobs/<jobId>), so a finished build still shows its result. packageName and signerSha256 never change. */
  final class Project {
   final String projectId, name, packageName, signerSha256;
   final List<Version> versions; final BuildJob job;
@@ -49,8 +51,9 @@ interface BuilderApi {
  Project create(String clientRequestId, String description) throws Unreachable;
  Project revise(String projectId, String clientRequestId, String request) throws Unreachable;
  CancelStatus cancel(String jobId) throws Unreachable;
- /** Fetches one version's APK by SHA-256 over the same signed link (§3.1 artifacts). */
- void download(String apkSha256, File dest) throws Exception;
+ /** Fetches one version's APK by SHA-256 over the same signed link (§3.1 artifacts), stopping at its exact size
+  * (apk.size, exact bytes): anything longer is refused. */
+ void download(String apkSha256, long size, File dest) throws Exception;
  void reportInstall(InstallReceipt receipt) throws Unreachable;
  /** Public download link for sharing (Level 3, the Chariot owner's hosting; not part of builder API v1): one
   * immutable per version, or the latest when versionCode is null. Null until hosting exists. */
