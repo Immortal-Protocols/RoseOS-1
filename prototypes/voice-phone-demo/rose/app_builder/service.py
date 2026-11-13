@@ -105,10 +105,21 @@ class Builder:
         return path if self.ledger.artifact(sha256) and path.is_file() else None
 
     def install(self, device: str, body) -> dict:
+        # versionCode: the version this receipt is about (the one attempted). signerSha256: what the phone has for
+        # the package afterwards, null when nothing is installed. detail: Android's status message, may be empty.
+        body = dict(body) if isinstance(body, dict) else body
+        signer = body.pop('signerSha256', 'missing') if isinstance(body, dict) else 'missing'
+        detail = body.pop('detail', None) if isinstance(body, dict) else None
         b = _body(body, {'projectId': (str, 32), 'packageName': (str, 200), 'versionCode': (int, 2**31 - 1),
-                         'signerSha256': (str, 64), 'status': (str, 32), 'detail': (str, 500)})
+                         'status': (str, 32)})
         if b['status'] not in INSTALL_STATUSES:
             raise Refused('unknown install status')
+        if signer is not None and not (isinstance(signer, str) and len(signer) == 64
+                                       and all(c in '0123456789abcdef' for c in signer)):
+            raise Refused('signerSha256 must be 64 lowercase hex characters or null')
+        if detail is not None and (not isinstance(detail, str) or len(detail) > 500):
+            raise Refused('detail must be at most 500 characters')
+        b['signerSha256'], b['detail'] = signer, detail or ''
         project = self.ledger.project(b['projectId'])
         if project is None or project['packageName'] != b['packageName']:
             raise Refused('unknown project or package')

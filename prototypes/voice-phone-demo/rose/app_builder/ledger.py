@@ -266,8 +266,12 @@ class Ledger:
         out = []
         for (project,) in self.db.execute('SELECT project_id FROM projects ORDER BY created').fetchall():
             p = self.project(project)
+            active = self.db.execute('SELECT job_id, state FROM jobs WHERE project_id=? AND state IN (%s) '
+                                     'ORDER BY started DESC LIMIT 1' % ','.join('?' * len(ACTIVE)),
+                                     (project, *ACTIVE)).fetchone()
             out.append({k: p[k] for k in ('projectId', 'name', 'packageName', 'signerSha256')}
-                       | {'versions': self.versions(project)})
+                       | {'activeJob': {'jobId': active[0], 'state': active[1]} if active else None,
+                          'versions': self.versions(project)})
         return out
 
     def job(self, job_id: str):

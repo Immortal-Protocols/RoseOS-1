@@ -108,8 +108,12 @@ read-back test on a stock-Android phone and a RoseOS phone, run separately.
 
 All requests use the paired device's `rose-auth-v1` signature, under the
 `/builder/v1/` prefix on the remote listener. Every body carries
-`schemaVersion: 1`. Unknown fields and versions are refused (`400`). A second
-client package pairs as its own device, with its own key.
+`schemaVersion: 1`. Unknown request fields and versions are refused (`400`).
+Responses may gain fields within version 1, so clients ignore fields they don't
+know. A removed or changed field means a new version. A second client package
+pairs as its own device, with its own key. Generated builds never enter Rose
+Agent's `/apps` catalog. They reach the phone only through this API, and Rose
+Agent may refuse the `app.rose.gen.` prefix outright.
 
 ### 3.1 Calls
 
@@ -140,11 +144,21 @@ updatedAt, failure?}`
   outcome unknown", retryable: true}`. It is never silently re-run.
 - **Logs:** `logTail` holds redacted build output only, never paths under
   `ROSE_CONFIG_DIR`, keys or tokens.
+- **Display only:** `state` drives progress and Cancel. `stage`, `message`
+  and `logTail` are text for display and are not an enum.
 
 ### 3.3 Library
 
-`[{projectId, name, packageName, signerSha256, versions: [{versionCode,
-versionName, createdAt, jobId, sourceRevision, apk: {sha256, size}, notes}]}]`
+`[{projectId, name, packageName, signerSha256, activeJob: {jobId, state} |
+null, versions: [{versionCode, versionName, createdAt, jobId, sourceRevision,
+apk: {sha256, size}, notes}]}]`
+
+- `activeJob` is the project's queued or running job, so a restarted client or
+  a second phone can show progress and Cancel.
+- `apk.size` is the exact byte count.
+- The APK is fetched only through the creator's signed
+  `GET /builder/v1/artifacts/<sha256>`. Public share links come separately from
+  hosting (Level 3) and never grant backend or account access.
 
 `packageName` and `signerSha256` never change for a project. `versionCode`
 strictly increases and is allocated by the server ledger, never by Codex.
@@ -160,8 +174,20 @@ silently dropped.
 
 `{schemaVersion, projectId, packageName, versionCode, signerSha256, status:
 installed | updated | refused_signer | refused_version | cancelled_by_user |
-failed, detail}`. The server reports "installed" only from this receipt, never
-from publishing alone.
+failed, detail}`
+
+- `versionCode` is the version the receipt is about: the one attempted.
+- `signerSha256` is the signer the phone has for the package afterwards, read
+  back from PackageManager. It is `null` when nothing is installed and must
+  always be present.
+- `refused_signer` and `refused_version` mean the client refused before
+  Android saw the APK. When Android refuses, the status is `failed`, with
+  Android's status message in `detail`, which may be empty.
+- `updated` means success over an installed copy.
+- A pending user action sends no receipt.
+
+The server reports "installed" only from this receipt, never from publishing
+alone.
 
 ## 4. Project 2: composer intent/result contract v1
 

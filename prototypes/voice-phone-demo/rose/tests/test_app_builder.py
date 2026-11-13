@@ -171,6 +171,21 @@ class ApiTest(Base):
         with self.assertRaises(Refused):
             self.b.install('d', {'schemaVersion': 1, 'projectId': out['projectId'], 'packageName': 'dev.pixel.voice',
                                  'versionCode': 1, 'signerSha256': 'a' * 64, 'status': 'installed', 'detail': 'ok'})
+        pkg = self.b.projects()[0]['packageName']
+        receipt = {'schemaVersion': 1, 'projectId': out['projectId'], 'packageName': pkg, 'versionCode': 1,
+                   'signerSha256': None, 'status': 'failed', 'detail': ''}
+        self.assertEqual(self.b.install('d', receipt), {'recorded': True})  # nothing installed: no signer
+        for bad in ({'signerSha256': 'A' * 64}, {'signerSha256': 'x'}, {'status': 'done'}, {'detail': 'x' * 501}):
+            with self.assertRaises(Refused, msg=bad):
+                self.b.install('d', receipt | bad)
+        with self.assertRaises(Refused):
+            self.b.install('d', {k: v for k, v in receipt.items() if k != 'signerSha256'})  # must be stated
+
+    def test_library_shows_the_active_job(self):
+        out = self.b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'Tip calculator'})
+        self.assertEqual(self.b.projects()[0]['activeJob'], {'jobId': out['jobId'], 'state': 'queued'})
+        self.b.cancel(out['jobId'], {'schemaVersion': 1})
+        self.assertIsNone(self.b.projects()[0]['activeJob'])
 
 
 @unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK (ANDROID_SDK_ROOT) and a JDK')
