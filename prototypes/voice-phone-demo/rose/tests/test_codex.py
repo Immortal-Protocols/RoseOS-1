@@ -300,6 +300,56 @@ class Integration(unittest.TestCase):
         self.assertTrue(a.busy and b.busy)
         self.assertFalse(any(op == 'stop' for op,_ in self.controller.calls))
 
+    def test_newly_installed_app_refreshes_recent_inventory_before_worker_start(self):
+        maps = {'label': 'Maps', 'packageName': 'com.google.android.apps.maps'}
+        with patch.object(self.controller, 'call', return_value={'status': 'ok', 'apps': [*APPS, maps]}) as calls:
+            s = self.task('Google Maps')
+            self.assertEqual(s.view.workspace.package, maps['packageName'])
+            calls.assert_called_once_with('list_apps')
+            self.assertEqual(s.task.status, 'running')
+
+    def test_app_aliases_reuse_package_binding_and_idle_release_stays_targeted(self):
+        # Like Google Maps / Maps, two labels resolve to one installed package.
+        first = self.task('Google Calculator')
+        self.complete(first)
+        session_id, task_id = first.view.workspace.bound_id, first.view.workspace.task_id
+        alias = self.engine.start_phone('Calculator', 'Observe Calculator again')
+        self.assertTrue(wait(lambda: first.busy))
+        self.assertIs(alias, first.task)
+        self.complete(first)
+        self.assertEqual(first.view.workspace.bound_id, session_id)
+        self.assertEqual(first.view.workspace.task_id, task_id)
+        self.assertEqual(len([s for s in self.engine.sessions.values() if s.task and not s.closed]), 1)
+        second = self.task('Clock')
+        self.complete(second)
+        third = self.task('Keep Notes')
+        self.assertTrue(self.call(third, 'open_app', app=third.app)['ok'])
+        self.assertTrue(first.closed)
+        self.assertFalse(first.cleanup_uncertain)
+        self.assertIn(('stop', {'sessionId': session_id, 'taskId': task_id}), self.controller.calls)
+        self.assertFalse(second.closed)
+
+    def test_unavailable_app_keeps_specific_failure_without_launching(self):
+        task = self.engine.start_phone('Uninstalled Telescope', 'Open the app')
+        self.assertTrue(wait(lambda: task.status == 'failed'))
+        self.assertIn('installed-app list', task.result)
+        self.assertIn('Nothing was opened', task.result)
+        events = self.store.export(self.engine.conversation)
+        self.assertTrue(any(e['kind'] == 'failure' and e['data']['reason'] == 'app_unavailable'
+                            for e in events))
+        self.assertFalse(any(op == 'start' for op, _ in self.controller.calls))
+        self.assertFalse(any(op == 'open' and name.startswith('app-')
+                             for op, name, _ in self.engine.client.calls))
+
+    def test_app_inventory_cache_hit_and_reconnect_refresh(self):
+        with patch.object(self.controller, 'call', return_value={'status': 'ok', 'apps': APPS}) as calls:
+            self.assertEqual(self.phone.resolve_app('Calculator')[0], CALC)
+            calls.assert_not_called()
+            self.phone._link_changed()
+            calls.assert_not_called()  # reconnect callback never waits on the phone
+            self.assertEqual(self.phone.resolve_app('Calculator')[0], CALC)
+            calls.assert_called_once_with('list_apps')
+
     def test_foreground_app_refusal_keeps_actionable_reason_in_failed_result(self):
         a = self.task('Calculator')
         send = a.view.workspace.send
