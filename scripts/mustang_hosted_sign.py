@@ -283,9 +283,9 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
             or any((actual.get(k) or {}).get('id')!=1428996648 for k in ('repository','head_repository')):
         raise ValueError('full-run Actions metadata differs')
     if retained and (actual.get('workflow_id')!=408460629 or type(actual.get('run_number')) is not int \
-            or actual['run_number']<=36 or int(run['runId'])<=int(mustang_retained.RUN) \
+            or actual['run_number']<=mustang_retained.RUN_NUMBER or int(run['runId'])<=int(mustang_retained.RUN) \
             or mustang_retained.mustang_clock.utc(actual.get('created_at'))<=
-                mustang_retained.mustang_clock.utc('2026-11-09T17:23:51Z')):
+                mustang_retained.mustang_clock.utc(mustang_retained.CREATED_AT)):
         raise ValueError('retained delivery Actions epoch/order differs')
     if 'clockAllocation' in bundle:
         import mustang_clock

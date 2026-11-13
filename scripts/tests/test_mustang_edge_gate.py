@@ -942,6 +942,27 @@ class DedicatedRuntimeTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'no available bytes/inodes'):
                 self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=process)
 
+    def test_completed_compile_does_not_need_a_second_source_copy_budget(self):
+        import mustang_route as readiness
+        runtime=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        recipe=json.loads((ROOT/'os/build-only/mustang.json').read_text())
+        lane_binding=lane.configuration()
+        facts=dict(instanceId=lane.CONFIRMED_INSTANCE_ID,filesystemUuid=lane.CONFIRMED_UUID,
+            mount=lane.CONFIRMED_MOUNT,availableBytes=884227551232,availableInodes=1000,
+            totalInodes=runtime['dataFilesystemTotalInodes'],euid=1000)
+        self.assertEqual(readiness.full_run_disk_budget(recipe),906238099456)
+        with self.assertRaisesRegex(ValueError,'source, metadata'):
+            readiness.evaluate_guest(facts,lane_binding,runtime)
+        readiness.evaluate_guest(facts,lane_binding,runtime,phase='collection')
+        required=recipe['capacity']['compileAllowanceBytes']+recipe['capacity']['reserveBytes']
+        with self.assertRaisesRegex(ValueError,'collection and reserve'):
+            readiness.evaluate_guest(dict(facts,availableBytes=required-1),lane_binding,runtime,phase='collection')
+        for changed in (dict(instanceId='wrong'),dict(filesystemUuid='wrong'),dict(euid=0)):
+            with self.assertRaises(ValueError):
+                readiness.evaluate_guest(dict(facts,**changed),lane_binding,runtime,phase='collection')
+        with self.assertRaises(ValueError):
+            readiness.evaluate_guest(facts,lane_binding,runtime,phase='unknown')
+
     def test_real_disk_preflight_rejects_wrong_identity_low_space_and_root(self):
         import mustang_route as readiness
         peak=readiness.compile_peak()

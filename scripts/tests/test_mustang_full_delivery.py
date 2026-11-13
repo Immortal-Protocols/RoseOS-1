@@ -556,8 +556,8 @@ class RetainedDeliveryTest(unittest.TestCase):
         self.f.source=retained.SOURCE
         first=self.f.environment('42622314509',35,'2026-11-09T13:04:51Z')
         self.f.reserve(first,now='2026-11-09T14:09:50Z')
-        old=self.f.environment(retained.RUN,36,'2026-11-09T17:23:51Z')
-        self.allocation=self.f.reserve(old,now='2026-11-09T18:22:08Z')
+        old=self.f.environment(retained.RUN,retained.RUN_NUMBER,retained.CREATED_AT)
+        self.allocation=self.f.reserve(old,now='2026-11-13T19:48:46Z')
         op=self.f.compiler_operator(self.allocation)
         self.source=Path(op['sourceRoot']);self.build=self.allocation['build'];self.stamp=op['buildDatetime']
         (self.source.parent/'allocation.json').write_bytes(proof.canonical(self.allocation))
@@ -596,10 +596,9 @@ class RetainedDeliveryTest(unittest.TestCase):
             stages={'integrate':dict(source=retained.SOURCE,result=dict(returncode=0,stopped=None)),
                 'compile':dict(result=completed),'bootstrap-source':dict(result=native,receipt=dict(sha256=copied['nativeReceiptSha256'])),
                 'source-copy':dict(result=copied)})
-        failed=dict(status='failed',error=retained.ERROR,candidate=self.candidate,collectorSource=retained.SOURCE,
-            runId=retained.RUN,runAttempt='1',makeReturncode=0,makeRerun=False,originalReceiptsModified=False,collectionRecovery=False)
-        self.docs=dict(zip(retained.FILES,(self.candidate,completed,self.allocation,failed)))
-        self.delivery='42699999999';self.sha='c'*40
+        self.docs=dict(zip(retained.FILES,(self.candidate,completed,self.allocation)))
+        self.original_artifact=dict(retained.ARTIFACT)
+        self.delivery='90000000001';self.sha='c'*40
         self.current=dict(runId=self.delivery,runAttempt='1',source=self.sha,workflow=run['workflow'])
         owner=dict(schema=controller.SCHEMA,run=self.current,owner=dict(vm=self.lane['vm'],startedByThisOperation=True))
         self.env=dict(GITHUB_RUN_ID=self.delivery,GITHUB_RUN_ATTEMPT='1',GITHUB_SHA=self.sha,
@@ -611,13 +610,13 @@ class RetainedDeliveryTest(unittest.TestCase):
         self.event={'inputs':dict(publish=True,retained_compile_run=retained.RUN)}
         self.facts=dict(instanceId=self.lane['vm']['instanceId'],filesystemUuid=self.cfg['dataFilesystemUuid'],
             mount=self.cfg['dataMount'],availableBytes=10**12,availableInodes=10**6,totalInodes=10**7,euid=999)
-        self.actual=dict(id=int(retained.RUN),run_attempt=1,run_number=36,head_sha=retained.SOURCE,head_branch='main',
-            path=retained.WORKFLOW,workflow_id=408460629,event='workflow_dispatch',created_at='2026-11-09T17:23:51Z',
+        self.actual=dict(id=int(retained.RUN),run_attempt=1,run_number=retained.RUN_NUMBER,head_sha=retained.SOURCE,head_branch='main',
+            path=retained.WORKFLOW,workflow_id=408460629,event='workflow_dispatch',created_at=retained.CREATED_AT,
             status='completed',conclusion='failure',repository=dict(id=1428996648),head_repository=dict(id=1428996648))
         self.jobs=[]
         for i,(name,conclusion) in enumerate((('guard','success'),('controller','success'),('enroll','success'),
                 ('builder','failure'),('cleanup','success'),('signer','skipped'),('publisher','skipped'))):
-            self.jobs.append(dict(id=129324047950 if name=='builder' else i+1,name=name,run_id=int(retained.RUN),
+            self.jobs.append(dict(id=132098482375 if name=='builder' else i+1,name=name,run_id=int(retained.RUN),
                 head_sha=retained.SOURCE,status='completed',conclusion=conclusion,runner_group_id=5,
                 runner_name='mustang-'+retained.RUN,labels=[self.lane['runnerLabel']],steps=[
                     dict(name='Prepare, allocate, integrate and compile once on Mustang disk',conclusion='success'),
@@ -640,12 +639,9 @@ class RetainedDeliveryTest(unittest.TestCase):
             for name,raw in self.raw.items():zipped.writestr(name,raw)
         self.blob=data.getvalue()
         retained.ARTIFACT=dict(retained.ARTIFACT,sizeBytes=len(self.blob),sha256=hashlib.sha256(self.blob).hexdigest())
-        self.addCleanup(setattr,retained,'ARTIFACT',dict(id=13708411788,name='mustang-dedicated-receipts-42664204892-1',sizeBytes=30778,
-            sha256='0a35e679c31667151814357b9e1ba5a11c84b33035ac178aaa1159dba355570a'))
+        self.addCleanup(setattr,retained,'ARTIFACT',self.original_artifact)
         original=self.source.parent/'delivery-inputs';original.mkdir(exist_ok=True)
-        for name in retained.FILES[:3]:(original/name).write_bytes(self.raw[name])
-        failure=self.f.home/'rose-actions'/('mustang-collect-'+retained.RUN+'-1');failure.mkdir(exist_ok=True)
-        (failure/'compile-collection.json').write_bytes(self.raw['compile-collection.json'])
+        for name in retained.FILES:(original/name).write_bytes(self.raw[name])
 
     def api(self,path):
         self.calls.append(path)
@@ -688,7 +684,7 @@ class RetainedDeliveryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'attempt exists'):self.collect()
 
     def test_wrong_original_outcome_steps_archive_clock_apps_and_cleanup_are_refused(self):
-        for change in (dict(conclusion='success'),dict(head_sha='d'*40),dict(run_attempt=2),dict(run_number=37)):
+        for change in (dict(conclusion='success'),dict(head_sha='d'*40),dict(run_attempt=2),dict(run_number=52)):
             with self.subTest(change=change),patch.dict(self.actual,change):
                 with self.assertRaises(ValueError):retained.authenticate(self.env,self.root)
         self.jobs[4]['conclusion']='failure'
@@ -731,8 +727,8 @@ class RetainedDeliveryTest(unittest.TestCase):
         self.assertFalse((self.home/'rose-actions'/('mustang-collect-'+self.delivery+'-1')).exists())
 
     def test_newer_journal_reservation_is_preserved_and_blocks_retained_delivery(self):
-        later=self.f.environment('42699999998',37,'2026-11-09T20:00:00Z')
-        self.f.reserve(later,now='2026-11-09T20:20:00Z');before=self.preserved()
+        later=self.f.environment('90000000000',52,'2026-11-13T22:00:00Z')
+        self.f.reserve(later,now='2026-11-13T22:20:00Z');before=self.preserved()
         with self.assertRaisesRegex(ValueError,'journal'):self.collect()
         self.assertEqual(before,self.preserved())
         self.assertFalse((self.home/'rose-actions'/('mustang-retained-'+self.delivery+'-1')).exists())
@@ -762,7 +758,7 @@ class RetainedDeliveryTest(unittest.TestCase):
     def test_hosted_bundle_authenticates_two_runs_and_rejects_provenance_substitution(self):
         before=self.preserved();bundle=self.bundle()
         current=dict(id=int(self.delivery),run_attempt=1,head_sha=self.sha,head_branch='main',path=retained.WORKFLOW,
-            event='workflow_dispatch',workflow_id=408460629,run_number=37,created_at='2026-11-09T21:00:00Z',
+            event='workflow_dispatch',workflow_id=408460629,run_number=52,created_at='2026-11-13T22:00:00Z',
             status='in_progress',conclusion=None,repository=dict(id=1428996648),head_repository=dict(id=1428996648))
         jobs=[]
         for i,name in enumerate(('guard','controller','enroll','builder','signer')):
