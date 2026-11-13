@@ -16,13 +16,7 @@
   "hostDependenciesEvidence": "os/build-only/mustang-hostdeps-42512135815.json",
   "allocationState": "os/build-only/mustang-allocation-state-20261107.json",
   "clockNumbering": "os/build-only/mustang-clock-numbering.json",
-  "appInputsRecord": "os/app-inputs/frankel-2026111001.json",
-  "frozenAppInputs": {
-    "workflowRunNumber": 47,
-    "record": "os/app-inputs/frankel-2026111001.json",
-    "recordSha256": "68572407da9a396bc8217a4baa971c3f997b84913583b032ceec8d533c5a778a",
-    "reason": "Nathan selected the verified voice370 export for this attempt, omitting newer app changes; do not claim those APKs are source-current."
-  },
+  "appInputsRecord": "os/app-inputs/frankel-2026111201.json",
   "compilerCache": {
     "enabled": true,
     "kind": "ccache",
@@ -41,7 +35,7 @@
     "enabled": true,
     "authorityRecord": "os/build-only/mustang-dedicated-publication-authority.json"
   },
-  "basis": "Dedicated full-delivery source bindings selected: exact VM/disk, group5 ephemeral JIT, jobs24, measured native/hosted tool pins, fresh Frankel2026111001 app export, source/copy verification contract, original v1 signer and manual publication authority. Nathan confirmed existing group6/hosted runner3 Ready, Ubuntu24.04 Linux x64,4CPU/16GB/150GB plus public-repository and exact main-workflow scheduling access. Explicit output budgets are caps, not measurements. Source admission does not establish current hardware/free bytes, native success, allocation, signing, publication or phone compatibility. All same-run checks and owned STOP/cleanup remain mandatory; no runtime dispatch occurs in this source change. Fresh common artifact13781175876 is1875279 bytes, archive digest 4cb8c4ff5ed801210f687071ea5e48442ee11712e7e4f3877495456ee07376ef; it is not an OTA extraction. This selects voice370, calculator6 and background control41 from producer42813894214/source6bab12cd; the old retained compile/export and its consumed clock journal remain unchanged and cannot substitute for a fresh full compile. Same numeric data disk expanded to3000GiB on2026-11-11; actual ext4 bytes/inodes and owned maintenance STOP/metadata cleanup recorded in os/build-only/mustang-data-growth-20261111.json.",
+  "basis": "Dedicated full-delivery bindings retain the separate numeric Mustang VM/3000GiB disk, protected group5 ephemeral JIT, jobs24, qualified native/hosted tools, original v1 signer, output capacity checks and owned four-hour STOP/cleanup. Current signed apps are Frankel2026111201, producer43216030196/sourceed67c9cf, voice374/calculator6/background43; immutable export43485652878 attempt1 artifact14067412309 is2917480 bytes, SHA256 f19da76f2ea7e6e9870c9cc73d4f064d78020fda85a9493dbb1f6e3243968e68. The downloaded12-file packet passed hashes and independent aapt/apksigner admission, toolsRechecked true, with zero declared app-source drift through4b04b6be. This is not an OTA extraction. The one-attempt voice370 exception is removed. Persistent ccache remains enabled; previous outputs and consumed clock journal remain intact. Nathan requested a new full OTA and daily automatic runs at06:00 America/Los_Angeles on2026-11-13. The ChatGPT automation invokes this existing manual-dispatch workflow, keeping the repository04:00 Frankel dispatcher and disabled Mustang lane unchanged to avoid duplicate scheduling. No new infrastructure, permissions, credentials, resource bounds or physical-device acceptance is implied.",
   "candidateContinuity": "os/build-only/mustang-candidate-continuity-20261107.json",
   "dataFilesystemTotalInodes": 196608000,
   "dataDiskEvidence": "os/build-only/mustang-data-growth-20261111.json"

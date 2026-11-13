@@ -1,0 +1,99 @@
+{
+  "apps": [
+    {
+      "apkSha256": "1091cccdb6b1fc113ed2dd606da77955f33a0d3d7d1a84b89fcaf18d48a263a8",
+      "package": "dev.pixel.backgroundcontrol",
+      "versionCode": 43
+    },
+    {
+      "apkSha256": "a832d58ea1574135539f53e6d45bed1019eae64e3b9a5234b1a4a5ed4312e5ce",
+      "package": "dev.pixel.voice",
+      "versionCode": 374
+    },
+    {
+      "apkSha256": "02f1ea333f144099c8dff982762ee002d93f4a2c806d9e72dcfbbc1763d78bee",
+      "package": "dev.pixel.calculator.agent",
+      "versionCode": 6
+    }
+  ],
+  "export": {
+    "artifact": {
+      "digest": "sha256:f19da76f2ea7e6e9870c9cc73d4f064d78020fda85a9493dbb1f6e3243968e68",
+      "id": 14067412309,
+      "name": "app-inputs-frankel-2026111201-43485652878-1"
+    },
+    "attempt": "1",
+    "receiptSha256": "72ecc06dd6a51add5db8e1b87eb77f93fa6a3e5e0d4070fddc8e7637cdd88b12",
+    "run": "43485652878"
+  },
+  "files": [
+    {
+      "path": "background-policy.json",
+      "sha256": "ae86251a1d7edaf9973f22c93840e57a4290b5cf7b88458e8213a75048547442",
+      "sizeBytes": 910
+    },
+    {
+      "path": "signed-apps/dev.pixel.backgroundcontrol.apk",
+      "sha256": "1091cccdb6b1fc113ed2dd606da77955f33a0d3d7d1a84b89fcaf18d48a263a8",
+      "sizeBytes": 110935
+    },
+    {
+      "path": "signed-apps/dev.pixel.backgroundcontrol.apk.idsig",
+      "sha256": "645e49e8192b6826aad2145cb4ec7feb878d184346b7c28ced85f7cec1336bec",
+      "sizeBytes": 5553
+    },
+    {
+      "path": "signed-apps/dev.pixel.backgroundcontrol.receipt.json",
+      "sha256": "57b587bc49cc22b89b5910ef310a4b2db39898dbe5565456995d824713bde4db",
+      "sizeBytes": 408
+    },
+    {
+      "path": "signed-apps/dev.pixel.calculator.agent.apk",
+      "sha256": "02f1ea333f144099c8dff982762ee002d93f4a2c806d9e72dcfbbc1763d78bee",
+      "sizeBytes": 33403
+    },
+    {
+      "path": "signed-apps/dev.pixel.calculator.agent.apk.idsig",
+      "sha256": "762ee246beb8ed7b4857f5112264ea32f5949e13977b13f2bc20bcd68f307c04",
+      "sizeBytes": 5553
+    },
+    {
+      "path": "signed-apps/dev.pixel.calculator.agent.receipt.json",
+      "sha256": "9ba2fc10dd9ac26f97d084687364c9cf5a80849e7f2ca298414c9edbd172368e",
+      "sizeBytes": 407
+    },
+    {
+      "path": "signed-apps/dev.pixel.voice.apk",
+      "sha256": "a832d58ea1574135539f53e6d45bed1019eae64e3b9a5234b1a4a5ed4312e5ce",
+      "sizeBytes": 2835573
+    },
+    {
+      "path": "signed-apps/dev.pixel.voice.apk.idsig",
+      "sha256": "3329d09f2605ef1fec70fd40fa2e3ada48fc517d82ccbc205768aaeb03e2bb9b",
+      "sizeBytes": 30129
+    },
+    {
+      "path": "signed-apps/dev.pixel.voice.receipt.json",
+      "sha256": "55e01a347d094afc5cb4160a3fa579a90ebf0a081f523d725aac566a35ac5707",
+      "sizeBytes": 396
+    }
+  ],
+  "producer": {
+    "allocation": {
+      "path": "os/latest-beta/frankel-2026111201-allocation.json",
+      "sha256": "18ec6673a7a57558063af4c091ad7703d1cbd7407eb3679e99f53b373cabf184"
+    },
+    "build": "2026111201",
+    "candidateSha": "0f5f076f1c58c122a0b4372a3cb920a89552c162",
+    "device": "frankel",
+    "run": {
+      "attempt": "1",
+      "id": "43216030196"
+    },
+    "sourceSha": "ed67c9cf48858f08866f6eb85b1ff1e5d49b5753",
+    "tag": "frankel-2026111201"
+  },
+  "schema": "roseos.app-inputs-record.v1",
+  "sdk": 37,
+  "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+}

@@ -108,20 +108,18 @@ def enrollment():
                     'Provisioning needs a fresh authorized session. This repository does not store a key, open SSH, attach a service account, or mint a registration token.'}}
 
 
-ACCEPTED_APP_EXPORT = {
-    'path': 'os/app-inputs/frankel-2026111001.json',
-    'run': '42851073284',
-    'artifact': 13781175876,
-    'digest': 'sha256:4cb8c4ff5ed801210f687071ea5e48442ee11712e7e4f3877495456ee07376ef',
-    'producerRun': '42813894214',
-    'sourceSha': '6bab12cdf9a6ac2fa2267966447b9820297650ec',
-    'recordMerge': '07c890df8462407bc6233f89791496102786773a',
-    'archiveBytes': 1875279,
-    'sdk': 37,
-    'signerSha256': '650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb',
-    'targetSdk': 35,
-    'apps': {'dev.pixel.backgroundcontrol': 41, 'dev.pixel.calculator.agent': 6, 'dev.pixel.voice': 370},
-}
+ACCEPTED_APP_EXPORT = {'path': 'os/app-inputs/frankel-2026111201.json',
+ 'run': '43485652878',
+ 'artifact': 14067412309,
+ 'digest': 'sha256:f19da76f2ea7e6e9870c9cc73d4f064d78020fda85a9493dbb1f6e3243968e68',
+ 'producerRun': '43216030196',
+ 'sourceSha': 'ed67c9cf48858f08866f6eb85b1ff1e5d49b5753',
+ 'freshnessCheckedAt': '4b04b6be281089fe026c8d2e255edf6d61aa97bb',
+ 'archiveBytes': 2917480,
+ 'sdk': 37,
+ 'signerSha256': '650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb',
+ 'targetSdk': 35,
+ 'apps': {'dev.pixel.backgroundcontrol': 43, 'dev.pixel.voice': 374, 'dev.pixel.calculator.agent': 6}}
 
 
 def git_local(root, args):
