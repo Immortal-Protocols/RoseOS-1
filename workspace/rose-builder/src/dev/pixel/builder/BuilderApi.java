@@ -13,10 +13,10 @@ import java.util.List;
 interface BuilderApi {
  /** §3.3 version: sourceRevision is the immutable id of its source; the APK is fetched by its SHA-256. */
  final class Version {
-  final long versionCode; final String versionName, jobId, sourceRevision, apkSha256, notes; final long apkSize;
-  Version(long versionCode, String versionName, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes) {
-   this.versionCode = versionCode; this.versionName = versionName; this.jobId = jobId; this.sourceRevision = sourceRevision;
-   this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
+  final long versionCode, createdAt; final String versionName, jobId, sourceRevision, apkSha256, notes; final long apkSize;
+  Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes) {
+   this.versionCode = versionCode; this.versionName = versionName; this.createdAt = createdAt; this.jobId = jobId;
+   this.sourceRevision = sourceRevision; this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
   }
  }
  /** §3.3 project. job: its activeJob (queued or running) from the library, or else the last job this client followed
@@ -29,6 +29,7 @@ interface BuilderApi {
    this.versions = versions; this.job = job;
   }
   Version latest() { return versions.isEmpty() ? null : versions.get(versions.size() - 1); }
+  long newestVersionAt() { long t = 0; for (Version v : versions) t = Math.max(t, v.createdAt); return t; }
  }
  /** §3.1 cancel: ACCEPTED means stopping, not stopped. */
  enum CancelStatus { ACCEPTED, NOT_RUNNING, UNKNOWN_JOB }

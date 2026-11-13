@@ -16,17 +16,29 @@ final class BuildJob {
   Failure(Category category, String summary, boolean retryable) { this.category = category; this.summary = summary; this.retryable = retryable; }
  }
 
- /** attempt: App Core's retry count for this job, from 1, so a retry is visible rather than silent. */
- final String jobId; final Stage stage; final String message; final Failure failure; final int attempt;
- BuildJob(String jobId, Stage stage, String message, Failure failure) { this(jobId, stage, message, failure, 1); }
- BuildJob(String jobId, Stage stage, String message, Failure failure, int attempt) {
+ /** attempt: App Core's retry count for this job, from 1, so a retry is visible rather than silent. startedAt: the
+  * job's start (§3.2 startedAt) in ms since the epoch, 0 when unknown. */
+ final String jobId; final Stage stage; final String message; final Failure failure; final int attempt; final long startedAt;
+ BuildJob(String jobId, Stage stage, String message, Failure failure) { this(jobId, stage, message, failure, 1, 0); }
+ BuildJob(String jobId, Stage stage, String message, Failure failure, int attempt) { this(jobId, stage, message, failure, attempt, 0); }
+ BuildJob(String jobId, Stage stage, String message, Failure failure, int attempt, long startedAt) {
   this.jobId = jobId; this.stage = stage; this.message = message; this.failure = failure; this.attempt = Math.max(1, attempt);
+  this.startedAt = startedAt;
  }
 
  boolean terminal() { return stage == Stage.READY || stage == Stage.FAILED || stage == Stage.CANCELLED; }
  boolean cancellable() { return !terminal(); }
  /** builder API v1 retry: only a failed job whose failure says a retry can help; it runs again as attempt + 1. */
  boolean retryable() { return stage == Stage.FAILED && failure != null && failure.retryable; }
+
+ /** Whether to offer Try again for this project's latest job: the builder refuses a retry once another job delivered
+  * a version after this one started (it would rebuild over the newer version). newestVersionAt: the newest
+  * version's createdAt in ms, 0 when there is none. An unknown start is offered only when there is no version. */
+ static boolean offerRetry(BuildJob latest, long newestVersionAt) {
+  if (latest == null || !latest.retryable()) return false;
+  if (newestVersionAt == 0) return true;
+  return latest.startedAt > 0 && newestVersionAt <= latest.startedAt;
+ }
 
  /** The one-line status the phone shows; a live retry says which attempt it is. */
  static String status(BuildJob j) { return status(j, false); }

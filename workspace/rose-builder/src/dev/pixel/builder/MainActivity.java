@@ -138,8 +138,8 @@ public final class MainActivity extends Activity {
    if (p.job.stage == BuildJob.Stage.FAILED) {
     if (p.job.failure != null && p.job.failure.summary != null) body(p.job.failure.summary);
     body(BuildJob.failureAdvice(p.job.failure));
-    // Only when the builder says a retry can help; it runs the same job again as its next attempt.
-    if (p.job.retryable()) button("Try again", x -> {
+    // Only when the builder says a retry can help and no newer version exists; it runs the same job again.
+    if (BuildJob.offerRetry(p.job, p.newestVersionAt())) button("Try again", x -> {
      try { api.retry(p.job.jobId); } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder"); }
      showProject(id);
     });

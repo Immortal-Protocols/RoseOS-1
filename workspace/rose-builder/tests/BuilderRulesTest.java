@@ -46,6 +46,11 @@ public final class BuilderRulesTest {
         expect(!failed.retryable(), "a non-retryable failure offers no retry");
         expect(new BuildJob("j4", BuildJob.Stage.FAILED, null, new BuildJob.Failure(BuildJob.Category.TIMEOUT, "", true)).retryable(), "a retryable failure offers retry");
         expect(!building.retryable() && !ready.retryable(), "only failed jobs are retried");
+        BuildJob lateFail = new BuildJob("j5", BuildJob.Stage.FAILED, null, new BuildJob.Failure(BuildJob.Category.TIMEOUT, "", true), 1, 100);
+        expect(BuildJob.offerRetry(lateFail, 0) && BuildJob.offerRetry(lateFail, 90), "retry offered with no newer version");
+        expect(!BuildJob.offerRetry(lateFail, 120), "no retry once a newer version was delivered after it started");
+        expect(!BuildJob.offerRetry(new BuildJob("j6", BuildJob.Stage.FAILED, null, new BuildJob.Failure(BuildJob.Category.TIMEOUT, "", true)), 50), "unknown start with versions: not offered");
+        expect(!BuildJob.offerRetry(failed, 0) && !BuildJob.offerRetry(null, 0), "never for a non-retryable or missing job");
 
         // Install/update continuity: same package, same signer, higher version.
         String pkg = "dev.rose.app.tipcalc", signer = "AB12", other = "CD34";
