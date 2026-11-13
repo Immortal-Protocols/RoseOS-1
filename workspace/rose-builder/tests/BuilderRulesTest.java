@@ -52,6 +52,7 @@ public final class BuilderRulesTest {
         expect(down.action == InstallPlan.Action.REFUSE && down.reason.contains("newer"), "downgrade refused");
         InstallPlan resign = InstallPlan.offer(v2, new InstallPlan.Installed(pkg, other, 1));
         expect(resign.action == InstallPlan.Action.REFUSE && resign.reason.contains("data is left alone"), "different signer refused, never reinstall");
+        expect(down.refusal == InstallPlan.Receipt.REFUSED_VERSION && resign.refusal == InstallPlan.Receipt.REFUSED_SIGNER, "refusals carry their receipt");
         expect("Update".equals(InstallPlan.label(InstallPlan.offer(v2, new InstallPlan.Installed(pkg, signer, 1)))), "update label");
 
         // A download is used only when it is exactly the recorded version.
@@ -61,6 +62,16 @@ public final class BuilderRulesTest {
         expect(InstallPlan.verify(v2, new InstallPlan.Apk("x.y", signer, "ff00", 2), null).action == InstallPlan.Action.REFUSE, "wrong package refused");
         expect(InstallPlan.verify(v2, new InstallPlan.Apk(pkg, other, "ff00", 2), null).action == InstallPlan.Action.REFUSE, "wrong signer refused");
         expect(InstallPlan.verify(v2, new InstallPlan.Apk(pkg, signer, "FF00", 2), new InstallPlan.Installed(pkg, signer, 1)).action == InstallPlan.Action.UPDATE, "matching file: update");
+
+        expect(InstallPlan.verify(v2, new InstallPlan.Apk(pkg, other, "ff00", 2), null).refusal == InstallPlan.Receipt.REFUSED_SIGNER, "wrong signer file: refused_signer");
+        expect(InstallPlan.verify(v2, new InstallPlan.Apk(pkg, signer, "0000", 2), null).refusal == InstallPlan.Receipt.FAILED, "mismatched file: failed");
+
+        // Install receipts (builder API v1 §3.5): what Android did, never what was intended.
+        expect(InstallPlan.androidOutcome(true, false, false) == InstallPlan.Receipt.INSTALLED, "first install: installed");
+        expect(InstallPlan.androidOutcome(true, false, true) == InstallPlan.Receipt.UPDATED, "over the same app: updated");
+        expect(InstallPlan.androidOutcome(false, true, true) == InstallPlan.Receipt.CANCELLED_BY_USER, "owner declined: cancelled_by_user");
+        expect(InstallPlan.androidOutcome(false, false, true) == InstallPlan.Receipt.FAILED, "Android refused: failed");
+        expect("refused_signer".equals(InstallPlan.Receipt.REFUSED_SIGNER.wire()) && "cancelled_by_user".equals(InstallPlan.Receipt.CANCELLED_BY_USER.wire()), "wire names");
 
         // Share text: the owner sends it; version links name the version, latest links do not.
         String exact = ShareMessage.text("Tip Calc", "1.2", "https://example.invalid/a/tipcalc/1.2", false);

@@ -18,11 +18,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,6 +37,9 @@ public final class MainActivity extends Activity {
  String openProject;
  /** Jobs the owner asked to stop; they read "Stopping…" until the job itself reports its end. */
  final java.util.Set<String> stopRequested = new java.util.HashSet<>();
+ /** One clientRequestId per create or change the owner asks for, reused when it's retried after a lost connection,
+  * so a retry never starts a second build. Cleared once the builder answers. */
+ String createRequest, reviseRequest;
  final Runnable poll = new Runnable() { @Override public void run() { if (openProject != null) showProject(openProject); } };
 
  @Override protected void onCreate(Bundle state) {
@@ -79,15 +77,20 @@ public final class MainActivity extends Activity {
   if (status == PackageInstaller.STATUS_SUCCESS) toast("Installed");
   else if (status == PackageInstaller.STATUS_FAILURE_ABORTED) toast("Install cancelled");
   else toast("Android didn't install it: " + ShareMessage.clean(intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE), "no reason given"));
-  // Report what Android actually did, with what the phone now has for the package, never what was intended.
+  // Report what Android actually did, with the signer the phone now has for the package, never what was intended.
   String project = intent.getStringExtra(Installer.EXTRA_PROJECT), pkg = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME);
   if (project != null && pkg != null) {
    InstallPlan.Installed now = Installer.installed(this, pkg);
-   String outcome = status == PackageInstaller.STATUS_SUCCESS ? "installed" : status == PackageInstaller.STATUS_FAILURE_ABORTED ? "cancelled" : "failed";
-   BuilderApi.InstallReport r = new BuilderApi.InstallReport(outcome, pkg, now == null ? -1 : now.versionCode, now == null ? null : now.signerSha256);
-   io.execute(() -> { try { api.reportInstall(project, r); } catch (BuilderApi.Unreachable e) { main.post(() -> toast("Your builder couldn't be told the install result yet")); } });
+   InstallPlan.Receipt outcome = InstallPlan.androidOutcome(status == PackageInstaller.STATUS_SUCCESS,
+     status == PackageInstaller.STATUS_FAILURE_ABORTED, intent.getBooleanExtra(Installer.EXTRA_WAS_INSTALLED, false));
+   String detail = outcome == InstallPlan.Receipt.FAILED ? ShareMessage.clean(intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE), null) : null;
+   report(new BuilderApi.InstallReceipt(project, pkg, intent.getLongExtra(Installer.EXTRA_VERSION, -1), now == null ? null : now.signerSha256, outcome, detail));
   }
   if (openProject != null) showProject(openProject);
+ }
+
+ void report(BuilderApi.InstallReceipt r) {
+  io.execute(() -> { try { api.reportInstall(r); } catch (BuilderApi.Unreachable e) { main.post(() -> toast("Your builder couldn't be told the install result yet")); } });
  }
 
  void showLibrary() {
@@ -115,7 +118,9 @@ public final class MainActivity extends Activity {
   button("Build it", x -> {
    String d = text.getText().toString().trim();
    if (d.isEmpty()) { toast("Describe the app first"); return; }
-   try { showProject(api.create(d).projectId); } catch (BuilderApi.Unreachable e) { unreachable(this::showCreate); }
+   if (createRequest == null) createRequest = java.util.UUID.randomUUID().toString();
+   try { String pid = api.create(createRequest, d).projectId; createRequest = null; showProject(pid); }
+   catch (BuilderApi.Unreachable e) { toast("Can't reach your builder. Your description is kept; try again."); }
   });
   button("Back", x -> showLibrary());
  }
@@ -136,8 +141,11 @@ public final class MainActivity extends Activity {
    }
    if (p.job.cancellable()) {
     if (!stopRequested.contains(p.job.jobId)) button("Cancel build", x -> {
-     try { api.cancel(p.projectId, p.job.jobId); stopRequested.add(p.job.jobId); }
-     catch (BuilderApi.Unreachable e) { toast("Can't reach your builder to cancel"); }
+     try {
+      BuilderApi.CancelStatus c = api.cancel(p.job.jobId);
+      if (c == BuilderApi.CancelStatus.ACCEPTED) stopRequested.add(p.job.jobId);
+      else toast(c == BuilderApi.CancelStatus.NOT_RUNNING ? "That build had already finished" : "Your builder doesn't know that build");
+     } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder to cancel"); }
      showProject(id);
     });
     main.postDelayed(poll, POLL_MS);
@@ -147,9 +155,10 @@ public final class MainActivity extends Activity {
   for (int i = p.versions.size() - 1; i >= 0; i--) {
    BuilderApi.Version v = p.versions.get(i);
    InstallPlan offer = InstallPlan.offer(new InstallPlan.Apk(p.packageName, p.signerSha256, v.apkSha256, v.versionCode), installed);
+   if (v.notes != null) body("Version " + v.versionName + ": " + ShareMessage.clean(v.notes, ""));
    if (offer.action == InstallPlan.Action.REFUSE) { body("Version " + v.versionName + ": " + offer.reason); continue; }
    if (offer.action == InstallPlan.Action.OPEN) { button("Open version " + v.versionName, x -> open(p.packageName)); continue; }
-   if (v.apkUrl == null) { body("Version " + v.versionName + " isn't downloadable yet."); continue; }
+   if (v.apkSha256 == null) { body("Version " + v.versionName + " isn't downloadable yet."); continue; }
    button(InstallPlan.label(offer) + " version " + v.versionName, x -> download(p, v, installed));
   }
   if (p.job == null || p.job.terminal()) {
@@ -157,7 +166,9 @@ public final class MainActivity extends Activity {
    button("Request change", x -> {
     String c = change.getText().toString().trim();
     if (c.isEmpty()) { toast("Describe the change first"); return; }
-    try { api.revise(p.projectId, c); } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder"); }
+    if (reviseRequest == null) reviseRequest = java.util.UUID.randomUUID().toString();
+    try { api.revise(p.projectId, reviseRequest, c); reviseRequest = null; }
+    catch (BuilderApi.Unreachable e) { toast("Can't reach your builder. Try again; it won't start a second build."); return; }
     showProject(id);
    });
   }
@@ -172,29 +183,27 @@ public final class MainActivity extends Activity {
    startActivity(Installer.allowIntent(this));
    return;
   }
-  if (!v.apkUrl.startsWith("https://")) { toast("Refused: the download link isn't secure"); return; }
   toast("Downloading…");
   io.execute(() -> {
    File f = new File(getCacheDir(), "download.apk");
    String error = null;
    try {
-    HttpURLConnection c = (HttpURLConnection) new URL(v.apkUrl).openConnection();
-    c.setInstanceFollowRedirects(true);
-    if (c.getResponseCode() != 200) throw new java.io.IOException("HTTP " + c.getResponseCode());
-    try (InputStream in = c.getInputStream(); OutputStream out = new FileOutputStream(f)) {
-     byte[] buf = new byte[65536];
-     for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
-    } finally { c.disconnect(); }
+    api.download(v.apkSha256, f);
     InstallPlan.Apk expected = new InstallPlan.Apk(p.packageName, p.signerSha256, v.apkSha256, v.versionCode);
     InstallPlan plan = InstallPlan.verify(expected, Installer.inspect(this, f), installed);
-    if (plan.action == InstallPlan.Action.REFUSE) error = plan.reason;
-    else if (plan.action != InstallPlan.Action.OPEN) Installer.install(this, f, p.packageName, p.projectId);
+    if (plan.action == InstallPlan.Action.REFUSE) {
+     error = plan.reason;
+     // Refused before Android saw it: the builder is told, with the signer the phone has now.
+     report(new BuilderApi.InstallReceipt(p.projectId, p.packageName, v.versionCode, installed == null ? null : installed.signerSha256, plan.refusal, null));
+    } else if (plan.action != InstallPlan.Action.OPEN) Installer.install(this, f, p.packageName, p.projectId, v.versionCode, installed != null);
    } catch (Exception e) {
     // The exception's class only: a message could carry a token-bearing URL.
     error = "The download failed (" + e.getClass().getSimpleName() + "). Check your connection and try again.";
    }
+   // Android's session holds its own copy once committed; the download is never kept.
+   f.delete();
    String shown = error;
-   if (shown != null) { f.delete(); main.post(() -> toast(shown)); }
+   if (shown != null) main.post(() -> toast(shown));
   });
  }
 
