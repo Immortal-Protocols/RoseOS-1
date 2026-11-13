@@ -132,6 +132,30 @@ Failure categories (fixed tokens; never model text):
 `timing.composeMs` is composer-side only. **Request-to-render latency needs the renderer's completion timestamp
 from OS Product**; until it exists, results are labelled generation-only.
 
+## Relation to App Core's composer intent/result v1
+
+App Core's contract (`docs/APP-BUILDER.md` §4, proposed in PR 782) is the outer hop: the server sends a
+`workspace_compose` command to OS Product's phone composer provider, and the provider reports
+`shown | prepared | rejected | unavailable | uncertain`. This document is the inner, on-phone call from that
+provider to the Models composer. The two do not overlap; the provider translates:
+
+| App Core `kind` (server → phone) | this contract |
+|---|---|
+| `prompt` (owner's words, ≤ 500 chars) | `trigger: conversational`, same `prompt`; typed text on the page is `direct_text` |
+| `arrange` (best guess, no text) | `trigger: button`, `prompt: null` |
+| `regenerate` | the provider recomposes the last request; deterministic decoding returns the same layout, so a variation input is an open question (7) |
+| `undo` | OS Product only (last-usable layout); no composer call |
+
+| this result | App Core status the provider reports |
+|---|---|
+| `ok`, then rendered | `shown` (or `prepared` if saved off screen) |
+| `failed: model_unavailable` | `unavailable` |
+| any other `failed` | `rejected`, with the category as `reason` |
+| `cancelled` or no answer | as the provider knows it (`rejected` or `uncertain`) |
+
+`requestId` (≤ 64 chars) passes through unchanged, so App Core's repeat-returns-first-outcome rule holds at the
+provider.
+
 ## Open questions for OS Product and App Core
 
 1. The real component types, their item rules and bounds (the table above is a guess to start from).
@@ -140,4 +164,9 @@ from OS Product**; until it exists, results are labelled generation-only.
 3. Whether `pinned` items must appear, or only be preferred.
 4. Where the composer runs: in the launcher process, or a separate service the launcher binds to (memory and
    process-death behaviour differ).
-5. App Core: whether `conversational` needs anything beyond `trigger`, `prompt` and `requestId`.
+5. App Core: whether `conversational` needs anything beyond `trigger`, `prompt` and `requestId` (App Core's v1
+   suggests not).
+6. OS Product: whether the composer is told whether the page is on screen (it is not needed to compose; the
+   provider alone decides `shown` versus `prepared`).
+7. `regenerate`: whether it should produce a different layout (a variation seed, or the previous layout's IDs to
+   avoid), or simply recompose against a newer snapshot.
