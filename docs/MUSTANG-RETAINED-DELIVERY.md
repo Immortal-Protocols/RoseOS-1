@@ -132,6 +132,36 @@ The existing pixel-ota App is invoked only after verification, with metadata-las
 upload/readback and global Latest preservation. The90-minute publisher bound,
 release/tag/feed destination and existing release/rollback protections are unchanged.
 
+## New full builds and daily delivery (2026-11-13)
+
+Run43156621647 successfully published `mustang-2611111800`, with authenticated and
+anonymous public download/hash verification, unchanged global Latest, successful
+App-token cleanup and the dedicated VM stopped. Its signing producer was43150538877;
+its native compile was43074045726. Physical installation remains untested.
+
+Nathan requested a new full OTA and daily automatic runs at06:00 America/Los_Angeles,
+two hours after the existing Frankel window. The ChatGPT task starts2026-11-14 at06:00
+Pacific, follows daylight saving time and invokes the existing dedicated manual
+workflow with publish=true, no retained selector and every preparation/dry-run flag
+false. It uses the selected RoseOS environment, persistent compiler cache and existing
+resource/cleanup bounds. The repository daily dispatcher is unchanged; its disabled
+Mustang lane avoids a second scheduler. A daily OTA is requested even when source is
+unchanged; active or uncertain attempts must be reconciled without duplicate dispatch.
+
+The current app input is now `os/app-inputs/frankel-2026111201.json`, replacing the
+one-attempt voice370 exception. Frankel producer43216030196 attempt1 ated67c9cf delivered
+voice374, calculator6 and background control43. Its existing signed apps were exported
+unchanged by43485652878 attempt1 at4b04b6be; export and owned cleanup succeeded.
+Artifact14067412309 is2917480 bytes, ZIP SHA-256
+`f19da76f2ea7e6e9870c9cc73d4f064d78020fda85a9493dbb1f6e3243968e68`,
+expires2026-11-27T18:46:20Z. All12 files, checksum entries and the allocation/producer
+bindings were verified, then rechecked with qualified aapt2/apksigner (`toolsRechecked`
+true). Declared app-source drift through4b04b6be is zero. The receipt SHA-256 is
+`72ecc06dd6a51add5db8e1b87eb77f93fa6a3e5e0d4070fddc8e7637cdd88b12`.
+Subsequent runs must refresh this export when source or availability changes;
+recurrence is not a permanent stale-app exception. Prior compiled output, ccache,
+old records and the consumed clock journal remain intact.
+
 ## Space protection and the expanded data disk
 
 Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while

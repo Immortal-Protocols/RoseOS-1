@@ -712,11 +712,14 @@ class PrivateInputImportTest(app_fixture.Fixture):
 
 
 class DedicatedRuntimeTest(unittest.TestCase):
-    def test_frozen_apps_are_exactly_the_requested_export_and_one_attempt(self):
+    def test_frozen_exception_requires_explicit_exact_record_and_one_attempt(self):
         driver = self.driver
         cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         record = json.loads((ROOT/cfg['appInputsRecord']).read_text())
-        choice = cfg['frozenAppInputs']
+        self.assertFalse(driver.frozen_app_inputs_allowed(record,cfg,{'GITHUB_RUN_NUMBER':'51'},ROOT))
+        choice = dict(workflowRunNumber=47,record=cfg['appInputsRecord'],
+                      recordSha256=hashlib.sha256((ROOT/cfg['appInputsRecord']).read_bytes()).hexdigest())
+        cfg = dict(cfg,frozenAppInputs=choice)
         allowed = lambda c=cfg,e={'GITHUB_RUN_NUMBER':str(choice['workflowRunNumber'])},r=record: \
             driver.frozen_app_inputs_allowed(r,c,e,ROOT)
         self.assertTrue(allowed())
@@ -987,9 +990,9 @@ class DedicatedRuntimeTest(unittest.TestCase):
         export=readiness.ACCEPTED_APP_EXPORT
         self.assertTrue(readiness.accepted_app_export(record, runtime['appInputsRecord']))
         self.assertEqual(record['apps'], [
-            {'package':'dev.pixel.backgroundcontrol','versionCode':41,'apkSha256':'7746c5b6724e5fd6aa732a3e2bf6d303c16d7d2704c88b136fd4222a8675d5d6'},
-            {'package':'dev.pixel.voice','versionCode':370,'apkSha256':'6cf2c3baacb01032e156ed5bcb79ec44e586a459a57eb7e5aa2a0dad86758ed5'},
-            {'package':'dev.pixel.calculator.agent','versionCode':6,'apkSha256':'19309b3ea65e31fe531f46e7c5bd677b2ebf1fa8a15798e5c1581840972e0b2d'}])
+            {'package':'dev.pixel.backgroundcontrol','versionCode':43,'apkSha256':'1091cccdb6b1fc113ed2dd606da77955f33a0d3d7d1a84b89fcaf18d48a263a8'},
+            {'package':'dev.pixel.voice','versionCode':374,'apkSha256':'a832d58ea1574135539f53e6d45bed1019eae64e3b9a5234b1a4a5ed4312e5ce'},
+            {'package':'dev.pixel.calculator.agent','versionCode':6,'apkSha256':'02f1ea333f144099c8dff982762ee002d93f4a2c806d9e72dcfbbc1763d78bee'}])
         self.assertIn(str(export['archiveBytes']), runtime['basis'])
         self.assertIn('not an OTA extraction', runtime['basis'])
         head=subprocess.check_output(['git','-C',str(ROOT),'-c','protocol.allow=never','rev-parse','HEAD'],text=True).strip()
@@ -997,7 +1000,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         # HEAD may be past the producer's app sources (see above), so only consistency is pinned at HEAD; the fixed
         # commit below has none of the producer's app sources changed.
         self.assertEqual(readiness.bound_app_freshness(record), readiness.app_source_drift(record, head))
-        self.assertEqual(readiness.app_source_drift(record, export['recordMerge']), [])
+        self.assertEqual(readiness.app_source_drift(record, export['freshnessCheckedAt']), [])
         self.assertEqual(readiness.app_source_drift(record, head, diff=lambda *args:'workspace/rose-agent/changed\n'),
                          ['dev.pixel.voice','dev.pixel.calculator.agent','dev.pixel.backgroundcontrol'])
         missing='0000000000000000000000000000000000000000'
