@@ -131,6 +131,11 @@ class TemplateTest(Base):
     def test_skeleton_passes(self):
         template.check(self.source(), self.PKG)
 
+    def test_a_missing_jdk_is_a_toolchain_problem(self):
+        tools = toolchain.Tools(SDK, java_home=Path('/nonexistent-jdk'))
+        if (SDK / 'build-tools/android-15/aapt').exists():
+            self.assertIn('JDK', tools.available())
+
     def test_labels_are_escaped_for_aapt(self):
         self.assertEqual(template.android_string("Don't @x"), "Don\\'t @x")
         self.assertEqual(template.android_string('@home'), '\\@home')
@@ -175,6 +180,10 @@ class TemplateTest(Base):
             'versionCodeMajor': lambda s: (s / 'AndroidManifest.xml').write_text(
                 (s / 'AndroidManifest.xml').read_text().replace('package=', 'android:versionCodeMajor="1" package=')),
             'java dir': lambda s: (s / 'src/Dir.java').mkdir(),
+            'split': lambda s: (s / 'AndroidManifest.xml').write_text(
+                (s / 'AndroidManifest.xml').read_text().replace('package=', 'split="config.xx" package=')),
+            'isFeatureSplit': lambda s: (s / 'AndroidManifest.xml').write_text(
+                (s / 'AndroidManifest.xml').read_text().replace('package=', 'android:isFeatureSplit="true" package=')),
             'comment hides package': lambda s: next(s.glob('src/**/MainActivity.java')).write_text(
                 '/* package ' + self.PKG + '; */ package dev.pixel.voice; class A {}'),
         }
@@ -208,6 +217,10 @@ class ApiTest(Base):
                                              {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'}))
         self.assertIsNone(self.b.artifact('../../etc/passwd'))
         self.assertIsNone(self.b.job('nope'))
+        with self.assertRaises(Refused):  # a revise's clientRequestId reused for a create
+            self.b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r2', 'description': 'other'})
+        with self.assertRaises(Refused):
+            self.b.create('d', {'schemaVersion': 1, 'clientRequestId': 'z\ud800', 'description': 'x'})
         with self.assertRaises(Refused):
             self.b.install('d', {'schemaVersion': 1, 'projectId': out['projectId'], 'packageName': 'dev.pixel.voice',
                                  'versionCode': 1, 'signerSha256': 'a' * 64, 'status': 'installed', 'detail': 'ok'})
@@ -430,6 +443,33 @@ class BuildTest(Base):
             out = b.create('d', {'schemaVersion': 1, 'clientRequestId': str(id(generate)), 'description': 'x'})
             b.run_next()
             self.assertEqual(b.job(out['jobId'])['failure']['category'], 'dependency', b.job(out['jobId']))
+
+    def test_a_stale_git_lock_from_a_crash_is_cleared(self):
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'Save 50% of 100% spend'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready', b.job(out['jobId']))  # % in the label builds
+        (self.root / 'projects' / out['projectId'] / 'repo.git/index.lock').write_text('')
+        b.generate = self.label_generator('two')
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+
+    def test_a_stale_failed_job_cannot_overwrite_a_later_version(self):
+        calls = []
+
+        def first_slow(source, kind, request, cancelled):
+            calls.append(kind)
+            if len(calls) == 1:
+                raise toolchain.StepFailed('timeout', 'slow', retryable=True)
+        b = self.builder(first_slow)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'a calculator'})
+        b.run_next()
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'blue'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready')
+        with self.assertRaises(Refused):
+            b.retry(out['jobId'], {'schemaVersion': 1})
 
     def test_a_retryable_failure_can_be_retried_as_the_next_attempt(self):
         calls = []

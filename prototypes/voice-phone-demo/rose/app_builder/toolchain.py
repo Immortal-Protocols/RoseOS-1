@@ -57,7 +57,9 @@ class Tools:
 
     def path(self) -> str:
         """PATH for tools: java_home's bin first, so d8 and apksigner (java wrappers) use the configured JDK."""
-        return (f'{self.java_home}/bin:' if self.java_home else '') + '/usr/bin:/bin:/usr/sbin:/sbin'
+        java = Path(self.java()).parent if Path(self.java()).is_absolute() else None
+        jdk = f'{self.java_home}/bin:' if self.java_home else (f'{java}:' if java else '')
+        return jdk + '/usr/bin:/bin:/usr/sbin:/sbin'
 
     def keytool(self) -> str:
         return str(self.java_home / 'bin/keytool') if self.java_home else (shutil.which('keytool') or 'keytool')
@@ -67,6 +69,9 @@ class Tools:
         for path in (self.bt / 'aapt', self.bt / 'd8', self.bt / 'zipalign', self.bt / 'apksigner', self.android_jar):
             if not path.exists():
                 return f'The pinned Android toolchain is missing {path.name}.'
+        for tool in (self.java(), self.keytool()):
+            if not (Path(tool).is_absolute() and Path(tool).exists()):
+                return f'The builder\'s JDK is missing {Path(tool).name}.'
         return None
 
 
@@ -153,8 +158,8 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     unsigned = work / 'unsigned.apk'
     run([tools.bt / 'zipalign', '-f', '4', unaligned, unsigned], work, home, tools, cancelled, 'compile', hidden)
     badging = run([tools.bt / 'aapt', 'dump', 'badging', unsigned], work, home, tools, cancelled, 'compile', hidden)
-    found = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']*)'", badging)
-    if not found or found.groups() != (package, str(version_code), version_name):
+    found = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']*)'(.*)$", badging, re.M)
+    if not found or found.groups()[:3] != (package, str(version_code), version_name) or 'split=' in found.group(4):
         raise StepFailed('internal', 'The built APK does not carry the identity the builder set.')
     # Checked again on the built binary, by attribute id, whatever namespace prefix the source used.
     tree = run([tools.bt / 'aapt', 'dump', 'xmltree', unsigned, 'AndroidManifest.xml'], work, home, tools, cancelled,

@@ -68,7 +68,9 @@ directory beside it in `repo.git`), outside
    non-regular files, anywhere in the tree. Compiled classes must sit in the
    app's own package, whatever the source text claims. The manifest may hold
    only `application`, permissions, features, `queries` and screen-support
-   elements. So `key-sets`/`upgrade-key-set`, `original-package` and
+   elements, and `<manifest>` may carry only `package`, so `split` and the
+   split attributes are refused too. So `key-sets`/`upgrade-key-set`,
+   `original-package` and
    `adopt-permissions`, which could hand the installed app's updates to another
    signer, are refused, and the built binary is checked for them again.
    The project's git directory sits beside the tree, out of the generator's
@@ -130,7 +132,8 @@ All requests use the paired device's `rose-auth-v1` signature, under the
 The routes are mounted only when the server has an app builder enabled, and
 `rose.app` enables none today. The signature covers the method, path, time and
 nonce. Body integrity comes from the pinned TLS link. Every JSON response is an
-object carrying `schemaVersion: 1`, including a 401 refusal. The library response is `{schemaVersion,
+object carrying `schemaVersion: 1`, including a 401 refusal. An unknown path
+or method under `/builder/v1` gets the web framework's own 404 or 405 body. The library response is `{schemaVersion,
 projects: [...]}`. Every paired device of the server's owner sees the same
 library. Every body carries
 `schemaVersion: 1`. Unknown request fields and versions are refused (`400`).
@@ -147,7 +150,7 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 | `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId}` |
 | `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId}` |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
-| `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`, or 400 unless the job failed and is retryable |
+| `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`; 400 unless the job failed, is retryable, the project has no active job, and no later version has been delivered |
 | `GET /builder/v1/jobs/<jobId>` | | job (§3.2) |
 | `GET /builder/v1/projects` | | `{schemaVersion, projects: [...]}` (§3.3) |
 | `GET /builder/v1/artifacts/<sha256>` | | APK bytes (same signature) |
@@ -264,8 +267,13 @@ mere submission.
   `uncertain`. It is reported and never re-sent; v1 has no read operation, so
   the owner asks again if they want to. Only a link that reports the request
   was never sent (`offline`) means nothing changed.
-- The server waits 25 s, longer than Rose Agent's 20 s `app_command` wait, so a
-  slow composition's answer is not dropped.
+- The server waits 25 s, longer than Rose Agent's 20 s `app_command` wait, so
+  Rose Agent's own reply always arrives. A composition slower than 20 s comes
+  back as Rose Agent's `running` and is reported as `uncertain`; v1 does not
+  fetch it later.
+- A busy or transient reply to the capabilities check (`routine_busy`,
+  `running`, `expired`, `error`) is reported as busy. Nothing was sent, so
+  nothing changed.
 - Rose Agent relays `app_command` only to same-signer or allowlisted packages,
   so the composer provider must be one of those.
 

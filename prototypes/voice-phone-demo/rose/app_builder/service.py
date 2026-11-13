@@ -39,12 +39,22 @@ def _body(body, keys: dict) -> dict:
         if kind is str:
             if not isinstance(value, str) or not value.strip() or len(value) > limit:
                 raise Refused(f'{name} must be 1 to {limit} characters')
+            if not _utf8(value):
+                raise Refused(f'{name} must be valid text')
             value = value.strip()
         elif kind is int:
             if not isinstance(value, int) or isinstance(value, bool) or not 0 < value <= limit:
                 raise Refused(f'{name} must be a positive integer')
         out[name] = value
     return out
+
+
+def _utf8(text: str) -> bool:
+    try:
+        text.encode('utf-8')
+        return True
+    except UnicodeEncodeError:  # a lone surrogate from a \\ud800 escape
+        return False
 
 
 def _git(source: Path, *args) -> str:
@@ -92,7 +102,10 @@ class Builder:
     def create(self, device: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'description': (str, MAX_TEXT)})
         name = b['description'].splitlines()[0][:40].strip() or 'New app'
-        out = self.ledger.create(device, b['clientRequestId'], b['description'], name)
+        try:
+            out = self.ledger.create(device, b['clientRequestId'], b['description'], name)
+        except LedgerError as error:
+            raise Refused(str(error)) from None
         self.wake.set()
         return out
 
@@ -148,7 +161,7 @@ class Builder:
         if signer is not None and not (isinstance(signer, str) and len(signer) == 64
                                        and all(c in '0123456789abcdef' for c in signer)):
             raise Refused('signerSha256 must be 64 lowercase hex characters or null')
-        if detail is not None and (not isinstance(detail, str) or len(detail) > 500):
+        if detail is not None and (not isinstance(detail, str) or len(detail) > 500 or not _utf8(detail)):
             raise Refused('detail must be at most 500 characters')
         b['signerSha256'], b['detail'] = signer, detail or ''
         project = self.ledger.project(b['projectId'])
@@ -249,7 +262,11 @@ class Builder:
 
     def _prepare(self, source: Path, project: dict, job: dict):
         gitdir = source.parent / 'repo.git'
-        if gitdir.exists() and not self._has_commit(source):
+        if gitdir.exists():
+            # One builder process runs git at a time, so a lock here was left by a crash: clear it.
+            for lock in [*gitdir.glob('*.lock'), *gitdir.glob('refs/**/*.lock')]:
+                lock.unlink()
+        if gitdir.exists() and not self._has_commit(source) and not self.ledger.versions(project['projectId']):
             # An interrupted first preparation: nothing was delivered from it, so start the project afresh.
             shutil.rmtree(gitdir)
             if source.exists():

@@ -46,6 +46,7 @@ MESSAGES = {
     'unavailable': 'The workspace page is not available on this phone, so nothing changed.',
     'offline': 'The phone is not connected or did not answer, so nothing was changed.',
     'unsupported': 'The workspace page on this phone does not support that yet, so nothing changed.',
+    'busy': 'The phone is busy and did not take it, so nothing changed. Ask again in a moment.',
     'uncertain': 'The phone did not confirm it; the workspace page may or may not have changed.',
 }
 
@@ -130,6 +131,9 @@ def call(phone, provider: str | None, request_id: str, args) -> dict:
         return offline
     if isinstance(capabilities, dict) and capabilities.get('status') in ('timeout', 'offline', 'disconnected'):
         return offline
+    if isinstance(capabilities, dict) and capabilities.get('status') in ('routine_busy', 'running', 'expired',
+                                                                         'error', 'uncertain'):
+        return {'ok': False, 'outcome': 'unavailable', 'requestId': request_id, 'message': MESSAGES['busy']}
     if not supports(capabilities, request['kind']):
         offers_contract = (isinstance(capabilities, dict) and capabilities.get('status') == 'ok'
                            and capabilities.get('schemaVersion') == SCHEMA_VERSION)

@@ -127,6 +127,10 @@ class Ledger:
                 raise LedgerError('only a failed, retryable job can be retried')
             if self._active(job['projectId']):
                 raise LedgerError('this project already has a build in progress')
+            if self.db.execute('SELECT 1 FROM versions WHERE project_id=? AND created > ?',
+                               (job['projectId'], job['startedAt'])).fetchone():
+                # Another job delivered a version since: re-running this one would build over that version.
+                raise LedgerError('a later version superseded this build; ask for the change again')
             now = self.clock()  # queued again now, so it runs in submission order and is the project's activeJob
             self.db.execute("UPDATE jobs SET attempt=attempt+1, state='queued', stage='queued', message='Queued.', "
                             "failure=NULL, cancel_requested=0, version_code=NULL, started=?, updated=? "

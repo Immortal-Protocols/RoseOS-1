@@ -22,7 +22,10 @@ FORBIDDEN_NAMES = {'.git', '.gitignore', '.gitattributes', '.gitmodules'}
 MAX_FILE = 4 * 1024 * 1024
 FORBIDDEN_SUFFIXES = ('.gradle', '.kts', '.kt', '.so', '.jar', '.aar', '.sh', '.py', '.mk', '.cmake', '.c', '.cpp',
                       '.h', '.jks', '.keystore', '.p12', '.pk8', '.apk', '.dex')
-OWNED_ATTRIBUTES = ('versionCode', 'versionCodeMajor', 'versionName', 'sharedUserId', 'sharedUserLabel')
+OWNED_ATTRIBUTES = ('versionCode', 'versionCodeMajor', 'versionName', 'sharedUserId', 'sharedUserLabel',
+                    'isSplitRequired', 'isFeatureSplit', 'requiredSplitTypes', 'splitTypes', 'compileSdkVersion',
+                    'compileSdkVersionCodename')
+ROOT_ATTRIBUTES = {'package'}  # unprefixed attributes allowed on <manifest>; `split` and the like are not
 # Manifest elements a generated app may declare. Anything else (key-sets and upgrade-key-set, original-package,
 # adopt-permissions, uses-sdk, instrumentation, ...) could change how Android identifies, updates or trusts the app.
 MANIFEST_CHILDREN = {'application', 'uses-permission', 'uses-feature', 'queries', 'supports-screens',
@@ -42,6 +45,8 @@ class TemplateRefused(ValueError):
 def android_string(text: str) -> str:
     """Text as an aapt string resource: XML-escaped, with aapt's own escapes for quotes, backslashes and a
     leading @ or ? (which would otherwise be read as a resource reference)."""
+    text = ''.join(c for c in text if c in '\t\n\r' or '\x20' <= c <= '\ud7ff' or '\ue000' <= c <= '\ufffd'
+                   or c >= '\U00010000')  # only characters XML 1.0 allows
     text = text.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\"')
     if text[:1] in ('@', '?'):
         text = '\\' + text
@@ -67,7 +72,7 @@ def skeleton(package: str, label: str) -> dict[str, str]:
             '</manifest>\n'),
         'res/values/strings.xml': (
             '<?xml version="1.0" encoding="utf-8"?>\n'
-            f'<resources><string name="app_name">{label}</string></resources>\n'),
+            f'<resources><string name="app_name" formatted="false">{label}</string></resources>\n'),
         f'src/{path}/MainActivity.java': (
             f'package {package};\n\n'
             'import android.app.Activity;\nimport android.os.Bundle;\nimport android.widget.TextView;\n\n'
@@ -131,6 +136,9 @@ def check(source: Path, package: str) -> None:
         for key in element.attrib:
             if key.startswith('{') and not key.startswith(ANDROID):
                 raise TemplateRefused('The manifest may use only the android namespace.')
+    for key in root.attrib:
+        if not key.startswith('{') and key not in ROOT_ATTRIBUTES:
+            raise TemplateRefused(f'The manifest attribute {key!r} is not allowed.')
     if root.tag != 'manifest' or root.get('package') != package:
         raise TemplateRefused('The manifest package must stay ' + package + '.')
     for name in OWNED_ATTRIBUTES:

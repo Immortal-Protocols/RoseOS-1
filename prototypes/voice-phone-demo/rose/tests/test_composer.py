@@ -112,6 +112,8 @@ class Call(unittest.TestCase):
         self.assertEqual(r['message'], composer.MESSAGES['unsupported'])
         r = composer.call(phone(Link(reply={'status': 'offline'})), 'p', 'r', {'kind': 'arrange'})
         self.assertEqual((r['outcome'], r['message']), ('unavailable', composer.MESSAGES['offline']))
+        r = composer.call(phone(Link(caps={'status': 'routine_busy'})), 'p', 'r', {'kind': 'arrange'})
+        self.assertEqual(r['message'], composer.MESSAGES['busy'])
         r = composer.call(phone(Link(reply={'status': 'disconnected'})), 'p', 'r', {'kind': 'arrange'})
         self.assertEqual(r['outcome'], 'uncertain')  # dropped after sending: it may have composed
 
