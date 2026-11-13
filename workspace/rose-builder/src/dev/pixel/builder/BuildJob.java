@@ -73,6 +73,7 @@ final class BuildJob {
   if (f == null) return "Try again, or describe the change differently.";
   if (f.category == Category.UNREACHABLE) return "Check that your Mac or builder is on and connected, then reconnect.";
   if (f.category == Category.CANCELLED) return "Start the build again when you're ready.";
+  if (f.category == Category.DEPENDENCY) return "Ask for the change again without that library; the builder uses Android's own features only.";
   return f.retryable ? "Try again. If it fails the same way, describe the change differently." : "Describe the change differently, or ask Rose what went wrong.";
  }
 
