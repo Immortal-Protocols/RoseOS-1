@@ -72,6 +72,12 @@ def skeleton(package: str, label: str) -> dict[str, str]:
     }
 
 
+def unicode_escapes(text: str) -> str:
+    """Java source after javac's first step: \\uXXXX escapes (with any number of u's) become their characters."""
+    return re.sub(r'(?<!\\)((?:\\\\)*)\\u+([0-9a-fA-F]{4})',
+                  lambda m: m.group(1) + chr(int(m.group(2), 16)), text)
+
+
 def write_skeleton(source: Path, package: str, label: str):
     for name, text in skeleton(package, label).items():
         target = source / name
@@ -94,6 +100,8 @@ def check(source: Path, package: str) -> None:
             raise TemplateRefused('Source contains a symbolic link; it is not built.')
         if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
             raise TemplateRefused(f'{name} is not a regular file; it is not built.')
+        if stat.S_ISREG(mode) and os.lstat(path).st_nlink > 1:
+            raise TemplateRefused(f'{name} is a hard link; it is not built.')
         if stat.S_ISREG(mode) and os.lstat(path).st_size > MAX_FILE:
             raise TemplateRefused(f'{name} is larger than {MAX_FILE // (1024 * 1024)} MB.')
         if stat.S_ISREG(mode) and path.name.lower().endswith(FORBIDDEN_SUFFIXES):
@@ -121,7 +129,7 @@ def check(source: Path, package: str) -> None:
     if application is not None and application.get(ANDROID + 'debuggable') is not None:
         raise TemplateRefused('android:debuggable is not allowed.')
     for java in source.glob('src/**/*.java'):
-        text = java.read_text(encoding='utf-8', errors='replace')
+        text = unicode_escapes(java.read_text(encoding='utf-8', errors='replace'))  # as javac reads it
         code = re.sub(r'/\*.*?\*/|//[^\n]*', ' ', text, flags=re.S)  # comments cannot hide the declaration
         match = re.match(r'\s*package\s+([\w.]+)\s*;', code)
         if not match or not (match.group(1) == package or match.group(1).startswith(package + '.')):

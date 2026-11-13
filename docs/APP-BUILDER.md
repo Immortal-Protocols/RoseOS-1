@@ -46,7 +46,8 @@ apps.
 2. **Project.** `create` allocates a fixed `projectId`, a `packageName` in the
    reserved namespace `app.rose.gen.p<projectId>` (never `dev.pixel.*`, which
    carries first-party signature permissions), and a per-project signer. Both
-   are fixed for the project's life.
+   are fixed for the project's life. Per-project keys are the implemented
+   default, but the key decision in §5 is still Nathan's.
 3. **Source.** Each project's source is a private git repository under
    `ROSE_CONFIG_DIR/app-builder/projects/<projectId>/source` (0700, with its git
 directory beside it in `repo.git`), outside
@@ -58,9 +59,12 @@ directory beside it in `repo.git`), outside
    fixed framework-only skeleton: Java 8 source level, android.jar APIs only,
    aapt v1 resources, min API 26 and target 35. It cannot change the package,
    versionCode or signing. Enabling this thread on the Mac is a
-   security-relevant runtime change; see §5.
+   security-relevant runtime change; see §5. The generator is injected and is
+   not implemented yet.
 5. **Build.** Before git or any tool touches the generated tree, the builder
-   refuses `.git`, `.gitignore`, `.gitattributes`, links and non-regular files.
+   refuses `.git`, `.gitignore`, `.gitattributes`, symbolic and hard links, and
+   non-regular files, anywhere in the tree. Compiled classes must sit in the
+   app's own package, whatever the source text claims.
    The project's git directory sits beside the tree, out of the generator's
    reach, and git runs with hooks, fsmonitor and excludes disabled. The
    builder, not Codex, runs the pinned recipe (aapt v1 → javac → d8 →
@@ -109,7 +113,8 @@ Proof levels:
 
 Data survives an update because the package, signer and higher versionCode keep
 Android's update path; the revise prompt also requires keeping storage keys
-and schema migrations. Acceptance still needs a seeded-data → update →
+and schema migrations. Those requirements still have to be written into the
+generator's instructions, which are not written yet. Acceptance still needs a seeded-data → update →
 read-back test on a stock-Android phone and a RoseOS phone, run separately.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
@@ -136,6 +141,7 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 | `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId}` |
 | `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId}` |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
+| `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`, or 400 unless the job failed and is retryable |
 | `GET /builder/v1/jobs/<jobId>` | | job (§3.2) |
 | `GET /builder/v1/projects` | | `{schemaVersion, projects: [...]}` (§3.3) |
 | `GET /builder/v1/artifacts/<sha256>` | | APK bytes (same signature) |
@@ -155,7 +161,7 @@ updatedAt, failure?}`
 - **failure:** `{category: toolchain | dependency | compile | test | signing |
   timeout | cancelled | internal, summary, retryable}`.
 - **Server restart:** a running job becomes `failed {internal, "interrupted;
-  outcome unknown", retryable: true}`. It is never silently re-run.
+  outcome unknown", retryable: true}`. It is never silently re-run; the owner can retry it (`POST ./retry`).
 - **Logs:** `logTail` holds redacted build output only, never paths under
   `ROSE_CONFIG_DIR`, keys or tokens.
 - **Display only:** `state` drives progress and Cancel. `stage`, `message`

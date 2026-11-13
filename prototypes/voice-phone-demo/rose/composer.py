@@ -45,6 +45,7 @@ MESSAGES = {
     'rejected': 'The phone refused it, so the workspace page did not change.',
     'unavailable': 'The workspace page is not available on this phone, so nothing changed.',
     'offline': 'The phone is not connected or did not answer, so nothing was changed.',
+    'unsupported': 'The workspace page on this phone does not support that yet, so nothing changed.',
     'uncertain': 'The phone did not confirm it; the workspace page may or may not have changed.',
 }
 
@@ -130,9 +131,14 @@ def call(phone, provider: str | None, request_id: str, args) -> dict:
     if isinstance(capabilities, dict) and capabilities.get('status') in ('timeout', 'offline', 'disconnected'):
         return offline
     if not supports(capabilities, request['kind']):
-        return {'ok': False, 'outcome': 'unavailable', 'requestId': request_id, 'message': MESSAGES['unavailable']}
+        offers_contract = (isinstance(capabilities, dict) and capabilities.get('status') == 'ok'
+                           and capabilities.get('schemaVersion') == SCHEMA_VERSION)
+        return {'ok': False, 'outcome': 'unavailable', 'requestId': request_id,
+                'message': MESSAGES['unsupported' if offers_contract else 'unavailable']}
     try:
         result = send('app_command', timeout=TIMEOUT_S, packageName=provider, operation=OPERATION, params=request)
     except Exception:  # a lost link is not success, and it may or may not have composed: never re-send
         result = None
+    if isinstance(result, dict) and result.get('status') in ('offline', 'disconnected'):
+        return offline  # the link says the command never reached the phone
     return outcome(request_id, result)

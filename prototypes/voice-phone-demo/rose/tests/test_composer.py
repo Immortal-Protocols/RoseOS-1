@@ -107,6 +107,11 @@ class Call(unittest.TestCase):
         r = composer.call(phone(Link(caps={'status': 'timeout'})), 'p', 'r', {'kind': 'arrange'})
         self.assertEqual(r['message'], composer.MESSAGES['offline'])
         self.assertGreater(composer.TIMEOUT_S, 20.0)  # outlasts Rose Agent's app_command wait
+        r = composer.call(phone(Link(caps={'status': 'ok', 'schemaVersion': 1, 'kinds': ['prompt']})), 'p', 'r',
+                          {'kind': 'arrange'})
+        self.assertEqual(r['message'], composer.MESSAGES['unsupported'])
+        r = composer.call(phone(Link(reply={'status': 'offline'})), 'p', 'r', {'kind': 'arrange'})
+        self.assertEqual((r['outcome'], r['message']), ('unavailable', composer.MESSAGES['offline']))
 
     def test_a_lost_link_during_compose_is_uncertain_and_not_resent(self):
         link = Link(fail='workspace_compose')

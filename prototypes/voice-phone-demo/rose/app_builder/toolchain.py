@@ -55,6 +55,10 @@ class Tools:
     def java(self) -> str:
         return str(self.java_home / 'bin/java') if self.java_home else (shutil.which('java') or 'java')
 
+    def path(self) -> str:
+        """PATH for tools: java_home's bin first, so d8 and apksigner (java wrappers) use the configured JDK."""
+        return (f'{self.java_home}/bin:' if self.java_home else '') + '/usr/bin:/bin:/usr/sbin:/sbin'
+
     def keytool(self) -> str:
         return str(self.java_home / 'bin/keytool') if self.java_home else (shutil.which('keytool') or 'keytool')
 
@@ -74,7 +78,7 @@ def _redact(text: str, *paths: Path) -> str:
 
 def run(args: list, cwd: Path, home: Path, tools: Tools, cancelled, category: str, redact=()) -> str:
     """One tool with a scrubbed environment, a timeout and cancellation; raises StepFailed."""
-    env = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': str(home), 'LANG': 'C.UTF-8', 'TMPDIR': str(home)}
+    env = {'PATH': tools.path(), 'HOME': str(home), 'LANG': 'C.UTF-8', 'TMPDIR': str(home)}
     if tools.java_home:
         env['JAVA_HOME'] = str(tools.java_home)
     proc = subprocess.Popen([str(a) for a in args], cwd=cwd, env=env, stdout=subprocess.PIPE,
@@ -127,6 +131,10 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
                     f'{tools.android_jar}:{tools.bt / "core-lambda-stubs.jar"}', '-d', work / 'classes', *sources],
                    work, home, tools, cancelled, 'compile', hidden))
     classes = sorted(str(p) for p in (work / 'classes').rglob('*.class'))
+    own = package.replace('.', '/') + '/'
+    for c in classes:  # whatever the source text claimed, compiled classes live in the app's own package
+        if not Path(c).relative_to(work / 'classes').as_posix().startswith(own):
+            raise StepFailed('compile', f'Classes must be in package {package}.')
     log.append(run([tools.bt / 'd8', '--min-api', str(template.MIN_SDK), '--lib', tools.android_jar, '--output',
                     work / 'dex', *classes], work, home, tools, cancelled, 'compile', hidden))
     unaligned = work / 'unaligned.apk'
@@ -153,6 +161,16 @@ def _private(path: Path, data: str):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as f:
         f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def fsync_path(path: Path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def ensure_key(keys: Path, package: str, tools: Tools, cancelled=lambda: False, signer_bound: bool = False) -> Path:
@@ -179,8 +197,11 @@ def ensure_key(keys: Path, package: str, tools: Tools, cancelled=lambda: False, 
          '-storetype', 'PKCS12', '-keystore', keys / 'app.p12', '-storepass:file', password,
          '-dname', f'CN={package}'], keys, keys, tools, cancelled, 'signing', (keys,))
     os.chmod(keys / 'app.p12', 0o600)
+    fsync_path(keys / 'app.p12')
     _private(config, json.dumps({'keyAlias': 'app', 'storePasswordFile': str(password),
                                  'keyPasswordFile': str(password)}))
+    fsync_path(keys)  # the key is on disk before any build signed with it can be delivered
+    fsync_path(keys.parent)
     return config
 
 
@@ -191,7 +212,9 @@ def sign(unsigned: Path, output: Path, keys: Path, expected_signer: str | None, 
             '--output', output]
     if expected_signer:
         args += ['--expected-cert-sha256', expected_signer]
-    env = {'PATH': '/usr/bin:/bin', 'ANDROID_SDK_ROOT': str(tools.sdk), 'LANG': 'C.UTF-8'}
+    env = {'PATH': tools.path(), 'ANDROID_SDK_ROOT': str(tools.sdk), 'LANG': 'C.UTF-8'}
+    if tools.java_home:
+        env['JAVA_HOME'] = str(tools.java_home)
     try:
         result = subprocess.run([str(a) for a in args], capture_output=True, text=True, env=env,
                                 timeout=tools.timeout_s)

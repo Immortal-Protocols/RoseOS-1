@@ -71,6 +71,7 @@ def _place(src: Path, dst: Path):
     with open(tmp, 'rb') as f:
         os.fsync(f.fileno())
     os.replace(tmp, dst)
+    toolchain.fsync_path(dst.parent)
 
 
 class Builder:
@@ -101,6 +102,16 @@ class Builder:
             raise Refused(str(error)) from None
         self.wake.set()
         return out
+
+    def retry(self, job_id: str, body) -> dict:
+        """Run a failed, retryable job again as its next attempt (same jobId, attempt + 1)."""
+        _body(body, {})
+        try:
+            job = self.ledger.retry(job_id)
+        except LedgerError as error:
+            raise Refused(str(error)) from None
+        self.wake.set()
+        return {'jobId': job['jobId'], 'attempt': job['attempt']}
 
     def cancel(self, job_id: str, body) -> dict:
         _body(body, {})
@@ -256,4 +267,7 @@ class Builder:
         versions = self.ledger.versions(project_id)
         target = versions[-1]['sourceRevision'] if versions else _git(source, 'rev-list', '--max-parents=0', 'HEAD')
         _git(source, 'reset', '-q', '--hard', target)
-        _git(source, 'clean', '-q', '-fdx')
+        _git(source, 'clean', '-q', '-ffdx')  # twice: also nested repositories git would otherwise keep
+        for path in sorted(source.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+            if path.name in template.FORBIDDEN_NAMES:  # whatever git left, never into the next attempt
+                path.unlink() if path.is_symlink() or not path.is_dir() else shutil.rmtree(path)

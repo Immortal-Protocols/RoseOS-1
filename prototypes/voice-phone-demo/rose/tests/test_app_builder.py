@@ -151,6 +151,10 @@ class TemplateTest(Base):
             'gitignore': lambda s: (s / 'res/.gitignore').write_text('*'),
             'gitattributes': lambda s: (s / 'src/.gitattributes').write_text('* filter=x'),
             'fifo': lambda s: os.mkfifo(s / 'src/Stuck.java'),
+            # Raw text shows the app's package; javac decodes \\u002a to '*' and reads dev.pixel.voice instead.
+            'unicode escape hides package': lambda s: next(s.glob('src/**/MainActivity.java')).write_text(
+                '/*\\u002a/ package dev.pixel.voice; /* */ package ' + self.PKG + '; class A {}'),
+            'hard link': lambda s: os.link(s / 'res/values/strings.xml', s / 'res/values/copy.xml'),
             'comment hides package': lambda s: next(s.glob('src/**/MainActivity.java')).write_text(
                 '/* package ' + self.PKG + '; */ package dev.pixel.voice; class A {}'),
         }
@@ -337,6 +341,58 @@ class BuildTest(Base):
         out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
         b.run_next()
         self.assertEqual(b.job(out['jobId'])['state'], 'failed')
+
+    def test_a_nested_repository_never_wedges_later_revisions(self):
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+
+        def nested(source, kind, request, cancelled):
+            git = source / 'res/.git'
+            for d in ('objects', 'refs'):
+                (git / d).mkdir(parents=True)
+            (git / 'HEAD').write_text('ref: refs/heads/main\n')
+        b.generate = nested
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'failed')
+        b.generate = self.label_generator('two')
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r3', 'request': 'y'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+
+    def test_a_retryable_failure_can_be_retried_as_the_next_attempt(self):
+        calls = []
+
+        def flaky(source, kind, request, cancelled):
+            calls.append(1)
+            if len(calls) == 1:
+                raise toolchain.StepFailed('timeout', 'slow', retryable=True)
+        b = self.builder(flaky)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['failure']['retryable'], True)
+        self.assertEqual(b.retry(out['jobId'], {'schemaVersion': 1}), {'jobId': out['jobId'], 'attempt': 2})
+        b.run_next()
+        job = b.job(out['jobId'])
+        self.assertEqual((job['state'], job['attempt']), ('ready', 2), job)
+        with self.assertRaises(Refused):
+            b.retry(out['jobId'], {'schemaVersion': 1})  # only failed, retryable jobs
+
+    def test_a_different_valid_key_is_refused_by_the_pin(self):
+        b = self.builder(self.label_generator('one'))
+        a = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'a', 'description': 'A'})
+        b.run_next()
+        other = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'b', 'description': 'B'})
+        b.run_next()
+        keys = self.root / 'keys'
+        shutil.rmtree(keys / a['projectId'])
+        shutil.copytree(keys / other['projectId'], keys / a['projectId'])  # a complete key, but not A's
+        rev = b.revise('d', a['projectId'], {'schemaVersion': 1, 'clientRequestId': 'a2', 'request': 'more'})
+        b.run_next()
+        job = b.job(rev['jobId'])
+        self.assertEqual(job['failure']['category'], 'signing', job)
+        self.assertIn('different key', job['failure']['summary'])
 
     def test_cancel_during_generation(self):
         holder = {}

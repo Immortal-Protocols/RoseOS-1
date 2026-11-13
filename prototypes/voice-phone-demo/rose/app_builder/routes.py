@@ -82,6 +82,10 @@ def add_routes(app: FastAPI, remote: Any, builder: Builder, peer: Callable[[Any]
     async def cancel(job_id: str, request: Request):
         return await call(request, lambda device, data: builder.cancel(job_id, data))
 
+    @app.post(PREFIX + '/jobs/{job_id}/retry')
+    async def retry(job_id: str, request: Request):
+        return await call(request, lambda device, data: builder.retry(job_id, data))
+
     @app.get(PREFIX + '/jobs/{job_id}')
     async def job(job_id: str, request: Request):
         return await call(request, lambda device: builder.job(job_id), with_body=False)
