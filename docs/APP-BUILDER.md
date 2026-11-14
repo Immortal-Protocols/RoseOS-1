@@ -341,8 +341,17 @@ one.
   (`rose/workspace_routes.py`) and its checks and durable once-per-request
   store (`rose/workspace_tasks.py`), with a test suite
   (`rose/tests/test_workspace_tasks.py`). They are mounted only when the server
-  has `workspace_tasks` set, and `rose.app` sets none. The `start()` that
-  hands the task to the conversation is the next piece and is not wired yet.
+  has `workspace_tasks` set, and `rose.app` sets none.
+- **Conversation hand-off (source, tests only):**
+  `workspace_tasks.conversation_starter(conductor)`. A confirmed task becomes
+  the owner's own request in the conversation, marked as confirmed on the
+  workspace page, so it runs with exactly the conversation's tools and policy.
+  While Rose is replying, it is `unavailable` (503) rather than cutting her
+  off. `taskId` is `null`, because the conversation decides what phone work to
+  start; the page follows the task events.
+- **Proof levels.** Source tests drive the real conductor with the simulated
+  Codex fixtures. There is no live end-to-end proof: no phone, no real Codex
+  turn, and the server is not enabled or running.
 
 ### 4.4 App Core's answers to `rose-layout-v1` (Models Core, #781)
 

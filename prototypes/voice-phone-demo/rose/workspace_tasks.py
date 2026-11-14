@@ -95,3 +95,24 @@ class WorkspaceTasks:
             # events; the request is never started twice from here because the lock is held throughout.
             self.db.execute('INSERT INTO requests VALUES (?,?,?)', (key, json.dumps(reply), time.time()))
             return reply
+
+
+PREFIX = '[A Rose task the owner confirmed on the workspace page] '
+
+
+def conversation_starter(conductor):
+    """start() for a CodexConductor: the confirmed task becomes the owner's own request in the conversation, so it
+    runs with exactly the conversation's tools and policy (phone work through phone_task) and its progress arrives as
+    the usual task events. While Rose is replying, it is refused as unavailable (the phone retries after a 503)
+    rather than cutting her off. The task id is not known yet: the conversation decides whether and how to start
+    phone work, so the reply's taskId is None and the page follows the task events."""
+    def start(label: str, goal: str, request_id: str):
+        session = getattr(conductor, 'sessions', {}).get('conversation')
+        stopped = getattr(conductor, '_stopped', None)
+        if session is None or (stopped is not None and stopped.is_set()):
+            raise Unavailable()
+        if session.busy or session.utterance is not None:
+            raise Unavailable()
+        conductor.inject_text_turn(f'{PREFIX}{label}. {goal}')
+        return None
+    return start

@@ -68,6 +68,45 @@ class Handoff(unittest.TestCase):
         self.assertEqual(self.tasks.submit('d', GOOD)['status'], 'accepted')
 
 
+class ConversationStarter(unittest.TestCase):
+    def setUp(self):
+        from rose.tests import test_codex as fixtures
+        self.fixtures = fixtures
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = fixtures.Transcripts(Path(self.tmp.name) / 't')
+        self.engine = fixtures.CodexConductor(fixtures.RealPhone(), fixtures.Bus(), None, self.store,
+                                              client_factory=fixtures.FakeCodex)
+        self.engine.start()
+
+    def tearDown(self):
+        self.engine.stop()
+        self.store.close()
+        self.tmp.cleanup()
+
+    def test_a_confirmed_task_becomes_the_owners_request(self):
+        from rose.workspace_tasks import PREFIX, conversation_starter
+        start = conversation_starter(self.engine)
+        self.assertIsNone(start('Add missing items', 'Compare the recipe with my Notes list.', 'r1'))
+        s = self.engine.sessions['conversation']
+        self.assertTrue(self.fixtures.wait(lambda: any(
+            op == 'submit' and PREFIX + 'Add missing items. Compare the recipe with my Notes list.' in p.get('text', '')
+            for op, _, p in self.engine.client.calls)))
+        self.assertTrue(self.fixtures.wait(lambda: s.turn is not None or s.busy))
+
+    def test_busy_or_stopped_is_unavailable(self):
+        from rose.workspace_tasks import conversation_starter
+        start = conversation_starter(self.engine)
+        s = self.engine.sessions['conversation']
+        s.busy = True
+        with self.assertRaises(Unavailable):
+            start('x', 'y', 'r')
+        s.busy = False
+        self.engine.stop()
+        with self.assertRaises(Unavailable):
+            start('x', 'y', 'r')
+        self.assertFalse(any(op == 'submit' for op, _, p in self.engine.client.calls))
+
+
 class Route(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
