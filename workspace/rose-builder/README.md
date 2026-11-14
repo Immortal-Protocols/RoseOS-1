@@ -4,23 +4,31 @@ The phone side of Project 1 in the Nov 13 plan: describe an app, follow its buil
 for changes, and share a download link. It is one ordinary Android app (minSdk 26, targetSdk 35) that needs nothing
 from RoseOS. Builds run on the owner's Mac or builder; nothing is compiled on the phone.
 
-Status: **source skeleton only.** It runs against `FakeBuilderApi`, an in-memory stand-in with no network, no APKs
-and no share links. The real build/job/artifact contract belongs to App Core, and hosting belongs to the Chariot owner.
-`BuilderApi` mirrors App Core's builder API v1 (`docs/APP-BUILDER.md` §3), which is the single source of truth.
-It covers idempotent create and revise with a `clientRequestId`, `sourceRevision` and `attempt`, APKs fetched by
-SHA-256 over the signed link, and install receipts. Generated packages are `app.rose.gen.p<projectId>`. The
-rose-auth-v1 transport, with this app pairing as its own device, is not written yet. Share links come from the
-Chariot owner's hosting and are not part of builder API v1. The package ID
-`dev.pixel.builder` and the name "Rose App Builder" are provisional. They must be settled before the first release,
-because the package ID can't change after that.
+Status: **source only, never run against a live builder.** With no pairing, the app offers to pair or to try a
+labelled demo (`FakeBuilderApi`: in memory, no network, no APKs). Once paired it uses `HttpsBuilderApi`: builder API
+v1 (`docs/APP-BUILDER.md` §3, App Core's contract) over the owner's Tailscale link. Every request carries this app's
+rose-auth-v1 signature, on TLS pinned to the backend's certificate. Pairing follows Rose Agent's flow: paste a
+`roseagent://pair` link made on the Mac, POST `/pair` with this app's own Keystore public key, then prove it with a
+signed `GET /hello`. The signer and key code are Rose Agent's own `LocalRoseAuth` and `LocalRoseKey`, compiled in
+unchanged (`dev.pixel.voice.RoseLink` is the bridge), so both apps sign the same bytes and share Rose Agent's pinned
+cross-language vectors. No builder host enables these routes today, and the Rose server is stopped.
 
-Rules (host-tested in `tests/BuilderRulesTest.java`, registered in `scripts/test-local.sh`):
+Rules (host-tested in `tests/BuilderRulesTest.java`, `RequestIdsTest.java` and `BuilderWireTest.java`, registered
+in `scripts/test-local.sh`):
 
+- `Json` and `BuilderWire`: a small strict JSON reader and writer, and v1's wire mapping. Every response must carry
+  `schemaVersion: 1`, and unknown fields are ignored. Times convert from epoch seconds to milliseconds. A 400
+  `out_of_scope` shows the builder's own sentence. A final 401 asks the owner to pair again, and a non-final one is
+  signed afresh once.
 - `BuildJob`: build stages, named failure categories, and retry advice only when the server says a retry can help.
   Progress never moves backwards.
 - `InstallPlan`: install, update or open only with the same package, the same signer and a higher version. A changed
   signer or a downgrade is refused with its reason, never uninstalled and reinstalled. A downloaded file must match
   the SHA-256, package, version and signer the builder recorded.
+- `RequestIds`: one `clientRequestId` per request. Retrying the same text after a lost connection reuses it. Changed
+  text, or any request after the builder has answered (including a §3.6 `out_of_scope` refusal, which starts
+  nothing), gets a new id. Host-tested in `tests/RequestIdsTest.java`.
+- The builder's refusal sentence and its accepted-request `notes` are shown as plain text only.
 - `ShareMessage`: the text the owner sends from Android's share sheet or SMS composer. It carries either the version's
   immutable link or the latest link. The link is a public APK download only.
 

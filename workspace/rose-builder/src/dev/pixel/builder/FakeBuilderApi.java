@@ -52,9 +52,23 @@ final class FakeBuilderApi implements BuilderApi {
   return q;
  }
 
- @Override public synchronized Project create(String clientRequestId, String description) {
+ /** The fake's stand-in for App Core's screening: a request naming "spyware" is refused, and one asking for Kotlin
+  * gets a note. App Core's real screening is server-side; this only drives the screens. */
+ static void screen(String text) throws OutOfScope {
+  if (text.toLowerCase(java.util.Locale.ROOT).contains("spyware"))
+   throw new OutOfScope("Rose won't build an app that secretly watches someone. Nothing was started.", "harm");
+ }
+
+ static List<String> notes(String text) {
+  List<String> n = new ArrayList<>();
+  if (text.toLowerCase(java.util.Locale.ROOT).contains("kotlin")) n.add("Generated apps are written in Java with Android's own features, so Kotlin isn't used.");
+  return n;
+ }
+
+ @Override public synchronized Started create(String clientRequestId, String description) throws OutOfScope {
   String[] seen = requests.get(clientRequestId);
-  if (seen != null) return projects.get(seen[0]);
+  if (seen != null) return new Started(projects.get(seen[0]), notes(description));
+  screen(description);
   String id = String.valueOf(next++);
   String name = ShareMessage.clean(description, "New app");
   if (name.length() > 24) name = name.substring(0, 24).trim() + "…";
@@ -62,16 +76,17 @@ final class FakeBuilderApi implements BuilderApi {
   Project p = new Project(id, name, "app.rose.gen.p" + id, "fake", new ArrayList<Version>(), new BuildJob("j" + next++, BuildJob.Stage.QUEUED, null, null, 1, clock++));
   projects.put(id, p);
   requests.put(clientRequestId, new String[]{id});
-  return p;
+  return new Started(p, notes(description));
  }
 
- @Override public synchronized Project revise(String id, String clientRequestId, String request) {
-  if (requests.containsKey(clientRequestId)) return projects.get(id);
+ @Override public synchronized Started revise(String id, String clientRequestId, String request) throws OutOfScope {
+  if (requests.containsKey(clientRequestId)) return new Started(projects.get(id), notes(request));
+  screen(request);
   Project p = projects.get(id);
   Project q = new Project(p.projectId, p.name, p.packageName, p.signerSha256, p.versions, new BuildJob("j" + next++, BuildJob.Stage.QUEUED, null, null, 1, clock++));
   projects.put(id, q);
   requests.put(clientRequestId, new String[]{id});
-  return q;
+  return new Started(q, notes(request));
  }
 
  @Override public synchronized CancelStatus cancel(String jobId) {

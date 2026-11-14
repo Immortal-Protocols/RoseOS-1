@@ -6,6 +6,76 @@ route.** Every stage is refused until `os/ota/yogi.json` records the prerequisit
 it needs. See [YOGI-BUILD.md](YOGI-BUILD.md) for the port and the lab build, and the
 [handoff](https://app.notion.com/p/40e7c646c81b81629d22eb03edd73abd).
 
+## Integrated first delivery
+
+Nathan approved an integrated attempt in the current thread. Select `stage=one-shot`
+and `publish=true` in the existing Yogi workflow once the actual setup below is
+bound. This runs the complete path automatically, with no individual-stage
+dispatches or manual transfer of bootstrap receipts:
+
+1. Hosted admission checks the captured main commit, exact immutable app
+   export, exclusive protected Yogi runner and signing/setup bindings. The
+   controller checks the actual 12-hour STOP limit and preserved dedicated disk
+   before starting the replacement VM; it never adopts a running VM.
+2. The native job verifies instance identity before checkout, then the actual
+   filesystem UUID, paths and free space. The existing bootstrap tool proof runs
+   before signer login. Yogi's keys are generated/imported once with the existing
+   write-once recovery journal. A complete public receipt is retained on the Yogi
+   disk. Later attempts reuse only a receipt matching the completed journal;
+   incomplete or uncertain imports require recovery and never regenerate keys.
+3. Allocate, integrate, compile and sign private baseline A. Retain its private
+   install image on the Yogi disk. Allocate strictly newer B, copy A's integrated
+   tree, compile and sign with the same identity and app inputs, then verify the
+   full OTA, packaged updater and system trust. Nothing touches a phone.
+4. A hosted publisher consumes the same-run public identity/baseline bindings,
+   verifies the exact OTA assets before minting the existing pixel-ota App token,
+   and publishes only `yogi-{build}`, OTA first and `yogi-stable` last. Existing
+   releases and global Latest are preserved. Token cleanup and ownership-gated
+   native VM STOP run on failure as well as success.
+
+Both compiles stream stdout/stderr and retain `compile.log` plus a failure
+receipt on the Yogi disk. They use the same pinned ccache implementation as
+Mustang, in **Yogi's own** `/srv/rose-yogi/compiler-cache-v1`, bounded to 20 GiB.
+Each fresh attempt uses the same relative `out-yogi-cache` name so include paths
+and compiler flags do not change merely because the allocation changed. No old
+OUT_DIR is adopted or deleted. A second compile can reuse C/C++ objects;
+cache hits and Java/whole-build reuse are not promised. Signing credentials and
+workflow tokens are removed from the compiler environment. Compile timeout and
+sampled free-space stops terminate its process group. Delivery phases check
+space using actual input sizes plus a 64 GiB reserve. These are conservative
+allowances, not measured Yogi peaks or disk quotas.
+
+**Observed setup blockers (2026-11-14).** The exact replacement VM is stopped,
+with its preserved 2,000 GiB disk, but its actual STOP limit is **2,700 seconds**,
+not the historical 12-hour figure. Both Yogi secret containers return metadata
+404. The existing signer provider admits only `os-release.yml`; the existing
+Yogi provider admits hosted controller jobs only. Organization runner eligibility
+remains unknown after the historical 403 and has not been retried. The configured
+dev-infra identity can set VM scheduling/metadata and create containers; it cannot
+set secret or signer IAM policies. No live setup changes have been made.
+
+The exact decision-ready scope is in
+[`yogi-full-setup-proposal.json`](../os/ota/yogi-full-setup-proposal.json): a separate
+self-hosted signer provider with exact repository/main/workflow claims, one
+24-hour signer trust binding preserving existing members, two empty Yogi-only
+secrets with a four-hour existing bootstrap-role binding and a 24-hour read
+binding, protected runner eligibility, and the existing VM's 12-hour STOP limit.
+The reviewed startup payload starts only the existing Yogi service; it creates
+no SSH or registration credential. Administrator action/approval is needed for
+those access/resource changes. Binding their actual evidence and expiries then
+opens `fullRun.enabled`; this source commit deliberately leaves it false.
+
+The selected app input is `frankel-2026111201` (voice 374, calculator 6,
+background control 43), exported by run 43485652878, artifact 14067412309. Its
+record bytes are pinned in the Yogi configuration. The downloaded bytes and
+signatures are admitted by the existing verifier. This deliberately uses the
+verified fleet set; newer in-tree app-builder changes are excluded until a new
+export is selected. Source drift is observed and recorded in the native and
+public run bindings, never misrepresented as source-current app compilation.
+The initial one-shot needs two compiles and two signings; no successful timing
+measurement exists yet. The native job is limited to 660 minutes, with a
+separate 12-hour VM STOP fallback. No schedule is added.
+
 ## Bootstrap and identity decision
 
 **Established (source evidence).** The lab artifact `2026110401` (Rose `c478983`),

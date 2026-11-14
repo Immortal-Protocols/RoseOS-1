@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import urllib.error
 import zipfile
@@ -52,6 +53,15 @@ class SignedDeliveryTest(unittest.TestCase):
             expired=False,workflow_run=dict(id=int(signed.RUN),head_sha=signed.SOURCE,repository_id=1428996648,
             head_repository_id=1428996648))]
         self.phase('guard')
+        # Metadata/byte cases use a compatible synthetic source. Current main
+        # can legitimately change a profile and invalidate old artifact custody;
+        # that production refusal is covered by the artifact compatibility tests.
+        compatible = signed.recovery.compatible
+        def fixture_compatible(source, root=signed.recovery.ROOT, git=None):
+            clean = lambda args: SimpleNamespace(returncode=0, stdout='')
+            return compatible(source, root=root, git=git or clean)
+        binding = patch.object(signed.recovery, 'compatible', fixture_compatible)
+        binding.start();self.addCleanup(binding.stop)
 
     def phase(self,phase):
         self.env['GITHUB_JOB']=phase
