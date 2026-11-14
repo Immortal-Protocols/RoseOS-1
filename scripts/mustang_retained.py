@@ -55,8 +55,11 @@ def compatible(source,root=ROOT,git=None):
     diff=git(['diff','--name-only',SOURCE,source,'--'])
     if diff.returncode or len(diff.stdout)>128 << 10:
         raise ValueError('retained source compatibility unavailable')
+    # The standalone Python local composer added after this compile is not
+    # referenced by the manifest, app source sets or Mustang build inputs. A
+    # later integration into those inputs still fails this compatibility check.
     for path in diff.stdout.splitlines():
-        if path not in ALLOWED and not path.startswith(('scripts/tests/','docs/')):
+        if path not in ALLOWED and not path.startswith(('scripts/tests/','docs/','workspace/models/local-composer/')):
             raise ValueError('retained delivery changes OS, app, input, allocation or tool source: '+path)
 
 

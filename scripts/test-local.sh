@@ -404,6 +404,10 @@ java -cp "$JAVA_TESTS/CallbackOwner" dev.pixel.voice.CallbackOwnerTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/PhoneCommandGate" \
  workspace/rose-agent/app/src/dev/pixel/voice/PhoneCommandGate.java workspace/rose-agent/app/tests/PhoneCommandGateTest.java
 java -cp "$JAVA_TESTS/PhoneCommandGate" dev.pixel.voice.PhoneCommandGateTest
+# Project 1 rose-signin-v1 (generated-app sign-in; distinct from the rose-auth-v1 phone<->server signature prefix):
+# the pure-Java client core against the shared vectors, and the name guard (the Rust library runs in
+# .github/workflows/rose-signin.yml, since cargo needs its locked crates).
+bash workspace/rose-signin/java/test.sh
 # Plan 1E: the shared theme definition (themes/rose-themes.json), its generated RoseTheme copies, Glacier's assets
 # and contrast, and the Java colour map against the approved prototype's own map (golden values).
 python3 -I scripts/tests/test_rose_themes.py
