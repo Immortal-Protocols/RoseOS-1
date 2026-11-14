@@ -49,6 +49,8 @@ final class WorkspaceHub {
  final WorkspaceEngine engine=new WorkspaceEngine(new WorkspaceStarter());
  final WorkspaceTiming timing=new WorkspaceTiming();
  private final ExecutorService worker=Executors.newSingleThreadExecutor();
+ /** Rose task requests (up to 3 attempts of 10 s) never hold up composing. */
+ private final ExecutorService taskWorker=Executors.newSingleThreadExecutor();
  private final Handler main=new Handler(Looper.getMainLooper());
  private AtomicBoolean cancel=new AtomicBoolean();
  private Listener listener;
@@ -83,6 +85,32 @@ final class WorkspaceHub {
  void togglePin(String key){if(!composer.busy()&&state.togglePin(key))changed(null);}
  void reopen(int index){if(!composer.busy()&&state.reopen(index))changed(null);}
  void actionResult(String id,String status){state.actionResult(id,status);save();}
+
+ // ---------- Rose tasks (App Core section 4.3) ----------
+
+ /** The last outcome of each Rose task tapped this session, for its card line (WorkspaceTaskCard). */
+ private final Map<String,WorkspaceTaskClient.Outcome> taskOutcomes=new java.util.HashMap<>();
+ WorkspaceTaskClient.Outcome taskOutcome(String id){return taskOutcomes.get(id);}
+ boolean tasksEnabled(){return WorkspaceTaskGate.enabled(app);}
+
+ /**
+  * The person confirmed task id on the confirm sheet. One signed POST /workspace/v1/tasks, with a fresh
+  * requestId for this tap that every retry reuses. Only for a task in the current snapshot, and only while the
+  * gate is on (WorkspaceTaskClient refuses otherwise). Runs on the worker; the card updates on the main thread.
+  */
+ void startTask(String id){
+  final WorkspaceSnapshot.Task task=lastRead==null?null:lastRead.snapshot.task(id);
+  final String requestId="tap-"+java.util.UUID.randomUUID();
+  final WorkspaceTaskClient client=new WorkspaceTaskClient(WorkspaceTaskGate.gate(app),new WorkspaceTaskTransport(app),WorkspaceTaskTransport.signer(app));
+  taskOutcomes.put(id,new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.SENDING,null,null,0));
+  if(listener!=null)listener.changed(null);
+  taskWorker.execute(()->{
+   WorkspaceTaskClient.Outcome o;
+   try{o=client.start(requestId,task,true);}catch(Throwable t){o=new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.UNCERTAIN,"internal",null,0);}
+   final WorkspaceTaskClient.Outcome done=o;
+   main.post(()->{taskOutcomes.put(id,done);actionResult(id,done.kind.name().toLowerCase(java.util.Locale.ROOT));if(listener!=null)listener.changed(null);});
+  });
+ }
 
  // ---------- a conversation (WorkspaceAgent) ----------
 
