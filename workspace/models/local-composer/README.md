@@ -138,7 +138,14 @@ until at least two candidates have device numbers and validity/usefulness on the
   threads; case, trigger, run index, phase (`first` in process / `warm`).
 - **Generation-only** (`generationMs`, plus runtime prompt/output tokens and ms) separately from **composer**
   (`composeMs`: context + generation + validation). Neither is request-to-render.
-- **Request-to-render** needs OS Product's renderer completion timestamp; `requestToRenderMs` stays null until then.
+- **Request-to-render:** OS Product's renderer half exists in source on main (`WorkspaceTiming`, from #787,
+  merged `d17e60f7`). Each record is keyed by `requestId`. `WorkspaceHub.start` calls `requested()`, the worker's
+  compose return reaches `resulted()`, and `WorkspacePage.timeFirstFrame`'s one-shot `OnDrawListener` calls
+  `rendered()`. All three use `System.nanoTime()`; "rendered" is the draw pass, not display presentation.
+  `requestToRenderMs` here **stays null**: nothing calls `WorkspacePage.timingJson()` or exports it, `bench.py`
+  ingests nothing, and there is no phone or model measurement. These records are **not benchmark-ready**. A
+  commit prepared off screen can be drawn only when the person comes back, so its render time can include that
+  delay, and a record does not say whether the page was on screen.
 - **True cold start** (fresh process, model load) is a device measurement; `first` here is only the first call in
   a process.
 - Validity rate and failure categories; usefulness as recall and precision of each case's expected IDs (the
@@ -149,14 +156,14 @@ until at least two candidates have device numbers and validity/usefulness on the
 
 ## Agreed with OS Product and App Core
 
-OS Product's draft PR 787 (`d71fd72a`) adopts rose-layout-v1 as the phone's only layout format and answers its
-questions; App Core's PR 782 §4.4 (`41891f4c`) answers its side. Applied here in both languages and the vectors:
+OS Product's PR 787 (merged `d17e60f7`) adopts rose-layout-v1 as the phone's only layout format and answers its
+questions; App Core's PR 782 §4.4 (merged `e8eb0453`) answers its side. Applied here in both languages and the vectors:
 catalog `cat-1` (`button` is a row of 1–4 actions, at most 6 sections, `agent_task` only in a `button` row or a
 `card` action), pinned ids left out of the context (the phone keeps pinned sections at their index), and the
-request's `avoid` list for regenerate. Both PRs are drafts: if either changes, the contract and vectors follow.
+request's `avoid` list for regenerate. If either side changes, the contract and vectors follow.
 
-Still open on OS Product's side and not needed for this source: notifications (its D1; the first build has none),
-a content source, and the renderer timestamp for request-to-render timing.
+Still open on OS Product's side and not needed for this source: notifications (its D1; the first build has none)
+and a content source. The renderer timestamp exists in source (above); exporting it is not built.
 
 ## Blockers (exact)
 
@@ -173,8 +180,10 @@ a content source, and the renderer timestamp for request-to-render timing.
    `runtime/acquisition-manifest.json`.
 4. **Gated weights.** Gemma (Google repos) and Llama 3.2 need licence acceptance with a Hugging Face account, which
    is a credential; their configs (and so KV budgets) are unverified. Gemma's licence also needs Nathan's call.
-5. **Contract drafts.** OS Product's (PR 787) and App Core's (PR 782) answers are drafts, not merged.
-6. **Renderer timestamp.** Request-to-render latency needs OS Product's renderer completion time.
+5. **Contract answers.** Merged: OS Product's PR 787 (`d17e60f7`) and App Core's PR 782 (`e8eb0453`).
+6. **Request-to-render data.** The renderer timestamp exists in source (`WorkspaceTiming`), but nothing exports
+   it, `bench.py` does not ingest it, and records lack on-screen provenance (see the benchmark plan). Human review
+   of usefulness is a separate step.
 7. **CI.** This directory is not wired into shared CI; tests run locally.
 8. **Android compile.** No Android SDK is present, and downloading one is outside this source-only scope, so the
    Java core has not been compiled against `android.jar` or dexed. It uses only `java.lang`, `java.util`,
