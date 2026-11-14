@@ -1,49 +1,40 @@
-"""Project 2 composer intent/result v1 (docs/APP-BUILDER.md §4): only explicit requests reach the phone, and only the
-phone's drawn or saved revision counts as done."""
+"""Project 2 conversational route (docs/APP-BUILDER.md §4, OS Product's workspace_prepare carrier): only explicit
+requests reach the phone, and only a committed layout revision counts as done."""
 import unittest
 from types import SimpleNamespace
 
 from rose import composer
 
-CAPS = {'status': 'ok', 'schemaVersion': 1, 'kinds': list(composer.KINDS)}
-
 
 class Link:
-    def __init__(self, caps=CAPS, reply=None, fail=None):
-        self.caps, self.reply, self.fail, self.sent = caps, reply, fail, []
+    def __init__(self, reply=None, fail=False):
+        self.reply, self.fail, self.sent = reply, fail, []
 
-    def call(self, action, timeout, packageName, operation, params):
-        self.sent.append((action, packageName, operation, params))
-        if self.fail == operation:
+    def call(self, action, timeout, **params):
+        self.sent.append((action, params))
+        if self.fail:
             raise ConnectionError('lost')
-        if operation == 'capabilities':
-            return self.caps
-        return self.reply(params) if callable(self.reply) else self.reply
+        return self.reply
 
 
 def phone(link):
     return SimpleNamespace(link=link)
 
 
-def reply(status, **extra):
-    return lambda p: {'schemaVersion': 1, 'requestId': p['requestId'], 'status': status, **extra}
-
-
 class Params(unittest.TestCase):
     def test_kinds_and_text(self):
-        self.assertEqual(composer.params('r1', {'kind': 'prompt', 'text': '  set up for cooking '}),
-                         {'schemaVersion': 1, 'requestId': 'r1', 'kind': 'prompt', 'text': 'set up for cooking'})
-        for kind in ('arrange', 'regenerate', 'undo'):
-            self.assertEqual(composer.params('r', {'kind': kind}), {'schemaVersion': 1, 'requestId': 'r', 'kind': kind})
+        self.assertEqual(composer.params('r1', {'kind': 'text', 'text': '  set up for cooking '}),
+                         {'requestId': 'r1', 'request': {'kind': 'text', 'text': 'set up for cooking'}})
+        self.assertEqual(composer.params('r', {'kind': 'arrange'}), {'requestId': 'r', 'request': {'kind': 'arrange'}})
 
     def test_refusals(self):
-        for args in (None, [], {}, {'kind': 'layout'}, {'kind': 'prompt'}, {'kind': 'prompt', 'text': '  '},
-                     {'kind': 'prompt', 'text': 'x' * 501}, {'kind': 'undo', 'text': 'x'},
-                     {'kind': 'arrange', 'grid': 3}, {'kind': 'prompt', 'text': 7}):
-            with self.assertRaises(composer.ComposeRefused, msg=args):
+        for args in (None, [], {}, {'kind': 'regenerate'}, {'kind': 'undo'}, {'kind': 'text'},
+                     {'kind': 'text', 'text': '  '}, {'kind': 'text', 'text': 'x' * 501}, {'kind': 'arrange', 'text': 'x'},
+                     {'kind': 'arrange', 'grid': 3}, {'kind': 'text', 'text': 7}):
+            with self.assertRaises(composer.PrepareRefused, msg=args):
                 composer.params('r', args)
         for rid in ('', 'x' * 65, None):
-            with self.assertRaises(composer.ComposeRefused):
+            with self.assertRaises(composer.PrepareRefused):
                 composer.params(rid, {'kind': 'arrange'})
 
     def test_tool_schema_matches_the_contract(self):
@@ -53,88 +44,70 @@ class Params(unittest.TestCase):
 
 
 class Outcome(unittest.TestCase):
-    def test_only_a_named_revision_is_done(self):
-        for status in ('shown', 'prepared'):
-            r = composer.outcome('r', {'schemaVersion': 1, 'requestId': 'r', 'status': status, 'revision': 4})
-            self.assertEqual((r['ok'], r['outcome'], r['revision']), (True, status, 4))
-            for bad in (None, '4', -1, True, 1.5):
-                r = composer.outcome('r', {'schemaVersion': 1, 'requestId': 'r', 'status': status, 'revision': bad})
-                self.assertEqual((r['ok'], r['outcome']), (False, 'uncertain'), bad)
+    def test_only_a_committed_revision_is_done(self):
+        r = composer.outcome('r', {'status': 'committed', 'layout_revision': 4})
+        self.assertEqual((r['ok'], r['outcome'], r['revision']), (True, 'prepared', 4))
+        r = composer.outcome('r', {'status': 'committed', 'layout_revision': 4, 'shown': True})
+        self.assertEqual((r['ok'], r['outcome']), (True, 'shown'))
+        self.assertIn('Show workspace', composer.outcome('r', {'status': 'committed', 'layout_revision': 1})['message'])
+        for bad in (None, '4', -1, True, 1.5):
+            r = composer.outcome('r', {'status': 'committed', 'layout_revision': bad})
+            self.assertEqual((r['ok'], r['outcome']), (False, 'uncertain'), bad)
 
-    def test_not_done_statuses(self):
-        for status in ('rejected', 'unavailable', 'uncertain'):
-            r = composer.outcome('r', {'schemaVersion': 1, 'requestId': 'r', 'status': status, 'revision': 3})
-            self.assertEqual((r['ok'], r['outcome']), (False, status))
-            self.assertNotIn('revision', r)
-        r = composer.outcome('r', {'schemaVersion': 1, 'requestId': 'r', 'status': 'rejected', 'reason': 'no apps'})
-        self.assertEqual(r['reason'], 'no apps')
+    def test_not_done(self):
+        r = composer.outcome('r', {'status': 'rejected', 'reason': 'nothing_available'})
+        self.assertEqual((r['ok'], r['outcome'], r['reason']), (False, 'rejected', 'nothing_available'))
+        for reason in ('unavailable', 'model_unavailable'):
+            self.assertEqual(composer.outcome('r', {'status': 'rejected', 'reason': reason})['outcome'], 'unavailable')
+        r = composer.outcome('r', {'status': 'busy'})
+        self.assertEqual((r['ok'], r['outcome']), (False, 'busy'))
+        r = composer.outcome('r', {'status': 'error', 'message': 'Unsupported phone action: workspace_prepare'})
+        self.assertEqual(r['outcome'], 'unavailable')  # an older Rose Agent never ran it
 
-    def test_malformed_other_request_or_version_is_uncertain(self):
-        for result in (None, 'shown', {}, {'schemaVersion': 2, 'requestId': 'r', 'status': 'shown', 'revision': 1},
-                       {'schemaVersion': 1, 'requestId': 'other', 'status': 'shown', 'revision': 1},
-                       {'schemaVersion': 1, 'requestId': 'r', 'status': 'done', 'revision': 1}):
+    def test_anything_else_is_uncertain(self):
+        for result in (None, 'committed', {}, {'status': 'done', 'layout_revision': 1}, {'status': 'running'},
+                       {'status': 'timeout'}, {'status': 'disconnected'}, {'status': 'error', 'message': 'boom'}):
             r = composer.outcome('r', result)
             self.assertEqual((r['ok'], r['outcome']), (False, 'uncertain'), result)
 
 
 class Call(unittest.TestCase):
-    def test_shown_after_capabilities(self):
-        link = Link(reply=reply('shown', revision=2))
-        r = composer.call(phone(link), 'dev.example.composer', 'r1', {'kind': 'arrange'})
-        self.assertEqual((r['ok'], r['outcome'], r['revision']), (True, 'shown', 2))
-        self.assertEqual([s[2] for s in link.sent], ['capabilities', 'workspace_compose'])
-        self.assertEqual(link.sent[1][3], {'schemaVersion': 1, 'requestId': 'r1', 'kind': 'arrange'})
+    def test_prepared_through_workspace_prepare(self):
+        link = Link(reply={'status': 'committed', 'layout_revision': 2})
+        r = composer.call(phone(link), 'r1', {'kind': 'arrange'})
+        self.assertEqual((r['ok'], r['outcome'], r['revision']), (True, 'prepared', 2))
+        self.assertEqual(link.sent, [('workspace_prepare', {'requestId': 'r1', 'request': {'kind': 'arrange'}})])
 
     def test_refused_arguments_send_nothing(self):
-        link = Link(reply=reply('shown', revision=2))
-        r = composer.call(phone(link), 'dev.example.composer', 'r1', {'kind': 'prompt'})
+        link = Link(reply={'status': 'committed', 'layout_revision': 2})
+        r = composer.call(phone(link), 'r1', {'kind': 'text'})
         self.assertEqual(r['outcome'], 'rejected')
         self.assertIn('Nothing was sent', r['message'])
         self.assertEqual(link.sent, [])
 
-    def test_no_provider_or_contract_is_unavailable_and_composes_nothing(self):
-        self.assertEqual(composer.call(phone(Link()), None, 'r', {'kind': 'arrange'})['outcome'], 'unavailable')
-        self.assertEqual(composer.call(SimpleNamespace(), 'p', 'r', {'kind': 'arrange'})['outcome'], 'unavailable')
-        for caps in (None, {'status': 'ok', 'schemaVersion': 2, 'kinds': ['arrange']},
-                     {'status': 'ok', 'schemaVersion': 1, 'kinds': ['prompt']}, {'status': 'error'}):
-            link = Link(caps=caps, reply=reply('shown', revision=1))
-            r = composer.call(phone(link), 'p', 'r', {'kind': 'arrange'})
-            self.assertEqual(r['outcome'], 'unavailable', caps)
-            self.assertEqual([s[2] for s in link.sent], ['capabilities'])
-        link = Link(fail='capabilities')
-        r = composer.call(phone(link), 'p', 'r', {'kind': 'arrange'})
+    def test_no_link_or_a_link_that_never_sent_is_offline(self):
+        r = composer.call(SimpleNamespace(), 'r', {'kind': 'arrange'})
         self.assertEqual((r['outcome'], r['message']), ('unavailable', composer.MESSAGES['offline']))
-        r = composer.call(phone(Link(caps={'status': 'timeout'})), 'p', 'r', {'kind': 'arrange'})
-        self.assertEqual(r['message'], composer.MESSAGES['offline'])
-        self.assertGreater(composer.TIMEOUT_S, 20.0)  # outlasts Rose Agent's app_command wait
-        r = composer.call(phone(Link(caps={'status': 'ok', 'schemaVersion': 1, 'kinds': ['prompt']})), 'p', 'r',
+        r = composer.call(phone(Link(reply={'status': 'offline', 'message': 'Rose Agent is not connected.'})), 'r',
                           {'kind': 'arrange'})
-        self.assertEqual(r['message'], composer.MESSAGES['unsupported'])
-        r = composer.call(phone(Link(reply={'status': 'offline'})), 'p', 'r', {'kind': 'arrange'})
         self.assertEqual((r['outcome'], r['message']), ('unavailable', composer.MESSAGES['offline']))
-        r = composer.call(phone(Link(caps={'status': 'routine_busy'})), 'p', 'r', {'kind': 'arrange'})
-        self.assertEqual(r['message'], composer.MESSAGES['busy'])
-        r = composer.call(phone(Link(reply=lambda p: {'schemaVersion': 1, 'requestId': p['requestId'],
-                                                       'status': 'offline'})), 'p', 'r', {'kind': 'arrange'})
-        self.assertEqual(r['outcome'], 'uncertain')  # the provider's own 'offline' is not a v1 status
-        r = composer.call(phone(Link(reply={'status': 'disconnected'})), 'p', 'r', {'kind': 'arrange'})
-        self.assertEqual(r['outcome'], 'uncertain')  # dropped after sending: it may have composed
 
-    def test_a_lost_link_during_compose_is_uncertain_and_not_resent(self):
-        link = Link(fail='workspace_compose')
-        r = composer.call(phone(link), 'p', 'r', {'kind': 'regenerate'})
+    def test_a_lost_link_after_sending_is_uncertain_and_not_resent(self):
+        link = Link(fail=True)
+        r = composer.call(phone(link), 'r', {'kind': 'text', 'text': 'unwind'})
         self.assertEqual((r['ok'], r['outcome']), (False, 'uncertain'))
-        self.assertEqual([s[2] for s in link.sent], ['capabilities', 'workspace_compose'])
+        self.assertEqual(len(link.sent), 1)
+        r = composer.call(phone(Link(reply={'status': 'disconnected'})), 'r', {'kind': 'arrange'})
+        self.assertEqual(r['outcome'], 'uncertain')
 
-    def test_prepared_without_interrupting(self):
-        link = Link(reply=reply('prepared', revision=9))
-        r = composer.call(phone(link), 'p', 'r', {'kind': 'prompt', 'text': 'unwind'})
-        self.assertEqual((r['ok'], r['outcome'], r['revision']), (True, 'prepared', 9))
-        self.assertIn('swipes', r['message'])
+    def test_outlasts_rose_agents_wait(self):
+        self.assertGreater(composer.TIMEOUT_S, 20.0)
 
     def test_not_offered_to_the_conversation_yet(self):
         from rose import codex_conductor
-        self.assertNotIn('compose_workspace', {t['name'] for t in codex_conductor.CONVERSATION_TOOLS})
+        names = {t['name'] for t in codex_conductor.CONVERSATION_TOOLS}
+        self.assertNotIn('prepare_workspace', names)
+        self.assertNotIn('compose_workspace', names)
 
 
 if __name__ == '__main__':
