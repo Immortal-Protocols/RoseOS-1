@@ -316,6 +316,14 @@ class Ledger:
                                    'version_code=? ORDER BY coordinate', (project, version_code)).fetchall()
         return [{'coordinate': c, 'sha256': h, 'size': n} for c, h, n in rows]
 
+    def library_lock(self, project: str) -> dict:
+        """coordinate -> sha256 for every library any delivered version of the project used (the newest digest if
+        a coordinate was ever recorded twice), so a library dropped and declared again must still match."""
+        with self.lock:
+            rows = self.db.execute('SELECT coordinate, sha256 FROM version_dependencies WHERE project_id=? '
+                                   'ORDER BY version_code', (project,)).fetchall()
+        return dict(rows)
+
     def versions(self, project: str) -> list[dict]:
         with self.lock:
             return self._versions(project)

@@ -392,14 +392,19 @@ class Builder:
             coordinates = dependencies.declared(snapshot)
             if not coordinates:
                 return []
-            locked = {d['coordinate']: d['sha256'] for d in self.ledger.dependencies(project_id)}
-            framework = dependencies.framework_classes(self.tools.android_jar) if self.resolver is not None else None
-            return dependencies.resolve(coordinates, self.resolver, work / 'libs', package, framework or frozenset(),
-                                        locked)
+            framework = frozenset()
+            if self.resolver is not None:
+                try:
+                    framework = dependencies.framework_classes(self.tools.android_jar)
+                except Exception:
+                    raise toolchain.StepFailed('toolchain', 'The builder could not read its Android platform '
+                                               'classes.', retryable=True) from None
+            return dependencies.resolve(coordinates, self.resolver, work / 'libs', package, framework,
+                                        self.ledger.library_lock(project_id))
         except dependencies.Refused as refused:
             raise toolchain.StepFailed('compile' if refused.malformed else 'dependency', str(refused)) from None
-        except OSError:
-            raise toolchain.StepFailed('toolchain', 'The builder could not read its Android platform classes.',
+        except OSError:  # the job's own disk, not the library: retryable
+            raise toolchain.StepFailed('internal', 'The builder could not prepare the app\'s libraries.',
                                        retryable=True) from None
 
     def _back_up_key(self, keys: Path, project_id: str, package: str):

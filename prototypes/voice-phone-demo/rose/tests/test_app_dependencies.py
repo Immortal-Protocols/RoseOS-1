@@ -4,6 +4,7 @@ Every library here is a tiny fake made by the test itself: hand-built JARs for t
 compiled with the pinned JDK. Nothing is downloaded and no real library store exists. The build tests need the pinned
 SDK; the rest run anywhere."""
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -20,12 +21,24 @@ from rose.app_builder.service import Builder
 from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
 
 P = 'app.rose.gen.p1'
-CLASS = b'\xca\xfe\xba\xbe\x00\x00\x00\x34' + b'\x00' * 8  # magic, minor 0, major 52 (Java 8)
 
 
-def jar(path: Path, entries: dict) -> bytes:
-    with zipfile.ZipFile(path, 'w') as z:
+def klass(name: str, access: int = 0x21, major: int = 52) -> bytes:
+    """A minimal class file defining ``name``, up to this_class (all the builder reads before d8)."""
+    raw = name.encode()
+    pool = b'\x01' + len(raw).to_bytes(2, 'big') + raw + b'\x07\x00\x01'  # #1 Utf8 name, #2 Class #1
+    return (b'\xca\xfe\xba\xbe\x00\x00' + major.to_bytes(2, 'big') + (3).to_bytes(2, 'big') + pool
+            + access.to_bytes(2, 'big') + b'\x00\x02' + b'\x00' * 8)
+
+
+CLASS = klass('placeholder')  # in jar(), this exact object stands for "a class file defining this entry's name"
+
+
+def jar(path: Path, entries: dict, compression=zipfile.ZIP_STORED) -> bytes:
+    with zipfile.ZipFile(path, 'w', compression) as z:
         for name, data in entries.items():
+            if data is CLASS:
+                data = klass(name[:-6], 0x8000 if name == 'module-info.class' else 0x21)
             z.writestr(name, data)
     return path.read_bytes()
 
@@ -112,9 +125,9 @@ class Verify(unittest.TestCase):
         self.store = Store(self.root / 'store')
         self.n = 0
 
-    def make(self, entries: dict) -> bytes:
+    def make(self, entries: dict, compression=zipfile.ZIP_STORED) -> bytes:
         self.n += 1
-        return jar(self.root / f'build{self.n}.jar', entries)
+        return jar(self.root / f'build{self.n}.jar', entries, compression)
 
     def resolve(self, coordinates, resolver='store', locked=None, framework=frozenset({'javax/crypto/Cipher.class'})):
         self.n += 1
@@ -171,6 +184,45 @@ class Verify(unittest.TestCase):
         self.store.add('g:ok:1', self.make(entries))
         return self.resolve(['g:ok:1'])
 
+    def test_a_class_is_checked_by_the_name_its_bytes_define(self):
+        for entries in ({'com/lib/Foo.class': klass('app/rose/gen/p1/Evil')},
+                        {'com/lib/X.class': klass('android/app/Activity')},
+                        {'com/lib/S.class': klass('java/util/Sneaky')}, {'com/lib/A.class': klass('com/lib/B')}):
+            with self.subTest(entries=list(entries)):
+                self.refused(entries, "under another class's name")
+        self.store.add('g:a:1', self.make({'g/Same.class': CLASS}))
+        self.store.add('g:b:1', self.make({'h/Other.class': klass('g/Same')}))  # a relabelled duplicate
+        with self.assertRaisesRegex(D.Refused, "under another class's name"):
+            self.resolve(['g:a:1', 'g:b:1'])
+
+    def test_a_malformed_class_or_module_info_is_refused(self):
+        good = klass('g/X')
+        for data in (good[:14], good[:10] + b'\x63' + good[11:], good[:-12], klass('g/X')[:10] + b'\x07\x00\x09'):
+            with self.subTest(data=data[:20]):
+                self.refused({'g/X.class': data}, 'cannot read')
+        for data in (klass('module-info', 0x21), klass('g/X', 0x8000)):
+            with self.subTest(data=data[:20]):
+                self.refused({'module-info.class': data}, 'not module metadata')
+        self.assertEqual(len(self.resolve_one({'module-info.class': CLASS, 'g/Y.class': CLASS})), 1)
+        # Long and Double take two constant pool slots: names after them still resolve.
+        raw = b'g/Z'
+        pool = b'\x05' + b'\x00' * 8 + b'\x01' + len(raw).to_bytes(2, 'big') + raw + b'\x07\x00\x03'
+        z = b'\xca\xfe\xba\xbe\x00\x00\x00\x34\x00\x05' + pool + b'\x00\x21\x00\x04' + b'\x00' * 8
+        self.assertEqual(D.class_name(z), ('g/Z', 0x21))
+
+    def test_a_corrupt_or_unreadable_entry_is_a_refused_library_not_a_builder_failure(self):
+        data = bytearray(self.make({'g/X.class': klass('g/X') + b'\x00' * 200}, zipfile.ZIP_DEFLATED))
+        start = data.index(b'g/X.class') + len('g/X.class')  # the local header's name, then the compressed data
+        data[start:start + 8] = b'\xff' * 8
+        broken = bytes(data)
+        data = bytearray(self.make({'g/X.class': CLASS}))
+        central = data.index(b'PK\x01\x02')
+        data[central + 10:central + 12] = (99).to_bytes(2, 'little')  # a compression method zipfile cannot read
+        for jar_bytes in (broken, bytes(data)):
+            self.store.add('g:a:1', jar_bytes)
+            with self.assertRaisesRegex(D.Refused, 'not a valid JAR'):
+                self.resolve(['g:a:1'])
+
     def test_two_libraries_defining_one_class_are_refused(self):
         self.store.add('g:a:1', self.make({'g/Same.class': CLASS}))
         self.store.add('g:b:1', self.make({'g/Same.class': CLASS}))
@@ -202,8 +254,8 @@ class Verify(unittest.TestCase):
     def test_a_duplicate_or_encrypted_entry_is_refused(self):
         path = self.root / 'dup.jar'
         with zipfile.ZipFile(path, 'w') as z, mock.patch('warnings.warn'):
-            z.writestr('g/X.class', CLASS)
-            z.writestr('g/X.class', CLASS)
+            z.writestr('g/X.class', klass('g/X'))
+            z.writestr('g/X.class', klass('g/X'))
         self.store.add('g:a:1', path.read_bytes())
         with self.assertRaisesRegex(D.Refused, 'same entry twice'):
             self.resolve(['g:a:1'])
@@ -218,12 +270,12 @@ class Verify(unittest.TestCase):
         for bound, value, entries, message in (
                 ('MAX_JAR', 200, {'g/X.class': CLASS * 40}, 'larger than this builder accepts'),
                 ('MAX_ENTRIES', 2, {'g/A.class': CLASS, 'g/B.class': CLASS, 'g/C.class': CLASS}, 'more entries'),
-                ('MAX_UNCOMPRESSED', 20, {'g/A.class': CLASS, 'g/B.class': CLASS}, 'once unpacked'),
+                ('MAX_UNCOMPRESSED', 40, {'g/A.class': CLASS, 'g/B.class': CLASS}, 'once unpacked'),
                 ('MAX_ENTRY', 10, {'g/A.class': CLASS}, 'an entry larger')):
             with self.subTest(bound=bound), mock.patch.object(D, bound, value):
                 self.refused(entries, message)
-        self.store.add('g:a:1', self.make({'g/A.class': CLASS * 30}))
-        self.store.add('g:b:1', self.make({'g/B.class': CLASS * 30}))
+        self.store.add('g:a:1', self.make({'g/A.class': klass('g/A') + b'\x00' * 400}))
+        self.store.add('g:b:1', self.make({'g/B.class': klass('g/B') + b'\x00' * 400}))
         with mock.patch.object(D, 'MAX_TOTAL', 600), self.assertRaisesRegex(D.Refused, 'larger than'):
             self.resolve(['g:a:1', 'g:b:1'])  # each fits, together they do not
 
@@ -370,6 +422,54 @@ class LibraryBuild(unittest.TestCase):
         self.assertEqual(b.ledger.dependencies(out['projectId']),
                          [{'coordinate': 'com.example:fakelib:1.1', 'sha256': newer, 'size': mock.ANY}])
         self.assertEqual([v['versionCode'] for v in b.projects()[0]['versions']], [1, 2, 3])
+
+    def test_a_library_class_relabelled_into_the_app_or_platform_is_refused(self):
+        b = self.builder(self.using('com.example:evil:1.0'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        package = b.projects()[0]['packageName'].replace('.', '/')
+        src = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        self.store.add('com.example:evil:1.0', jar(src / 'evil.jar', {
+            'com/example/fakelib/Greeter.class': self.greeter(), 'com/example/fakelib/X.class': klass(package + '/Extra')}))
+        job = self.run_job(b, out)
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'dependency'), job)
+        self.assertIn("another class's name", job['failure']['summary'])
+
+    def test_a_library_d8_cannot_convert_is_the_librarys_failure(self):
+        src = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        self.store.add('com.example:fakelib:1.0', jar(src / 'lib.jar', {
+            'com/example/fakelib/Greeter.class': self.greeter(),
+            'com/example/fakelib/Broken.class': klass('com/example/fakelib/Broken')}))  # ends after this_class
+        b = self.builder(self.using())
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        job = self.run_job(b, out)
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'dependency'), job)
+        self.assertIn('could not be converted', job['failure']['summary'])
+
+    def greeter(self) -> bytes:
+        with zipfile.ZipFile(io.BytesIO(self.library())) as z:
+            return z.read('com/example/fakelib/Greeter.class')
+
+    def test_a_library_dropped_and_declared_again_must_still_match(self):
+        self.store.add('com.example:fakelib:1.0', self.library())
+        b = self.builder(self.using())
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r1', 'description': 'x'})
+        self.assertEqual(self.run_job(b, out)['state'], 'ready')
+
+        def drop(source, kind, request, cancelled):
+            (source / D.FILE).unlink()
+            java = next(source.glob('src/**/MainActivity.java'))
+            java.write_text(java.read_text().replace('import com.example.fakelib.Greeter;\n', '')
+                            .replace('Greeter.greet("owner")', '"no library"'))
+        b.generate = drop
+        revise = lambda key: b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': key,
+                                                              'request': 'again'})
+        self.assertEqual(self.run_job(b, revise('r2'))['state'], 'ready')
+        self.assertEqual(b.ledger.dependencies(out['projectId']), [])  # version 2 uses no library
+        self.store.add('com.example:fakelib:1.0', self.library('Hi, '))  # then the store's bytes change
+        b.generate = self.using()
+        job = self.run_job(b, revise('r3'))
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'dependency'), job)
+        self.assertIn('last built with', job['failure']['summary'])
 
     def test_a_library_defining_app_classes_is_refused(self):
         b = self.builder(self.using('com.example:evil:1.0'))

@@ -140,6 +140,9 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
                         *(['-classpath', ':'.join(jars)] if jars else []), '-d', work / 'classes',
                         *sources], work, home, tools, cancelled, 'compile', hidden))
     except StepFailed as failed:
+        if failed.category == 'compile' and jars and re.search(r'error: cannot access|bad class file', failed.log):
+            raise StepFailed('dependency', 'A library the app declares could not be read by the compiler.',
+                             log=failed.log) from None
         # An import of a library the toolchain lacks (androidx, kotlin, an undeclared one) is a dependency failure.
         if failed.category == 'compile' and re.search(r'error: package [\w.]+ does not exist', failed.log):
             raise StepFailed('dependency', 'The app needs a library this builder does not provide (it builds with '
@@ -151,6 +154,16 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     for c in classes:  # whatever the source text claimed, compiled classes live in the app's own package
         if not Path(c).relative_to(work / 'classes').as_posix().startswith(own):
             raise StepFailed('compile', f'Classes must be in package {package}.')
+    if jars:  # the libraries alone first, so a library d8 cannot convert is reported as the library's failure
+        (work / 'libdex').mkdir(exist_ok=True)
+        try:
+            run([tools.bt / 'd8', '--min-api', str(template.MIN_SDK), '--lib', tools.android_jar, '--output',
+                 work / 'libdex', *jars], work, home, tools, cancelled, 'compile', hidden)
+        except StepFailed as failed:
+            if failed.category != 'compile':
+                raise
+            raise StepFailed('dependency', 'A library the app declares could not be converted for Android.',
+                             log=failed.log) from None
     log.append(run([tools.bt / 'd8', '--min-api', str(template.MIN_SDK), '--lib', tools.android_jar, '--output',
                     work / 'dex', *classes, *jars], work, home, tools, cancelled, 'compile', hidden))
     unaligned = work / 'unaligned.apk'

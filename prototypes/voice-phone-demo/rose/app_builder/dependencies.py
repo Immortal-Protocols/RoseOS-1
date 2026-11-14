@@ -12,6 +12,7 @@ host-owned directory of recorded files and digests; nothing here downloads anyth
   with the digest the resolver recorded and, for a coordinate an earlier delivered version used, with that version's
   lock (a library never changes under an app without its coordinate changing);
 - read as a plain JVM JAR: bounded entries and sizes, safe names, class files only (plus inert META-INF metadata),
+  each checked under the name its bytes define (this_class), not just its entry path,
   no class in the ``java``, ``android`` or ``dalvik`` packages, none that android.jar defines, none in the app's own
   package, and no class two libraries both define;
 - rewritten as a job-local JAR holding exactly those class files, which is what javac and d8 see.
@@ -227,14 +228,55 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+# Constant pool entries' sizes after their tag (Utf8, tag 1, is sized by its own length; Long and Double take 2 slots).
+POOL_SIZES = {3: 4, 4: 4, 5: 8, 6: 8, 7: 2, 8: 2, 9: 4, 10: 4, 11: 4, 12: 4, 15: 3, 16: 2, 17: 4, 18: 4, 19: 2, 20: 2}
+ACC_MODULE = 0x8000
+
+
+def class_name(data: bytes) -> tuple[str, int]:
+    """The internal name a class file defines (this_class) and its access flags. That name, not the JAR entry's,
+    is what javac and d8 use. ValueError when the constant pool is malformed or truncated."""
+    count, pos, utf8, classes = int.from_bytes(data[8:10], 'big'), 10, {}, {}
+    index = 1
+    while index < count:
+        tag = data[pos] if pos < len(data) else None
+        if tag == 1:
+            length = int.from_bytes(data[pos + 1:pos + 3], 'big')
+            raw = data[pos + 3:pos + 3 + length]
+            if len(raw) != length:
+                raise ValueError('truncated')
+            utf8[index] = raw
+            pos += 3 + length
+        elif tag in POOL_SIZES:
+            if tag == 7:
+                classes[index] = int.from_bytes(data[pos + 1:pos + 3], 'big')
+            pos += 1 + POOL_SIZES[tag]
+        else:
+            raise ValueError('bad constant pool tag')
+        index += 2 if tag in (5, 6) else 1
+    if pos + 4 > len(data):
+        raise ValueError('truncated')
+    access, this = int.from_bytes(data[pos:pos + 2], 'big'), int.from_bytes(data[pos + 2:pos + 4], 'big')
+    raw = utf8.get(classes.get(this))
+    if raw is None:
+        raise ValueError('this_class is not a class')
+    return raw.decode('ascii'), access  # a name outside ASCII is refused (UnicodeDecodeError is a ValueError)
+
+
 def _classes(jar: Path, coordinate: str, package: str, framework: frozenset) -> dict:
-    """The JAR's class entries, name -> bytes, after every check; Refused otherwise."""
-    own = package.replace('.', '/') + '/'
+    """The JAR's class entries, name -> bytes, after every check; Refused otherwise. Anything the archive reader
+    raises is a library that is not a valid JAR, never a builder failure."""
     try:
-        z = zipfile.ZipFile(jar)
-    except (zipfile.BadZipFile, OSError, ValueError):
+        return _check_archive(jar, coordinate, package, framework)
+    except Refused:
+        raise
+    except Exception:
         raise Refused(f'The library {coordinate} is not a valid JAR.') from None
-    with z:
+
+
+def _check_archive(jar: Path, coordinate: str, package: str, framework: frozenset) -> dict:
+    own = package.replace('.', '/') + '/'
+    with zipfile.ZipFile(jar) as z:
         infos = z.infolist()
         if len(infos) > MAX_ENTRIES:
             raise Refused(f'The library {coordinate} has more entries than this builder accepts.')
@@ -260,27 +302,34 @@ def _classes(jar: Path, coordinate: str, package: str, framework: frozenset) -> 
                     raise Refused(f'The library {coordinate} carries {name}, a resource this builder does not '
                                   'package yet.')
                 continue
-            if name == 'module-info.class':
-                continue  # module metadata; Android has no modules
             parts = name.split('/')
-            if not (CLASS_NAME.fullmatch(parts[-1]) and all(SEGMENT.fullmatch(p) for p in parts[:-1])):
+            if name != 'module-info.class' and not (CLASS_NAME.fullmatch(parts[-1])
+                                                    and all(SEGMENT.fullmatch(p) for p in parts[:-1])):
                 raise Refused(f'The library {coordinate} carries {name}; only class files are supported yet '
                               '(no Java resources or native code).')
-            if name.startswith(RESERVED) or name in framework or name.startswith(own):
-                raise Refused(f'The library {coordinate} defines {name[:-6].replace("/", ".")}, which belongs to '
-                              f'{"this app" if name.startswith(own) else "the Android platform"}.')
             if info.file_size > MAX_ENTRY:
                 raise Refused(f'The library {coordinate} has an entry larger than this builder accepts.')
-            try:
-                with z.open(info) as f:
-                    data = f.read(MAX_ENTRY + 1)
-            except (zipfile.BadZipFile, OSError, ValueError, NotImplementedError, EOFError):
-                raise Refused(f'The library {coordinate} is not a valid JAR.') from None
+            with z.open(info) as f:
+                data = f.read(MAX_ENTRY + 1)
             if len(data) > MAX_ENTRY or len(data) != info.file_size:
                 raise Refused(f'The library {coordinate} is not a valid JAR.')
             major = int.from_bytes(data[6:8], 'big') if len(data) >= 10 else 0
             if data[:4] != b'\xca\xfe\xba\xbe' or not 45 <= major <= MAX_CLASS_MAJOR:
                 raise Refused(f'The library {coordinate} has a class file this builder cannot read ({name}).')
+            try:
+                defined, access = class_name(data)
+            except (ValueError, IndexError):
+                raise Refused(f'The library {coordinate} has a class file this builder cannot read ({name}).') from None
+            if name == 'module-info.class':
+                if defined != 'module-info' or not access & ACC_MODULE:
+                    raise Refused(f'The library {coordinate} has a module-info.class that is not module metadata.')
+                continue  # module metadata; Android has no modules
+            # Every check below is on the class the bytes define, which is what javac and d8 use.
+            if defined + '.class' != name:
+                raise Refused(f'The library {coordinate} stores a class under another class\'s name ({name}).')
+            if name.startswith(RESERVED) or name in framework or name.startswith(own):
+                raise Refused(f'The library {coordinate} defines {name[:-6].replace("/", ".")}, which belongs to '
+                              f'{"this app" if name.startswith(own) else "the Android platform"}.')
             classes[name] = data
     return classes
 

@@ -161,22 +161,31 @@ in source downloads or populates a store. Then, per job:
    not followed, only a regular file is accepted, and size is bounded at
    16 MB a JAR and 64 MB a job.
 2. **Digest.** The copy's sha256 must equal the digest the resolver recorded.
-   For a coordinate the last delivered version used, it must also equal that
-   version's lock, so a library never changes under an app without its
-   coordinate changing.
+   For a coordinate any delivered version of the project used, it must also
+   equal that version's lock, so a library never changes under an app
+   without its coordinate changing, even if it was dropped and declared
+   again.
 3. **Read as a plain JVM JAR.** These bounds apply:
    - at most 20,000 entries, 64 MB unpacked, and 8 MB an entry;
    - no unsafe names (absolute, `..`, backslash, empty segments), no
      duplicate entries and no encryption;
    - class files only, Java 1.1 to 21; inert `META-INF` metadata (the
-     manifest, license, notice, Maven and signature files) is allowed, and
-     `module-info.class` is skipped;
+     manifest, license, notice, Maven and signature files) is allowed, and a
+     `module-info.class` that really is module metadata is skipped;
+   - each class is checked under the name its bytes define (`this_class`,
+     read from the constant pool), which is the name `javac` and `d8` use.
+     That name must equal its entry's path;
    - no class in `java/`, `android/` or `dalvik/`, none that `android.jar`
      defines, none in the app's own package, and none that two libraries both
-     define.
+     define;
+   - anything the archive reader can't read (corrupt or unsupported
+     compression, a malformed class) is a refused library, never a builder
+     failure.
 4. **Rewrite.** A job-local JAR is written holding exactly those class files.
-   `javac` compiles against it, and `d8` adds it to the app. The app's own
-   classes are still checked to be in its package.
+   `javac` compiles against it, and `d8` first converts the libraries alone,
+   so a library `d8` can't convert, or `javac` can't read, is a `dependency`
+   failure and not blamed on the app's code. `d8` then adds them to the app.
+   The app's own classes are still checked to be in its package.
 5. **Lock.** The delivered version records each library's coordinate, sha256
    and size (`Ledger.dependencies`), in the same transaction as the version.
    It is the next revision's lock.
@@ -203,7 +212,10 @@ compiled by the pinned JDK for the real build. It shows:
   recorded, and the library's class is in its dex;
 - with no resolver, or no declaration, the build is a `dependency` failure;
 - a revision reuses the lock, and changed bytes under the same coordinate are
-  refused;
+  refused, also after the library was dropped and declared again;
+- a class relabelled into the app's package or the platform under a harmless
+  entry name is refused, and a library `d8` can't convert is the library's
+  failure;
 - tampering, namespace and archive bounds are each refused.
 
 This is compilation and signature verification only. No real library, store,
