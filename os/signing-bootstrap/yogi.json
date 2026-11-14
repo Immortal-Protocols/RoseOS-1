@@ -557,18 +557,28 @@
           "sourceImageId": "3188631002576736407",
           "basis": "Known lineage of the original protected builder image; the actual guest OS and package metadata are observed by the proof, never inferred from this label"
         },
-        "spec": null,
-        "specBasis": "Unset on purpose: the admitted helper proves the generator, decrypt-keys and avbtool scripts at their source roots on the builder that runs the bootstrap. The Yogi bootstrap runs only on the dedicated Yogi builder, whose roots are not measured; the Frankel-builder roots of fold-rango-v1/pro-mustang-v1 do not apply. A reviewed commit sets the spec from that builder once measured."
+        "spec": {
+          "schema": "roseos.fold-tool-proof-spec.v2",
+          "profile": "fold-rango-v1",
+          "scripts": {
+            "generator": {
+              "root": "/srv/rose-yogi/src/development"
+            },
+            "decrypt-keys": {
+              "root": "/srv/rose-yogi/src/script"
+            },
+            "avbtool": {
+              "root": "/srv/rose-yogi/src/external/avb"
+            }
+          }
+        },
+        "specBasis": "Reviewed source binding of the existing retained Yogi root. The installed scripts, git objects and host OpenSSL package are proved on the exact Yogi builder in the same full run before login or key generation; this spec is not a claim that those runtime checks have passed."
       },
       "missing": [
-        "owner/security approval of the new Yogi OS identity (yogi-v1, the Fold recipe key set)",
         "the two empty secret containers PIXEL_OS_SIGNING_KEYS_YOGI_V1 and PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1 in protocols-465723, created by the admin",
-        "time-boxed bootstrap access (secrets.get, versions.list, versions.add as one binding per secret, at most 4 h, made at action time) and an expiring secretAccessor for the signer on those two containers only; the run checks get and list live, versions.add only by the add itself, and never the secretAccessor",
-        "localProof.spec source roots of the generator, decrypt-keys and avbtool scripts on the dedicated Yogi builder, from a reviewed measurement",
-        "a Yogi-builder key-bootstrap job (runner roseos-yogi-builder, lock /srv/rose-yogi/yogi-build.lock via signing-bootstrap.py --lock), never the Frankel builder",
-        "one approved bootstrap run"
+        "time-boxed bootstrap access (secrets.get, versions.list, versions.add as one binding per secret, at most 4 h, made at action time) and an expiring secretAccessor for the signer on those two containers only; the run checks get and list live, versions.add only by the add itself, and never the secretAccessor"
       ],
-      "definitionBasis": "Nathan approved this unbound source definition (B1) after the Yogi signing compatibility review of #558. No container, grant, key, measurement or run exists or is implied; every missing item above needs its own approval.",
+      "definitionBasis": "Nathan approved one integrated Yogi OS identity/bootstrap/build/sign/publication attempt in this thread. Existing bootstrap machinery and same-run local proof; no key exists yet and no resource grant or VM change has been made. The listed resource and access prerequisites remain unbound.",
       "resourceBasis": null,
       "resourceEvidence": null,
       "accessEvidence": null

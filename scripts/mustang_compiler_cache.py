@@ -105,7 +105,12 @@ def statistics(cache, root=ROOT):
 def prepare(lane, runtime, root=ROOT, fetch=None):
     if not enabled(runtime):
         return None
-    cache = location(lane)
+    return prepare_at(location(lane), root=root, fetch=fetch)
+
+
+def prepare_at(cache, root=ROOT, fetch=None, out_dir=OUT):
+    """The same pinned local cache on a caller's dedicated filesystem."""
+    cache = Path(cache)
     plain(cache.parent, directory=True)
     cache.mkdir(mode=0o700, exist_ok=True)
     plain(cache, directory=True)
@@ -152,7 +157,7 @@ def prepare(lane, runtime, root=ROOT, fetch=None):
     check_binary(cache)
     before = statistics(cache, root)
     return {'enabled': True, 'kind': 'ccache', 'version': VERSION, 'maxBytes': MAX_BYTES,
-            'path': str(cache), 'outDir': OUT, 'before': before,
+            'path': str(cache), 'outDir': out_dir, 'before': before,
             'namespace': cache_environment(cache, root=root)['CCACHE_NAMESPACE'],
             'priorObjectImport': False, 'scope': 'C/C++ compiler results; no Java or whole-OUT_DIR reuse'}
 
