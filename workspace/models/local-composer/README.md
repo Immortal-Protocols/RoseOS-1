@@ -1,17 +1,21 @@
-# Local composer (Project 2, LOCAL-COMPOSER-001)
+# Local composer (Project 2, LOCAL-COMPOSER-001/002)
 
 Phone-local layout composition for the workspace page one swipe left of Home: a button press ("best guess") or
 direct text becomes a validated layout **on the phone, offline**. No server generates layouts. Models owns this
 directory only: context selection, the constrained model call, validation and benchmarking. OS Product owns the
 catalog, snapshot, ID registry, renderer, persistence, pin/undo and last-usable layout. App Core owns request
-routing. Native UI waits for Nathan's prototype approval.
+routing. Nathan approved the Project 2 HiFi direction (r2, `prototypes/rose-hifi`, source `6fcf8c9b`) on
+2026-11-14; native layout, state and rendering are OS Product's. Models does not build UI, an app module or a
+service: it provides the Python reference and a Java core the app can call.
 
-Status (2026-11-13): **source and offline tests only.** No model has been run, nothing has been built for a
-phone, nothing has been deployed, and nothing has been measured on a device.
+Status (2026-11-14): **source and offline tests only.** No model has been run, nothing has been built for a
+phone, nothing has been deployed, and nothing has been measured on a device. Runtime access limits are
+unchanged by the design approval.
 
 | evidence level | state |
 |---|---|
-| source | this directory: contract proposal, composer, grammar, validator, bench harness, 34 offline tests |
+| source | this directory: contract proposal, Python reference, Java core, 55 shared vectors, 38 Python tests (one of which runs the 1,318 Java checks) |
+| compilation | Java compiled with `javac --release 8` on a host JDK (Rose Agent's source level); not compiled against `android.jar` or dexed here (no Android SDK in this workspace) |
 | build (phone runtime + weights) | none: no on-device runtime is in the repo; installs and weight downloads are not authorized |
 | deployment | none |
 | phone proof | none: no admitted Pixel 10 install/measurement route |
@@ -29,7 +33,13 @@ composer/validate.py           strict output validation and alias -> real ID map
 composer/compose.py            one request -> validated layout | typed failure, with timings
 composer/backends.py           heuristic no-model baseline, scripted test backend, llama-server adapter (unexecuted)
 composer/bench.py              JSONL benchmark records + p50/p95 summary
+contract/vectors/v1.json       shared vectors, generated from the Python reference (tests/make_vectors.py)
+java/src/rose/models/composer/ Java 8 core for the app: Contract, ContextSelector, Grammar, Validator, Composer,
+                               LocalInference (the runtime seam), ScriptedInference (labelled, not a model), Json
+java/test/.../ComposerTests    replays every vector plus cancel/deadline/crash/goal-boundary/JSON checks
+java/run-tests.sh              compiles at --release 8 into java/out/ (ignored) and runs the Java tests
 tests/test_composer.py         offline unit, negative, fuzz and harness tests
+tests/test_parity.py           vectors are current; Java reproduces them (skips with a reason if no JDK)
 ```
 
 ```bash
@@ -39,6 +49,32 @@ cd workspace/models/local-composer && python3 -m unittest discover -s tests -v
 ```bash
 cd workspace/models/local-composer && python3 -m composer.bench --cases contract/examples/cases.json --repeats 3
 ```
+
+```bash
+cd workspace/models/local-composer && python3 tests/make_vectors.py && bash java/run-tests.sh
+```
+
+## Java core (for the app)
+
+`rose.models.composer` is plain Java 8 with no Android or `org.json` types, so it compiles inside Rose Agent
+(`-source 8`, `minSdkVersion 29`) and on a host JDK. The caller passes the request as JSON-shaped maps (or parses
+a string with `Json.parse`) and an on-device `LocalInference`:
+
+```java
+Composer composer = new Composer(Catalog.fromJson(osProductCatalog), localInference);
+ComposeResult r = composer.compose(request, cancellation);        // ok + layout of real IDs, or failed + category
+ComposeResult shown = Validator.checkFresh(r, currentSnapshotVersion); // stale_snapshot just before rendering
+```
+
+- `LocalInference.generate(Request)` receives the system and user text, the per-request GBNF, an output-token
+  cap, the time left and a cancellation token; it returns untrusted text. Any exception other than `Refused`
+  (`timeout`, `cancelled`) becomes `model_unavailable`. No binding to llama.cpp or LiteRT-LM is included: none is
+  admitted.
+- Every behaviour is checked against the Python reference through `contract/vectors/v1.json`: the selected
+  aliases and exact model-visible lines, the GBNF text (SHA-256), the output-token cap and the result. Lengths
+  are counted in code points on both sides, and Python's whitespace rules are mirrored.
+- Where this core and OS Product's native composer meet (who calls it, on which thread, with which catalog) is
+  OS Product's design; nothing here registers a provider, service or UI.
 
 These tests are not in `scripts/test-local.sh` or CI: shared CI belongs to others, so wiring this directory in is
 a request to its owners, not part of this change.
@@ -110,6 +146,16 @@ until at least two candidates have device numbers and validity/usefulness on the
 - Peak memory (`peakRssMb`) and repeat-run energy (`energyMj`) only from an admitted on-device route.
 - Target: warm composer time under one second. This is a target, not a result.
 
+## Waiting on OS Product (the dependent pieces, not implemented)
+
+1. **Catalog.** HiFi r2's card set is `apps`, `actions`, `carousel`, `list`/checklist and `notif`; the code reads
+   all rules from catalog data, but `cat-1` is a proposal until OS Product names the native catalog and version.
+2. **Pins.** HiFi pins whole cards at fixed positions. If native does the same, the request needs the pinned cards
+   as fixed input (slots plus ids the composer must not repeat or move); today `pinned` only gives items priority.
+3. **Regenerate.** Same context plus deterministic decoding gives the same layout. App Core recommends a fresh
+   snapshot plus the previous layout's ids as a soft avoid hint; OS Product decides the input.
+4. **Real IDs and action shapes** for the first build.
+
 ## Blockers (exact)
 
 1. **No phone route.** No admitted Pixel 10 install or measurement route exists for Models; phone deployment and
@@ -121,7 +167,10 @@ until at least two candidates have device numbers and validity/usefulness on the
    returns 403 in this session (repositories not enabled); not routed around.
 4. **Gated weights.** Gemma (Google repos) and Llama 3.2 need licence acceptance with a Hugging Face account, which
    is a credential; their configs (and so KV budgets) are unverified. Gemma's licence also needs Nathan's call.
-5. **Contract confirmation.** The real catalog, ID format and first-build item kinds are OS Product's; the request
-   fields are App Core's. Both are proposals in `contract/rose-layout-v1.md`.
+5. **Contract confirmation.** App Core confirmed its side (PR 782 §4.4). The real catalog, ID format, first-build
+   item kinds, pin semantics and regenerate input are OS Product's (see above).
 6. **Renderer timestamp.** Request-to-render latency needs OS Product's renderer completion time.
 7. **CI.** This directory is not wired into shared CI; tests run locally.
+8. **Android compile.** No Android SDK is present, and downloading one is outside this source-only scope, so the
+   Java core has not been compiled against `android.jar` or dexed. It uses only `java.lang`, `java.util`,
+   `java.util.regex` and `java.math` APIs available at Rose Agent's `minSdkVersion` 29.

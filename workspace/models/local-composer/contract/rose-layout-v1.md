@@ -6,6 +6,11 @@ last-usable layout. App Core owns conversational routing. Models owns only what 
 the constrained model call and validation of its output. Every field below is open for OS Product and App Core to
 change; nothing renders from this until they confirm it.
 
+Confirmed so far: App Core accepted the mapping to its outer contract and answered questions 5 and 6
+(`docs/APP-BUILDER.md` §4.4, PR 782 at `41891f4c`). Nathan approved the Project 2 HiFi direction (r2,
+`prototypes/rose-hifi`, source `6fcf8c9b`); OS Product owns its native integration. The catalog, ID format and
+pin semantics below still wait for OS Product.
+
 ## Boundary
 
 ```
@@ -51,7 +56,8 @@ registry can resolve and launch. `snapshotVersion` changes whenever any entry ch
   "apps":          [{"id": "<app id>", "label": "Calculator", "category": "tools", "recentRank": 3}],
   "notifications": [{"id": "<notification id>", "appId": "<app id>", "title": "Pasta timer done", "recentRank": 1}],
   "content":       [{"id": "<content id>", "kind": "media | contact | document | place | other", "label": "...", "appId": "<app id>"}],
-  "actions":       [{"id": "<action id>", "label": "Start timer", "kind": "launch | shortcut | deeplink | notification_action | app_function",
+  "actions":       [{"id": "<action id>", "label": "Start timer",
+                     "kind": "launch | shortcut | deeplink | notification_action | app_function | agent_task",
                      "targetId": "<app/notification/content id>", "requiresConfirmation": false}],
   "pinned": ["<any id above>"]
 }
@@ -60,18 +66,31 @@ registry can resolve and launch. `snapshotVersion` changes whenever any entry ch
 - Labels and titles are display text the OS has already chosen to show, truncated to 60 characters. Nothing else
   (no message bodies, no account names) enters the model.
 - Hidden, sensitive or permission-gated items are left out by OS Product, not filtered by Models.
+- Optional `category`, `kind` and `appId` are strings; `recentRank` is an integer from 0 to 1,000,000 (lower is
+  more recent); `timeOfDay` is one of the four values or absent; `pinned` is a list of ids in the snapshot.
+  Anything else is `bad_request`.
+- `agent_task` is a Rose task (App Core PR 782 §4.3): it always asks first, so `requiresConfirmation` must be
+  `true`. Its `ask` (confirm-sheet text) and `goal` (what Rose runs) may ride along in the snapshot but **never
+  enter the model**: the composer reads only `id`, `label`/`title`, `category`, `kind`, `appId`, `targetId`,
+  `recentRank` and `pinned`. It may be placed only as a `button` item or a `card` action, never in a `grid`.
 
 ## Catalog (owned by OS Product; this is the proposed starting set)
 
 | component | items it may reference | items | notes |
 |---|---|---|---|
-| `grid` | apps, actions | 2–8 | icon grid, 2–4 columns chosen by the renderer |
+| `grid` | apps, actions (not `agent_task`) | 2–8 | icon grid, 2–4 columns chosen by the renderer |
 | `carousel` | content, notifications, apps | 2–8 | horizontally scrollable; must not fight the page swipe (renderer's job) |
 | `list` | notifications, content | 1–8 | vertical, scrollable |
 | `card` | one notification or content item, plus up to 2 actions that target it | 1 | |
 | `button` | one action | 1 | a direct action; `requiresConfirmation` actions still confirm in the OS |
 
 Each section also has a `title` of at most 30 characters, plain text. The layout has a `title` of at most 40.
+
+The approved HiFi r2 uses a different card set: `apps`, `actions` (direct actions and Rose tasks), `carousel`,
+`list` (optionally a checklist) and `notif` (a notification with its actions). The composer reads every rule
+(item kinds, bounds, card actions, excluded action kinds) from the catalog data, in Python and Java alike, so OS
+Product's real catalog replaces `cat-1` without code changes. **Until OS Product names it, `cat-1` stays a
+proposal.**
 
 ## Layout (what the model may produce; the validator enforces all of it)
 
@@ -161,12 +180,15 @@ provider.
 1. The real component types, their item rules and bounds (the table above is a guess to start from).
 2. The real ID format and which item kinds exist in the first build (apps and launch actions only, or also
    notifications, shortcuts and app functions).
-3. Whether `pinned` items must appear, or only be preferred.
+3. Whether `pinned` items must appear, or only be preferred (see 8: HiFi pins whole cards).
 4. Where the composer runs: in the launcher process, or a separate service the launcher binds to (memory and
    process-death behaviour differ).
-5. App Core: whether `conversational` needs anything beyond `trigger`, `prompt` and `requestId` (App Core's v1
-   suggests not).
-6. OS Product: whether the composer is told whether the page is on screen (it is not needed to compose; the
-   provider alone decides `shown` versus `prepared`).
-7. `regenerate`: whether it should produce a different layout (a variation seed, or the previous layout's IDs to
-   avoid), or simply recompose against a newer snapshot.
+5. ~~App Core: whether `conversational` needs more fields.~~ Answered: only `trigger`, `prompt` and `requestId`.
+6. ~~Whether the composer is told the page is on screen.~~ Answered: no; only the provider decides `shown` versus
+   `prepared`.
+7. `regenerate` (OS Product, with App Core's recommendation): App Core needs only a new revision and recommends a
+   fresh snapshot plus the previous layout's item ids as a soft "avoid" hint. Deterministic decoding of the same
+   context returns the same layout, so some variation input is required. Not implemented until OS Product picks it.
+8. Pins (OS Product): HiFi pins whole cards and keeps each at its index while the unpinned cards move. If that is
+   the native rule, the composer needs the pinned cards as fixed input (their slots and ids, which it must neither
+   repeat nor move) rather than today's item-level `pinned` preference. Not implemented until OS Product decides.

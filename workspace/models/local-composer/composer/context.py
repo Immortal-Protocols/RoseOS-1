@@ -4,7 +4,8 @@ The model never sees raw IDs. Each selected entry gets a short alias (a1, n2, c3
 back to real IDs after validation. Selection is deterministic: pinned entries first, then entries ranked by overlap
 with the prompt (or, for a button press, by recency and time of day), with a per-app cap for variety, until the
 character budget is spent. Characters stand in for tokens here; a model's own tokenizer replaces the estimate when
-a runtime is bound.
+a runtime is bound. Only `label`/`title`, `category` and `kind` reach the model: an action's `ask` or `goal`
+text, and any other field, never does.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ class Context:
     aliases: dict = field(default_factory=dict)   # alias -> real id
     kinds: dict = field(default_factory=dict)     # alias -> snapshot kind ('apps', ...)
     targets: dict = field(default_factory=dict)   # action alias -> alias of its target (if selected)
+    action_kinds: dict = field(default_factory=dict)  # action alias -> action kind ('agent_task', ...)
     lines: list = field(default_factory=list)     # the compact text the model sees
     chars: int = 0
 
@@ -60,7 +62,7 @@ def select(snapshot: dict, prompt: str | None, budget_chars: int = 1600, per_app
             candidates.append((_score(kind, e, prompt_words, hints, pinned), kind, e))
     candidates.sort(key=lambda c: c[0], reverse=True)
     ctx, counts, per_app_count = Context(), {k: 0 for k in KINDS}, {}
-    chosen_ids = {}
+    chosen_ids, raw_targets = {}, []
     for _, kind, e in candidates:
         app = e.get('appId') or (e['id'] if kind == 'apps' else None)
         if app is not None and e['id'] not in pinned and per_app_count.get(app, 0) >= per_app:
@@ -75,17 +77,20 @@ def select(snapshot: dict, prompt: str | None, budget_chars: int = 1600, per_app
             counts[kind] -= 1
             continue
         ctx.aliases[alias], ctx.kinds[alias] = e['id'], kind
+        if kind == 'actions':
+            ctx.action_kinds[alias] = e.get('kind')
         chosen_ids[e['id']] = alias
         ctx.lines.append(line)
+        raw_targets.append(e['targetId'] if kind == 'actions' else None)
         ctx.chars += len(line) + 1
         if app is not None:
             per_app_count[app] = per_app_count.get(app, 0) + 1
     # actions point at the alias of their target; an action whose target was not selected still stands alone
     final = []
-    for line in ctx.lines:
+    for line, target in zip(ctx.lines, raw_targets):
         alias = line.split(' ', 1)[0]
         if ctx.kinds[alias] == 'actions':
-            head, target = line.rsplit(' -> ', 1)
+            head = line[:len(line) - len(f' -> {target}')]
             if target in chosen_ids:
                 ctx.targets[alias] = chosen_ids[target]
                 line = f'{head} -> {chosen_ids[target]}'
