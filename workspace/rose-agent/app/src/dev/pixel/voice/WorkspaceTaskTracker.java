@@ -135,8 +135,10 @@ final class WorkspaceTaskTracker {
   if(!(pt instanceof List)||((List<?>)pt).size()>PHONE_TASKS)return null;
   for(Object e:(List<?>)pt){
    if(!(e instanceof Map))return null;Map<?,?> t=(Map<?,?>)e;
-   String id=str(t.get("id")),st=str(t.get("status"));
-   if(id==null||id.isEmpty()||id.length()>PHONE_TASK_ID||st==null||!PHONE_STATUSES.contains(st))return null;
+   // App Core writes an all-digit phone task id as a JSON integer and any other id as a string.
+   Object rawId=t.get("id");String st=str(t.get("status"));
+   boolean idOk=rawId instanceof Long?(Long)rawId>=0:rawId instanceof String&&!((String)rawId).isEmpty()&&((String)rawId).length()<=PHONE_TASK_ID;
+   if(!idOk||st==null||!PHONE_STATUSES.contains(st))return null;
   }
   // Epoch seconds, compared in milliseconds so fractions keep their order.
   return new State(taskId,requestId,actionId,state,detail.trim(),Math.round(updated*1000));

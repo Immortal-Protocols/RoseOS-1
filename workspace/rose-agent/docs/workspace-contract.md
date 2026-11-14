@@ -273,7 +273,8 @@ mounted only when the server enables it, which nothing does yet. The phone treat
   - **The phone's record (`WorkspaceTaskTracker`).** For each of the last 20 taps it saves the action,
     `requestId`, `taskId` once known, and the last state with its `updatedAt`, so a restart keeps them.
   - **Strict parsing.** The phone refuses a `taskId` not matching `wt-[0-9a-f]{16}`, an unknown state or phone
-    task status, more than 8 phone tasks, a phone task id over 128 characters, and a `detail` over 200. A
+    task status, more than 8 phone tasks, a phone task id that is neither a string of 1 to 128 characters nor a non-negative integer (App Core
+    writes an all-digit id as a JSON integer), and a `detail` over 200. A
     refused state is ignored, never shown.
   - **Ordering.** An update older than the one held is dropped. A final state never changes, and a final with
     the same `updatedAt` wins over `running`.

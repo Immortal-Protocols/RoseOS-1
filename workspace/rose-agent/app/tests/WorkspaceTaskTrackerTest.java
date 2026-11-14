@@ -142,6 +142,11 @@ public final class WorkspaceTaskTrackerTest {
    good.replace("\"phoneTasks\":[{\"id\":\"local:1\",\"status\":\"running\"}]","\"phoneTasks\":{}")
   };
   for(String b:bad)expect(parse(b)==null,"refused: "+b);
+  // App Core sends an all-digit phone task id as a JSON integer (workspace_tasks.py _get).
+  String pt="[{\"id\":\"local:1\",\"status\":\"running\"}]";
+  expect(parse(good.replace(pt,"[{\"id\":42,\"status\":\"running\"},{\"id\":\"local:1\",\"status\":\"done\"}]"))!=null,"an integer phone task id");
+  for(String b:new String[]{"-1","1.5","true","null"})expect(parse(good.replace(pt,"[{\"id\":"+b+",\"status\":\"running\"}]"))==null,"refused phone task id "+b);
+  expect(parse(good.replace(pt,"[{\"id\":\""+new String(new char[129]).replace('\0','p')+"\",\"status\":\"running\"}]"))==null,"a phone task id over 128");
   StringBuilder many=new StringBuilder("[");for(int i=0;i<9;i++){if(i>0)many.append(',');many.append("{\"id\":\"p").append(i).append("\",\"status\":\"done\"}");}many.append(']');
   expect(parse(good.replace("[{\"id\":\"local:1\",\"status\":\"running\"}]",many.toString()))==null,"more than 8 phone tasks");
   expect(WorkspaceTaskTracker.event("not json")==null&&WorkspaceTaskTracker.event("{\"kind\":\"workspace_task\",\"task\":{}}")==null,"unreadable events");
