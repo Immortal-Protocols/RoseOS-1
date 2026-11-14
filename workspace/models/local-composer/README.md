@@ -14,7 +14,7 @@ unchanged by the design approval.
 
 | evidence level | state |
 |---|---|
-| source | this directory: contract proposal, Python reference, Java core, 55 shared vectors, 38 Python tests (one of which runs the 1,318 Java checks) |
+| source | this directory: contract, Python reference, Java core, 66 shared vectors, 40 Python tests (one of which runs the 1,714 Java checks) |
 | compilation | Java compiled with `javac --release 8` on a host JDK (Rose Agent's source level); not compiled against `android.jar` or dexed here (no Android SDK in this workspace) |
 | build (phone runtime + weights) | none: no on-device runtime is in the repo; installs and weight downloads are not authorized |
 | deployment | none |
@@ -23,7 +23,7 @@ unchanged by the design approval.
 ## Layout
 
 ```
-contract/rose-layout-v1.md     the request/snapshot/catalog/layout/result proposal for OS Product + App Core
+contract/rose-layout-v1.md     the request/snapshot/catalog/layout/result contract (answered by OS Product + App Core)
 contract/examples/             synthetic, public-safe snapshot, cases (with expected IDs) and an alias layout
 composer/contract.py           constants, proposed catalog, request + snapshot checks, typed failures
 composer/context.py            deterministic bounded context selection; real IDs -> short aliases
@@ -61,9 +61,9 @@ cd workspace/models/local-composer && python3 tests/make_vectors.py && bash java
 a string with `Json.parse`) and an on-device `LocalInference`:
 
 ```java
-Composer composer = new Composer(Catalog.fromJson(osProductCatalog), localInference);
-ComposeResult r = composer.compose(request, cancellation);        // ok + layout of real IDs, or failed + category
-ComposeResult shown = Validator.checkFresh(r, currentSnapshotVersion); // stale_snapshot just before rendering
+Composer composer = new Composer(Catalog.fromJson(osProductCatalog), localInference);  // or Catalog.cat1()
+ComposeResult r = composer.compose(request, cancellation);   // ok + layout of real IDs, or failed + category
+String wire = r.toJson();   // the rose-layout-v1 result text OS Product's WorkspaceLayout.check reads (#787)
 ```
 
 - `LocalInference.generate(Request)` receives the system and user text, the per-request GBNF, an output-token
@@ -146,15 +146,16 @@ until at least two candidates have device numbers and validity/usefulness on the
 - Peak memory (`peakRssMb`) and repeat-run energy (`energyMj`) only from an admitted on-device route.
 - Target: warm composer time under one second. This is a target, not a result.
 
-## Waiting on OS Product (the dependent pieces, not implemented)
+## Agreed with OS Product and App Core
 
-1. **Catalog.** HiFi r2's card set is `apps`, `actions`, `carousel`, `list`/checklist and `notif`; the code reads
-   all rules from catalog data, but `cat-1` is a proposal until OS Product names the native catalog and version.
-2. **Pins.** HiFi pins whole cards at fixed positions. If native does the same, the request needs the pinned cards
-   as fixed input (slots plus ids the composer must not repeat or move); today `pinned` only gives items priority.
-3. **Regenerate.** Same context plus deterministic decoding gives the same layout. App Core recommends a fresh
-   snapshot plus the previous layout's ids as a soft avoid hint; OS Product decides the input.
-4. **Real IDs and action shapes** for the first build.
+OS Product's draft PR 787 (`d71fd72a`) adopts rose-layout-v1 as the phone's only layout format and answers its
+questions; App Core's PR 782 §4.4 (`41891f4c`) answers its side. Applied here in both languages and the vectors:
+catalog `cat-1` (`button` is a row of 1–4 actions, at most 6 sections, `agent_task` only in a `button` row or a
+`card` action), pinned ids left out of the context (the phone keeps pinned sections at their index), and the
+request's `avoid` list for regenerate. Both PRs are drafts: if either changes, the contract and vectors follow.
+
+Still open on OS Product's side and not needed for this source: notifications (its D1; the first build has none),
+a content source, and the renderer timestamp for request-to-render timing.
 
 ## Blockers (exact)
 
@@ -167,8 +168,7 @@ until at least two candidates have device numbers and validity/usefulness on the
    returns 403 in this session (repositories not enabled); not routed around.
 4. **Gated weights.** Gemma (Google repos) and Llama 3.2 need licence acceptance with a Hugging Face account, which
    is a credential; their configs (and so KV budgets) are unverified. Gemma's licence also needs Nathan's call.
-5. **Contract confirmation.** App Core confirmed its side (PR 782 §4.4). The real catalog, ID format, first-build
-   item kinds, pin semantics and regenerate input are OS Product's (see above).
+5. **Contract drafts.** OS Product's (PR 787) and App Core's (PR 782) answers are drafts, not merged.
 6. **Renderer timestamp.** Request-to-render latency needs OS Product's renderer completion time.
 7. **CI.** This directory is not wired into shared CI; tests run locally.
 8. **Android compile.** No Android SDK is present, and downloading one is outside this source-only scope, so the

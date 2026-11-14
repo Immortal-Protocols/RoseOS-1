@@ -21,6 +21,9 @@ import java.util.Map;
  */
 public final class ComposerTests {
     private static int passed, failed;
+    /** The result keys OS Product's WorkspaceLayout.check allows (draft PR787 at d71fd72a). */
+    private static final java.util.Set<String> RESULT_KEYS = new java.util.HashSet<String>(java.util.Arrays.asList(
+            "contract", "requestId", "status", "layout", "failure", "model", "timing", "context", "runtimeStats"));
     private static final List<String> failures = new ArrayList<String>();
 
     private static void check(boolean ok, String what) {
@@ -75,7 +78,7 @@ public final class ComposerTests {
     static void vectors(String path) throws Exception {
         Map<String, Object> data = Json.asMap(Json.parse(read(path)));
         Catalog fromData = Catalog.fromJson(Json.asMap(data.get("catalog")));
-        Catalog catalog = Catalog.proposal();
+        Catalog catalog = Catalog.cat1();
         eq(fromData.version, catalog.version, "catalog version");
         eq(new ArrayList<String>(fromData.components.keySet()), new ArrayList<String>(catalog.components.keySet()),
                 "catalog components");
@@ -103,7 +106,7 @@ public final class ComposerTests {
                 limits = Contract.checkRequest(request, catalog);
                 Object p = request.get("prompt");
                 ctx = ContextSelector.select(Json.asMap(request.get("snapshot")), p instanceof String ? (String) p : null,
-                        budget, ContextSelector.DEFAULT_PER_APP);
+                        budget, ContextSelector.DEFAULT_PER_APP, Json.asList(request.get("avoid")));
             } catch (Refused r) {
                 ctx = null;
             }
@@ -142,6 +145,11 @@ public final class ComposerTests {
                     .compose(request);
             Map<String, Object> want = Json.asMap(expect.get("result"));
             eq(want.get("status"), res.status, name + ": status");
+            Map<String, Object> wire = Json.asMap(Json.parse(res.toJson()));
+            eq(want.get("status"), wire.get("status"), name + ": wire status");
+            check(RESULT_KEYS.containsAll(wire.keySet()), name + ": wire keys are the ones the phone's check accepts");
+            if (res.ok()) eq(want.get("layout"), wire.get("layout"), name + ": wire layout");
+            else eq(want.get("failure"), wire.get("failure"), name + ": wire failure");
             if (res.ok()) {
                 eq(want.get("layout"), res.layout, name + ": layout");
                 eq(want.get("maxTokens"), Long.valueOf(res.maxTokens), name + ": maxTokens");
@@ -176,7 +184,7 @@ public final class ComposerTests {
     static void behaviour(String path) throws Exception {
         final Map<String, Object> req = firstRequest(path);
         final String output = exampleOutput(path);
-        Catalog cat = Catalog.proposal();
+        Catalog cat = Catalog.cat1();
 
         ScriptedInference before = new ScriptedInference(output);
         ComposeResult r = new Composer(cat, before).compose(req, new LocalInference.Cancellation() {
@@ -252,6 +260,11 @@ public final class ComposerTests {
                 threw = true;
             }
             check(threw, "json depth bound");
+            String tricky = "q\"b\\n\n\u0001\u00e9\ud83c\udf5d";
+            Map<String, Object> rt = new LinkedHashMap<String, Object>();
+            rt.put("s", tricky);
+            rt.put("n", Long.valueOf(-3));
+            eq(rt, Json.asMap(Json.parse(Json.write(rt))), "json write round-trips escapes");
         } catch (Json.ParseError e) {
             check(false, "json parses a valid document");
         }

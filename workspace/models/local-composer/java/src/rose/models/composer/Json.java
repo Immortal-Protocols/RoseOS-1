@@ -184,6 +184,59 @@ public final class Json {
         return n.bitLength() < 64 ? (Object) Long.valueOf(n.longValue()) : n;
     }
 
+    /** Compact JSON text for maps, lists, strings, numbers, booleans and {@link #NULL} (or Java null). */
+    public static String write(Object v) {
+        StringBuilder b = new StringBuilder();
+        write(v, b);
+        return b.toString();
+    }
+
+    private static void write(Object v, StringBuilder b) {
+        if (v == null || v == NULL) {
+            b.append("null");
+        } else if (v instanceof String) {
+            b.append('"');
+            String s = (String) v;
+            for (int k = 0; k < s.length(); k++) {
+                char c = s.charAt(k);
+                if (c == '"') b.append("\\\"");
+                else if (c == '\\') b.append("\\\\");
+                else if (c < 0x20) b.append(String.format("\\u%04x", (int) c));
+                else b.append(c);
+            }
+            b.append('"');
+        } else if (v instanceof Map) {
+            b.append('{');
+            boolean first = true;
+            for (Map.Entry<?, ?> e : ((Map<?, ?>) v).entrySet()) {
+                if (!first) b.append(',');
+                first = false;
+                write(String.valueOf(e.getKey()), b);
+                b.append(':');
+                write(e.getValue(), b);
+            }
+            b.append('}');
+        } else if (v instanceof List) {
+            b.append('[');
+            boolean first = true;
+            for (Object x : (List<?>) v) {
+                if (!first) b.append(',');
+                first = false;
+                write(x, b);
+            }
+            b.append(']');
+        } else if (v instanceof Boolean || v instanceof Long || v instanceof Integer || v instanceof BigInteger
+                || v instanceof BigDecimal) {
+            b.append(v.toString());
+        } else if (v instanceof Double) {
+            double d = (Double) v;
+            if (Double.isNaN(d) || Double.isInfinite(d)) throw new IllegalArgumentException("non-finite number");
+            b.append(v.toString());
+        } else {
+            throw new IllegalArgumentException("not a JSON value");
+        }
+    }
+
     // ---- small typed accessors shared by the composer ------------------------------------------------------
 
     static boolean isString(Object o) { return o instanceof String; }

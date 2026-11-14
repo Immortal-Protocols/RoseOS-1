@@ -1,15 +1,16 @@
-# rose-layout-v1: the phone-local composer contract (PROPOSAL)
+# rose-layout-v1: the phone-local composer contract
 
-Status: **proposal from Models Core (LOCAL-COMPOSER-001), not agreed.** OS Product owns the component catalog,
+Status: **Models Core's contract (LOCAL-COMPOSER-001/002), answered by OS Product and App Core in drafts (below).** OS Product owns the component catalog,
 the context snapshot, the registry of real app/content/action IDs, the renderer, persistence, pin/undo and the
 last-usable layout. App Core owns conversational routing. Models owns only what sits between: context selection,
-the constrained model call and validation of its output. Every field below is open for OS Product and App Core to
-change; nothing renders from this until they confirm it.
+the constrained model call and validation of its output. OS Product's phone re-checks every result before
+rendering (`WorkspaceLayout.check`), so a composer bug can never break Home.
 
-Confirmed so far: App Core accepted the mapping to its outer contract and answered questions 5 and 6
-(`docs/APP-BUILDER.md` §4.4, PR 782 at `41891f4c`). Nathan approved the Project 2 HiFi direction (r2,
-`prototypes/rose-hifi`, source `6fcf8c9b`); OS Product owns its native integration. The catalog, ID format and
-pin semantics below still wait for OS Product.
+Confirmed: App Core accepted the mapping to its outer contract (`docs/APP-BUILDER.md` §4.4, PR 782 at
+`41891f4c`), and OS Product adopted this contract as the phone's only layout format, supplied catalog `cat-1` and
+answered the remaining questions (`workspace/rose-agent/docs/workspace-contract.md`, draft PR 787 at `d71fd72a`).
+Nathan approved the Project 2 HiFi direction (r2, `prototypes/rose-hifi`, source `6fcf8c9b`); OS Product owns its
+native integration.
 
 ## Boundary
 
@@ -35,12 +36,15 @@ App Core    ──request (trigger, prompt)──▶  composer
   "prompt": "something for cooking dinner",
   "catalogVersion": "cat-1",
   "snapshot": { "...": "see Snapshot" },
-  "limits": { "maxSections": 4, "maxItemsPerSection": 8, "maxTotalItems": 20, "deadlineMs": 4000 }
+  "limits": { "maxSections": 6, "maxItemsPerSection": 8, "maxTotalItems": 20, "deadlineMs": 4000 },
+  "avoid": ["<the previous layout's item ids, on regenerate>"]
 }
 ```
 
 - `prompt` is null for `button`, at most 500 characters otherwise.
 - `limits` may only tighten the catalog's own bounds.
+- `avoid` (optional, at most 64 non-empty strings) is regenerate's soft hint. Ids no longer in the snapshot are
+  ignored.
 
 ## Snapshot (built by OS Product)
 
@@ -59,7 +63,7 @@ registry can resolve and launch. `snapshotVersion` changes whenever any entry ch
   "actions":       [{"id": "<action id>", "label": "Start timer",
                      "kind": "launch | shortcut | deeplink | notification_action | app_function | agent_task",
                      "targetId": "<app/notification/content id>", "requiresConfirmation": false}],
-  "pinned": ["<any id above>"]
+  "pinned": ["<item ids of the sections the phone keeps pinned>"]
 }
 ```
 
@@ -74,7 +78,7 @@ registry can resolve and launch. `snapshotVersion` changes whenever any entry ch
   enter the model**: the composer reads only `id`, `label`/`title`, `category`, `kind`, `appId`, `targetId`,
   `recentRank` and `pinned`. It may be placed only as a `button` item or a `card` action, never in a `grid`.
 
-## Catalog (owned by OS Product; this is the proposed starting set)
+## Catalog `cat-1` (OS Product's, from the approved HiFi r2 cards)
 
 | component | items it may reference | items | notes |
 |---|---|---|---|
@@ -82,15 +86,14 @@ registry can resolve and launch. `snapshotVersion` changes whenever any entry ch
 | `carousel` | content, notifications, apps | 2–8 | horizontally scrollable; must not fight the page swipe (renderer's job) |
 | `list` | notifications, content | 1–8 | vertical, scrollable |
 | `card` | one notification or content item, plus up to 2 actions that target it | 1 | |
-| `button` | one action | 1 | a direct action; `requiresConfirmation` actions still confirm in the OS |
+| `button` | actions, including `agent_task` | 1–4 | a row of actions (HiFi "Quick actions"); `requiresConfirmation` actions still confirm in the OS |
 
 Each section also has a `title` of at most 30 characters, plain text. The layout has a `title` of at most 40.
 
-The approved HiFi r2 uses a different card set: `apps`, `actions` (direct actions and Rose tasks), `carousel`,
-`list` (optionally a checklist) and `notif` (a notification with its actions). The composer reads every rule
-(item kinds, bounds, card actions, excluded action kinds) from the catalog data, in Python and Java alike, so OS
-Product's real catalog replaces `cat-1` without code changes. **Until OS Product names it, `cat-1` stays a
-proposal.**
+At most 6 sections and 20 items per layout; every id at most once. HiFi cards map as apps → `grid`, actions →
+`button`, carousel → `carousel`, list/checklist → `list` (ticks are phone-local), notification → `card`. The
+composer reads every rule from the catalog data in Python and Java alike, so a later catalog version needs no code
+change.
 
 ## Layout (what the model may produce; the validator enforces all of it)
 
@@ -175,20 +178,23 @@ provider to the Models composer. The two do not overlap; the provider translates
 `requestId` (≤ 64 chars) passes through unchanged, so App Core's repeat-returns-first-outcome rule holds at the
 provider.
 
-## Open questions for OS Product and App Core
+## Open questions: all answered
 
-1. The real component types, their item rules and bounds (the table above is a guess to start from).
-2. The real ID format and which item kinds exist in the first build (apps and launch actions only, or also
-   notifications, shortcuts and app functions).
-3. Whether `pinned` items must appear, or only be preferred (see 8: HiFi pins whole cards).
-4. Where the composer runs: in the launcher process, or a separate service the launcher binds to (memory and
-   process-death behaviour differ).
-5. ~~App Core: whether `conversational` needs more fields.~~ Answered: only `trigger`, `prompt` and `requestId`.
-6. ~~Whether the composer is told the page is on screen.~~ Answered: no; only the provider decides `shown` versus
-   `prepared`.
-7. `regenerate` (OS Product, with App Core's recommendation): App Core needs only a new revision and recommends a
-   fresh snapshot plus the previous layout's item ids as a soft "avoid" hint. Deterministic decoding of the same
-   context returns the same layout, so some variation input is required. Not implemented until OS Product picks it.
-8. Pins (OS Product): HiFi pins whole cards and keeps each at its index while the unpinned cards move. If that is
-   the native rule, the composer needs the pinned cards as fixed input (their slots and ids, which it must neither
-   repeat nor move) rather than today's item-level `pinned` preference. Not implemented until OS Product decides.
+1. ~~Components and bounds.~~ OS Product's `cat-1` (above), from the HiFi r2 cards.
+2. ~~ID format and first-build kinds.~~ Opaque, stable ids in OS Product's registry formats (`app:`, `launch:`,
+   `sc:`, `intent:`, `task:`; `n:`/`nact:` after its decision D1). The first build has apps and actions only; no
+   notifications until D1 is decided and no content source yet.
+3. ~~Pinned.~~ The phone places pinned sections itself, at their index. `pinned` lists their item ids so the
+   composer does not repeat them: the composer leaves them out of the context entirely (preferred absent, not
+   required; the phone drops a repeat anyway).
+4. ~~Where it runs.~~ A separate `:composer` process of Rose Agent that Home binds to; a dead process is
+   `model_unavailable`.
+5. ~~Conversational fields.~~ Only `trigger`, `prompt` and `requestId` (App Core).
+6. ~~On screen.~~ The composer is never told; only the provider decides `shown` versus `prepared`.
+7. ~~Regenerate.~~ A fresh snapshot plus the previous layout's item ids in the request's `avoid` list (App Core's
+   proposal, OS Product's answer). Avoided ids rank after every other entry, so the context, and therefore the
+   deterministic layout, changes; they stay selectable if nothing else fits.
+
+Sources: OS Product `workspace/rose-agent/docs/workspace-contract.md` (draft PR 787 at `d71fd72a`); App Core
+`docs/APP-BUILDER.md` §4.4 (PR 782 at `41891f4c`). Both are drafts; if either changes, this document and
+`contract/vectors/v1.json` change with it.

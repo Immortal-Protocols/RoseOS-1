@@ -34,6 +34,32 @@ public final class ComposeResult {
 
     public boolean ok() { return "ok".equals(status); }
 
+    /**
+     * The rose-layout-v1 result text, in the same shape as the Python reference's result: what the composer
+     * process hands the phone, whose own check ({@code WorkspaceLayout.check}) reads it again before rendering.
+     */
+    public String toJson() {
+        Map<String, Object> m = new LinkedHashMap<String, Object>();
+        m.put("contract", Contract.CONTRACT);
+        m.put("requestId", requestId);
+        m.put("status", status);
+        if (ok()) {
+            m.put("layout", layout);
+            m.put("model", model);
+            m.put("timing", timing);
+            Map<String, Object> c = new LinkedHashMap<String, Object>();
+            c.put("entries", Long.valueOf(contextEntries));
+            c.put("chars", Long.valueOf(contextChars));
+            c.put("maxTokens", Long.valueOf(maxTokens));
+            m.put("context", c);
+            m.put("runtimeStats", runtimeStats == null ? new LinkedHashMap<String, Object>() : runtimeStats);
+        } else {
+            m.put("failure", failure);
+            if (!timing.isEmpty()) m.put("timing", timing);
+        }
+        return Json.write(m);
+    }
+
     static ComposeResult failed(String requestId, String category, Map<String, Double> timing) {
         return new ComposeResult(requestId, "failed", category, null, null, timing, 0, 0, 0, null);
     }

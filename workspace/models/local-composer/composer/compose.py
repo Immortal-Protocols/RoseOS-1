@@ -31,7 +31,7 @@ def compose(req: dict, backend, catalog: dict = DEFAULT_CATALOG, budget_chars: i
     try:
         limits = check_request(req, catalog)
         snap = req['snapshot']
-        ctx = context_mod.select(snap, req.get('prompt'), budget_chars=budget_chars)
+        ctx = context_mod.select(snap, req.get('prompt'), budget_chars=budget_chars, avoid=req.get('avoid'))
         tree = grammar_mod.build(ctx, catalog, limits)
         if tree is None:
             raise Refused('empty_context')

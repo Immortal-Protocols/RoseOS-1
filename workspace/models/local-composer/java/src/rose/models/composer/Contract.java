@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** rose-layout-v1 (PROPOSAL) request and snapshot checks. Mirrors {@code composer/contract.py} exactly. */
+/** rose-layout-v1 request and snapshot checks. Mirrors {@code composer/contract.py} exactly. */
 public final class Contract {
     private Contract() {}
 
@@ -19,6 +19,7 @@ public final class Contract {
             "launch", "shortcut", "deeplink", "notification_action", "app_function", "agent_task");
     public static final int MAX_PROMPT_CHARS = 500, MAX_LABEL_CHARS = 60, MAX_REQUEST_ID_CHARS = 64;
     public static final long MAX_RECENT_RANK = 1000000L;
+    public static final int MAX_AVOID = 64; // regenerate's soft hint: the previous layout's item ids
     public static final int LAYOUT_TITLE_CHARS = 40, SECTION_TITLE_CHARS = 30;
 
     static String prefix(String kind) {
@@ -61,6 +62,12 @@ public final class Contract {
                 if (n <= 0 || n > catalog.limits.get(e.getKey())) throw new Refused("bad_request");
                 limits = limits.with(e.getKey(), (int) n);
             }
+        }
+        Object avoid = req.get("avoid");
+        if (!Json.isNull(avoid)) { // ids gone from the fresh snapshot are simply ignored
+            List<Object> a = Json.asList(avoid);
+            if (a == null || a.size() > MAX_AVOID) throw new Refused("bad_request");
+            for (Object x : a) if (!Json.isString(x) || ((String) x).isEmpty()) throw new Refused("bad_request");
         }
         checkSnapshot(snap);
         return limits;

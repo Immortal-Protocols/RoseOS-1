@@ -50,7 +50,7 @@ public final class Composer {
             Map<String, Object> snap = Json.asMap(req.get("snapshot"));
             String prompt = req.get("prompt") instanceof String ? (String) req.get("prompt") : null;
             ContextSelector.Context ctx = ContextSelector.select(snap, prompt, budgetChars,
-                    ContextSelector.DEFAULT_PER_APP);
+                    ContextSelector.DEFAULT_PER_APP, Json.asList(req.get("avoid")));
             Grammar.Node tree = Grammar.build(ctx, catalog, limits);
             if (tree == null) throw new Refused("empty_context");
             String gbnf = Grammar.toGbnf(tree);

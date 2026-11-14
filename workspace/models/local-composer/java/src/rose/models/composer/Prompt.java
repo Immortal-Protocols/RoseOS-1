@@ -17,7 +17,7 @@ public final class Prompt {
         COMPONENT_HELP.put("carousel", "carousel: 2-8 content, notifications or apps");
         COMPONENT_HELP.put("list", "list: 1-8 notifications or content");
         COMPONENT_HELP.put("card", "card: 1 notification or content, plus up to 2 actions marked \"-> its id\"");
-        COMPONENT_HELP.put("button", "button: 1 action");
+        COMPONENT_HELP.put("button", "button: a row of 1-4 actions");
     }
 
     /** The user message for one request (the system message is {@link #SYSTEM}). */

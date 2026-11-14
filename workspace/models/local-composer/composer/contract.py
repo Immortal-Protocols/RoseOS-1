@@ -1,7 +1,7 @@
-"""rose-layout-v1 (PROPOSAL, contract/rose-layout-v1.md): request, snapshot and catalog checks.
+"""rose-layout-v1 (contract/rose-layout-v1.md): request, snapshot and catalog checks.
 
-Standard library only. OS Product owns the real catalog and snapshot; DEFAULT_CATALOG is the proposed starting set
-so the composer and its tests have something concrete to bind to.
+Standard library only. OS Product owns the catalog and snapshot; DEFAULT_CATALOG is its catalog cat-1 as specified
+in workspace/rose-agent/docs/workspace-contract.md (draft PR787).
 """
 
 from __future__ import annotations
@@ -14,15 +14,17 @@ ACTION_KINDS = ('launch', 'shortcut', 'deeplink', 'notification_action', 'app_fu
 MAX_PROMPT_CHARS = 500
 MAX_LABEL_CHARS = 60
 MAX_RECENT_RANK = 1_000_000
+MAX_AVOID = 64          # regenerate's soft hint: the previous layout's item ids
 LAYOUT_TITLE_CHARS, SECTION_TITLE_CHARS = 40, 30
 
 FAILURES = ('bad_request', 'catalog_mismatch', 'stale_snapshot', 'empty_context', 'model_unavailable', 'timeout',
             'cancelled', 'invalid_output', 'unknown_ref', 'disallowed_ref', 'over_limit', 'duplicate_ref')
 
 # component -> item kinds it may reference, min/max items, max card actions, and action kinds it may not hold as
-# items. `agent_task` (a Rose task that always asks first; App Core PR782 §4.3) may be a `button` item or a `card`
-# action, never a grid item. PROPOSAL: OS Product owns the real catalog (the HiFi r2 card set is apps, actions,
-# carousel, list/checklist and notification); composer code reads every rule from the catalog data.
+# items. This is OS Product's catalog cat-1 (workspace/rose-agent/docs/workspace-contract.md, draft PR787 at
+# d71fd72a), drawn from the approved HiFi r2 cards: `button` is a row of 1-4 actions, at most 6 sections, and
+# `agent_task` (a Rose task that always asks first; App Core PR782 §4.3) only in a `button` row or as a `card`
+# action. OS Product owns it; composer code reads every rule from this data.
 DEFAULT_CATALOG = {
     'version': 'cat-1',
     'components': {
@@ -30,9 +32,9 @@ DEFAULT_CATALOG = {
         'carousel': {'items': ('content', 'notifications', 'apps'), 'min': 2, 'max': 8, 'actions': 0},
         'list': {'items': ('notifications', 'content'), 'min': 1, 'max': 8, 'actions': 0},
         'card': {'items': ('notifications', 'content'), 'min': 1, 'max': 1, 'actions': 2},
-        'button': {'items': ('actions',), 'min': 1, 'max': 1, 'actions': 0},
+        'button': {'items': ('actions',), 'min': 1, 'max': 4, 'actions': 0},
     },
-    'limits': {'maxSections': 4, 'maxItemsPerSection': 8, 'maxTotalItems': 20, 'deadlineMs': 4000},
+    'limits': {'maxSections': 6, 'maxItemsPerSection': 8, 'maxTotalItems': 20, 'deadlineMs': 4000},
 }
 
 
@@ -70,6 +72,10 @@ def check_request(req: dict, catalog: dict = DEFAULT_CATALOG) -> dict:
         if k not in limits or not isinstance(v, int) or isinstance(v, bool) or not 0 < v <= limits[k]:
             raise Refused('bad_request')  # a request may only tighten the catalog's bounds
         limits[k] = v
+    avoid = req.get('avoid')
+    if avoid is not None and (not isinstance(avoid, list) or len(avoid) > MAX_AVOID
+                              or not all(isinstance(a, str) and a for a in avoid)):
+        raise Refused('bad_request')  # ids gone from the fresh snapshot are simply ignored
     check_snapshot(snap)
     return limits
 

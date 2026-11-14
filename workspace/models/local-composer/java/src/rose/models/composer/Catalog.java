@@ -7,9 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The component catalog, read from data. OS Product owns the real catalog; nothing here hard-codes a component.
- * {@link #proposal()} is the rose-layout-v1 proposal (catalog {@code cat-1}), the same data as the Python
- * reference's {@code DEFAULT_CATALOG}, and is not an approved catalog.
+ * The component catalog, read from data; nothing else here hard-codes a component. {@link #cat1()} is OS
+ * Product's catalog {@code cat-1} as specified in {@code workspace/rose-agent/docs/workspace-contract.md} (draft
+ * PR787 at d71fd72a), the same data as the Python reference's {@code DEFAULT_CATALOG}. OS Product owns it: in the
+ * app, prefer {@link #fromJson} with OS Product's own copy.
  */
 public final class Catalog {
     public static final class Component {
@@ -62,15 +63,15 @@ public final class Catalog {
 
     private static int intOf(Object o) { return ((Number) o).intValue(); }
 
-    /** The rose-layout-v1 PROPOSAL catalog {@code cat-1} (mirrors the Python reference). */
-    public static Catalog proposal() {
+    /** OS Product's catalog {@code cat-1} (mirrors the Python reference's DEFAULT_CATALOG). */
+    public static Catalog cat1() {
         Map<String, Component> c = new LinkedHashMap<String, Component>();
         c.put("grid", new Component("grid", list("apps", "actions"), 2, 8, 0, list("agent_task")));
         c.put("carousel", new Component("carousel", list("content", "notifications", "apps"), 2, 8, 0, list()));
         c.put("list", new Component("list", list("notifications", "content"), 1, 8, 0, list()));
         c.put("card", new Component("card", list("notifications", "content"), 1, 1, 2, list()));
-        c.put("button", new Component("button", list("actions"), 1, 1, 0, list()));
-        return new Catalog("cat-1", c, new Limits(4, 8, 20, 4000));
+        c.put("button", new Component("button", list("actions"), 1, 4, 0, list()));
+        return new Catalog("cat-1", c, new Limits(6, 8, 20, 4000));
     }
 
     private static List<String> list(String... xs) {

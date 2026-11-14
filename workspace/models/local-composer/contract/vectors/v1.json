@@ -48,12 +48,12 @@
      "actions"
     ],
     "min": 1,
-    "max": 1,
+    "max": 4,
     "actions": 0
    }
   },
   "limits": {
-   "maxSections": 4,
+   "maxSections": 6,
    "maxItemsPerSection": 8,
    "maxTotalItems": 20,
    "deadlineMs": 4000
@@ -1606,312 +1606,6 @@
    "apps": [
     {
      "id": "app.timer",
-     "label": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-     "category": "tools",
-     "recentRank": 2
-    },
-    {
-     "id": "app.recipes",
-     "label": "Recipes",
-     "category": "cooking",
-     "recentRank": 4
-    },
-    {
-     "id": "app.groceries",
-     "label": "Grocery list",
-     "category": "cooking",
-     "recentRank": 6
-    },
-    {
-     "id": "app.music",
-     "label": "Music",
-     "category": "music",
-     "recentRank": 3
-    },
-    {
-     "id": "app.mail",
-     "label": "Mail",
-     "category": "work",
-     "recentRank": 1
-    },
-    {
-     "id": "app.calendar",
-     "label": "Calendar",
-     "category": "calendar",
-     "recentRank": 5
-    },
-    {
-     "id": "app.docs",
-     "label": "Documents",
-     "category": "work",
-     "recentRank": 7
-    },
-    {
-     "id": "app.calculator",
-     "label": "Calculator",
-     "category": "tools",
-     "recentRank": 9
-    },
-    {
-     "id": "app.video",
-     "label": "Video",
-     "category": "media",
-     "recentRank": 8
-    },
-    {
-     "id": "app.podcasts",
-     "label": "Podcasts",
-     "category": "media",
-     "recentRank": 10
-    }
-   ],
-   "notifications": [
-    {
-     "id": "ntf.1",
-     "appId": "app.timer",
-     "title": "Pasta timer done",
-     "recentRank": 1
-    },
-    {
-     "id": "ntf.2",
-     "appId": "app.mail",
-     "title": "Quarterly report due Friday",
-     "recentRank": 2
-    },
-    {
-     "id": "ntf.3",
-     "appId": "app.calendar",
-     "title": "Team meeting at 9:00",
-     "recentRank": 3
-    }
-   ],
-   "content": [
-    {
-     "id": "cnt.1",
-     "kind": "document",
-     "label": "Tomato pasta recipe",
-     "appId": "app.recipes"
-    },
-    {
-     "id": "cnt.2",
-     "kind": "document",
-     "label": "Weeknight curry recipe",
-     "appId": "app.recipes"
-    },
-    {
-     "id": "cnt.3",
-     "kind": "media",
-     "label": "Dinner jazz playlist",
-     "appId": "app.music"
-    },
-    {
-     "id": "cnt.4",
-     "kind": "document",
-     "label": "Q3 planning doc",
-     "appId": "app.docs"
-    },
-    {
-     "id": "cnt.5",
-     "kind": "media",
-     "label": "Evening news podcast",
-     "appId": "app.podcasts"
-    }
-   ],
-   "actions": [
-    {
-     "id": "act.timer10",
-     "label": "Start 10 minute timer",
-     "kind": "shortcut",
-     "targetId": "app.timer",
-     "requiresConfirmation": false
-    },
-    {
-     "id": "act.dismiss1",
-     "label": "Dismiss",
-     "kind": "notification_action",
-     "targetId": "ntf.1",
-     "requiresConfirmation": false
-    },
-    {
-     "id": "act.reply2",
-     "label": "Reply",
-     "kind": "notification_action",
-     "targetId": "ntf.2",
-     "requiresConfirmation": false
-    },
-    {
-     "id": "act.play3",
-     "label": "Play",
-     "kind": "deeplink",
-     "targetId": "cnt.3",
-     "requiresConfirmation": false
-    }
-   ],
-   "pinned": [
-    "app.timer"
-   ]
-  },
-  "s13": {
-   "snapshotVersion": "s-demo-1",
-   "catalogVersion": "cat-1",
-   "createdAtMs": 1794600000000,
-   "timeOfDay": "evening",
-   "apps": [
-    {
-     "id": "app.timer",
-     "label": "Timer",
-     "category": "tools",
-     "recentRank": 2
-    },
-    {
-     "id": "app.recipes",
-     "label": "🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝",
-     "category": "cooking",
-     "recentRank": 4
-    },
-    {
-     "id": "app.groceries",
-     "label": "Grocery list",
-     "category": "cooking",
-     "recentRank": 6
-    },
-    {
-     "id": "app.music",
-     "label": "Music",
-     "category": "music",
-     "recentRank": 3
-    },
-    {
-     "id": "app.mail",
-     "label": "Mail",
-     "category": "work",
-     "recentRank": 1
-    },
-    {
-     "id": "app.calendar",
-     "label": "Calendar",
-     "category": "calendar",
-     "recentRank": 5
-    },
-    {
-     "id": "app.docs",
-     "label": "Documents",
-     "category": "work",
-     "recentRank": 7
-    },
-    {
-     "id": "app.calculator",
-     "label": "Calculator",
-     "category": "tools",
-     "recentRank": 9
-    },
-    {
-     "id": "app.video",
-     "label": "Video",
-     "category": "media",
-     "recentRank": 8
-    },
-    {
-     "id": "app.podcasts",
-     "label": "Podcasts",
-     "category": "media",
-     "recentRank": 10
-    }
-   ],
-   "notifications": [
-    {
-     "id": "ntf.1",
-     "appId": "app.timer",
-     "title": "Pasta timer done",
-     "recentRank": 1
-    },
-    {
-     "id": "ntf.2",
-     "appId": "app.mail",
-     "title": "Quarterly report due Friday",
-     "recentRank": 2
-    },
-    {
-     "id": "ntf.3",
-     "appId": "app.calendar",
-     "title": "Team meeting at 9:00",
-     "recentRank": 3
-    }
-   ],
-   "content": [
-    {
-     "id": "cnt.1",
-     "kind": "document",
-     "label": "Tomato pasta recipe",
-     "appId": "app.recipes"
-    },
-    {
-     "id": "cnt.2",
-     "kind": "document",
-     "label": "Weeknight curry recipe",
-     "appId": "app.recipes"
-    },
-    {
-     "id": "cnt.3",
-     "kind": "media",
-     "label": "Dinner jazz playlist",
-     "appId": "app.music"
-    },
-    {
-     "id": "cnt.4",
-     "kind": "document",
-     "label": "Q3 planning doc",
-     "appId": "app.docs"
-    },
-    {
-     "id": "cnt.5",
-     "kind": "media",
-     "label": "Evening news podcast",
-     "appId": "app.podcasts"
-    }
-   ],
-   "actions": [
-    {
-     "id": "act.timer10",
-     "label": "Start 10 minute timer",
-     "kind": "shortcut",
-     "targetId": "app.timer",
-     "requiresConfirmation": false
-    },
-    {
-     "id": "act.dismiss1",
-     "label": "Dismiss",
-     "kind": "notification_action",
-     "targetId": "ntf.1",
-     "requiresConfirmation": false
-    },
-    {
-     "id": "act.reply2",
-     "label": "Reply",
-     "kind": "notification_action",
-     "targetId": "ntf.2",
-     "requiresConfirmation": false
-    },
-    {
-     "id": "act.play3",
-     "label": "Play",
-     "kind": "deeplink",
-     "targetId": "cnt.3",
-     "requiresConfirmation": false
-    }
-   ],
-   "pinned": [
-    "app.timer"
-   ]
-  },
-  "s14": {
-   "snapshotVersion": "s-demo-1",
-   "catalogVersion": "cat-1",
-   "createdAtMs": 1794600000000,
-   "timeOfDay": "evening",
-   "apps": [
-    {
-     "id": "app.timer",
      "label": "Timer",
      "category": "tools",
      "recentRank": 2
@@ -2075,7 +1769,367 @@
     "app.timer"
    ]
   },
+  "s13": {
+   "snapshotVersion": "s-fb-1",
+   "catalogVersion": "cat-1",
+   "createdAtMs": 1794600000000,
+   "timeOfDay": "evening",
+   "apps": [
+    {
+     "id": "app:org.example.clock/.Main",
+     "label": "Clock",
+     "category": "tools",
+     "recentRank": 2
+    },
+    {
+     "id": "app:org.example.notes/.Notes",
+     "label": "Notes",
+     "category": "cooking",
+     "recentRank": 1
+    },
+    {
+     "id": "app:org.example.music/.Player",
+     "label": "Music",
+     "category": "music",
+     "recentRank": 3
+    }
+   ],
+   "notifications": [],
+   "content": [],
+   "actions": [
+    {
+     "id": "intent:timer?minutes=12",
+     "label": "Start 12-min timer",
+     "kind": "deeplink",
+     "targetId": "app:org.example.clock/.Main",
+     "requiresConfirmation": false
+    },
+    {
+     "id": "task:ws-grocery",
+     "label": "Add missing items to grocery list",
+     "kind": "agent_task",
+     "targetId": "app:org.example.notes/.Notes",
+     "requiresConfirmation": true,
+     "ask": "Rose will compare the recipe with your Notes list and add what is missing.",
+     "goal": "GOAL-TEXT-MUST-NOT-REACH-THE-MODEL grocery"
+    },
+    {
+     "id": "sc:org.example.music/slow-supper",
+     "label": "Play Slow Supper",
+     "kind": "shortcut",
+     "targetId": "app:org.example.music/.Player",
+     "requiresConfirmation": false
+    }
+   ],
+   "pinned": []
+  },
+  "s14": {
+   "snapshotVersion": "s-demo-1",
+   "catalogVersion": "cat-1",
+   "createdAtMs": 1794600000000,
+   "timeOfDay": "evening",
+   "apps": [
+    {
+     "id": "app.timer",
+     "label": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+     "category": "tools",
+     "recentRank": 2
+    },
+    {
+     "id": "app.recipes",
+     "label": "Recipes",
+     "category": "cooking",
+     "recentRank": 4
+    },
+    {
+     "id": "app.groceries",
+     "label": "Grocery list",
+     "category": "cooking",
+     "recentRank": 6
+    },
+    {
+     "id": "app.music",
+     "label": "Music",
+     "category": "music",
+     "recentRank": 3
+    },
+    {
+     "id": "app.mail",
+     "label": "Mail",
+     "category": "work",
+     "recentRank": 1
+    },
+    {
+     "id": "app.calendar",
+     "label": "Calendar",
+     "category": "calendar",
+     "recentRank": 5
+    },
+    {
+     "id": "app.docs",
+     "label": "Documents",
+     "category": "work",
+     "recentRank": 7
+    },
+    {
+     "id": "app.calculator",
+     "label": "Calculator",
+     "category": "tools",
+     "recentRank": 9
+    },
+    {
+     "id": "app.video",
+     "label": "Video",
+     "category": "media",
+     "recentRank": 8
+    },
+    {
+     "id": "app.podcasts",
+     "label": "Podcasts",
+     "category": "media",
+     "recentRank": 10
+    }
+   ],
+   "notifications": [
+    {
+     "id": "ntf.1",
+     "appId": "app.timer",
+     "title": "Pasta timer done",
+     "recentRank": 1
+    },
+    {
+     "id": "ntf.2",
+     "appId": "app.mail",
+     "title": "Quarterly report due Friday",
+     "recentRank": 2
+    },
+    {
+     "id": "ntf.3",
+     "appId": "app.calendar",
+     "title": "Team meeting at 9:00",
+     "recentRank": 3
+    }
+   ],
+   "content": [
+    {
+     "id": "cnt.1",
+     "kind": "document",
+     "label": "Tomato pasta recipe",
+     "appId": "app.recipes"
+    },
+    {
+     "id": "cnt.2",
+     "kind": "document",
+     "label": "Weeknight curry recipe",
+     "appId": "app.recipes"
+    },
+    {
+     "id": "cnt.3",
+     "kind": "media",
+     "label": "Dinner jazz playlist",
+     "appId": "app.music"
+    },
+    {
+     "id": "cnt.4",
+     "kind": "document",
+     "label": "Q3 planning doc",
+     "appId": "app.docs"
+    },
+    {
+     "id": "cnt.5",
+     "kind": "media",
+     "label": "Evening news podcast",
+     "appId": "app.podcasts"
+    }
+   ],
+   "actions": [
+    {
+     "id": "act.timer10",
+     "label": "Start 10 minute timer",
+     "kind": "shortcut",
+     "targetId": "app.timer",
+     "requiresConfirmation": false
+    },
+    {
+     "id": "act.dismiss1",
+     "label": "Dismiss",
+     "kind": "notification_action",
+     "targetId": "ntf.1",
+     "requiresConfirmation": false
+    },
+    {
+     "id": "act.reply2",
+     "label": "Reply",
+     "kind": "notification_action",
+     "targetId": "ntf.2",
+     "requiresConfirmation": false
+    },
+    {
+     "id": "act.play3",
+     "label": "Play",
+     "kind": "deeplink",
+     "targetId": "cnt.3",
+     "requiresConfirmation": false
+    }
+   ],
+   "pinned": [
+    "app.timer"
+   ]
+  },
   "s15": {
+   "snapshotVersion": "s-demo-1",
+   "catalogVersion": "cat-1",
+   "createdAtMs": 1794600000000,
+   "timeOfDay": "evening",
+   "apps": [
+    {
+     "id": "app.timer",
+     "label": "Timer",
+     "category": "tools",
+     "recentRank": 2
+    },
+    {
+     "id": "app.recipes",
+     "label": "🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝",
+     "category": "cooking",
+     "recentRank": 4
+    },
+    {
+     "id": "app.groceries",
+     "label": "Grocery list",
+     "category": "cooking",
+     "recentRank": 6
+    },
+    {
+     "id": "app.music",
+     "label": "Music",
+     "category": "music",
+     "recentRank": 3
+    },
+    {
+     "id": "app.mail",
+     "label": "Mail",
+     "category": "work",
+     "recentRank": 1
+    },
+    {
+     "id": "app.calendar",
+     "label": "Calendar",
+     "category": "calendar",
+     "recentRank": 5
+    },
+    {
+     "id": "app.docs",
+     "label": "Documents",
+     "category": "work",
+     "recentRank": 7
+    },
+    {
+     "id": "app.calculator",
+     "label": "Calculator",
+     "category": "tools",
+     "recentRank": 9
+    },
+    {
+     "id": "app.video",
+     "label": "Video",
+     "category": "media",
+     "recentRank": 8
+    },
+    {
+     "id": "app.podcasts",
+     "label": "Podcasts",
+     "category": "media",
+     "recentRank": 10
+    }
+   ],
+   "notifications": [
+    {
+     "id": "ntf.1",
+     "appId": "app.timer",
+     "title": "Pasta timer done",
+     "recentRank": 1
+    },
+    {
+     "id": "ntf.2",
+     "appId": "app.mail",
+     "title": "Quarterly report due Friday",
+     "recentRank": 2
+    },
+    {
+     "id": "ntf.3",
+     "appId": "app.calendar",
+     "title": "Team meeting at 9:00",
+     "recentRank": 3
+    }
+   ],
+   "content": [
+    {
+     "id": "cnt.1",
+     "kind": "document",
+     "label": "Tomato pasta recipe",
+     "appId": "app.recipes"
+    },
+    {
+     "id": "cnt.2",
+     "kind": "document",
+     "label": "Weeknight curry recipe",
+     "appId": "app.recipes"
+    },
+    {
+     "id": "cnt.3",
+     "kind": "media",
+     "label": "Dinner jazz playlist",
+     "appId": "app.music"
+    },
+    {
+     "id": "cnt.4",
+     "kind": "document",
+     "label": "Q3 planning doc",
+     "appId": "app.docs"
+    },
+    {
+     "id": "cnt.5",
+     "kind": "media",
+     "label": "Evening news podcast",
+     "appId": "app.podcasts"
+    }
+   ],
+   "actions": [
+    {
+     "id": "act.timer10",
+     "label": "Start 10 minute timer",
+     "kind": "shortcut",
+     "targetId": "app.timer",
+     "requiresConfirmation": false
+    },
+    {
+     "id": "act.dismiss1",
+     "label": "Dismiss",
+     "kind": "notification_action",
+     "targetId": "ntf.1",
+     "requiresConfirmation": false
+    },
+    {
+     "id": "act.reply2",
+     "label": "Reply",
+     "kind": "notification_action",
+     "targetId": "ntf.2",
+     "requiresConfirmation": false
+    },
+    {
+     "id": "act.play3",
+     "label": "Play",
+     "kind": "deeplink",
+     "targetId": "cnt.3",
+     "requiresConfirmation": false
+    }
+   ],
+   "pinned": [
+    "app.timer"
+   ]
+  },
+  "s16": {
    "snapshotVersion": "s-demo-1",
    "catalogVersion": "cat-1",
    "createdAtMs": 1794600000000,
@@ -2246,7 +2300,7 @@
     "app.timer"
    ]
   },
-  "s16": {
+  "s17": {
    "snapshotVersion": "s-demo-1",
    "catalogVersion": "cat-1",
    "createdAtMs": 1794600000000,
@@ -2433,14 +2487,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -2448,7 +2498,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -2460,7 +2510,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -2468,23 +2518,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -2521,21 +2571,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -2544,12 +2593,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -2562,8 +2611,8 @@
         "component": "grid",
         "title": "Kitchen",
         "items": [
-         "app.timer",
          "app.recipes",
+         "app.groceries",
          "act.timer10"
         ],
         "actions": []
@@ -2589,7 +2638,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     }
    }
   },
@@ -2612,30 +2661,26 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.music"
       ],
       [
-       "a3",
+       "a2",
        "app.recipes"
       ],
       [
-       "a4",
+       "a3",
        "app.groceries"
       ],
       [
-       "a5",
+       "a4",
        "app.video"
       ],
       [
-       "a6",
+       "a5",
        "app.podcasts"
       ],
       [
-       "a7",
+       "a6",
        "app.mail"
       ],
       [
@@ -2651,15 +2696,15 @@
        "ntf.3"
       ],
       [
-       "a8",
+       "a7",
        "app.calendar"
       ],
       [
-       "a9",
+       "a8",
        "app.docs"
       ],
       [
-       "a10",
+       "a9",
        "app.calculator"
       ],
       [
@@ -2700,20 +2745,19 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Music [music]",
-      "a3 Recipes [cooking]",
-      "a4 Grocery list [cooking]",
-      "a5 Video [media]",
-      "a6 Podcasts [media]",
-      "a7 Mail [work]",
+      "a1 Music [music]",
+      "a2 Recipes [cooking]",
+      "a3 Grocery list [cooking]",
+      "a4 Video [media]",
+      "a5 Podcasts [media]",
+      "a6 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
       "n3 Team meeting at 9:00",
-      "a8 Calendar [calendar]",
-      "a9 Documents [work]",
-      "a10 Calculator [tools]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a7 Calendar [calendar]",
+      "a8 Documents [work]",
+      "a9 Calculator [tools]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c3",
@@ -2723,12 +2767,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "b55bf610dd61f4fd2dc538a35292aa312e1d6181603c2e578568d3d242b7993b",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "2a8104852822d9381816c37a3996152ed40c6ada74d90f78e900fb3458ab0b70",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -2741,12 +2785,12 @@
         "component": "grid",
         "title": "Apps",
         "items": [
-         "app.timer",
          "app.music",
          "app.recipes",
          "app.groceries",
          "app.video",
-         "app.podcasts"
+         "app.podcasts",
+         "app.mail"
         ],
         "actions": []
        },
@@ -2774,7 +2818,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     }
    }
   },
@@ -2911,9 +2955,9 @@
      "chars": 582
     },
     "grammar": {
-     "sha256": "e9327497f89ed92e15fd052d88c414c4ef9bf4e4781fc419bc618675bbee20ad",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "2d876c51722966ba5824bda9c7d3cab405470eca75e76ebb432b2c379572399f",
+     "length": 3429,
+     "maxChars": 809
     },
     "result": {
      "status": "ok",
@@ -2959,7 +3003,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 412
     }
    }
   },
@@ -2982,14 +3026,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.mail"
       ],
       [
-       "a3",
+       "a2",
        "app.docs"
       ],
       [
@@ -3001,7 +3041,7 @@
        "ntf.2"
       ],
       [
-       "a4",
+       "a3",
        "app.music"
       ],
       [
@@ -3009,27 +3049,27 @@
        "ntf.3"
       ],
       [
-       "a5",
+       "a4",
        "app.recipes"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.groceries"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -3070,20 +3110,19 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Mail [work]",
-      "a3 Documents [work]",
+      "a1 Mail [work]",
+      "a2 Documents [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a4 Music [music]",
+      "a3 Music [music]",
       "n3 Team meeting at 9:00",
-      "a5 Recipes [cooking]",
-      "a6 Calendar [calendar]",
-      "a7 Grocery list [cooking]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a4 Recipes [cooking]",
+      "a5 Calendar [calendar]",
+      "a6 Grocery list [cooking]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c3",
@@ -3093,12 +3132,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "725eaa4576059ba877480159ff9034f16dc8e34edbfa05917b44007e8a5e9c90",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "e9732e6cdad8b796a2f3d4cd07aa48aa33b88b9368fa9faf40e58004d4ef846a",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -3111,12 +3150,12 @@
         "component": "grid",
         "title": "Apps",
         "items": [
-         "app.timer",
          "app.mail",
          "app.docs",
          "app.music",
          "app.recipes",
-         "app.calendar"
+         "app.calendar",
+         "app.groceries"
         ],
         "actions": []
        },
@@ -3144,7 +3183,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     }
    }
   },
@@ -3169,14 +3208,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -3184,7 +3219,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -3196,7 +3231,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -3204,23 +3239,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -3257,21 +3292,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -3280,12 +3314,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -3298,8 +3332,8 @@
         "component": "grid",
         "title": "Kitchen",
         "items": [
-         "app.timer",
          "app.recipes",
+         "app.groceries",
          "act.timer10"
         ],
         "actions": []
@@ -3325,7 +3359,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     },
     "afterFreshness": {
      "status": "failed",
@@ -3354,14 +3388,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -3369,7 +3399,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -3381,7 +3411,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -3389,23 +3419,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -3442,21 +3472,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -3465,12 +3494,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -3483,8 +3512,8 @@
         "component": "grid",
         "title": "Kitchen",
         "items": [
-         "app.timer",
          "app.recipes",
+         "app.groceries",
          "act.timer10"
         ],
         "actions": []
@@ -3510,7 +3539,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     },
     "afterFreshness": {
      "status": "ok",
@@ -3537,14 +3566,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -3552,7 +3577,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -3564,7 +3589,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -3572,23 +3597,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -3625,21 +3650,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -3648,12 +3672,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -3680,14 +3704,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -3695,7 +3715,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -3707,7 +3727,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -3715,23 +3735,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -3768,21 +3788,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -3791,12 +3810,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -3823,14 +3842,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -3838,7 +3853,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -3850,7 +3865,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -3858,23 +3873,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -3911,21 +3926,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -3934,12 +3948,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -3966,14 +3980,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -3981,7 +3991,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -3993,7 +4003,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -4001,23 +4011,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -4054,21 +4064,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -4077,12 +4086,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -4109,14 +4118,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -4124,7 +4129,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -4136,7 +4141,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -4144,23 +4149,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -4197,21 +4202,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -4220,12 +4224,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -4252,14 +4256,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -4267,7 +4267,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -4279,7 +4279,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -4287,23 +4287,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -4340,21 +4340,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -4363,12 +4362,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -4388,21 +4387,17 @@
      "$ref": "s1"
     }
    },
-   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]},{\"component\":\"button\",\"title\":\"Go\",\"items\":[\"x3\"]},{\"component\":\"button\",\"title\":\"Play\",\"items\":[\"x4\"]}]}",
+   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]},{\"component\":\"button\",\"title\":\"Go\",\"items\":[\"x3\"]},{\"component\":\"button\",\"title\":\"Play\",\"items\":[\"x4\"]},{\"component\":\"list\",\"title\":\"More\",\"items\":[\"c3\"]},{\"component\":\"list\",\"title\":\"Also\",\"items\":[\"c4\"]}]}",
    "options": {},
    "expect": {
     "context": {
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -4410,7 +4405,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -4422,7 +4417,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -4430,23 +4425,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -4483,21 +4478,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -4506,12 +4500,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -4538,14 +4532,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -4553,7 +4543,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -4565,7 +4555,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -4573,23 +4563,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -4626,21 +4616,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -4649,12 +4638,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -4681,14 +4670,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -4696,7 +4681,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -4708,7 +4693,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -4716,23 +4701,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -4769,21 +4754,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -4792,12 +4776,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -4824,14 +4808,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -4839,7 +4819,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -4851,7 +4831,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -4859,23 +4839,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -4912,21 +4892,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -4935,12 +4914,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -4967,14 +4946,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -4982,7 +4957,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -4994,7 +4969,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -5002,23 +4977,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -5055,21 +5030,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -5078,12 +5052,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -5113,14 +5087,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -5128,7 +5098,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -5140,7 +5110,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -5148,23 +5118,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -5201,21 +5171,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -5224,12 +5193,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "e7eb962e31757ddf5560caacff89e77ec2606b0c9cfe0d98ac8e0f3cafd28cb2",
-     "length": 3319,
-     "maxChars": 313
+     "sha256": "da112483d747dd410f1f837fca3fca8f1cfb555ee33962916094f0bba1afc9ba",
+     "length": 3333,
+     "maxChars": 297
     },
     "result": {
      "status": "failed",
@@ -5259,14 +5228,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -5274,7 +5239,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -5286,7 +5251,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -5294,23 +5259,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -5347,21 +5312,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -5370,12 +5334,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -5402,14 +5366,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -5417,7 +5377,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -5429,7 +5389,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -5437,23 +5397,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -5490,21 +5450,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -5513,12 +5472,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -5545,14 +5504,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -5560,7 +5515,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -5572,7 +5527,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -5580,23 +5535,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -5633,21 +5588,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -5656,12 +5610,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -5688,14 +5642,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -5703,7 +5653,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -5715,7 +5665,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -5723,23 +5673,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -5776,21 +5726,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -5799,12 +5748,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -5831,14 +5780,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -5846,7 +5791,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -5858,7 +5803,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -5866,23 +5811,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -5919,21 +5864,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -5942,12 +5886,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -5974,14 +5918,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -5989,7 +5929,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -6001,7 +5941,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -6009,23 +5949,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -6062,21 +6002,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -6085,12 +6024,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -6117,14 +6056,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -6132,7 +6067,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -6144,7 +6079,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -6152,23 +6087,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -6205,21 +6140,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -6228,12 +6162,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -6260,14 +6194,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -6275,7 +6205,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -6287,7 +6217,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -6295,23 +6225,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -6348,21 +6278,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -6371,12 +6300,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -6403,14 +6332,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -6418,7 +6343,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -6430,7 +6355,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -6438,23 +6363,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -6491,21 +6416,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -6514,12 +6438,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -6874,14 +6798,10 @@
      "aliases": [
       [
        "a1",
-       "app -> timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -6889,7 +6809,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -6901,7 +6821,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -6909,23 +6829,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -6962,21 +6882,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -6985,12 +6904,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -7003,8 +6922,8 @@
         "component": "grid",
         "title": "Kitchen",
         "items": [
-         "app -> timer",
          "app.recipes",
+         "app.groceries",
          "act.timer10"
         ],
         "actions": []
@@ -7030,7 +6949,1278 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
+    }
+   }
+  },
+  {
+   "name": "regenerate with avoid hint",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    },
+    "avoid": [
+     "app.recipes",
+     "cnt.1",
+     "gone:id"
+    ]
+   },
+   "output": "{\"title\":\"Something\",\"sections\":[{\"component\":\"grid\",\"title\":\"Apps\",\"items\":[\"a1\",\"a2\",\"a3\",\"a4\",\"a5\",\"a6\"]},{\"component\":\"list\",\"title\":\"Updates\",\"items\":[\"n1\",\"n2\",\"n3\"]},{\"component\":\"carousel\",\"title\":\"For you\",\"items\":[\"c1\",\"c2\",\"c3\",\"c4\",\"c5\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app.groceries"
+      ],
+      [
+       "c1",
+       "cnt.3"
+      ],
+      [
+       "a2",
+       "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
+      ],
+      [
+       "n2",
+       "ntf.2"
+      ],
+      [
+       "a3",
+       "app.music"
+      ],
+      [
+       "n3",
+       "ntf.3"
+      ],
+      [
+       "a4",
+       "app.calendar"
+      ],
+      [
+       "a5",
+       "app.docs"
+      ],
+      [
+       "a6",
+       "app.video"
+      ],
+      [
+       "a7",
+       "app.calculator"
+      ],
+      [
+       "a8",
+       "app.podcasts"
+      ],
+      [
+       "x1",
+       "act.timer10"
+      ],
+      [
+       "x2",
+       "act.dismiss1"
+      ],
+      [
+       "x3",
+       "act.reply2"
+      ],
+      [
+       "x4",
+       "act.play3"
+      ],
+      [
+       "c2",
+       "cnt.2"
+      ],
+      [
+       "c3",
+       "cnt.4"
+      ],
+      [
+       "c4",
+       "cnt.5"
+      ],
+      [
+       "a9",
+       "app.recipes"
+      ],
+      [
+       "c5",
+       "cnt.1"
+      ]
+     ],
+     "lines": [
+      "a1 Grocery list [cooking]",
+      "c1 Dinner jazz playlist [media]",
+      "a2 Mail [work]",
+      "n1 Pasta timer done",
+      "n2 Quarterly report due Friday",
+      "a3 Music [music]",
+      "n3 Team meeting at 9:00",
+      "a4 Calendar [calendar]",
+      "a5 Documents [work]",
+      "a6 Video [media]",
+      "a7 Calculator [tools]",
+      "a8 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
+      "x2 Dismiss [notification_action] -> n1",
+      "x3 Reply [notification_action] -> n2",
+      "x4 Play [deeplink] -> c1",
+      "c2 Weeknight curry recipe [document]",
+      "c3 Q3 planning doc [document]",
+      "c4 Evening news podcast [media]",
+      "a9 Recipes [cooking]",
+      "c5 Tomato pasta recipe [document]"
+     ],
+     "chars": 558
+    },
+    "grammar": {
+     "sha256": "0fb5fc8545e654cc1cb9ed0a10a1a90295a3d9fa6b3bacf3b89f8fb3ac712230",
+     "length": 3333,
+     "maxChars": 761
+    },
+    "result": {
+     "status": "ok",
+     "layout": {
+      "snapshotVersion": "s-demo-1",
+      "catalogVersion": "cat-1",
+      "title": "Something",
+      "sections": [
+       {
+        "component": "grid",
+        "title": "Apps",
+        "items": [
+         "app.groceries",
+         "app.mail",
+         "app.music",
+         "app.calendar",
+         "app.docs",
+         "app.video"
+        ],
+        "actions": []
+       },
+       {
+        "component": "list",
+        "title": "Updates",
+        "items": [
+         "ntf.1",
+         "ntf.2",
+         "ntf.3"
+        ],
+        "actions": []
+       },
+       {
+        "component": "carousel",
+        "title": "For you",
+        "items": [
+         "cnt.3",
+         "cnt.2",
+         "cnt.4",
+         "cnt.5",
+         "cnt.1"
+        ],
+        "actions": []
+       }
+      ]
+     },
+     "maxTokens": 388
+    }
+   }
+  },
+  {
+   "name": "avoid not a list",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    },
+    "avoid": "app.recipes"
+   },
+   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]}]}",
+   "options": {},
+   "expect": {
+    "context": null,
+    "grammar": null,
+    "result": {
+     "status": "failed",
+     "failure": "bad_request"
+    }
+   }
+  },
+  {
+   "name": "avoid with a non-string",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    },
+    "avoid": [
+     "app.recipes",
+     3
+    ]
+   },
+   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]}]}",
+   "options": {},
+   "expect": {
+    "context": null,
+    "grammar": null,
+    "result": {
+     "status": "failed",
+     "failure": "bad_request"
+    }
+   }
+  },
+  {
+   "name": "avoid too long",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    },
+    "avoid": [
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x"
+    ]
+   },
+   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]}]}",
+   "options": {},
+   "expect": {
+    "context": null,
+    "grammar": null,
+    "result": {
+     "status": "failed",
+     "failure": "bad_request"
+    }
+   }
+  },
+  {
+   "name": "pinned id is not selectable",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    }
+   },
+   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\",\"app.timer\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app.recipes"
+      ],
+      [
+       "a2",
+       "app.groceries"
+      ],
+      [
+       "c1",
+       "cnt.3"
+      ],
+      [
+       "a3",
+       "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
+      ],
+      [
+       "n2",
+       "ntf.2"
+      ],
+      [
+       "a4",
+       "app.music"
+      ],
+      [
+       "n3",
+       "ntf.3"
+      ],
+      [
+       "a5",
+       "app.calendar"
+      ],
+      [
+       "a6",
+       "app.docs"
+      ],
+      [
+       "a7",
+       "app.video"
+      ],
+      [
+       "a8",
+       "app.calculator"
+      ],
+      [
+       "a9",
+       "app.podcasts"
+      ],
+      [
+       "x1",
+       "act.timer10"
+      ],
+      [
+       "x2",
+       "act.dismiss1"
+      ],
+      [
+       "x3",
+       "act.reply2"
+      ],
+      [
+       "x4",
+       "act.play3"
+      ],
+      [
+       "c2",
+       "cnt.1"
+      ],
+      [
+       "c3",
+       "cnt.2"
+      ],
+      [
+       "c4",
+       "cnt.4"
+      ],
+      [
+       "c5",
+       "cnt.5"
+      ]
+     ],
+     "lines": [
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
+      "c1 Dinner jazz playlist [media]",
+      "a3 Mail [work]",
+      "n1 Pasta timer done",
+      "n2 Quarterly report due Friday",
+      "a4 Music [music]",
+      "n3 Team meeting at 9:00",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
+      "x2 Dismiss [notification_action] -> n1",
+      "x3 Reply [notification_action] -> n2",
+      "x4 Play [deeplink] -> c1",
+      "c2 Tomato pasta recipe [document]",
+      "c3 Weeknight curry recipe [document]",
+      "c4 Q3 planning doc [document]",
+      "c5 Evening news podcast [media]"
+     ],
+     "chars": 558
+    },
+    "grammar": {
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
+    },
+    "result": {
+     "status": "failed",
+     "failure": "unknown_ref"
+    }
+   }
+  },
+  {
+   "name": "button row of three actions",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    }
+   },
+   "output": "{\"title\":\"Now\",\"sections\":[{\"component\":\"button\",\"title\":\"Quick actions\",\"items\":[\"x2\",\"x3\",\"x4\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app.recipes"
+      ],
+      [
+       "a2",
+       "app.groceries"
+      ],
+      [
+       "c1",
+       "cnt.3"
+      ],
+      [
+       "a3",
+       "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
+      ],
+      [
+       "n2",
+       "ntf.2"
+      ],
+      [
+       "a4",
+       "app.music"
+      ],
+      [
+       "n3",
+       "ntf.3"
+      ],
+      [
+       "a5",
+       "app.calendar"
+      ],
+      [
+       "a6",
+       "app.docs"
+      ],
+      [
+       "a7",
+       "app.video"
+      ],
+      [
+       "a8",
+       "app.calculator"
+      ],
+      [
+       "a9",
+       "app.podcasts"
+      ],
+      [
+       "x1",
+       "act.timer10"
+      ],
+      [
+       "x2",
+       "act.dismiss1"
+      ],
+      [
+       "x3",
+       "act.reply2"
+      ],
+      [
+       "x4",
+       "act.play3"
+      ],
+      [
+       "c2",
+       "cnt.1"
+      ],
+      [
+       "c3",
+       "cnt.2"
+      ],
+      [
+       "c4",
+       "cnt.4"
+      ],
+      [
+       "c5",
+       "cnt.5"
+      ]
+     ],
+     "lines": [
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
+      "c1 Dinner jazz playlist [media]",
+      "a3 Mail [work]",
+      "n1 Pasta timer done",
+      "n2 Quarterly report due Friday",
+      "a4 Music [music]",
+      "n3 Team meeting at 9:00",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
+      "x2 Dismiss [notification_action] -> n1",
+      "x3 Reply [notification_action] -> n2",
+      "x4 Play [deeplink] -> c1",
+      "c2 Tomato pasta recipe [document]",
+      "c3 Weeknight curry recipe [document]",
+      "c4 Q3 planning doc [document]",
+      "c5 Evening news podcast [media]"
+     ],
+     "chars": 558
+    },
+    "grammar": {
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
+    },
+    "result": {
+     "status": "ok",
+     "layout": {
+      "snapshotVersion": "s-demo-1",
+      "catalogVersion": "cat-1",
+      "title": "Now",
+      "sections": [
+       {
+        "component": "button",
+        "title": "Quick actions",
+        "items": [
+         "act.dismiss1",
+         "act.reply2",
+         "act.play3"
+        ],
+        "actions": []
+       }
+      ]
+     },
+     "maxTokens": 388
+    }
+   }
+  },
+  {
+   "name": "button row of five is over limit",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s12"
+    }
+   },
+   "output": "{\"title\":\"Now\",\"sections\":[{\"component\":\"button\",\"title\":\"Quick actions\",\"items\":[\"x1\",\"x2\",\"x3\",\"x4\",\"x5\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app.recipes"
+      ],
+      [
+       "a2",
+       "app.groceries"
+      ],
+      [
+       "c1",
+       "cnt.3"
+      ],
+      [
+       "a3",
+       "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
+      ],
+      [
+       "n2",
+       "ntf.2"
+      ],
+      [
+       "a4",
+       "app.music"
+      ],
+      [
+       "n3",
+       "ntf.3"
+      ],
+      [
+       "a5",
+       "app.calendar"
+      ],
+      [
+       "a6",
+       "app.docs"
+      ],
+      [
+       "a7",
+       "app.video"
+      ],
+      [
+       "a8",
+       "app.calculator"
+      ],
+      [
+       "a9",
+       "app.podcasts"
+      ],
+      [
+       "x1",
+       "act.timer10"
+      ],
+      [
+       "x2",
+       "act.dismiss1"
+      ],
+      [
+       "x3",
+       "act.reply2"
+      ],
+      [
+       "x4",
+       "act.play3"
+      ],
+      [
+       "x5",
+       "act.grocery"
+      ],
+      [
+       "x6",
+       "act.draft"
+      ],
+      [
+       "c2",
+       "cnt.1"
+      ],
+      [
+       "c3",
+       "cnt.2"
+      ],
+      [
+       "c4",
+       "cnt.4"
+      ],
+      [
+       "c5",
+       "cnt.5"
+      ]
+     ],
+     "lines": [
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
+      "c1 Dinner jazz playlist [media]",
+      "a3 Mail [work]",
+      "n1 Pasta timer done",
+      "n2 Quarterly report due Friday",
+      "a4 Music [music]",
+      "n3 Team meeting at 9:00",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
+      "x2 Dismiss [notification_action] -> n1",
+      "x3 Reply [notification_action] -> n2",
+      "x4 Play [deeplink] -> c1",
+      "x5 Add missing items to grocery list [agent_task] -> c2",
+      "x6 Draft a reply to Jamie [agent_task] -> n2",
+      "c2 Tomato pasta recipe [document]",
+      "c3 Weeknight curry recipe [document]",
+      "c4 Q3 planning doc [document]",
+      "c5 Evening news podcast [media]"
+     ],
+     "chars": 659
+    },
+    "grammar": {
+     "sha256": "c2b4b77270d44291ea4c4a5b058c00baeb66de03b819301da1c2733b8601a58d",
+     "length": 3509,
+     "maxChars": 761
+    },
+    "result": {
+     "status": "failed",
+     "failure": "over_limit"
+    }
+   }
+  },
+  {
+   "name": "six sections fit",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    }
+   },
+   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c2\",\"c3\"]},{\"component\":\"list\",\"title\":\"Messages\",\"items\":[\"n2\",\"n3\"]},{\"component\":\"button\",\"title\":\"Play\",\"items\":[\"x4\"]},{\"component\":\"list\",\"title\":\"Listen\",\"items\":[\"c1\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app.recipes"
+      ],
+      [
+       "a2",
+       "app.groceries"
+      ],
+      [
+       "c1",
+       "cnt.3"
+      ],
+      [
+       "a3",
+       "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
+      ],
+      [
+       "n2",
+       "ntf.2"
+      ],
+      [
+       "a4",
+       "app.music"
+      ],
+      [
+       "n3",
+       "ntf.3"
+      ],
+      [
+       "a5",
+       "app.calendar"
+      ],
+      [
+       "a6",
+       "app.docs"
+      ],
+      [
+       "a7",
+       "app.video"
+      ],
+      [
+       "a8",
+       "app.calculator"
+      ],
+      [
+       "a9",
+       "app.podcasts"
+      ],
+      [
+       "x1",
+       "act.timer10"
+      ],
+      [
+       "x2",
+       "act.dismiss1"
+      ],
+      [
+       "x3",
+       "act.reply2"
+      ],
+      [
+       "x4",
+       "act.play3"
+      ],
+      [
+       "c2",
+       "cnt.1"
+      ],
+      [
+       "c3",
+       "cnt.2"
+      ],
+      [
+       "c4",
+       "cnt.4"
+      ],
+      [
+       "c5",
+       "cnt.5"
+      ]
+     ],
+     "lines": [
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
+      "c1 Dinner jazz playlist [media]",
+      "a3 Mail [work]",
+      "n1 Pasta timer done",
+      "n2 Quarterly report due Friday",
+      "a4 Music [music]",
+      "n3 Team meeting at 9:00",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
+      "x2 Dismiss [notification_action] -> n1",
+      "x3 Reply [notification_action] -> n2",
+      "x4 Play [deeplink] -> c1",
+      "c2 Tomato pasta recipe [document]",
+      "c3 Weeknight curry recipe [document]",
+      "c4 Q3 planning doc [document]",
+      "c5 Evening news podcast [media]"
+     ],
+     "chars": 558
+    },
+    "grammar": {
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
+    },
+    "result": {
+     "status": "ok",
+     "layout": {
+      "snapshotVersion": "s-demo-1",
+      "catalogVersion": "cat-1",
+      "title": "Dinner",
+      "sections": [
+       {
+        "component": "grid",
+        "title": "Kitchen",
+        "items": [
+         "app.recipes",
+         "app.groceries"
+        ],
+        "actions": []
+       },
+       {
+        "component": "card",
+        "title": "Timer",
+        "items": [
+         "ntf.1"
+        ],
+        "actions": [
+         "act.dismiss1"
+        ]
+       },
+       {
+        "component": "carousel",
+        "title": "Recipes",
+        "items": [
+         "cnt.1",
+         "cnt.2"
+        ],
+        "actions": []
+       },
+       {
+        "component": "list",
+        "title": "Messages",
+        "items": [
+         "ntf.2",
+         "ntf.3"
+        ],
+        "actions": []
+       },
+       {
+        "component": "button",
+        "title": "Play",
+        "items": [
+         "act.play3"
+        ],
+        "actions": []
+       },
+       {
+        "component": "list",
+        "title": "Listen",
+        "items": [
+         "cnt.3"
+        ],
+        "actions": []
+       }
+      ]
+     },
+     "maxTokens": 388
+    }
+   }
+  },
+  {
+   "name": "seven sections are over limit",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s1"
+    }
+   },
+   "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"list\",\"title\":\"L\",\"items\":[\"n1\"]},{\"component\":\"list\",\"title\":\"L\",\"items\":[\"n2\"]},{\"component\":\"list\",\"title\":\"L\",\"items\":[\"n3\"]},{\"component\":\"list\",\"title\":\"L\",\"items\":[\"c1\"]},{\"component\":\"list\",\"title\":\"L\",\"items\":[\"c2\"]},{\"component\":\"list\",\"title\":\"L\",\"items\":[\"c3\"]},{\"component\":\"list\",\"title\":\"L\",\"items\":[\"c4\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app.recipes"
+      ],
+      [
+       "a2",
+       "app.groceries"
+      ],
+      [
+       "c1",
+       "cnt.3"
+      ],
+      [
+       "a3",
+       "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
+      ],
+      [
+       "n2",
+       "ntf.2"
+      ],
+      [
+       "a4",
+       "app.music"
+      ],
+      [
+       "n3",
+       "ntf.3"
+      ],
+      [
+       "a5",
+       "app.calendar"
+      ],
+      [
+       "a6",
+       "app.docs"
+      ],
+      [
+       "a7",
+       "app.video"
+      ],
+      [
+       "a8",
+       "app.calculator"
+      ],
+      [
+       "a9",
+       "app.podcasts"
+      ],
+      [
+       "x1",
+       "act.timer10"
+      ],
+      [
+       "x2",
+       "act.dismiss1"
+      ],
+      [
+       "x3",
+       "act.reply2"
+      ],
+      [
+       "x4",
+       "act.play3"
+      ],
+      [
+       "c2",
+       "cnt.1"
+      ],
+      [
+       "c3",
+       "cnt.2"
+      ],
+      [
+       "c4",
+       "cnt.4"
+      ],
+      [
+       "c5",
+       "cnt.5"
+      ]
+     ],
+     "lines": [
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
+      "c1 Dinner jazz playlist [media]",
+      "a3 Mail [work]",
+      "n1 Pasta timer done",
+      "n2 Quarterly report due Friday",
+      "a4 Music [music]",
+      "n3 Team meeting at 9:00",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
+      "x2 Dismiss [notification_action] -> n1",
+      "x3 Reply [notification_action] -> n2",
+      "x4 Play [deeplink] -> c1",
+      "c2 Tomato pasta recipe [document]",
+      "c3 Weeknight curry recipe [document]",
+      "c4 Q3 planning doc [document]",
+      "c5 Evening news podcast [media]"
+     ],
+     "chars": 558
+    },
+    "grammar": {
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
+    },
+    "result": {
+     "status": "failed",
+     "failure": "over_limit"
+    }
+   }
+  },
+  {
+   "name": "first build: apps and actions only",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "button",
+    "prompt": null,
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s13"
+    }
+   },
+   "output": "{\"title\":\"No\",\"sections\":[{\"component\":\"grid\",\"title\":\"Apps\",\"items\":[\"a1\",\"a2\",\"a3\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app:org.example.notes/.Notes"
+      ],
+      [
+       "a2",
+       "app:org.example.music/.Player"
+      ],
+      [
+       "a3",
+       "app:org.example.clock/.Main"
+      ],
+      [
+       "x1",
+       "intent:timer?minutes=12"
+      ],
+      [
+       "x2",
+       "task:ws-grocery"
+      ],
+      [
+       "x3",
+       "sc:org.example.music/slow-supper"
+      ]
+     ],
+     "lines": [
+      "a1 Notes [cooking]",
+      "a2 Music [music]",
+      "a3 Clock [tools]",
+      "x1 Start 12-min timer [deeplink] -> a3",
+      "x2 Add missing items to grocery list [agent_task] -> a1",
+      "x3 Play Slow Supper [shortcut] -> a2"
+     ],
+     "chars": 185
+    },
+    "grammar": {
+     "sha256": "3997f9faed842ddec822d0cf41c8aeecad3304aee0056adebcbb4ee087a7be90",
+     "length": 1197,
+     "maxChars": 647
+    },
+    "result": {
+     "status": "ok",
+     "layout": {
+      "snapshotVersion": "s-fb-1",
+      "catalogVersion": "cat-1",
+      "title": "No",
+      "sections": [
+       {
+        "component": "grid",
+        "title": "Apps",
+        "items": [
+         "app:org.example.notes/.Notes",
+         "app:org.example.music/.Player",
+         "app:org.example.clock/.Main"
+        ],
+        "actions": []
+       }
+      ]
+     },
+     "maxTokens": 331
+    }
+   }
+  },
+  {
+   "name": "first build: task row",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-vec",
+    "trigger": "direct_text",
+    "prompt": "cooking timer",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "$ref": "s13"
+    }
+   },
+   "output": "{\"title\":\"Cooking\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\"]},{\"component\":\"button\",\"title\":\"Quick actions\",\"items\":[\"x1\",\"x2\"]}]}",
+   "options": {},
+   "expect": {
+    "context": {
+     "aliases": [
+      [
+       "a1",
+       "app:org.example.notes/.Notes"
+      ],
+      [
+       "x1",
+       "intent:timer?minutes=12"
+      ],
+      [
+       "a2",
+       "app:org.example.clock/.Main"
+      ],
+      [
+       "a3",
+       "app:org.example.music/.Player"
+      ],
+      [
+       "x2",
+       "task:ws-grocery"
+      ],
+      [
+       "x3",
+       "sc:org.example.music/slow-supper"
+      ]
+     ],
+     "lines": [
+      "a1 Notes [cooking]",
+      "x1 Start 12-min timer [deeplink] -> a2",
+      "a2 Clock [tools]",
+      "a3 Music [music]",
+      "x2 Add missing items to grocery list [agent_task] -> a1",
+      "x3 Play Slow Supper [shortcut] -> a3"
+     ],
+     "chars": 185
+    },
+    "grammar": {
+     "sha256": "2fb7f68069a675ffa7c166ab54d58f56eb7d28aaf435fbc1b6ee38b45a27d84f",
+     "length": 1197,
+     "maxChars": 647
+    },
+    "result": {
+     "status": "ok",
+     "layout": {
+      "snapshotVersion": "s-fb-1",
+      "catalogVersion": "cat-1",
+      "title": "Cooking",
+      "sections": [
+       {
+        "component": "grid",
+        "title": "Kitchen",
+        "items": [
+         "app:org.example.notes/.Notes",
+         "app:org.example.clock/.Main"
+        ],
+        "actions": []
+       },
+       {
+        "component": "button",
+        "title": "Quick actions",
+        "items": [
+         "intent:timer?minutes=12",
+         "task:ws-grocery"
+        ],
+        "actions": []
+       }
+      ]
+     },
+     "maxTokens": 331
     }
    }
   },
@@ -7043,7 +8233,7 @@
     "prompt": "something for cooking dinner",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s12"
+     "$ref": "s14"
     }
    },
    "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]}]}",
@@ -7066,7 +8256,7 @@
     "prompt": "something for cooking dinner",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s13"
+     "$ref": "s15"
     }
    },
    "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]}]}",
@@ -7076,14 +8266,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -7091,7 +8277,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -7103,7 +8289,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -7111,23 +8297,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -7164,21 +8350,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝 [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝 [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -7187,12 +8372,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 635
+     "chars": 611
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -7205,8 +8390,8 @@
         "component": "grid",
         "title": "Kitchen",
         "items": [
-         "app.timer",
          "app.recipes",
+         "app.groceries",
          "act.timer10"
         ],
         "actions": []
@@ -7232,7 +8417,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     }
    }
   },
@@ -7257,14 +8442,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -7272,7 +8453,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -7284,7 +8465,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -7292,23 +8473,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -7345,21 +8526,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -7368,12 +8548,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -7402,14 +8582,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -7417,7 +8593,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -7429,7 +8605,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -7437,23 +8613,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -7490,21 +8666,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -7513,12 +8688,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -7547,14 +8722,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -7562,7 +8733,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -7574,7 +8745,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -7582,23 +8753,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -7635,21 +8806,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -7658,12 +8828,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 582
+     "chars": 558
     },
     "grammar": {
-     "sha256": "2e888cb8d7541abe0f7d37636e09299d88a6216e9647207914366ad9b98df949",
-     "length": 3319,
-     "maxChars": 561
+     "sha256": "1603483d454e0f038413807a83898a554be17b951ed7af758cbc0d45bfc1f033",
+     "length": 3333,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -7680,7 +8850,7 @@
     "prompt": "something for cooking dinner",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s14"
+     "$ref": "s12"
     }
    },
    "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"button\",\"title\":\"Groceries\",\"items\":[\"x5\"]}]}",
@@ -7690,14 +8860,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -7705,7 +8871,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -7717,7 +8883,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -7725,23 +8891,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -7786,21 +8952,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -7811,12 +8976,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 683
+     "chars": 659
     },
     "grammar": {
-     "sha256": "30e1f28ae8fa3b1463daa149d70baaf6987fb90b33bb00ceeacce7777bff56a2",
-     "length": 3451,
-     "maxChars": 561
+     "sha256": "c2b4b77270d44291ea4c4a5b058c00baeb66de03b819301da1c2733b8601a58d",
+     "length": 3509,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -7835,7 +9000,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     }
    }
   },
@@ -7848,7 +9013,7 @@
     "prompt": "something for cooking dinner",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s14"
+     "$ref": "s12"
     }
    },
    "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"card\",\"title\":\"Recipe\",\"items\":[\"c2\"],\"actions\":[\"x5\"]}]}",
@@ -7858,14 +9023,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -7873,7 +9034,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -7885,7 +9046,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -7893,23 +9054,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -7954,21 +9115,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -7979,12 +9139,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 683
+     "chars": 659
     },
     "grammar": {
-     "sha256": "30e1f28ae8fa3b1463daa149d70baaf6987fb90b33bb00ceeacce7777bff56a2",
-     "length": 3451,
-     "maxChars": 561
+     "sha256": "c2b4b77270d44291ea4c4a5b058c00baeb66de03b819301da1c2733b8601a58d",
+     "length": 3509,
+     "maxChars": 761
     },
     "result": {
      "status": "ok",
@@ -8005,7 +9165,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 388
     }
    }
   },
@@ -8018,7 +9178,7 @@
     "prompt": "something for cooking dinner",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s14"
+     "$ref": "s12"
     }
    },
    "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Do\",\"items\":[\"a1\",\"x5\"]}]}",
@@ -8028,14 +9188,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -8043,7 +9199,7 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
       ],
       [
@@ -8055,7 +9211,7 @@
        "ntf.2"
       ],
       [
-       "a5",
+       "a4",
        "app.music"
       ],
       [
@@ -8063,23 +9219,23 @@
        "ntf.3"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.docs"
       ],
       [
-       "a8",
+       "a7",
        "app.video"
       ],
       [
-       "a9",
+       "a8",
        "app.calculator"
       ],
       [
-       "a10",
+       "a9",
        "app.podcasts"
       ],
       [
@@ -8124,21 +9280,20 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]",
+      "a3 Mail [work]",
       "n1 Pasta timer done",
       "n2 Quarterly report due Friday",
-      "a5 Music [music]",
+      "a4 Music [music]",
       "n3 Team meeting at 9:00",
-      "a6 Calendar [calendar]",
-      "a7 Documents [work]",
-      "a8 Video [media]",
-      "a9 Calculator [tools]",
-      "a10 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a5 Calendar [calendar]",
+      "a6 Documents [work]",
+      "a7 Video [media]",
+      "a8 Calculator [tools]",
+      "a9 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n1",
       "x3 Reply [notification_action] -> n2",
       "x4 Play [deeplink] -> c1",
@@ -8149,12 +9304,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 683
+     "chars": 659
     },
     "grammar": {
-     "sha256": "30e1f28ae8fa3b1463daa149d70baaf6987fb90b33bb00ceeacce7777bff56a2",
-     "length": 3451,
-     "maxChars": 561
+     "sha256": "c2b4b77270d44291ea4c4a5b058c00baeb66de03b819301da1c2733b8601a58d",
+     "length": 3509,
+     "maxChars": 761
     },
     "result": {
      "status": "failed",
@@ -8171,7 +9326,7 @@
     "prompt": "something for cooking dinner",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s15"
+     "$ref": "s16"
     }
    },
    "output": "{\"title\":\"Dinner\",\"sections\":[{\"component\":\"grid\",\"title\":\"Kitchen\",\"items\":[\"a1\",\"a2\",\"x1\"]},{\"component\":\"card\",\"title\":\"Timer\",\"items\":[\"n1\"],\"actions\":[\"x2\"]},{\"component\":\"carousel\",\"title\":\"Recipes\",\"items\":[\"c1\",\"c2\"]}]}",
@@ -8206,14 +9361,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -8221,23 +9372,27 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]"
+      "a3 Mail [work]",
+      "n1 Pasta timer done"
      ],
-     "chars": 111
+     "chars": 114
     },
     "grammar": {
-     "sha256": "1065ebbfb1415312cc062098c32b5b37c234a737be6770675b00844b08456480",
-     "length": 1309,
-     "maxChars": 469
+     "sha256": "91626da06630a9433b821141fe13036d48bb468c5dfb6061fcb920b2bb1550ac",
+     "length": 1375,
+     "maxChars": 671
     },
     "result": {
      "status": "failed",
@@ -8266,14 +9421,10 @@
      "aliases": [
       [
        "a1",
-       "app.timer"
-      ],
-      [
-       "a2",
        "app.recipes"
       ],
       [
-       "a3",
+       "a2",
        "app.groceries"
       ],
       [
@@ -8281,23 +9432,27 @@
        "cnt.3"
       ],
       [
-       "a4",
+       "a3",
        "app.mail"
+      ],
+      [
+       "n1",
+       "ntf.1"
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
-      "a2 Recipes [cooking]",
-      "a3 Grocery list [cooking]",
+      "a1 Recipes [cooking]",
+      "a2 Grocery list [cooking]",
       "c1 Dinner jazz playlist [media]",
-      "a4 Mail [work]"
+      "a3 Mail [work]",
+      "n1 Pasta timer done"
      ],
-     "chars": 111
+     "chars": 114
     },
     "grammar": {
-     "sha256": "1065ebbfb1415312cc062098c32b5b37c234a737be6770675b00844b08456480",
-     "length": 1309,
-     "maxChars": 469
+     "sha256": "91626da06630a9433b821141fe13036d48bb468c5dfb6061fcb920b2bb1550ac",
+     "length": 1375,
+     "maxChars": 671
     },
     "result": {
      "status": "failed",
@@ -8314,7 +9469,7 @@
     "prompt": "crème brûlée at the café",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s16"
+     "$ref": "s17"
     }
    },
    "output": "{\"title\":\"Cr\",\"sections\":[{\"component\":\"grid\",\"title\":\"Apps\",\"items\":[\"a1\",\"a2\",\"a3\",\"a4\",\"a5\",\"a6\"]},{\"component\":\"list\",\"title\":\"Updates\",\"items\":[\"n1\",\"n2\",\"n3\"]},{\"component\":\"carousel\",\"title\":\"For you\",\"items\":[\"c1\",\"c2\",\"c3\",\"c4\",\"c5\"]}]}",
@@ -8322,10 +9477,6 @@
    "expect": {
     "context": {
      "aliases": [
-      [
-       "a1",
-       "app.timer"
-      ],
       [
        "c1",
        "cnt.u"
@@ -8335,11 +9486,11 @@
        "ntf.3"
       ],
       [
-       "a2",
+       "a1",
        "app.café"
       ],
       [
-       "a3",
+       "a2",
        "app.mail"
       ],
       [
@@ -8351,35 +9502,35 @@
        "ntf.2"
       ],
       [
-       "a4",
+       "a3",
        "app.music"
       ],
       [
-       "a5",
+       "a4",
        "app.recipes"
       ],
       [
-       "a6",
+       "a5",
        "app.calendar"
       ],
       [
-       "a7",
+       "a6",
        "app.groceries"
       ],
       [
-       "a8",
+       "a7",
        "app.docs"
       ],
       [
-       "a9",
+       "a8",
        "app.video"
       ],
       [
-       "a10",
+       "a9",
        "app.calculator"
       ],
       [
-       "a11",
+       "a10",
        "app.podcasts"
       ],
       [
@@ -8416,22 +9567,21 @@
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
       "c1 Crème brûlée 🍮 for two [document]",
       "n1 Team meeting at 9:00",
-      "a2 Café ☕ [food]",
-      "a3 Mail [work]",
+      "a1 Café ☕ [food]",
+      "a2 Mail [work]",
       "n2 Pasta timer done",
       "n3 Quarterly report due Friday",
-      "a4 Music [music]",
-      "a5 Recipes [cooking]",
-      "a6 Calendar [calendar]",
-      "a7 Grocery list [cooking]",
-      "a8 Documents [work]",
-      "a9 Video [media]",
-      "a10 Calculator [tools]",
-      "a11 Podcasts [media]",
-      "x1 Start 10 minute timer [shortcut] -> a1",
+      "a3 Music [music]",
+      "a4 Recipes [cooking]",
+      "a5 Calendar [calendar]",
+      "a6 Grocery list [cooking]",
+      "a7 Documents [work]",
+      "a8 Video [media]",
+      "a9 Calculator [tools]",
+      "a10 Podcasts [media]",
+      "x1 Start 10 minute timer [shortcut]",
       "x2 Dismiss [notification_action] -> n2",
       "x3 Reply [notification_action] -> n3",
       "x4 Play [deeplink] -> c3",
@@ -8440,12 +9590,12 @@
       "c4 Q3 planning doc [document]",
       "c5 Evening news podcast [media]"
      ],
-     "chars": 600
+     "chars": 576
     },
     "grammar": {
-     "sha256": "f296e3dbc41a5b1b2e6721a708f7e8e22a39343d6bf2e250c2d1f5b95f9c9f21",
-     "length": 3415,
-     "maxChars": 561
+     "sha256": "780967c7b62471b32f3aec7658ea419119ffb9152b35603dcd185d4da4276cd5",
+     "length": 3429,
+     "maxChars": 809
     },
     "result": {
      "status": "ok",
@@ -8458,12 +9608,12 @@
         "component": "grid",
         "title": "Apps",
         "items": [
-         "app.timer",
          "app.café",
          "app.mail",
          "app.music",
          "app.recipes",
-         "app.calendar"
+         "app.calendar",
+         "app.groceries"
         ],
         "actions": []
        },
@@ -8491,7 +9641,7 @@
        }
       ]
      },
-     "maxTokens": 288
+     "maxTokens": 412
     }
    }
   },
@@ -8504,7 +9654,7 @@
     "prompt": "crème brûlée",
     "catalogVersion": "cat-1",
     "snapshot": {
-     "$ref": "s16"
+     "$ref": "s17"
     }
    },
    "output": "{\"title\":\"Dessert ☕\",\"sections\":[{\"component\":\"list\",\"title\":\"Recettes 🍮\",\"items\":[\"c1\"]}]}",
@@ -8515,34 +9665,34 @@
     "context": {
      "aliases": [
       [
-       "a1",
-       "app.timer"
-      ],
-      [
        "c1",
        "cnt.u"
       ],
       [
-       "a2",
+       "a1",
        "app.mail"
       ],
       [
        "n1",
        "ntf.1"
+      ],
+      [
+       "a2",
+       "app.music"
       ]
      ],
      "lines": [
-      "a1 Timer [tools]",
       "c1 Crème brûlée 🍮 for two [document]",
-      "a2 Mail [work]",
-      "n1 Pasta timer done"
+      "a1 Mail [work]",
+      "n1 Pasta timer done",
+      "a2 Music [music]"
      ],
      "chars": 89
     },
     "grammar": {
-     "sha256": "0b8e4ab16061e40fdf2c6f5390fd0b870f587026538296fc4e156487b07ec2d8",
+     "sha256": "40877d90c60681a0a6c0042e6f9ee0e70a584e9c25c61cfee29069f2b8e89db4",
      "length": 1287,
-     "maxChars": 449
+     "maxChars": 641
     },
     "result": {
      "status": "ok",
@@ -8561,7 +9711,7 @@
        }
       ]
      },
-     "maxTokens": 232
+     "maxTokens": 328
     }
    }
   }

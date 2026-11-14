@@ -109,6 +109,21 @@ def cases():
     morning = dict(copy.deepcopy(snap), timeOfDay='morning', pinned=[])
     bad_task = copy.deepcopy(tasks)
     bad_task['actions'][-1]['requiresConfirmation'] = False
+    first_build = {  # OS Product's first-build shape: apps and actions only, registry id formats (#787)
+        'snapshotVersion': 's-fb-1', 'catalogVersion': 'cat-1', 'createdAtMs': 1794600000000, 'timeOfDay': 'evening',
+        'apps': [{'id': 'app:org.example.clock/.Main', 'label': 'Clock', 'category': 'tools', 'recentRank': 2},
+                 {'id': 'app:org.example.notes/.Notes', 'label': 'Notes', 'category': 'cooking', 'recentRank': 1},
+                 {'id': 'app:org.example.music/.Player', 'label': 'Music', 'category': 'music', 'recentRank': 3}],
+        'notifications': [], 'content': [],
+        'actions': [{'id': 'intent:timer?minutes=12', 'label': 'Start 12-min timer', 'kind': 'deeplink',
+                     'targetId': 'app:org.example.clock/.Main', 'requiresConfirmation': False},
+                    {'id': 'task:ws-grocery', 'label': 'Add missing items to grocery list', 'kind': 'agent_task',
+                     'targetId': 'app:org.example.notes/.Notes', 'requiresConfirmation': True,
+                     'ask': 'Rose will compare the recipe with your Notes list and add what is missing.',
+                     'goal': 'GOAL-TEXT-MUST-NOT-REACH-THE-MODEL grocery'},
+                    {'id': 'sc:org.example.music/slow-supper', 'label': 'Play Slow Supper', 'kind': 'shortcut',
+                     'targetId': 'app:org.example.music/.Player', 'requiresConfirmation': False}],
+        'pinned': []}
     bad_kind = copy.deepcopy(snap)
     bad_kind['actions'][0]['kind'] = 'shell'
 
@@ -130,7 +145,9 @@ def cases():
         ('duplicate item', req(snap), mut(lambda x: x['sections'][2]['items'].append('a1')), {}),
         ('too many sections', req(snap), mut(lambda x: x['sections'].extend(
             [{'component': 'button', 'title': 'Go', 'items': ['x3']},
-             {'component': 'button', 'title': 'Play', 'items': ['x4']}])), {}),
+             {'component': 'button', 'title': 'Play', 'items': ['x4']},
+             {'component': 'list', 'title': 'More', 'items': ['c3']},
+             {'component': 'list', 'title': 'Also', 'items': ['c4']}])), {}),
         ('layout title too long', req(snap), L(title='x' * 41), {}),
         ('section title too long', req(snap), mut(lambda x: x['sections'][0].update(title='y' * 31)), {}),
         ('grid over max items', req(snap), mut(lambda x: x['sections'][0].update(
@@ -164,6 +181,31 @@ def cases():
                                                                    x['actions'][0].update(targetId='app -> timer'),
                                                                    x.update(pinned=['app -> timer'])))),
          L(), {}),
+        ('regenerate with avoid hint', req(snap, avoid=['app.recipes', 'cnt.1', 'gone:id']),
+         heuristic_text(req(snap, avoid=['app.recipes', 'cnt.1', 'gone:id'])), {}),
+        ('avoid not a list', req(snap, avoid='app.recipes'), L(), {}),
+        ('avoid with a non-string', req(snap, avoid=['app.recipes', 3]), L(), {}),
+        ('avoid too long', req(snap, avoid=['x'] * 65), L(), {}),
+        ('pinned id is not selectable', req(snap), mut(lambda x: x['sections'][0]['items'].append('app.timer')), {}),
+        ('button row of three actions', req(snap), dumps({'title': 'Now', 'sections': [
+            {'component': 'button', 'title': 'Quick actions', 'items': ['x2', 'x3', 'x4']}]}), {}),
+        ('button row of five is over limit', req(tasks), dumps({'title': 'Now', 'sections': [
+            {'component': 'button', 'title': 'Quick actions', 'items': ['x1', 'x2', 'x3', 'x4', 'x5']}]}), {}),
+        ('six sections fit', req(snap), dumps({'title': 'Dinner', 'sections': [
+            {'component': 'grid', 'title': 'Kitchen', 'items': ['a1', 'a2']},
+            {'component': 'card', 'title': 'Timer', 'items': ['n1'], 'actions': ['x2']},
+            {'component': 'carousel', 'title': 'Recipes', 'items': ['c2', 'c3']},
+            {'component': 'list', 'title': 'Messages', 'items': ['n2', 'n3']},
+            {'component': 'button', 'title': 'Play', 'items': ['x4']},
+            {'component': 'list', 'title': 'Listen', 'items': ['c1']}]}), {}),
+        ('seven sections are over limit', req(snap), dumps({'title': 'Dinner', 'sections': [
+            {'component': 'list', 'title': 'L', 'items': [i]} for i in ('n1', 'n2', 'n3', 'c1', 'c2', 'c3', 'c4')]}),
+         {}),
+        ('first build: apps and actions only', req(first_build, 'button', None),
+         heuristic_text(req(first_build, 'button', None)), {}),
+        ('first build: task row', req(first_build, prompt='cooking timer'), dumps({'title': 'Cooking', 'sections': [
+            {'component': 'grid', 'title': 'Kitchen', 'items': ['a1', 'a2']},
+            {'component': 'button', 'title': 'Quick actions', 'items': ['x1', 'x2']}]}), {}),
         ('label too long', req(mutsnap(snap, lambda x: x['apps'][0].update(label='z' * 61))), L(), {}),
         ('label 60 astral chars fits', req(mutsnap(snap, lambda x: x['apps'][1].update(label='🍝' * 60))), L(), {}),
         ('inference cancelled', req(snap), {'error': 'cancelled'}, {}),
@@ -192,7 +234,8 @@ def expected(request, output, opts):
     out = {'context': None, 'grammar': None}
     try:
         limits = check_request(copy.deepcopy(request), DEFAULT_CATALOG)
-        ctx = context_mod.select(request['snapshot'], request.get('prompt'), budget_chars=budget)
+        ctx = context_mod.select(request['snapshot'], request.get('prompt'), budget_chars=budget,
+                                 avoid=request.get('avoid'))
         out['context'] = {'aliases': [[a, i] for a, i in ctx.aliases.items()], 'lines': ctx.lines,
                           'chars': ctx.chars}
         tree = grammar_mod.build(ctx, DEFAULT_CATALOG, limits)
