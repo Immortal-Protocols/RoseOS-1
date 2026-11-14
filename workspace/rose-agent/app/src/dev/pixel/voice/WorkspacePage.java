@@ -280,6 +280,12 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
 
  // ---------- the page in the pager ----------
 
+ /** Home's window shows or hides (another app came in front): a commit while hidden is prepared, not shown. */
+ @Override protected void onWindowVisibilityChanged(int visibility){
+  super.onWindowVisibilityChanged(visibility);
+  hub.windowVisible(visibility==View.VISIBLE);
+ }
+
  /** The pager settled on (or left) the workspace. Off screen the page is inert, and the offer card has done its job once reached. */
  void shown(boolean now){
   shown=now;

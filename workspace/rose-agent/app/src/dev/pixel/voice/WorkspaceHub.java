@@ -56,7 +56,8 @@ final class WorkspaceHub {
  private AtomicBoolean cancel=new AtomicBoolean();
  private final Map<String,Map<String,Object>> answered=new LinkedHashMap<>();
  private Listener listener;
- private boolean pageShown,reading;
+ /** The pager is on the workspace (pageShown) and Home's window is visible (windowVisible): only both together is on screen. */
+ private boolean pageShown,windowVisible,reading;
  WorkspaceSources.Read lastRead;
 
  private WorkspaceHub(Context app){
@@ -73,8 +74,12 @@ final class WorkspaceHub {
  // ---------- the page ----------
 
  void attach(Listener page){listener=page;}
- void detach(Listener page){if(listener==page){listener=null;pageShown=false;}}
- void shown(boolean now){pageShown=now&&listener!=null;if(pageShown)composer.workspaceShown();}
+ void detach(Listener page){if(listener==page){listener=null;pageShown=false;windowVisible=false;}}
+ void shown(boolean now){pageShown=now&&listener!=null;if(onScreen())composer.workspaceShown();}
+ /** Home's window became visible or not (the person left for another app, or came back). */
+ void windowVisible(boolean now){windowVisible=now&&listener!=null;if(onScreen())composer.workspaceShown();}
+ /** On screen for section 4.2: the workspace page is the pager's page and Home is in front. Otherwise a commit is prepared, not shown. */
+ boolean onScreen(){return pageShown&&windowVisible;}
 
  void ask(String text){WorkspaceRequests.Step s=requests.page(text);if(s.composes())start(s.gen);}
  void regenerate(){WorkspaceRequests.Step s=requests.pageRegenerate();if(s.composes())start(s.gen);}
@@ -93,7 +98,7 @@ final class WorkspaceHub {
   Map<String,Object> first=answered.get(r.requestId);
   if(first!=null){reply.send(first);return;}
   WorkspaceRequests.Reply remember=result->{answered.put(r.requestId,result);while(answered.size()>ANSWERED)answered.remove(answered.keySet().iterator().next());reply.send(result);};
-  WorkspaceRequests.Step s=requests.conversation(r,model(),pageShown,remember);
+  WorkspaceRequests.Step s=requests.conversation(r,model(),onScreen(),remember);
   if(s.composes())start(s.gen);else if(WorkspaceAgent.UNDO.equals(r.kind))changed(null);
  }
 
@@ -151,7 +156,7 @@ final class WorkspaceHub {
   if(outcome!=WorkspaceComposer.Outcome.IGNORED&&read!=null)lastRead=read;
   if(outcome==WorkspaceComposer.Outcome.COMMITTED)save();
   // Shown only when the page is on screen now; its first frame is then timed.
-  requests.finished(gen,outcome,pageShown);
+  requests.finished(gen,outcome,onScreen());
   if(outcome!=WorkspaceComposer.Outcome.IGNORED&&listener!=null)listener.changed(outcome==WorkspaceComposer.Outcome.COMMITTED?requestId:null);
  }
 
