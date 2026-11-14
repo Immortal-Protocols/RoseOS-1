@@ -62,9 +62,11 @@ final class WorkspaceComposer {
  int begin(String text,boolean conversational){return begin(text,conversational,null);}
 
  /** Regenerate: the same request again (around the current pins). -1 if there is nothing to regenerate. */
- int regenerate(){
+ int regenerate(){return regenerate(false,null);}
+ /** Regenerate asked from a conversation (App Core's regenerate kind), keeping that route's requestId. */
+ int regenerate(boolean conversational,String routeRequestId){
   String r=state.request();if(r==null)return -1;
-  int gen=begin(ARRANGE.equals(r)?null:r,false);
+  int gen=begin(ARRANGE.equals(r)?null:r,conversational,routeRequestId);
   if(gen>0&&state.layout()!=null){
    java.util.Set<String> ids=new java.util.LinkedHashSet<>();
    for(WorkspaceLayout.Section c:state.layout().sections){ids.addAll(c.items);ids.addAll(c.actions);}

@@ -67,12 +67,20 @@ public final class SettingsAgentProvider extends ContentProvider {
  }
  private static boolean bool(JSONObject p,String key)throws Exception{Object v=p.get(key);if(!(v instanceof Boolean))throw new IllegalArgumentException("Expected boolean "+key);return (Boolean)v;}
  private JSONObject execute(String method,JSONObject p)throws Exception{
+  // Project 2: App Core's composer intent/result v1 (section 4). call() has already checked the caller's signer,
+  // and its receipts answer a repeated command id; WorkspaceHub also answers a repeated requestId once.
+  if(method.equals(WorkspaceAgent.OPERATION))return new JSONObject(WorkspaceLayout.json(WorkspaceHub.serve(getContext(),p.toString())));
   if(method.equals("capabilities")){
    java.io.InputStream in=getContext().getAssets().open("settings-agent-tools.json");java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);in.close();
    JSONArray tools=new JSONArray(out.toString("UTF-8"));
    in=getContext().getAssets().open("youtube-agent-tools.json");out.reset();while((n=in.read(b))!=-1)out.write(b,0,n);in.close();JSONArray yt=new JSONArray(out.toString("UTF-8"));for(int i=0;i<yt.length();i++)tools.put(yt.get(i));
    JSONArray cz=CustomizationAgent.catalog(getContext());for(int i=0;i<cz.length();i++)tools.put(cz.get(i));
-   return new JSONObject().put("status","ok").put("schemaVersion",1).put("versionCode",getContext().getPackageManager().getPackageInfo(getContext().getPackageName(),0).getLongVersionCode()).put("tools",tools);
+   // Project 2 (section 4.1): the workspace_compose kinds this phone can honour; prompt only with a real model.
+   JSONObject caps=new JSONObject().put("status","ok").put("schemaVersion",1).put("versionCode",getContext().getPackageManager().getPackageInfo(getContext().getPackageName(),0).getLongVersionCode()).put("tools",tools);
+   // A workspace problem only leaves kinds out (App Core then offers no workspace tool); every other tool's
+   // capabilities still answer.
+   try{caps.put("kinds",new JSONArray(WorkspaceHub.kinds(getContext())));}catch(RuntimeException ignored){}
+   return caps;
   }
   if(method.startsWith("youtube_"))return youtube.execute(method,p);
   if(CustomizationAgent.handles(method))return CustomizationAgent.execute(getContext(),method,p);

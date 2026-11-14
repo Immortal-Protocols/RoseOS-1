@@ -32,6 +32,11 @@ final class WorkspaceState {
  private final List<Entry> undo=new ArrayList<>(),recent=new ArrayList<>();
  private final Map<String,String> actionResults=new LinkedHashMap<>();
  private long nextKey=1;
+ /** The store's revision (App Core section 4.2): it grows with every change to the layout or its pins, and never goes back, even on undo. */
+ private long revision;
+ long revision(){return revision;}
+ /** Never lets the revision go back: the hub keeps the highest revision it has saved apart from this store, so a store that was lost or corrupted continues above it. */
+ void raiseRevision(long floor){if(floor>revision)revision=floor;}
 
  WorkspaceLayout layout(){return layout;}
  String request(){return request;}
@@ -66,7 +71,7 @@ final class WorkspaceState {
    if(out.size()>WorkspaceLayout.MAX_SECTIONS&&allPinned(out))break;
   }
   pushUndo();
-  layout=new WorkspaceLayout(incoming.snapshotVersion,incoming.title,out);request=newRequest;
+  layout=new WorkspaceLayout(incoming.snapshotVersion,incoming.title,out);request=newRequest;revision++;
   remember();
  }
 
@@ -79,6 +84,7 @@ final class WorkspaceState {
   if(!present)return false;
   pushUndo();
   if(!pins.remove(key))pins.add(key);
+  revision++;
   return true;
  }
 
@@ -87,6 +93,7 @@ final class WorkspaceState {
   if(undo.isEmpty())return false;
   Entry e=undo.remove(undo.size()-1);
   layout=e.layout;request=e.request;pins.clear();pins.addAll(e.pins);
+  revision++;
   return true;
  }
 
@@ -95,7 +102,7 @@ final class WorkspaceState {
   if(index<0||index>=recent.size())return false;
   Entry e=recent.get(index);if(e.layout==layout)return false;
   pushUndo();
-  layout=e.layout;request=e.request;
+  layout=e.layout;request=e.request;revision++;
   Set<String> keysNow=new HashSet<>();for(WorkspaceLayout.Section c:layout.sections)keysNow.add(c.key);
   pins.retainAll(keysNow);
   remember();
@@ -123,7 +130,7 @@ final class WorkspaceState {
 
  String toJson(){
   Map<String,Object> m=new LinkedHashMap<>();
-  m.put("v",1L);m.put("next",nextKey);
+  m.put("v",1L);m.put("next",nextKey);m.put("rev",revision);
   m.put("layout",layout==null?null:layout.toMap());m.put("request",request);m.put("pins",new ArrayList<Object>(pins));
   m.put("undo",entries(undo));m.put("recent",entries(recent));
   m.put("actions",new LinkedHashMap<String,Object>(actionResults));
@@ -148,6 +155,7 @@ final class WorkspaceState {
    Map<String,Object> m=(Map<String,Object>)root;
    if(!Long.valueOf(1).equals(m.get("v")))return s;
    Object next=m.get("next");
+   Object rev=m.get("rev");if(rev instanceof Long&&(Long)rev>=0)s.revision=(Long)rev;
    Object rawLayout=m.get("layout");
    if(rawLayout!=null&&rawLayout!=MiniJson.NULL){
     WorkspaceLayout l=WorkspaceLayout.fromMap(rawLayout);if(l==null)return new WorkspaceState();
