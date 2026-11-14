@@ -64,8 +64,8 @@ directory beside it in `repo.git`), outside
    fixed framework-only skeleton: Java 8 source level, android.jar APIs only,
    aapt v1 resources, min API 26 and target 35. It cannot change the package,
    versionCode or signing. Enabling this thread on the Mac is a
-   security-relevant runtime change; see §5. The generator is injected and is
-   not implemented yet.
+   security-relevant runtime change; see §5. The generator is injected. It is
+   implemented in source (§4A) but disabled: nothing configures or runs it.
 5. **Build.** Before git or any tool touches the generated tree, the builder
    refuses git metadata (`.git`, `.gitignore`, `.gitattributes`, `.gitmodules`
    in any case, with trailing dots or spaces, or as short names like `git~1`),
@@ -343,9 +343,12 @@ mere submission.
   Rose Agent's own reply normally arrives. Rose Agent runs phone commands one
   at a time and starts its 20 s wait only when it reaches this one, so a
   command queued behind another can still come back late and be reported as
-  `uncertain`. A composition slower than 20 s comes
-  back as Rose Agent's `running` and is reported as `uncertain`; v1 does not
-  fetch it later.
+  `uncertain`. Rose Agent's composer provider answers within about 8 s: a
+  composition still running after its 7 s wait comes back as `uncertain`
+  (`still_composing`), and its provider's own 8 s limit also answers
+  `uncertain`. Neither the 20 s wait nor this 25 s one is reached for a
+  composition alone. The composition can still commit afterwards; the page
+  shows it when reached, and v1 does not fetch it later.
 - A busy or transient reply to the capabilities check (`routine_busy`,
   `running`, `expired`, `error`) is reported as busy. Nothing was sent, so
   nothing changed.
