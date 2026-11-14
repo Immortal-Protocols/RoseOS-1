@@ -4,9 +4,12 @@ Project 2 adds one page to the left of the normal Home screen. You reach it by s
 It shows a locally composed layout of native sections. Home's own layout, its dock (the first cells of the
 Home grid), the `HomeTray` edge and the page dots are unchanged.
 
-**Status.** Nathan approved the HiFi prototype r2 on 2026-11-14 (`6fcf8c9b`,
-`prototypes/rose-hifi/HANDOFF-WORKSPACE.md` on `claude/intelligent-ritchie-x2aqz4`). That handoff is the
-behaviour reference. This document is source only: nothing here has been built for or run on a phone.
+**Status.** Nathan approved the HiFi prototype r2 on 2026-11-14. Its source is `6fcf8c9b`, and it reached
+main in `5baea381`. The behaviour reference is `prototypes/rose-hifi/HANDOFF-WORKSPACE.md` and
+`prototypes/rose-hifi/src/workspace.js`. Both are byte-identical at `6fcf8c9b` and on main; main adds only
+review evidence under `prototypes/rose-hifi/evidence/workspace-6fcf8c9b/`. The pixel review is not complete,
+and its remaining observations stand. This document is source only: nothing here has been built for or run
+on a phone.
 
 ## Three contracts, one each
 
