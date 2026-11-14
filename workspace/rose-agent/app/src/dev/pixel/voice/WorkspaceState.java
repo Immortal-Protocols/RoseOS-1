@@ -35,6 +35,8 @@ final class WorkspaceState {
  /** The store's revision (App Core section 4.2): it grows with every change to the layout or its pins, and never goes back, even on undo. */
  private long revision;
  long revision(){return revision;}
+ /** Never lets the revision go back: the hub keeps the highest revision it has saved apart from this store, so a store that was lost or corrupted continues above it. */
+ void raiseRevision(long floor){if(floor>revision)revision=floor;}
 
  WorkspaceLayout layout(){return layout;}
  String request(){return request;}
