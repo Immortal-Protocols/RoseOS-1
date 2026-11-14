@@ -417,7 +417,9 @@ one.
   ```
 
   Times are epoch seconds. `detail` is owner-facing text of at most 200
-  characters, possibly empty. `phoneTasks` holds the Mac's own task ids. The
+  characters, possibly empty. `phoneTasks` holds the Mac's own task ids. An id
+  is a non-negative JSON integer (the Mac's ids), or else a string of 1 to 128
+  characters; clients accept both. The
   `state` values:
   - `running`: the turn hasn't ended, or a phone task it started is running.
   - `done`: the turn completed and every phone task it started finished done,

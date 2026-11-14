@@ -1179,7 +1179,7 @@ class Server:
         await ws.accept()
         q = self.bus.subscribe_queue()
         try:
-            device = ws.scope.get('rose_device')  # a paired phone; None on the local dashboard
+            device = (getattr(ws, 'scope', None) or {}).get('rose_device')  # a paired phone; None on the dashboard
 
             def visible(m):  # a page task is shown only to the device that asked for it
                 return m.get('kind') != 'workspace_task' or device is None or m.get('device') == device
