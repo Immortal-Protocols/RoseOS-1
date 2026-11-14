@@ -36,6 +36,8 @@ import java.util.Map;
  */
 final class WorkspaceTiming {
  static final int KEEP=20;
+ /** Where a request was decided: the Rose server's model (requestToResultMs then includes the network), or the phone's starter. */
+ static final String SERVER="server",PHONE="phone";
 
  /** One request, from asking to the first draw of its layout on screen (or to its failure). */
  static final class Record {
@@ -47,6 +49,8 @@ final class WorkspaceTiming {
   boolean visibleAtResult,leftBeforeDraw;
   /** A newer committed layout replaced this one before it was drawn, so no draw ever showed it. */
   boolean replacedBeforeDraw;
+  /** SERVER or PHONE (WorkspaceTiming.routed); null if never set. */
+  String route;
   Map<String,Object> composer=new LinkedHashMap<>();
   Record(String requestId,String trigger,long requestedNanos){this.requestId=requestId;this.trigger=trigger;this.requestedNanos=requestedNanos;}
 
@@ -71,7 +75,7 @@ final class WorkspaceTiming {
 
   Map<String,Object> toMap(){
    Map<String,Object> m=new LinkedHashMap<>();
-   m.put("requestId",requestId);m.put("trigger",trigger);m.put("basis",basis());
+   m.put("requestId",requestId);m.put("trigger",trigger);m.put("route",route);m.put("basis",basis());
    m.put("outcome",outcome);if(failure!=null)m.put("failure",failure);
    m.put("modelId",modelId);m.put("model",model);
    m.put("visibleAtResult",resultNanos>=0?visibleAtResult:null);m.put("leftBeforeDraw",leftBeforeDraw);m.put("replacedBeforeDraw",replacedBeforeDraw);
@@ -106,6 +110,11 @@ final class WorkspaceTiming {
   if(outcome==WorkspaceComposer.Outcome.COMMITTED)for(Record o:records)if(o!=r&&"committed".equals(o.outcome)&&o.renderedNanos<0)o.replacedBeforeDraw=true;
   r.modelId=modelId;r.model=isModel(modelId);
   if(composerTiming!=null)for(Map.Entry<String,?> e:composerTiming.entrySet())if(e.getValue() instanceof Number)r.composer.put(e.getKey(),((Number)e.getValue()).doubleValue());
+ }
+
+ /** Where the request is decided: SERVER or PHONE. Anything else is ignored. */
+ void routed(String requestId,String route){
+  Record r=find(requestId);if(r!=null&&(SERVER.equals(route)||PHONE.equals(route)))r.route=route;
  }
 
  /**

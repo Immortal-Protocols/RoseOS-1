@@ -16,7 +16,7 @@ on a phone.
 | Hop | Contract | Owner |
 | --- | --- | --- |
 | Server → phone: a conversational request, and its result | composer intent/result v1, `docs/APP-BUILDER.md` §4 (#782) | App Core |
-| Phone → on-phone composer → phone: snapshot in, layout or typed failure out | `rose-layout-v1`, `workspace/models/local-composer/contract/rose-layout-v1.md` (#781) | Models |
+| Phone → Rose server's model → phone: snapshot in, layout or typed failure out | `rose-layout-v1` (`workspace/models/local-composer/contract/rose-layout-v1.md`, #781), carried by App Core's `POST /workspace/v1/compose` (see "Decisions from the Rose server") | the layout format: unchanged; the route: App Core; the model: the Mac model worker |
 | The catalog, the snapshot, the real ids, the renderer, persistence, pins, undo and the last usable layout | this document | OS Product |
 
 There is no separate OS Product layout format. The phone renders `rose-layout-v1` layouts, after its own
@@ -112,12 +112,55 @@ layout is never reshuffled.
 | `WorkspacePage` | The native page, at `HomePages.WORKSPACE` (0), left of Home (1). Its geometry is fixed: the field, Arrange, Regenerate and Undo, the status line (20dp), the recent row (28dp) and the canvas never move. Each section has a Pin control. While composing, the old sections stay dimmed under a veil and the buttons are disabled in place. Apps are drawn and opened exactly as Home draws and opens them. Shortcuts open through `LauncherApps`, and intent templates open their app. A drag that starts on the field or a carousel belongs to it, not to the pager, and the page is inert while off screen. Its state is saved in the app's own preferences after every change. |
 | `WorkspaceSources` | Reads the phone into a snapshot on the page's worker thread: launchable apps without Rose Agent, launcher shortcuts (only while Rose Agent holds the HOME role, up to 2 per app), and the timer and alarms templates. |
 | `WorkspaceEngine` | One composer call through Models' core (`workspace/models/local-composer/java`, `Catalog.cat1()`), now packaged in the app by `build.sh`; its scripted test double is not packaged. It never throws: anything unexpected is a rose-layout-v1 failure. |
-| `WorkspaceStarter` | The only inference on the phone today, and **not a model**. It ignores the request's words. It answers with the apps it is offered as a grid, and up to 4 direct actions as a button row. It never offers a Rose task. The page labels it "Starter layout · no on-phone model yet". Models' runtime replaces it behind the same `LocalInference` seam. |
+| `WorkspaceStarter` | The page's arrangement while the compose route is off, and **not a model**. It ignores the request's words. It answers with the apps it is offered as a grid, and up to 4 direct actions as a button row. It never offers a Rose task. The page labels it "Starter layout · no on-phone model yet". Rose Agent runs no model: decisions come from the Rose server (see "Decisions from the Rose server"). |
+| `WorkspaceDecisionClient` | The client for the Rose server's decisions. See "Decisions from the Rose server". |
 | `WorkspaceTiming` | Request-to-render timing, the renderer half of rose-layout-v1's timing. See below. |
 
 These pieces are checked by `app/tests/WorkspaceTest.java`, `WorkspaceSnapshotTest.java`,
 `WorkspaceEngineTest.java` and `HomePagesTest.java`, and by `tests/home-launcher.test.mjs`. `scripts/test-local.sh`
 runs them all.
+
+## Decisions from the Rose server
+
+The workspace's decisions come from the model in the Rose server (Nathan, 2026-11-14). Rose Agent runs no model.
+The contract was agreed with App Core on 2026-11-14. App Core owns the route; the Mac model worker owns the
+model behind it (`decide(request, deadline_s)`); this side owns the client and the renderer.
+
+- **Route.** A signed rose-auth-v1 `POST /workspace/v1/compose`, device-scoped. The body is
+  `{schemaVersion: 1, requestId, request}`, where `request` is exactly the phone's rose-layout-v1 request
+  (`WorkspaceSnapshot.request`). A repeat of the same `(device, requestId, body)` returns the first result.
+- **Replies.**
+
+  | Reply | What the phone does |
+  | --- | --- |
+  | 200, a rose-layout-v1 result (`ok` or `failed`) for this `requestId` | passes it on; see "The phone is still the gate" |
+  | 503 `unavailable` | the request fails as `model_unavailable` |
+  | 400 refused, 401, any other status | the request fails as `model_unavailable` |
+  | a 200 whose envelope isn't rose-layout-v1 for this `requestId` | the request fails as `model_unavailable` |
+  | no reply | the request fails as `model_unavailable` |
+
+  `model_unavailable` keeps the last layout and pins, and App Core hears `unavailable` (§4.2).
+- **The phone is still the gate.** A server result goes through the same `WorkspaceComposer.finish` and
+  `WorkspaceLayout.check`, against the registry of the read the request was built from. An id the phone does
+  not have is `unknown_ref`, and nothing is drawn. The server never makes the phone open anything.
+- **One attempt.** The call has the request's own deadline (4 s, `WorkspaceEngine.DEADLINE_MS`) plus the
+  transport's read timeout. There is no retry.
+- **Off by default.** The route is behind the `compose-route-enabled` preference (`WorkspaceDecisionGate`), which
+  nothing in source sets. While it is off, the starter arranges the page and nothing is sent.
+- **Privacy: Nathan's decision before it is turned on.** With the route on, the snapshot leaves the phone for the
+  owner's own Rose server, over the paired, pinned link. That includes the labels of apps, shortcuts and
+  templates, and, for a prompt, the owner's words.
+- **Labels and timing.**
+  - The label under the title says who decides: "Arranged by your Rose server" with the route on, or the
+    starter's label with it off.
+  - Each timing record has `route`: `server` or `phone`. With `server`, `requestToResultMs` includes the
+    network round trip, and the composer's own `timing` is the server's.
+- **Not yet decided.** App Core's route isn't assigned or built yet. The server's latency cap needs agreeing with
+  the Mac model worker. For a conversational request, the provider's 7 s wait covers the 4 s deadline plus the
+  round trip, but a longer deadline would need that wait revisited.
+
+`app/tests/WorkspaceDecisionClientTest.java` checks this with a fake transport. No request is sent and no model
+runs.
 
 ## Request-to-render timing (for Models)
 
@@ -158,10 +201,10 @@ measured phone latency.
 - **3. Pinned.** The phone places pinned sections itself, at their index. Their item ids are listed in
   `pinned` so the composer can avoid repeating them. They are preferred to be absent, not required, and
   the phone drops a repeat anyway.
-- **4. Where the composer runs.** In a separate process of Rose Agent (`:composer`), which Home binds to.
-  Model memory and a crash or out-of-memory kill then cannot take Home down. A dead process is
-  `model_unavailable`. That split comes with Models' runtime. Until then the composer's pure Java core and the
-  starter run on the page's own worker thread, which loads no model.
+- **4. Where the composer runs.** The model runs in the Rose server, not in Rose Agent (Nathan, 2026-11-14),
+  so no model memory or model crash can reach Home. The phone's part, which is reading the phone, building the
+  request and the call, runs on the page's own worker thread. The starter, while the route is off, runs there
+  too.
 - **6. On screen.** The composer is never told. The provider alone decides `shown` versus `prepared`.
 - **7. Regenerate.** A fresh snapshot, with the previous layout's item ids as a soft avoid hint, as App
   Core proposed.
@@ -209,7 +252,8 @@ still answered once from VoiceService's durable receipts, and App Core does not 
 is kept apart from the store, so it never goes back.
 
 **`capabilities`** adds `kinds` (§4.1). If the workspace fails there, only `kinds` is left out, and every
-other tool's capabilities still answer. `prompt` is listed only with a real model. The starter ignores words,
+other tool's capabilities still answer. `prompt` is listed only while the compose route is on, because only
+the Rose server's model reads words. The starter ignores words,
 so today the kinds are `arrange`, `regenerate` and `undo`.
 
 **Not here yet: D4, the offer outside Home.** "Preparing workspace / Workspace ready · Show workspace"
