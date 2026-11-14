@@ -37,6 +37,12 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
   const item=type=>out({method:'item/started',params:{threadId:'build',turnId:'t1',item:{type,id:type}}});
   if(scenario==='web')item('webSearch');
   else if(scenario==='dynamic')item('dynamicToolCall');
+  else if(scenario==='flood')for(let i=0;i<401;i++)item('fileChange');
+  else if(scenario==='linger'){
+   // A command the writer left running in its process group, one that even ignores SIGTERM.
+   const c=require('node:child_process').spawn('sh',['-c','trap "" TERM; while :; do sleep 0.05; done'],{stdio:'ignore'});
+   fs.writeFileSync(process.env.ROSE_TEST_RECORD+'.pid',String(c.pid));item('commandExecution');
+  }
   else{
    item('fileChange');item('commandExecution');
    out({method:'item/completed',params:{threadId:'build',turnId:'t1',item:{type:'agentMessage',text:'A tip calculator.',phase:'final_answer'}}});
@@ -96,19 +102,19 @@ test('the policy forbids identity, version, signing and network changes and asks
 test('a real child launch: workspace-write in the project, no network per turn, research launches unchanged',async()=>{
  const f=fixture();
  try{
-  for(const runtime of [{appBuild:true},{publicResearch:true},{}]){
+  for(const runtime of [{appBuild:true},{publicResearch:true},{characterLife:true},{}]){
    writeFileSync(f.record,'');
    await withEnv(f.env('normal'),async()=>{
     const c=new Codex(f.source,join(f.dir,'unused'),null,{externalPhone:true,model:'gpt-6.1-terra',dynamicTools:[],...runtime});
     try{await c.init();await c.submit('Build a tip calculator.',{model:c.selectedModel,serviceTier:c.serviceTier});}
     finally{await c.closeConfirmed();}
    });
-   const rows=f.rows(),args=rows[0].args,isolated=runtime.appBuild||runtime.publicResearch;
+   const rows=f.rows(),args=rows[0].args,isolated=runtime.appBuild||runtime.publicResearch||runtime.characterLife;
    const start=rows.find(r=>r.method==='thread/start').params,turn=rows.find(r=>r.method==='turn/start').params;
    assert.equal(rows[0].cwd,f.source);
    assert.equal(args.includes('mcp_servers.node_repl.enabled=false'),!!isolated);
    assert.equal(args.includes('project_doc_max_bytes=0'),!!isolated);
-   assert.equal(args.includes('features.shell_tool=false'),!!runtime.publicResearch);
+   assert.equal(args.includes('features.shell_tool=false'),!!(runtime.publicResearch||runtime.characterLife));
    assert.equal(args.includes('features.memories=false'),!!isolated);
    assert.equal(start.ephemeral,true);
    assert.equal(start.cwd,f.source);
@@ -126,6 +132,9 @@ test('a real child launch: workspace-write in the project, no network per turn, 
     assert.equal(start.sandbox,'read-only');
     assert.equal('sandboxPolicy' in turn,false);
     if(runtime.publicResearch){assert.deepEqual(start.environments,[]);assert.equal(start.config.web_search,'live');}
+    if(runtime.characterLife){assert.deepEqual(start.environments,[]);assert.equal(start.config.web_search,'disabled');
+     assert.equal(start.config['features.shell_tool'],false);}
+    if(isolated)assert.equal(start.config['sandbox_workspace_write.network_access'],undefined);
    }
   }
  }finally{rmSync(f.dir,{recursive:true,force:true});}
@@ -146,6 +155,13 @@ test('an enabled MCP server refuses before the thread; a config change refuses b
   }
  }finally{rmSync(f.dir,{recursive:true,force:true});}
 });
+
+// Running and able to write: not gone and not a zombie (Linux /proc; elsewhere any existing pid counts).
+function running(pid){
+ try{process.kill(pid,0);}catch(error){if(error.code==='ESRCH')return false;throw error;}
+ try{const stat=readFileSync('/proc/'+pid+'/stat','utf8');return stat.slice(stat.lastIndexOf(')')+2)[0]!=='Z';}
+ catch{return true;}
+}
 
 // The real bridge process, as rose.app would drive it.
 function bridge(env){
@@ -199,4 +215,39 @@ test('bridge: a web search or dynamic tool in an app_build turn is a failure and
    assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
   }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
  }
+});
+
+test('bridge: more than the item budget stops the turn',async()=>{
+ const f=fixture(),b=bridge(f.env('flood'));
+ try{
+  await b.request('open','s1',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',tools:[]});
+  await b.request('submit','s1',{text:'Build a tip calculator.'});
+  assert.match((await b.until(e=>e.session==='s1'&&e.event==='failure')).message,/budget/);
+  assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
+ }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('close is confirmed only once the writer\'s whole process group is gone',async()=>{
+ const f=fixture(),b=bridge(f.env('linger'));
+ try{
+  await b.request('open','s1',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',tools:[]});
+  await b.request('submit','s1',{text:'Build a tip calculator.'});
+  let pid;
+  for(let i=0;i<100&&!pid;i++){try{pid=Number(readFileSync(f.record+'.pid','utf8'));}catch{await new Promise(r=>setTimeout(r,20));}}
+  assert.ok(pid>0);
+  assert.equal(running(pid),true);
+  assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
+  assert.equal(running(pid),false);  // gone, or a zombie that init has not reaped yet (it cannot write)
+ }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('a group that cannot be emptied is never confirmed stopped',async()=>{
+ // A real member that outlives both signals (they are swallowed here), as one in uninterruptible sleep would.
+ const member=spawn('sleep',['30'],{detached:true,stdio:'ignore'});
+ const c=new Codex('/x/source','',null,{appBuild:true}),child={pid:member.pid,exitCode:0,signalCode:null};
+ const realKill=process.kill,sent=[];
+ process.kill=(pid,signal)=>{if(signal===0)return realKill(pid,0);sent.push([pid,signal]);return true;};
+ try{assert.equal(await c.closeGroupConfirmed(child,60),false);}
+ finally{process.kill=realKill;member.kill('SIGKILL');}
+ assert.deepEqual(sent,[[-member.pid,'SIGTERM'],[-member.pid,'SIGKILL']]);
 });

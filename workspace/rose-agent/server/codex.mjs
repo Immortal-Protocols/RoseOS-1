@@ -1,7 +1,7 @@
 import {spawn,spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {EventEmitter} from 'node:events';
-import {readFileSync,writeFileSync,mkdirSync,copyFileSync,renameSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,copyFileSync,renameSync,readdirSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -87,7 +87,7 @@ export class Codex extends EventEmitter {
    for(const [key,value] of Object.entries({name:'Controlled Pixel evaluation',base_url:this.evaluation.url,wire_api:'responses',env_key:'PIXEL_EVALUATION_TOKEN',request_max_retries:0,stream_max_retries:0}))providerArgs.push('-c','model_providers.'+EVALUATION_PROVIDER+'.'+key+'='+JSON.stringify(value));
    providerEnv.PIXEL_EVALUATION_TOKEN=this.evaluation.token;
   }
-  this.child=spawn(process.env.PIXEL_CODEX_BIN||(this.runtime.externalPhone?'codex':'/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'),['app-server','--listen','stdio://','-c','agents.enabled=true','-c','tool_output_token_limit=15000',...providerArgs,...(this.apiKeyFile?['-c','cli_auth_credentials_store="ephemeral"','-c','model_catalog_json='+JSON.stringify(catalogPath)]:[])],{cwd:this.root,stdio:['pipe','pipe','pipe'],env:{...process.env,...providerEnv,...(this.baseten?{PIXEL_BASETEN_GATEWAY_TOKEN:this.baseten.token}:{})}});
+  this.child=spawn(process.env.PIXEL_CODEX_BIN||(this.runtime.externalPhone?'codex':'/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'),['app-server','--listen','stdio://','-c','agents.enabled=true','-c','tool_output_token_limit=15000',...providerArgs,...(this.apiKeyFile?['-c','cli_auth_credentials_store="ephemeral"','-c','model_catalog_json='+JSON.stringify(catalogPath)]:[])],{cwd:this.root,stdio:['pipe','pipe','pipe'],...(this.runtime.appBuild?{detached:true}:{}),env:{...process.env,...providerEnv,...(this.baseten?{PIXEL_BASETEN_GATEWAY_TOKEN:this.baseten.token}:{})}});
   this.child.stderr.on('data',()=>{});
   this.child.on('error',()=>this.emit('failure','Codex process failed to start'));
   this.child.on('exit',()=>{this.evaluation?.close();this.baseten?.close();this.cerebras?.close();for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new Error('Codex process stopped'));}this.pending.clear();this.emit('failure','Codex process stopped');});
@@ -279,6 +279,7 @@ export class Codex extends EventEmitter {
  close(){this.child?.kill();}
  async closeConfirmed(waitMs=1500){
   const child=this.child;
+  if(this.runtime.appBuild&&child?.pid)return this.closeGroupConfirmed(child,waitMs);
   if(!child||child.exitCode!==null&&child.exitCode!==undefined||child.signalCode)return true;
   const wait=()=>new Promise(resolve=>{
    const ended=()=>{clearTimeout(timer);resolve(true);};
@@ -289,6 +290,32 @@ export class Codex extends EventEmitter {
   if(await ended)return true;
   ended=wait();child.kill('SIGKILL');
   return await ended;
+ }
+ // app_build: the writer's shell can leave processes behind, so a stop counts only once the app-server's whole
+ // process group is gone. A process that leaves the group (setsid) is not covered: the builder only ever reads a
+ // snapshot taken after this, and real containment is a separate user or container (docs/APP-BUILDER.md §5).
+ async closeGroupConfirmed(child,waitMs){
+  const group=-child.pid;
+  const alive=()=>{
+   try{process.kill(group,0);}catch(error){return error.code!=='ESRCH';}
+   // Killed members keep the group id as zombies until init reaps them, which can take seconds, and a zombie
+   // cannot write. Where /proc exists, count only members that are not zombies; elsewhere any member counts.
+   let pids;try{pids=readdirSync('/proc').filter(name=>/^\d+$/.test(name));}catch{return true;}
+   return pids.some(pid=>{
+    try{const stat=readFileSync('/proc/'+pid+'/stat','utf8'),fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');
+     return fields[0]!=='Z'&&Number(fields[2])===child.pid;}
+    catch{return false;}  // exited while it was read
+   });
+  };
+  const exited=()=>child.exitCode!==null&&child.exitCode!==undefined||!!child.signalCode;
+  const signal=name=>{try{process.kill(group,name);}catch{}};
+  const gone=async()=>{const end=Date.now()+waitMs;
+   while(Date.now()<end){if(exited()&&!alive())return true;await new Promise(resolve=>setTimeout(resolve,20));}
+   return exited()&&!alive();};
+  signal('SIGTERM');
+  if(await gone())return true;
+  signal('SIGKILL');
+  return gone();
  }
  async interrupt(){if(this.active)return this.rpc('turn/interrupt',{threadId:this.thread,turnId:this.active});}
  rpc(method,params){return new Promise((resolve,reject)=>{const id=++this.seq;const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(method+' timed out'));},45000);this.pending.set(id,{resolve,reject,timer});this.child.stdin.write(JSON.stringify({id,method,params})+'\n');});}

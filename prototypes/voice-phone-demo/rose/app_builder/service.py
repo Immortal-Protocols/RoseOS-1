@@ -58,12 +58,14 @@ def _utf8(text: str) -> bool:
         return False
 
 
-def _git(source: Path, *args) -> str:
+def _git(source: Path, *args, work_tree: Path | None = None) -> str:
     """git on a project's source with the repository kept beside it (repo.git), out of the generator's reach,
-    and with hooks, fsmonitor, attributes and excludes switched off: nothing in the tree can make git run code."""
+    and with hooks, fsmonitor, attributes and excludes switched off: nothing in the tree can make git run code.
+    ``work_tree`` records a snapshot of the source instead of the source itself."""
     gitdir = source.parent / 'repo.git'
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(source.parent), 'GIT_CONFIG_NOSYSTEM': '1',
-           'GIT_CONFIG_GLOBAL': os.devnull, 'LANG': 'C.UTF-8', 'GIT_DIR': str(gitdir), 'GIT_WORK_TREE': str(source),
+           'GIT_CONFIG_GLOBAL': os.devnull, 'LANG': 'C.UTF-8', 'GIT_DIR': str(gitdir),
+           'GIT_WORK_TREE': str(work_tree or source),
            'GIT_AUTHOR_NAME': 'Rose builder', 'GIT_AUTHOR_EMAIL': 'builder@localhost',
            'GIT_COMMITTER_NAME': 'Rose builder', 'GIT_COMMITTER_EMAIL': 'builder@localhost'}
     safe = ['-c', 'core.hooksPath=' + os.devnull, '-c', 'core.fsmonitor=false', '-c', 'core.excludesFile=' + os.devnull,
@@ -101,6 +103,76 @@ def _place(src: Path, dst: Path):
         os.fsync(f.fileno())
     os.replace(tmp, dst)
     toolchain.fsync_path(dst.parent)
+
+
+SNAPSHOT_MAX_ENTRIES = 5000
+SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
+NOTE_MAX = 1200
+
+
+def _snapshot(source: Path, dest: Path):
+    """A private copy of the written source, outside the writer's sandbox. The builder checks, records and builds
+    only this copy, so anything the writer may have left running can still change ``source`` (which the next job
+    resets) but never what is checked, committed and built. Directories are opened without following links and each
+    file is read through one descriptor that is checked as a regular file with a single link."""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(mode=0o700, parents=True)
+    budget = {'entries': SNAPSHOT_MAX_ENTRIES, 'bytes': SNAPSHOT_MAX_BYTES}
+    refuse = lambda why: toolchain.StepFailed('compile', why)
+    nofollow = os.O_NOFOLLOW | os.O_CLOEXEC
+
+    def copy_dir(fd: int, to: Path):
+        for entry in sorted(os.scandir(fd), key=lambda e: e.name):
+            budget['entries'] -= 1
+            if budget['entries'] < 0:
+                raise refuse(f'The app has more than {SNAPSHOT_MAX_ENTRIES} files.')
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISDIR(mode):
+                child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | nofollow, dir_fd=fd)
+                try:
+                    (to / entry.name).mkdir(mode=0o700)
+                    copy_dir(child, to / entry.name)
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(mode):
+                f = os.open(entry.name, os.O_RDONLY | os.O_NONBLOCK | nofollow, dir_fd=fd)
+                try:
+                    st = os.fstat(f)
+                    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                        raise refuse(f'{entry.name} is linked to another file.')
+                    with open(to / entry.name, 'xb', opener=lambda p, fl: os.open(p, fl, 0o600)) as out:
+                        size = 0
+                        while chunk := os.read(f, 1 << 20):
+                            size += len(chunk)
+                            budget['bytes'] -= len(chunk)
+                            if size > template.MAX_FILE:
+                                raise refuse(f'{entry.name} is larger than {template.MAX_FILE // (1024 * 1024)} MB.')
+                            if budget['bytes'] < 0:
+                                raise refuse(f'The app is larger than {SNAPSHOT_MAX_BYTES // (1024 * 1024)} MB.')
+                            out.write(chunk)
+                finally:
+                    os.close(f)
+            else:
+                raise refuse(f'{entry.name} is a link or special file; only plain files are allowed.')
+
+    try:
+        root = os.open(source, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+    except OSError:
+        raise toolchain.StepFailed('internal', 'The project source could not be read.') from None
+    try:
+        copy_dir(root, dest)
+    except OSError:  # an entry changed or vanished while it was copied
+        raise refuse('The app\'s files changed while they were being checked.') from None
+    finally:
+        os.close(root)
+
+
+def _note(note, request: str) -> str:
+    """The version's display notes: the writer's own summary when it gave one (untrusted text), else the request."""
+    if isinstance(note, str) and note.strip() and _utf8(note):
+        return note.strip()[:NOTE_MAX]
+    return request[:200]
 
 
 class Builder:
@@ -237,23 +309,29 @@ class Builder:
             if kind == 'revise' and not self.ledger.versions(project_id):
                 # Nothing delivered yet: this starts from the skeleton, so the generator writes the whole app.
                 kind, request = 'create', project['description'] + '\n\nChange requested: ' + request
-            self.generate(source, kind, request, cancelled)
+            note = self.generate(source, kind, request, cancelled)
             if cancelled():
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
+            # From here on only the snapshot is read: checked, recorded and built are the same files. The source
+            # is checked first too, so its names, modes and links are refused as written, not as copied.
+            snapshot = work.parent / f'snapshot-{job["attempt"]}'
             try:  # before git touches anything the generator wrote
                 template.check(source, package)
+                _snapshot(source, snapshot)
+                template.check(snapshot, package)
             except template.TemplateRefused as refused:
                 raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
-            _git(source, 'add', '-A')
-            if _git(source, 'status', '--porcelain'):
-                _git(source, 'commit', '-q', '-m', f'{job["kind"]} {job_id} attempt {job["attempt"]}')
+            _git(source, 'add', '-A', work_tree=snapshot)
+            if _git(source, 'status', '--porcelain', work_tree=snapshot):
+                _git(source, 'commit', '-q', '-m', f'{job["kind"]} {job_id} attempt {job["attempt"]}',
+                     work_tree=snapshot)
             revision = _git(source, 'rev-parse', 'HEAD')
             code = self.ledger.allocate_version(job_id)
             name = f'{code}'
             self._step(job, 'building', 'compiling', 'Building the app.')
             if work.exists():
                 shutil.rmtree(work)
-            unsigned, log = toolchain.build(source, work, package, code, name, self.tools, cancelled)
+            unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled)
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
             self._step(job, 'signing', 'signing', 'Signing the app.')
             keys = self.root / 'keys' / project_id
@@ -272,7 +350,7 @@ class Builder:
                 _place(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
             _place(signed, artifacts / f'{receipt["sha256"]}.apk')  # durable before the version row exists
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
-                                       job['request'][:200]):
+                                       _note(note, job['request'])):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
         except toolchain.StepFailed as failed:
             self._safe_reset(source, project_id)

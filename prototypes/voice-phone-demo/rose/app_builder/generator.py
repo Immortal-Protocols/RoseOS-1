@@ -6,8 +6,9 @@ session on its own bridge process (``codex-voice-bridge.mjs``, the existing and 
 - an ephemeral thread whose cwd is the project's ``source`` directory, with fixed instructions, no tools, web search
   or network, and writes limited to that directory by Codex's workspace-write sandbox;
 - one turn, bounded by ``timeout_s`` and stopped on cancel;
-- returned only after the bridge confirms the Codex process exited, so nothing can still be writing when the builder
-  checks and commits the source. An unconfirmed stop is a failure, never a success.
+- returned only after the bridge confirms the writer's whole process group is gone (an unconfirmed stop is a failure,
+  never a success). A process that left the group can still change the source afterwards, so the Builder checks,
+  records and builds only a private snapshot taken after this returns, and resets the source before the next job.
 
 What it does not do: it does not keep the writer from *reading* the server's files. That needs the writer to run as
 a separate OS user or in a container that mounts only the project source (``command`` below), which belongs to the
@@ -111,7 +112,7 @@ class CodexGenerator:
         finally:
             stopped = self._stop(client, session, opened)
             if not stopped:
-                # Something may still be writing into the source: never let the builder use it.
+                # The writer's processes may still be running: fail the job rather than build next to them.
                 raise StepFailed('internal', 'The app writer did not confirm it stopped.') from failure
 
     @staticmethod

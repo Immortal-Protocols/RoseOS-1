@@ -441,22 +441,43 @@ app-server client.
   - ignores the caller's instructions;
   - stops the turn on any item other than messages, reasoning, plans, commands
     and file changes, or on more than 400 items;
-  - closes only with a confirmed child exit, as research does.
+  - closes only once the app-server's whole process group is gone. The
+    app-server starts as its own group, which is SIGTERMed and then SIGKILLed.
+    On Linux, members that are already zombies count as gone.
 - `rose/app_builder/generator.py`: `CodexGenerator` is the Builder's `generate`.
   Each job gets one bridge process and one turn, bounded by `timeout_s` and
-  stopped on cancel. It returns only after the writer confirms it stopped; an
-  unconfirmed stop fails the job, because something may still be writing. Its
-  `command` argument is where the Server Worker's separate-user launch goes.
-- Writer output gets no trust: the Builder's `template.check` and build
-  checks still apply. A test has the fake writer add `debuggable`, and the job
-  fails with nothing delivered.
+  stopped on cancel. It returns only after the bridge confirms that process
+  group stopped; an unconfirmed stop fails the job. Its `command` argument is
+  where the Server Worker's separate-user launch goes.
+- A process that leaves the group (`setsid`, a double fork) is not covered
+  by that stop. So the Builder never reads the live source after the writer:
+  - it copies the source into a private snapshot under `jobs/<id>/`, outside
+    the writer's writable root, reading each file through one descriptor
+    that is checked as a single-link regular file;
+  - it refuses links, special files, more than 5000 entries or more than
+    64 MB;
+  - it checks, records (git with the snapshot as work tree) and builds only
+    that snapshot.
+
+  Something left running can still change `source`, but the next job resets
+  it to the delivered revision. A test has an escaped writer add
+  `debuggable` after the stop: the delivered revision and the APK don't have
+  it.
+- Writer output gets no trust: the Builder's `template.check` and build checks
+  still apply, to the source as written and to the snapshot. A test has the
+  fake writer add `debuggable`, and the job fails with nothing delivered.
+- A version's `notes` (§3.3) carry the writer's own summary of what the app
+  does and what it could not do. It is untrusted display text, at most 1200
+  characters. When the writer gives none, `notes` falls back to the request.
 
 Proof levels:
 
 - **Container:** `app-build.test.mjs` (fake app-server: launch arguments,
   thread and turn parameters, refusals, bridge boundary) and
-  `rose/tests/test_app_generator.py` (fake client; real bridge; Builder with
-  the real bridge, compiled and signed with throwaway keys).
+  `rose/tests/test_app_generator.py` (fake client; snapshot refusals; real
+  bridge; Builder with the real bridge, compiled and signed with throwaway
+  keys, including a writer that escapes the process group). The group stop is
+  tested with a member that ignores SIGTERM, and with one that never goes away.
 - **Assumed, not verified:** the app-server field names `sandbox:
   workspace-write`, the turn's `sandboxPolicy` and the
   `sandbox_workspace_write.*` config keys come from the Codex app-server

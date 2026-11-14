@@ -2,9 +2,11 @@
 writer confirmed it stopped. A fake app-server stands in for Codex; nothing here reaches a model."""
 import os
 import shutil
+import subprocess
 import tempfile
 import textwrap
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -132,6 +134,57 @@ class Generator(unittest.TestCase):
         self.assertEqual(self.run_gen(self.gen(after_submit=DONE, close_reply={}, exits=True)), 'A tip calculator.')
 
 
+class Snapshot(unittest.TestCase):
+    """The builder's private copy of the written source: plain files only, bounded, never through a link."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.src = Path(self.tmp.name) / 'source'
+        (self.src / 'res/values').mkdir(parents=True)
+        (self.src / 'res/values/strings.xml').write_text('<resources/>')
+        self.dest = Path(self.tmp.name) / 'jobs' / 'j' / 'snapshot-1'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_copies_plain_files_privately(self):
+        from rose.app_builder.service import _snapshot
+        _snapshot(self.src, self.dest)
+        copy = self.dest / 'res/values/strings.xml'
+        self.assertEqual(copy.read_text(), '<resources/>')
+        self.assertEqual(copy.stat().st_mode & 0o777, 0o600)
+        (self.src / 'res/values/strings.xml').write_text('changed')  # the copy is independent of the source
+        self.assertEqual(copy.read_text(), '<resources/>')
+
+    def test_refuses_links_special_files_and_size(self):
+        from rose.app_builder import service
+        outside = Path(self.tmp.name) / 'secret'
+        outside.write_text('key')
+        cases = [lambda: (self.src / 'res/raw').symlink_to(outside.parent),
+                 lambda: (self.src / 'res/values/k.txt').symlink_to(outside),
+                 lambda: os.link(outside, self.src / 'res/values/k.txt'),
+                 lambda: os.mkfifo(self.src / 'res/values/pipe'),
+                 lambda: (self.src / 'big.bin').write_bytes(b'x' * (service.template.MAX_FILE + 1))]
+        for make in cases:
+            with self.subTest(make=make):
+                shutil.rmtree(self.src)
+                (self.src / 'res/values').mkdir(parents=True)
+                make()
+                with self.assertRaises(StepFailed) as cm:
+                    service._snapshot(self.src, self.dest)
+                self.assertEqual(cm.exception.category, 'compile')
+                self.assertFalse(any(p.is_file() and p.read_bytes() == b'key' for p in self.dest.rglob('*')))
+        old = service.SNAPSHOT_MAX_ENTRIES
+        service.SNAPSHOT_MAX_ENTRIES = 3
+        try:
+            shutil.rmtree(self.src)
+            (self.src / 'a/b/c/d').mkdir(parents=True)
+            with self.assertRaises(StepFailed):
+                service._snapshot(self.src, self.dest)
+        finally:
+            service.SNAPSHOT_MAX_ENTRIES = old
+
+
 FAKE_CODEX = textwrap.dedent('''\
     const fs=require('node:fs'),path=require('node:path');
     if(process.argv.includes('--version')){console.log('codex-cli 0.167.1');process.exit(0);}
@@ -156,6 +209,12 @@ FAKE_CODEX = textwrap.dedent('''\
       fs.writeFileSync(path.join(process.cwd(),'README.md'),'Tip calculator\\n');
       if(scenario==='notes')fs.writeFileSync(path.join(process.cwd(),'res','values','notes.xml'),
        '<?xml version="1.0" encoding="utf-8"?>\\n<resources><string name="note">Tip</string></resources>\\n');
+      if(scenario==='late'){
+       // A writer that escapes the process group (setsid) and changes the manifest after the stop.
+       const m=path.join(process.cwd(),'AndroidManifest.xml');
+       require('node:child_process').spawn('setsid',['sh','-c','sleep 0.4; sed -i "s/<application/<application android:debuggable=\\"true\\"/" "$0"; echo late > "$1"',
+        m,path.join(process.cwd(),'res','values','late.txt')],{detached:true,stdio:'ignore'}).unref();
+      }
       if(scenario==='identity'){const f=path.join(process.cwd(),'AndroidManifest.xml');
        fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace('<application','<application android:debuggable="true"'));}
       out({method:'item/completed',params:{threadId:'build',turnId:'t1',item:{type:'agentMessage',text:'A tip calculator.',phase:'final_answer'}}});
@@ -233,6 +292,41 @@ class BuilderWithWriter(RealBridge):
         source = Path(self.tmp.name) / 'builder' / 'projects' / out['projectId'] / 'source'
         self.assertTrue((source / 'res/values/notes.xml').is_file())
         self.assertEqual(b.projects()[0]['versions'][0]['versionCode'], 1)
+        self.assertEqual(b.projects()[0]['versions'][0]['notes'], 'A tip calculator.')  # the writer's own summary
+
+    @unittest.skipUnless(shutil.which('setsid'), 'needs setsid to start an escaping writer')
+    def test_a_writer_left_running_never_changes_what_is_built(self):
+        os.environ['ROSE_TEST_SCENARIO'] = 'late'
+        b = self.builder()
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r1', 'description': 'Tip calculator'})
+        self.assertTrue(b.run_next())
+        job = b.job(out['jobId'])
+        self.assertEqual(job['state'], 'ready', job)
+        project = Path(self.tmp.name) / 'builder' / 'projects' / out['projectId']
+        source = project / 'source'
+        for _ in range(100):  # the escaped writer did change the live source, after the snapshot
+            if (source / 'res/values/late.txt').exists():
+                break
+            time.sleep(0.05)
+        self.assertIn('debuggable', (source / 'AndroidManifest.xml').read_text())
+        # ... but the recorded revision and the delivered APK are the checked snapshot.
+        from rose.app_builder.service import _git
+        version = b.projects()[0]['versions'][0]
+        manifest = _git(source, 'show', version['sourceRevision'] + ':AndroidManifest.xml')
+        self.assertNotIn('debuggable', manifest)
+        self.assertNotIn('late.txt', _git(source, 'ls-tree', '-r', '--name-only', version['sourceRevision']))
+        apk = b.artifact(version['apk']['sha256'])
+        aapt = toolchain.Tools(SDK).bt / 'aapt'
+        badging = subprocess.run([str(aapt), 'dump', 'xmltree', str(apk), 'AndroidManifest.xml'],
+                                 capture_output=True, text=True, check=True).stdout
+        self.assertNotIn('debuggable', badging)
+        # The next job starts again from the delivered revision, not from what was left in the source.
+        os.environ['ROSE_TEST_SCENARIO'] = 'notes'
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'again'})
+        self.assertTrue(b.run_next())
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+        self.assertNotIn('debuggable', _git(source, 'show', b.projects()[0]['versions'][1]['sourceRevision']
+                                            + ':AndroidManifest.xml'))
 
     def test_writer_identity_change_is_refused_by_the_builder(self):
         os.environ['ROSE_TEST_SCENARIO'] = 'identity'
