@@ -67,8 +67,16 @@ final class WorkspaceHub {
   tasks=WorkspaceTaskTracker.fromJson(prefs().getString(TASKS,null));
  }
 
- /** True only with a real model on the phone: today the starter, so prompt is not offered (WorkspaceAgent.kinds). */
- boolean model(){return WorkspaceTiming.isModel(engine.modelId());}
+ /**
+  * True only when a real model decides: the Rose server's, through the compose route (WorkspaceDecisionGate).
+  * Rose Agent itself runs no model; its starter is not one. So prompt is offered only with the route on
+  * (WorkspaceAgent.kinds).
+  */
+ boolean model(){return WorkspaceDecisionGate.enabled(app)||WorkspaceTiming.isModel(engine.modelId());}
+
+ static final String SERVER_LABEL="Arranged by your Rose server";
+ /** The label under the page's title: who decides the next layout. */
+ String deciderLabel(){return WorkspaceDecisionGate.enabled(app)?SERVER_LABEL:WorkspaceStarter.LABEL;}
 
  // ---------- the page ----------
 
@@ -199,7 +207,11 @@ final class WorkspaceHub {
   final String requestId=composer.requestId(),trigger=composer.trigger(),prompt=composer.prompt();
   final List<String> avoid=composer.avoid();
   final Set<String> pinned=pinnedIds();
+  // The Rose server's model decides when the compose route is on; otherwise the starter (not a model) does.
+  final WorkspaceDecisionClient decider=WorkspaceDecisionGate.enabled(app)
+   ?new WorkspaceDecisionClient(WorkspaceDecisionGate.gate(app),new WorkspaceTaskTransport(app),WorkspaceTaskTransport.signer(app)):null;
   timing.requested(requestId,trigger,System.nanoTime());
+  timing.routed(requestId,decider!=null?WorkspaceTiming.SERVER:WorkspaceTiming.PHONE);
   if(listener!=null)listener.busy();
   worker.execute(()->{
    // Anything at all, an Error such as running out of memory included, still ends this request
@@ -207,7 +219,10 @@ final class WorkspaceHub {
    final WorkspaceSources.Read[] read={null};
    final String text=WorkspaceRecovery.compose(requestId,()->{
     read[0]=WorkspaceSources.read(app,pinned);
-    return engine.compose(WorkspaceSnapshot.request(requestId,trigger,prompt,read[0].snapshot,WorkspaceEngine.DEADLINE_MS,avoid),cancelled::get);
+    String request=WorkspaceSnapshot.request(requestId,trigger,prompt,read[0].snapshot,WorkspaceEngine.DEADLINE_MS,avoid);
+    // A server decision is only passed on: finish() checks it against this read's registry, like any result.
+    if(decider!=null)return WorkspaceDecisionClient.result(requestId,decider.decide(requestId,request));
+    return engine.compose(request,cancelled::get);
    });
    final WorkspaceSources.Read done=read[0];final long at=System.nanoTime();
    main.post(()->WorkspaceRecovery.apply(()->finish(gen,requestId,done,text,at),composer,requests,gen,()->{if(listener!=null)listener.changed(null);}));

@@ -694,3 +694,17 @@ test('Project 2: request-to-first-draw timing carries visibility, so a person\'s
  assert.match(hub,/timing\.resulted\([^;]*,at,onScreen\(\)\);/);
  assert.match(page,/if\(done\[0\]\|\|!hub\.timing\.rendered\(requestId,System\.nanoTime\(\),hub\.onScreen\(\)\)\)return;/);
 });
+
+test('Project 2: the Rose server decides behind the compose route; Rose Agent runs no model',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java'),page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
+ const start=hub.slice(hub.indexOf('private void start(int gen){'),hub.indexOf('private void finish('));
+ assert.match(start,/final WorkspaceDecisionClient decider=WorkspaceDecisionGate\.enabled\(app\)/);
+ assert.match(start,/if\(decider!=null\)return WorkspaceDecisionClient\.result\(requestId,decider\.decide\(requestId,request\)\);/);
+ // A server decision returns as text into the same finish() path, so the phone's own check is always applied.
+ assert.match(start,/finish\(gen,requestId,done,text,at\)/);
+ assert.match(hub,/boolean model\(\)\{return WorkspaceDecisionGate\.enabled\(app\)\|\|WorkspaceTiming\.isModel\(engine\.modelId\(\)\);\}/);
+ assert.match(page,/label\.setText\(hub\.deciderLabel\(\)\)/);
+ const gate=read('../app/src/dev/pixel/voice/WorkspaceDecisionGate.java');
+ assert.match(gate,/getBoolean\(KEY,false\)/);
+ assert.doesNotMatch(hub+page,/compose-route-enabled",true|putBoolean\(WorkspaceDecisionGate/,'nothing in source turns the route on');
+});
