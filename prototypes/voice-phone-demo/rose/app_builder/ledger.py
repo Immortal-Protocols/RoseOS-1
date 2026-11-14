@@ -15,6 +15,8 @@ import threading
 import time
 from pathlib import Path
 
+from .apilevel import wire_summary
+
 STATES = ('queued', 'preparing', 'building', 'testing', 'signing', 'ready', 'failed', 'cancelled')
 ACTIVE = ('queued', 'preparing', 'building', 'testing', 'signing')
 CATEGORIES = ('toolchain', 'dependency', 'compile', 'test', 'signing', 'timeout', 'cancelled', 'internal')
@@ -342,10 +344,13 @@ class Ledger:
             return self._versions(project)
 
     def _versions(self, project: str) -> list[dict]:
-        rows = self.db.execute('SELECT version_code, version_name, created, job_id, source_revision, sha256, size, '
-                               'notes FROM versions WHERE project_id=? ORDER BY version_code', (project,)).fetchall()
+        # Each version's advisory API level report summary (apilevel.wire_summary): `none` when it has no report.
+        rows = self.db.execute('SELECT v.version_code, v.version_name, v.created, v.job_id, v.source_revision, '
+                               'v.sha256, v.size, v.notes, r.report FROM versions v LEFT JOIN version_api_reports r '
+                               'ON r.project_id=v.project_id AND r.version_code=v.version_code WHERE v.project_id=? '
+                               'ORDER BY v.version_code', (project,)).fetchall()
         return [{'versionCode': r[0], 'versionName': r[1], 'createdAt': r[2], 'jobId': r[3], 'sourceRevision': r[4],
-                 'apk': {'sha256': r[5], 'size': r[6]}, 'notes': r[7]} for r in rows]
+                 'apk': {'sha256': r[5], 'size': r[6]}, 'notes': r[7], 'apiReport': wire_summary(r[8])} for r in rows]
 
     def projects(self) -> list[dict]:
         with self.lock:

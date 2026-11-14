@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import json
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -695,3 +696,79 @@ def summary(report: dict) -> str:
     return (f'API level report (advisory, not device proof): {c["not_guarded_here"]} reference(s) above API '
             f'{report["minSdk"]} not guarded in their method, {c["unverified"]} unverified, {c["guarded"]} guarded'
             f'; analysis {report["status"]}.')
+
+
+# The library's per-version summary (docs/APP-BUILDER.md §3.3, `apiReport`): what the phone may show. It never turns
+# anything it cannot read into a clean answer: no recorded report is `none`, and a record it cannot read or whose
+# schema it does not know is `unavailable`. Counts appear only for an analysis that ran (`complete` or `incomplete`).
+SUMMARY_NOTE = ('Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that '
+                'the app works on a phone, and nothing here blocks a build or an install.')
+REASON_MAX = 300
+STATUSES = ('not_guarded_here', 'unverified', 'guarded')
+
+
+def _count(value) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _readable(report) -> str | None:
+    """None if the recorded report is one this server reads, else why not."""
+    if not isinstance(report, dict) or not _count(report.get('schemaVersion')):
+        return 'the recorded report could not be read'
+    if report['schemaVersion'] != 1:
+        return 'the recorded report has a schema this server does not read'
+    status = report.get('status')
+    if report.get('advisory') is not True or status not in ('complete', 'incomplete', 'unavailable'):
+        return 'the recorded report could not be read'
+    if status == 'unavailable':
+        return None if isinstance(report.get('reason'), str) else 'the recorded report could not be read'
+    counts, findings = report.get('counts'), report.get('findings')
+    if (status == 'incomplete' and not isinstance(report.get('reason'), str)) \
+            or type(report.get('minSdk')) is not int or report['minSdk'] < 1 \
+            or not isinstance(counts, dict) or not all(_count(counts.get(k)) for k in STATUSES) \
+            or not isinstance(findings, list) or not _count(report.get('truncated')) \
+            or not _count(report.get('unlistedCount')) or not isinstance(report.get('unlisted'), list) \
+            or len(report['unlisted']) > report['unlistedCount']:
+        return 'the recorded report could not be read'
+    listed = dict.fromkeys(STATUSES, 0)
+    for f in findings:
+        if not isinstance(f, dict) or f.get('status') not in STATUSES or 'level' not in f \
+                or not (f['level'] is None or (type(f['level']) is int and f['level'] >= 1)):
+            return 'the recorded report could not be read'
+        listed[f['status']] += 1
+    if sum(counts[k] for k in STATUSES) != len(findings) + report['truncated'] \
+            or any(listed[k] > counts[k] for k in STATUSES):
+        return 'the recorded report could not be read'
+    return None
+
+
+def wire_summary(stored) -> dict:
+    """The `apiReport` summary of a version's recorded report: the stored JSON text, the parsed report, or None
+    when the version has none (built before the report existed, or the build's report file could not be read)."""
+    out = {'schemaVersion': 1, 'advisory': True, 'deviceProof': False}
+    if stored is None:
+        return out | {'status': 'none', 'note': SUMMARY_NOTE}
+    report = stored
+    if isinstance(stored, (str, bytes)):
+        try:
+            report = json.loads(stored)
+        except ValueError:
+            report = None
+    unreadable = _readable(report)
+    if unreadable:
+        return out | {'status': 'unavailable', 'reason': unreadable, 'note': SUMMARY_NOTE}
+    status = report['status']
+    if status == 'unavailable':
+        return out | {'status': status, 'reason': report['reason'][:REASON_MAX], 'note': SUMMARY_NOTE}
+    c = report['counts']
+    levels = [f['level'] for f in report['findings']
+              if f['status'] != 'guarded' and f['level'] is not None]
+    return out | {'status': status, **({'reason': report['reason'][:REASON_MAX]} if status == 'incomplete' else {}),
+                  'minSdk': report['minSdk'],
+                  'counts': {'notGuardedHere': c['not_guarded_here'], 'unverified': c['unverified'],
+                             'guarded': c['guarded']},
+                  # The highest level a kept finding names: a lower bound, never a ceiling (findings past the kept
+                  # ones, unverified ones the database cannot place, members it does not list (placed at their
+                  # class's level) and unanalysed methods may need more).
+                  'highestLevel': max(levels, default=None),
+                  'truncated': report['truncated'], 'unlistedCount': report['unlistedCount'], 'note': SUMMARY_NOTE}
