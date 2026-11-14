@@ -41,7 +41,7 @@ public final class WorkspaceEngineTest {
  static final List<WorkspaceSnapshot.App> APPS=Arrays.asList(CLOCK,NOTES,MUSIC,ROSE);
 
  public static void main(String[] args)throws Exception{
-  catalogParity();starter();engine();timing();endToEnd();
+  catalogParity();starter();engine();timing();visibility();endToEnd();
   System.out.println("WorkspaceEngineTest: "+checks+" checks passed");
  }
 
@@ -121,29 +121,29 @@ public final class WorkspaceEngineTest {
  static void timing(){
   WorkspaceTiming t=new WorkspaceTiming();
   t.requested("r1","button",1_000_000_000L);
-  t.rendered("r1",1_100_000_000L);
+  t.rendered("r1",1_100_000_000L,true);
   expect(t.record("r1").renderedNanos<0,"no render before a result");
   java.util.Map<String,Object> composer=new java.util.LinkedHashMap<>();composer.put("composeMs",12.5);composer.put("note","x");
-  t.resulted("r1",WorkspaceComposer.Outcome.COMMITTED,null,"starter",composer,1_200_000_000L);
-  t.resulted("r1",WorkspaceComposer.Outcome.REJECTED,"timeout","m",null,1_300_000_000L);
+  t.resulted("r1",WorkspaceComposer.Outcome.COMMITTED,null,"starter",composer,1_200_000_000L,true);
+  t.resulted("r1",WorkspaceComposer.Outcome.REJECTED,"timeout","m",null,1_300_000_000L,true);
   expect("committed".equals(t.record("r1").outcome),"a second result is ignored");
-  t.rendered("r1",1_150_000_000L);
+  t.rendered("r1",1_150_000_000L,true);
   expect(t.record("r1").renderedNanos<0,"a frame older than the result is not its render");
-  t.rendered("r1",1_216_666_666L);t.rendered("r1",1_300_000_000L);
+  t.rendered("r1",1_216_666_666L,true);t.rendered("r1",1_300_000_000L,true);
   WorkspaceTiming.Record r=t.record("r1");
   expect(r.requestToResultMs()==200.0&&r.resultToRenderMs()==16.67&&r.requestToRenderMs()==216.67,"times: "+r.requestToRenderMs());
-  expect("request-to-render".equals(r.basis()),"rendered basis");
+  expect("request-to-first-draw".equals(r.basis())&&r.resultToShownDrawMs()==null,"seen throughout: request-to-first-draw, no human wait");
   expect(!r.model,"the starter is not a model");
   expect(Double.valueOf(12.5).equals(r.composer.get("composeMs"))&&!r.composer.containsKey("note"),"composer timing kept, numbers only");
 
   t.requested("r2","direct_text",2_000_000_000L);
-  t.resulted("r2",WorkspaceComposer.Outcome.REJECTED,"model_unavailable","m-1",null,2_050_000_000L);
-  t.rendered("r2",2_060_000_000L);
+  t.resulted("r2",WorkspaceComposer.Outcome.REJECTED,"model_unavailable","m-1",null,2_050_000_000L,true);
+  t.rendered("r2",2_060_000_000L,true);
   expect("result-only".equals(t.record("r2").basis())&&t.record("r2").requestToRenderMs()==null,"a failure never renders");
   expect(t.record("r2").model,"a real model id is a model");
-  t.rendered("nobody",1);t.resulted("nobody",WorkspaceComposer.Outcome.COMMITTED,null,null,null,1);
+  t.rendered("nobody",1,true);t.resulted("nobody",WorkspaceComposer.Outcome.COMMITTED,null,null,null,1,true);
   expect(t.record("nobody")==null,"an unknown request is ignored");
-  t.requested("r3","button",3_000_000_000L);t.resulted("r3",WorkspaceComposer.Outcome.COMMITTED,null,"scripted",null,2_000_000_000L);
+  t.requested("r3","button",3_000_000_000L);t.resulted("r3",WorkspaceComposer.Outcome.COMMITTED,null,"scripted",null,2_000_000_000L,true);
   expect(t.record("r3").resultNanos<0,"a result before its request is ignored");
 
   String json=t.json();
@@ -157,6 +157,63 @@ public final class WorkspaceEngineTest {
   expect(WorkspaceTiming.modelId("garbage")==null&&WorkspaceTiming.composerTiming("[]")==null,"unreadable results give nothing");
  }
 
+ /**
+  * Visibility provenance on a fake clock: a person's wait is never latency. Only a result seen from arrival to
+  * first draw gives requestToRenderMs. A prepared or interrupted one gives resultToShownDrawMs, marked as
+  * including a human wait. A draw off screen never counts.
+  */
+ static void visibility(){
+  final long MS=1_000_000L;
+  // 1. Seen throughout: request-to-first-draw.
+  WorkspaceTiming t=new WorkspaceTiming();
+  t.requested("v1","conversational",100*MS);t.resulted("v1",WorkspaceComposer.Outcome.COMMITTED,null,"qwen-small",null,400*MS,true);
+  expect(t.rendered("v1",420*MS,true),"counted: stop listening");
+  WorkspaceTiming.Record r=t.record("v1");
+  expect("request-to-first-draw".equals(r.basis())&&r.requestToRenderMs()==320.0&&r.resultToRenderMs()==20.0&&r.resultToShownDrawMs()==null,"visible: 320 ms request to first draw");
+
+  // 2. Prepared off screen (another app in front); drawn when the person comes back 9 s later.
+  t.requested("p1","conversational",1000*MS);t.resulted("p1",WorkspaceComposer.Outcome.COMMITTED,null,"qwen-small",null,1300*MS,false);
+  expect(!t.rendered("p1",1310*MS,false),"a draw off screen does not count; keep listening");
+  t.visibility(true);
+  expect(t.rendered("p1",10_300*MS,true),"the first draw on screen counts");
+  r=t.record("p1");
+  expect("prepared-then-shown".equals(r.basis())&&r.requestToRenderMs()==null&&r.resultToRenderMs()==null,"prepared: no request-to-render latency");
+  expect(r.resultToShownDrawMs()==9000.0&&r.requestToResultMs()==300.0,"its 9 s human wait is reported apart, and the composer side stays 300 ms");
+
+  // 3. Visible at the result, but the person left before the first draw, then came back.
+  t.requested("l1","button",20_000*MS);t.resulted("l1",WorkspaceComposer.Outcome.COMMITTED,null,"starter",null,20_050*MS,true);
+  t.visibility(false);
+  expect(!t.rendered("l1",20_060*MS,false),"left before the first draw: not counted");
+  t.visibility(true);t.rendered("l1",25_000*MS,true);
+  r=t.record("l1");
+  expect(r.visibleAtResult&&r.leftBeforeDraw&&"prepared-then-shown".equals(r.basis())&&r.requestToRenderMs()==null,"leaving before the first draw is never latency");
+  expect(!r.model,"the starter stays labelled not a model");
+  // 3b. The same with no draw at all while away (an invisible window does not draw): visibility() alone marks it.
+  t.requested("l2","button",26_000*MS);t.resulted("l2",WorkspaceComposer.Outcome.COMMITTED,null,"m",null,26_050*MS,true);
+  t.visibility(false);t.visibility(true);t.rendered("l2",31_000*MS,true);
+  expect("prepared-then-shown".equals(t.record("l2").basis())&&t.record("l2").requestToRenderMs()==null&&t.record("l2").resultToShownDrawMs()==4950.0,"leaving and coming back before any draw is a human wait");
+
+  // 4. Leaving after the first draw changes nothing.
+  t.requested("a1","button",30_000*MS);t.resulted("a1",WorkspaceComposer.Outcome.COMMITTED,null,"m",null,30_100*MS,true);t.rendered("a1",30_116*MS,true);
+  t.visibility(false);t.visibility(true);
+  expect("request-to-first-draw".equals(t.record("a1").basis())&&t.record("a1").requestToRenderMs()==116.0,"leaving after the draw keeps the measurement");
+
+  // 5. Replaced before its first draw: no draw ever showed it, so it is result-only.
+  t.requested("o1","button",40_000*MS);t.resulted("o1",WorkspaceComposer.Outcome.COMMITTED,null,"m",null,40_100*MS,false);
+  t.requested("o2","button",40_200*MS);t.resulted("o2",WorkspaceComposer.Outcome.COMMITTED,null,"m",null,40_300*MS,true);
+  expect(t.rendered("o1",40_310*MS,true)&&"result-only".equals(t.record("o1").basis())&&t.record("o1").replacedBeforeDraw,"a replaced layout is never credited with a later draw");
+  t.rendered("o2",40_316*MS,true);
+  expect("request-to-first-draw".equals(t.record("o2").basis()),"the newer one is");
+
+  // 6. A failure and a superseded result still never draw; listening stops.
+  t.requested("f1","direct_text",50_000*MS);t.resulted("f1",WorkspaceComposer.Outcome.REJECTED,"invalid_output","m",null,50_100*MS,true);
+  expect(t.rendered("f1",50_110*MS,true)&&"result-only".equals(t.record("f1").basis()),"failure: result-only");
+
+  String json=t.json();
+  expect(json.contains("\"basis\":\"prepared-then-shown\"")&&json.contains("\"includesHumanWait\":true")&&json.contains("\"resultToShownDrawMs\":9000"),"json labels the wait: "+json);
+  expect(!json.contains("\"basis\":\"request-to-render\""),"the old ambiguous basis is gone");
+ }
+
  /** The page's whole flow, as WorkspacePage runs it, minus the views and the thread. */
  static void endToEnd()throws Exception{
   WorkspaceSnapshot s=snapshot(APPS,true);
@@ -166,10 +223,10 @@ public final class WorkspaceEngineTest {
   t.requested(c.requestId(),c.trigger(),10);
   String result=e.compose(WorkspaceSnapshot.request(c.requestId(),c.trigger(),c.prompt(),s,WorkspaceEngine.DEADLINE_MS,c.avoid()),null);
   WorkspaceComposer.Outcome o=c.finish(gen,result,s.registry);
-  t.resulted(c.requestId(),o,c.lastFailure(),WorkspaceTiming.modelId(result),WorkspaceTiming.composerTiming(result),20);
-  t.rendered(c.requestId(),30);
+  t.resulted(c.requestId(),o,c.lastFailure(),WorkspaceTiming.modelId(result),WorkspaceTiming.composerTiming(result),20,true);
+  t.rendered(c.requestId(),30,true);
   expect(o==WorkspaceComposer.Outcome.COMMITTED&&state.layout().sections.size()==2,"Arrange commits the starter layout");
-  expect("request-to-render".equals(t.record("page-1").basis()),"and its first frame is timed");
+  expect("request-to-first-draw".equals(t.record("page-1").basis()),"and its first draw is timed");
 
   // Pin the grid, regenerate: the grid keeps its place, and the request carries avoid.
   String grid=state.layout().sections.get(0).key;state.togglePin(grid);

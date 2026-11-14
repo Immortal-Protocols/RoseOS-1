@@ -32,7 +32,7 @@ final class WorkspaceHub {
  /** The page, while it exists. */
  interface Listener {
   void busy();
-  /** Draw the state again; timedRequest names a just-committed request whose first frame is timed, or null. */
+  /** Draw the state again; timedRequest names a just-committed request whose first draw on screen is timed, or null. */
   void changed(String timedRequest);
  }
 
@@ -73,10 +73,10 @@ final class WorkspaceHub {
  // ---------- the page ----------
 
  void attach(Listener page){listener=page;}
- void detach(Listener page){if(listener==page){listener=null;pageShown=false;windowVisible=false;}}
- void shown(boolean now){pageShown=now&&listener!=null;if(onScreen())composer.workspaceShown();if(now)recoverTasks();}
+ void detach(Listener page){if(listener==page){listener=null;pageShown=false;windowVisible=false;timing.visibility(false);}}
+ void shown(boolean now){pageShown=now&&listener!=null;timing.visibility(onScreen());if(onScreen())composer.workspaceShown();if(now)recoverTasks();}
  /** Home's window became visible or not (the person left for another app, or came back). */
- void windowVisible(boolean now){windowVisible=now&&listener!=null;if(onScreen())composer.workspaceShown();}
+ void windowVisible(boolean now){windowVisible=now&&listener!=null;timing.visibility(onScreen());if(onScreen())composer.workspaceShown();}
  /** On screen for section 4.2: the workspace page is the pager's page and Home is in front. Otherwise a commit is prepared, not shown. */
  boolean onScreen(){return pageShown&&windowVisible;}
 
@@ -216,10 +216,10 @@ final class WorkspaceHub {
 
  private void finish(int gen,String requestId,WorkspaceSources.Read read,String result,long at){
   WorkspaceComposer.Outcome outcome=read==null?composer.fail(gen,"model_unavailable"):composer.finish(gen,result,read.snapshot.registry);
-  timing.resulted(requestId,outcome,composer.lastFailure(),WorkspaceTiming.modelId(result),WorkspaceTiming.composerTiming(result),at);
+  timing.resulted(requestId,outcome,composer.lastFailure(),WorkspaceTiming.modelId(result),WorkspaceTiming.composerTiming(result),at,onScreen());
   if(outcome!=WorkspaceComposer.Outcome.IGNORED&&read!=null)lastRead=read;
   if(outcome==WorkspaceComposer.Outcome.COMMITTED)save();
-  // Shown only when the page is on screen now; its first frame is then timed.
+  // Shown only when the page is on screen now. Its first draw on screen is timed, with that visibility (WorkspaceTiming).
   requests.finished(gen,outcome,onScreen());
   if(outcome!=WorkspaceComposer.Outcome.IGNORED&&listener!=null)listener.changed(outcome==WorkspaceComposer.Outcome.COMMITTED?requestId:null);
  }

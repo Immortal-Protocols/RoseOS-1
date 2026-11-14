@@ -51,7 +51,7 @@ import java.util.Set;
  * There is no on-phone model yet, so the composer's inference is WorkspaceStarter, and the page says so.
  *
  * <p><b>Rendering.</b> Rendering shows only what is still on the phone (WorkspaceLayout.available). It never
- * reshuffles the saved layout. The first frame of a committed layout is timed (WorkspaceTiming).
+ * reshuffles the saved layout. The first draw of a committed layout on screen is timed (WorkspaceTiming).
  *
  * <p><b>Gestures.</b> A drag that starts on the field or a carousel belongs to it (keepsDrag); anything else pages as
  * on Home. The page is inert while off screen.
@@ -146,7 +146,7 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
  }
 
  /**
-  * Draws the current layout. timedRequest names a just-committed request whose first frame is timed. A failure
+  * Draws the current layout. timedRequest names a just-committed request whose first draw on screen is timed. A failure
   * to draw never reaches Home: the page says so, and its saved state is untouched.
   */
  void render(String timedRequest){
@@ -297,12 +297,18 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   }
  }
 
- /** WorkspaceTiming's render point: the first draw after a committed layout, timed on the draw pass itself. */
+ /**
+  * WorkspaceTiming's first-draw point: the first draw pass after a committed layout while the page is on screen,
+  * timed on the draw pass itself (not display presentation). A draw off screen does not count, so the listener
+  * stays until one does, or until the record can never count.
+  */
  private void timeFirstFrame(final String requestId){
   final ViewTreeObserver observer=sections.getViewTreeObserver();
   final ViewTreeObserver.OnDrawListener[] once=new ViewTreeObserver.OnDrawListener[1];
+  final boolean[] done={false};
   once[0]=()->{
-   hub.timing.rendered(requestId,System.nanoTime());
+   if(done[0]||!hub.timing.rendered(requestId,System.nanoTime(),hub.onScreen()))return;
+   done[0]=true;
    main.post(()->{if(observer.isAlive())observer.removeOnDrawListener(once[0]);});
   };
   observer.addOnDrawListener(once[0]);
