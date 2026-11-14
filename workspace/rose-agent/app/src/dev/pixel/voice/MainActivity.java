@@ -11,7 +11,7 @@ public class MainActivity extends Activity {
  boolean chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
  LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,homeCapacity;final HomePlan.Viewport appViewport=new HomePlan.Viewport(),homeViewport=new HomePlan.Viewport();int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
- ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,ourAppsPage=1;
+ ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=HomePages.HOME,ourAppsPage=HomePages.FIRST_APPS;WorkspacePage workspacePage;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
  final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){packageGeneration++;if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
@@ -312,6 +312,8 @@ public class MainActivity extends Activity {
   if(visualDetail!=null)return false;
   WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
   if(insets!=null&&insets.isVisible(WindowInsets.Type.ime()))return false;
+  // Project 2: a drag that starts on the workspace's request field or a carousel belongs to it.
+  if(workspacePage!=null&&launcherPager!=null&&HomePages.workspace(launcherPager.currentPage())&&workspacePage.keepsDrag(event))return false;
   return true;
  }
  boolean touchInside(View view,MotionEvent event){
@@ -366,7 +368,9 @@ public class MainActivity extends Activity {
   for(ArrayList<ResolveInfo> group:Arrays.asList(systemApps,storeApps,otherApps))Collections.sort(group,byName);
   Collections.sort(ourApps,(a,b)->Integer.compare(AppLabels.suiteIndex(a.activityInfo.packageName,cameraPackage),AppLabels.suiteIndex(b.activityInfo.packageName,cameraPackage)));
   ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>();
-  // Home, then the app pages next to it under the fixed tray, and nothing after them (HomePages, #223).
+  // Project 2's workspace, then Home, then the app pages next to it under the fixed tray, and nothing after them
+  // (HomePages, #223). The workspace is its own page left of Home: Home's layout, dock and chin are unchanged.
+  titles.add("Workspace");pages.add(new ArrayList<>());
   titles.add("Home");pages.add(new ArrayList<>());
   // One continuous real inventory, our apps first, then Play Store and other installs, each in name order; the page
   // count follows from it and the inset viewport (HomeAppLayout), never a fixed count. The system and duplicate apps
@@ -398,11 +402,18 @@ public class MainActivity extends Activity {
   pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));launcherPager.getBackground().setColorFilter(CustomizationVisuals.wallpaperFilter(plannedCustomization.shownWallpaper()));
   HomeGlassTile.Backdrop.set((OxbloodField)launcherPager.getBackground(),launcherPager); // the tiles' backdrop blur samples this field (#410)
   launcherPager.permission=this::canSwipePages;
-  launcherPager.listener=index->{launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);};
+  launcherPager.listener=index->{launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);if(workspacePage!=null)workspacePage.shown(HomePages.workspace(index));};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   // The one row of page dots is fixed in the HomeFrame.
   homePageDots=null;LinearLayout fixedDots=makePageDots(titles);
+  // The workspace page survives a rebuild (an app installed or removed), with any request still composing. A new
+  // theme draws a new page; its layout, pins and undo steps are saved, so only a request in flight is dropped.
+  if(workspacePage!=null&&!workspacePage.theme.equals(RoseThemeNow.id)){workspacePage.release();workspacePage=null;}
+  // A page that cannot be built never takes Home down: an empty page holds its place, so Home stays HomePages.HOME.
+  if(workspacePage==null)try{workspacePage=new WorkspacePage(this);}catch(RuntimeException e){workspacePage=null;}
+  else if(workspacePage.getParent() instanceof ViewGroup)((ViewGroup)workspacePage.getParent()).removeView(workspacePage);
+  if(workspacePage!=null)launcherPager.addView(workspacePage);else{View none=new View(this);none.setContentDescription(titles.get(HomePages.WORKSPACE));launcherPager.addView(none);}
   launcherPager.addView(roseHome=new RoseHomeView(this,homeEntries,homeColumns,this::homeMeasured));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
   for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),appEntries.isEmpty()));
@@ -500,7 +511,9 @@ public class MainActivity extends Activity {
   // offers scroll actions to accessibility services.
   dots.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
   for(int i=0;i<titles.size();i++){
-   TextView dot=new TextView(this);dot.setBackground(new HomeDot(getResources().getDisplayMetrics().density));dot.setTag(i);dot.setSelected(i==0);
+   // Project 2: the workspace's dot is the star before Home's round dots.
+   TextView dot=new TextView(this);dot.setBackground(new HomeDot(getResources().getDisplayMetrics().density,HomePages.workspace(i)));dot.setTag(i);dot.setSelected(i==HomePages.HOME);
+   if(HomePages.workspace(i))dot.setContentDescription(titles.get(i));
    dots.addView(dot,new LinearLayout.LayoutParams(dp(19),dp(HomeFrame.DOTS_DP)));pageDots.add(dot);
   }
   return dots;
@@ -741,7 +754,7 @@ public class MainActivity extends Activity {
  void refreshHomeRose(boolean shown){if(homeTray==null)return;VoiceService s=VoiceService.instance;ConversationState c=conversationState();homeTray.show(c,HomeRose.state(c,s==null?Float.NaN:s.trayInputLevel,s==null?Float.NaN:s.trayOutputLevel,s==null?0L:s.trayAudioObservedAt,SystemClock.elapsedRealtime(),HomeRose.reducedMotion(android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f)),shown),RoseMicInput.shown(c.active(),c.muted,RoseMicState.muted(this)));}
  @Override public void onBackPressed(){if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(chatMode){chatMode=false;home();}else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
 
- @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}CustomizationStore.unregister(this,customizationChanged);handler.removeCallbacks(applyCustomization);super.onDestroy();}
+ @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}CustomizationStore.unregister(this,customizationChanged);handler.removeCallbacks(applyCustomization);if(workspacePage!=null)workspacePage.release();super.onDestroy();}
  class MicControl extends View {
   final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);String label="Start";boolean listening;float targetLevel,displayLevel;long lastFrame;
   MicControl(){super(MainActivity.this);setClickable(true);setFocusable(true);setContentDescription("Start session");}

@@ -29,8 +29,21 @@ test('the HOME activity identity is unchanged',()=>{
 });
 
 test('HOME and the app icon land on Rose Home; the icon opens the Rose conversation; other opens keep their page',()=>{
- // Page indices are named and set from the built page list (HomePages): Home, then the apps (#223: no Widgets or voice page).
- assert.match(main,/int homePage=0,ourAppsPage=1;\n/);
+ // Page indices are named and set from the built page list (HomePages): Project 2's workspace, Home, then the apps
+ // (#223: no Widgets or voice page).
+ assert.match(main,/int homePage=HomePages\.HOME,ourAppsPage=HomePages\.FIRST_APPS;WorkspacePage workspacePage;\n/);
+ // Project 2: the workspace is the one page before Home. It is added before Home and survives a rebuild; Home, its
+ // dock and the chin are unchanged.
+ const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
+ assert.match(pages,/titles\.add\("Workspace"\);pages\.add\(new ArrayList<>\(\)\);\n  titles\.add\("Home"\);pages\.add\(new ArrayList<>\(\)\);/);
+ assert.ok(pages.indexOf('launcherPager.addView(workspacePage);')>=0&&pages.indexOf('launcherPager.addView(workspacePage);')<pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView('),'the workspace before Home');
+ // A workspace page that fails to build leaves an empty page in its place, so Home is still HomePages.HOME.
+ assert.match(pages,/if\(workspacePage!=null\)launcherPager\.addView\(workspacePage\);else\{View none=new View\(this\);none\.setContentDescription\(titles\.get\(HomePages\.WORKSPACE\)\);launcherPager\.addView\(none\);\}/);
+ assert.match(pages,/if\(workspacePage!=null&&!workspacePage\.theme\.equals\(RoseThemeNow\.id\)\)\{workspacePage\.release\(\);workspacePage=null;\}\n  \/\/ A page that cannot be built never takes Home down[^\n]*\n  if\(workspacePage==null\)try\{workspacePage=new WorkspacePage\(this\);\}catch\(RuntimeException e\)\{workspacePage=null;\}\n  else if\(workspacePage\.getParent\(\) instanceof ViewGroup\)\(\(ViewGroup\)workspacePage\.getParent\(\)\)\.removeView\(workspacePage\);/);
+ assert.match(pages,/if\(workspacePage!=null\)workspacePage\.shown\(HomePages\.workspace\(index\)\);/,'the workspace knows when it is shown (inert otherwise)');
+ // A drag that starts on the workspace's request field or a carousel stays with it. (Back from the workspace, as from
+ // any page, goes to homePage, which is HomePages.HOME: pinned with onBackPressed below.)
+ assert.match(main,/if\(workspacePage!=null&&launcherPager!=null&&HomePages\.workspace\(launcherPager\.currentPage\(\)\)&&workspacePage\.keepsDrag\(event\)\)return false;/,'a drag on the field or a carousel stays with it');
  assert.match(main,/homePage=HomePages\.HOME;ourAppsPage=count>HomePages\.FIRST_APPS\?HomePages\.FIRST_APPS:HomePages\.HOME;\n/,'with no app page, Apps is Home');
  assert.match(main,/int appPages=appEntries\.isEmpty\(\)&&!entries\.isEmpty\(\)\?0:HomeAppLayout\.pages\(appEntries\.size\(\),appPerPage\);/,'no empty overflow page when Home holds every app');
  assert.ok(!/voicePage|widgetsPage|HomePages\.(voice|widgets)\(/.test(main),'no legacy page index remains');
@@ -428,7 +441,9 @@ test('app labels and page dots follow the Oxblood type and dot treatment (#410)'
  assert.ok(!/chatFont\(800\)/.test(label),'not the rounded 800 face');
  // oxblood.css:364-367,514-515: indicator dots 19dp apart; the current page is the view's selected state.
  const dots=main.slice(main.indexOf(' LinearLayout makePageDots('),main.indexOf(' View appTile('));
- assert.match(dots,/TextView dot=new TextView\(this\);dot\.setBackground\(new HomeDot\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);dot\.setTag\(i\);dot\.setSelected\(i==0\);/);
+ // Project 2: the workspace's dot is a star before Home's round dots, and Home's dot is the first one lit.
+ assert.match(dots,/TextView dot=new TextView\(this\);dot\.setBackground\(new HomeDot\(getResources\(\)\.getDisplayMetrics\(\)\.density,HomePages\.workspace\(i\)\)\);dot\.setTag\(i\);dot\.setSelected\(i==HomePages\.HOME\);/);
+ assert.match(dots,/if\(HomePages\.workspace\(i\)\)dot\.setContentDescription\(titles\.get\(i\)\);/);
  assert.match(dots,/new LinearLayout\.LayoutParams\(dp\(19\),dp\(HomeFrame\.DOTS_DP\)\)/);
  assert.ok(!/setOnClickListener/.test(dots),'the dots are an indicator only');
  assert.ok(!/●/.test(dots)&&!/dot\.setAlpha/.test(main),'no glyph dots or alpha dimming');
@@ -439,6 +454,10 @@ test('app labels and page dots follow the Oxblood type and dot treatment (#410)'
  assert.match(dot,/if \(s == android\.R\.attr\.state_selected\) now = true;/);
  const draw=dot.slice(dot.indexOf('@Override public void draw('),dot.indexOf('@Override public boolean isStateful'));
  assert.ok(!draw.includes('new '),'no allocation while drawing');
+ // Project 2: the star is lit on the workspace, outlined and unlit elsewhere, with its path built off the draw pass.
+ assert.match(draw,/if \(star\) \{\n   if \(current\) \{/);
+ assert.match(draw,/fill\.setStyle\(Paint\.Style\.STROKE\);/);
+ assert.match(dot,/HomeDot\(float density\) \{\n  this\(density, false\);\n \}/,'round dots are unchanged');
 });
 
 test('app tiles are the Oxblood glass with the reference marks; other apps keep their own icons (#410, #403)',()=>{
