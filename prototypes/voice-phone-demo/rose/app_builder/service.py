@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import template, toolchain
+from . import dependencies, template, toolchain
 from .ledger import Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -192,7 +192,8 @@ def _note(note, request: str) -> str:
 
 
 class Builder:
-    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None):
+    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
+                 resolver=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
@@ -201,6 +202,7 @@ class Builder:
         self.ledger = ledger or Ledger(self.root)
         self.tools, self.generate = tools, generate
         self.backup = backup
+        self.resolver = resolver  # an offline dependencies.Resolver; None: an app that declares libraries fails
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -349,7 +351,8 @@ class Builder:
             self._step(job, 'building', 'compiling', 'Building the app.')
             if work.exists():
                 shutil.rmtree(work)
-            unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled)
+            libraries = self._libraries(snapshot, work, project_id, package)
+            unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
             self._step(job, 'signing', 'signing', 'Signing the app.')
             keys = self.root / 'keys' / project_id
@@ -369,7 +372,7 @@ class Builder:
                 _place(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
             _place(signed, artifacts / f'{receipt["sha256"]}.apk')  # durable before the version row exists
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
-                                       _note(note, job['request'])):
+                                       _note(note, job['request']), libraries):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
         except toolchain.StepFailed as failed:
             self._safe_reset(source, project_id)
@@ -381,6 +384,28 @@ class Builder:
         except Exception as error:  # never leave a job running; the summary carries no paths or tool output
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
+
+    def _libraries(self, snapshot: Path, work: Path, project_id: str, package: str) -> list:
+        """The verified libraries the app declares (none when it declares none). A coordinate the last delivered
+        version used must resolve to the same bytes it was built with."""
+        try:
+            coordinates = dependencies.declared(snapshot)
+            if not coordinates:
+                return []
+            framework = frozenset()
+            if self.resolver is not None:
+                try:
+                    framework = dependencies.framework_classes(self.tools.android_jar)
+                except Exception:
+                    raise toolchain.StepFailed('toolchain', 'The builder could not read its Android platform '
+                                               'classes.', retryable=True) from None
+            return dependencies.resolve(coordinates, self.resolver, work / 'libs', package, framework,
+                                        self.ledger.library_lock(project_id))
+        except dependencies.Refused as refused:
+            raise toolchain.StepFailed('compile' if refused.malformed else 'dependency', str(refused)) from None
+        except OSError:  # the job's own disk, not the library: retryable
+            raise toolchain.StepFailed('internal', 'The builder could not prepare the app\'s libraries.',
+                                       retryable=True) from None
 
     def _back_up_key(self, keys: Path, project_id: str, package: str):
         """Once per project: the injected backup must return a receipt before the first delivery."""

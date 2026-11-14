@@ -83,9 +83,23 @@ class Generator(unittest.TestCase):
         self.assertEqual([x[0] for x in c.calls], ['open', 'submit', 'close'])
         self.assertTrue(c.closed)
 
+    def test_the_library_store_list_reaches_the_turn(self):
+        g = self.gen(after_submit=DONE)
+        g.libraries = lambda: ['org.x:y:2', 'com.example:lib:1.0']  # e.g. a RecordedStore's available
+        self.run_gen(g)
+        self.assertIn('com.example:lib:1.0, org.x:y:2', self.clients[0].calls[1][2]['text'])
+        self.run_gen(self.gen(after_submit=DONE))  # none given: no library is offered
+        self.assertNotIn('dependencies.json', self.clients[1].calls[1][2]['text'])
+
     def test_prompt_kinds(self):
         self.assertIn('new app', prompt('create', 'x'))
         self.assertIn('keeping their data', prompt('revise', 'x'))
+        self.assertNotIn('dependencies.json', prompt('create', 'x'))  # no store: no library is offered
+        for kind in ('create', 'revise'):
+            text = prompt(kind, 'the request', ['com.example:lib:1.0', 'org.x:y:2'])
+            self.assertIn('com.example:lib:1.0, org.x:y:2', text)
+            self.assertIn('dependencies.json', text)
+            self.assertTrue(text.endswith('the request'))
         with self.assertRaises(StepFailed):
             prompt('delete', 'x')
 

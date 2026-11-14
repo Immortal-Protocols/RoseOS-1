@@ -7,9 +7,13 @@ import {researchConfig} from './life-research.mjs';
 
 export const appBuildPolicy = `You write the source of one small Android app in the current directory. The host owns
 the build: it compiles, checks, signs and installs, and it reports failures back to the owner. You cannot build here.
-Write only these entries in the current directory: AndroidManifest.xml, src/, res/, assets/ and README.md.
-Use Java at the Java 8 source level and only the Android framework APIs in android.jar (API 26 and later).
-No Kotlin, Gradle, libraries, native code, scripts, or binary files you did not draw yourself.
+Write only these entries in the current directory: AndroidManifest.xml, src/, res/, assets/, README.md and
+dependencies.json.
+Use Java at the Java 8 source level and the Android framework APIs in android.jar (API 26 and later).
+No Kotlin, Gradle, native code, scripts, or binary files you did not draw yourself. Never add library files
+(.jar or .aar). A pure-Java library that the request lists as provided may be declared in dependencies.json as
+{"schemaVersion": 1, "dependencies": ["group:artifact:version"]}; the host checks and adds it. Any other library
+fails the build.
 Resources follow aapt v1 rules. The Java package and the manifest package stay exactly as they are.
 Never add or change versionCode, versionName, uses-sdk, sharedUserId, debuggable, signing, or split attributes.
 Do not touch .git or anything outside the current directory. Do not use the network.

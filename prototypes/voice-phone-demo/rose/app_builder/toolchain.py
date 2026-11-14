@@ -110,8 +110,9 @@ def run(args: list, cwd: Path, home: Path, tools: Tools, cancelled, category: st
 
 
 def build(source: Path, work: Path, package: str, version_code: int, version_name: str, tools: Tools,
-          cancelled=lambda: False) -> tuple[Path, str]:
-    """An unsigned, aligned APK for this exact identity, and the build log."""
+          cancelled=lambda: False, libraries=()) -> tuple[Path, str]:
+    """An unsigned, aligned APK for this exact identity, and the build log. ``libraries`` are verified job-local
+    JARs (rose.app_builder.dependencies.resolve): javac compiles against them and d8 adds them to the app."""
     missing = tools.available()
     if missing:
         raise StepFailed('toolchain', missing, retryable=True)
@@ -131,24 +132,40 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
         aapt[5:5] = ['-A', source / 'assets']
     log.append(run(aapt, work, home, tools, cancelled, 'compile', hidden))
     sources = sorted(str(p) for p in [*source.glob('src/**/*.java'), *(work / 'generated').rglob('*.java')])
+    jars = [str(lib.jar) for lib in libraries]
     try:
         log.append(run([tools.java(), '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-encoding', 'UTF-8', '-source',
                         '8', '-target', '8', '-Xlint:-options', '-proc:none', '-bootclasspath',
-                        f'{tools.android_jar}:{tools.bt / "core-lambda-stubs.jar"}', '-d', work / 'classes',
+                        f'{tools.android_jar}:{tools.bt / "core-lambda-stubs.jar"}',
+                        *(['-classpath', ':'.join(jars)] if jars else []), '-d', work / 'classes',
                         *sources], work, home, tools, cancelled, 'compile', hidden))
     except StepFailed as failed:
-        # An import of a library the framework-only toolchain lacks (androidx, kotlin, ...) is a dependency failure.
+        if failed.category == 'compile' and jars and re.search(r'error: cannot access|bad class file', failed.log):
+            raise StepFailed('dependency', 'A library the app declares could not be read by the compiler.',
+                             log=failed.log) from None
+        # An import of a library the toolchain lacks (androidx, kotlin, an undeclared one) is a dependency failure.
         if failed.category == 'compile' and re.search(r'error: package [\w.]+ does not exist', failed.log):
             raise StepFailed('dependency', 'The app needs a library this builder does not provide (it builds with '
-                             'Android framework APIs only).', log=failed.log) from None
+                             'Android framework APIs and the libraries it declares in dependencies.json, if the '
+                             'builder has them).', log=failed.log) from None
         raise
     classes = sorted(str(p) for p in (work / 'classes').rglob('*.class'))
     own = package.replace('.', '/') + '/'
     for c in classes:  # whatever the source text claimed, compiled classes live in the app's own package
         if not Path(c).relative_to(work / 'classes').as_posix().startswith(own):
             raise StepFailed('compile', f'Classes must be in package {package}.')
+    if jars:  # the libraries alone first, so a library d8 cannot convert is reported as the library's failure
+        (work / 'libdex').mkdir(exist_ok=True)
+        try:
+            run([tools.bt / 'd8', '--min-api', str(template.MIN_SDK), '--lib', tools.android_jar, '--output',
+                 work / 'libdex', *jars], work, home, tools, cancelled, 'compile', hidden)
+        except StepFailed as failed:
+            if failed.category != 'compile':
+                raise
+            raise StepFailed('dependency', 'A library the app declares could not be converted for Android.',
+                             log=failed.log) from None
     log.append(run([tools.bt / 'd8', '--min-api', str(template.MIN_SDK), '--lib', tools.android_jar, '--output',
-                    work / 'dex', *classes], work, home, tools, cancelled, 'compile', hidden))
+                    work / 'dex', *classes, *jars], work, home, tools, cancelled, 'compile', hidden))
     unaligned = work / 'unaligned.apk'
     shutil.copyfile(work / 'resources.apk', unaligned)
     import zipfile
