@@ -17,8 +17,8 @@ Rules (host-tested in `tests/BuilderRulesTest.java`, `RequestIdsTest.java` and `
 in `scripts/test-local.sh`):
 
 - `Json` and `BuilderWire`: a small strict JSON reader and writer, and v1's wire mapping. Every response must carry
-  `schemaVersion: 1`, and unknown fields are ignored. Times convert from epoch seconds to milliseconds. A 400
-  `out_of_scope` shows the builder's own sentence. A final 401 asks the owner to pair again, and a non-final one is
+  `schemaVersion: 1`, and unknown fields are ignored. Times convert from epoch seconds to milliseconds. A 400 shows
+  the builder's own sentence, never treated as success or retried. A final 401 asks the owner to pair again, and a non-final one is
   signed afresh once.
 - `BuildJob`: build stages, named failure categories, and retry advice only when the server says a retry can help.
   Progress never moves backwards.
