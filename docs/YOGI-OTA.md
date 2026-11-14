@@ -36,7 +36,9 @@ dispatches or manual transfer of bootstrap receipts:
 Both compiles stream stdout/stderr and retain `compile.log` plus a failure
 receipt on the Yogi disk. They use the same pinned ccache implementation as
 Mustang, in **Yogi's own** `/srv/rose-yogi/compiler-cache-v1`, bounded to 20 GiB.
-No old OUT_DIR is adopted or deleted. A second compile can reuse C/C++ objects;
+Each fresh attempt uses the same relative `out-yogi-cache` name so include paths
+and compiler flags do not change merely because the allocation changed. No old
+OUT_DIR is adopted or deleted. A second compile can reuse C/C++ objects;
 cache hits and Java/whole-build reuse are not promised. Signing credentials and
 workflow tokens are removed from the compiler environment. Compile timeout and
 sampled free-space stops terminate its process group. Delivery phases check

@@ -853,7 +853,7 @@ def compile_build(cfg, build, run=subprocess.run):
     directory = attempt_dir(cfg, build)
     allocation = read(directory/'allocation.json')
     read(directory/'integrate.json')
-    source, out_dir = directory/'src', f'out/yogi-{build}'
+    source, out_dir = directory/'src', yogi_compile.output_dir(cfg, build)
     if (source/out_dir).exists():
         raise Refused('output directory exists; no attempt is resumed')
     env = yogi_compile.environment(os.environ)
