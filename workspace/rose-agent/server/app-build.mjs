@@ -12,6 +12,9 @@ Use Java at the Java 8 source level and only the Android framework APIs in andro
 No Kotlin, Gradle, libraries, native code, scripts, or binary files you did not draw yourself.
 Resources follow aapt v1 rules. The Java package and the manifest package stay exactly as they are.
 Never add or change versionCode, versionName, uses-sdk, sharedUserId, debuggable, signing, or split attributes.
+Request only ordinary permissions (network, notifications, alarms, camera, microphone, location while in use,
+media, Bluetooth, contacts, calendar). The host refuses SMS, call log, overlays, background location, other apps'
+data, and accessibility, device admin, VPN, notification listener or keyboard services.
 Do not touch .git or anything outside the current directory. Do not use the network.
 On a change to an existing app, keep the owner's data: keep SharedPreferences names and keys, file names and
 database names, and add database migrations instead of clearing or recreating storage.

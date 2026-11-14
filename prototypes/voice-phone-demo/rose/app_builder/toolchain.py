@@ -169,7 +169,37 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
             or re.search(r'E: (key-sets|upgrade-key-set|original-package|adopt-permissions)\b', tree)):
         raise StepFailed('compile', 'The app tries to set its own identity, debuggability or update keys, '
                          'which is not allowed.')
+    problem = binary_permission_problem(tree, package)
+    if problem:
+        raise StepFailed('compile', problem)
     return unsigned, '\n'.join(x for x in log if x)
+
+
+PERMISSION_IDS = {'0x01010006', '0x01010007', '0x01010008'}  # android:permission, readPermission, writePermission
+
+
+def binary_permission_problem(tree: str, package: str) -> str | None:
+    """The capability policy (template.permission_problem) applied again to ``aapt dump xmltree`` of the built
+    manifest, by attribute id: requested permissions and the permissions components require of their callers."""
+    element = None
+    for line in tree.splitlines():
+        opened = re.match(r'\s*E: (\S+)', line)
+        if opened:
+            element = opened.group(1)
+            continue
+        attribute = re.match(r'\s*A: [^(]*\((0x[0-9a-f]{8})\)=(.*)$', line)
+        if not attribute:
+            continue
+        attr_id, raw = attribute.groups()
+        requested = element in ('uses-permission', 'uses-permission-sdk-23', 'uses-permission-sdk-m') \
+            and attr_id == '0x01010003'
+        if not requested and attr_id not in PERMISSION_IDS:
+            continue
+        value = re.match(r'"([^"]*)"', raw)  # anything but a plain string (a reference, a number) is refused
+        problem = template.permission_problem(value.group(1) if value else None, package, component=not requested)
+        if problem:
+            return problem
+    return None
 
 
 def _private(path: Path, data: str):

@@ -68,6 +68,19 @@ class Routes(unittest.TestCase):
         h = self.device.headers(method, path, self.remote.identity.pin)
         return self.client.request(method, path, json=json, headers=h)
 
+    def test_screening_refusal_and_notes(self):
+        r = self.signed('POST', '/builder/v1/projects', {'schemaVersion': 1, 'clientRequestId': 's1',
+                                                         'description': 'an iPhone app for my lists'})
+        self.assertEqual(r.status_code, 400)
+        body = r.json()
+        self.assertEqual((body['schemaVersion'], body['code'], body['category']), (1, 'out_of_scope', 'platform'))
+        self.assertTrue(body['error'].endswith('Nothing was started.'))
+        self.assertEqual(self.signed('GET', '/builder/v1/projects').json()['projects'], [])
+        r = self.signed('POST', '/builder/v1/projects', {'schemaVersion': 1, 'clientRequestId': 's2',
+                                                         'description': 'chess with a leaderboard'})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.json()['notes']), 1)
+
     def test_not_mounted_without_a_builder(self):
         bare = TestClient(build_remote_app(server(), self.remote))
         self.assertEqual(bare.get('/builder/v1/projects').status_code, 404)

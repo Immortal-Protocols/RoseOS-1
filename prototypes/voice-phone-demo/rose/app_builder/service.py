@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import template, toolchain
+from . import screening, template, toolchain
 from .ledger import Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -25,7 +25,12 @@ INSTALL_STATUSES = ('installed', 'updated', 'refused_signer', 'refused_version',
 
 
 class Refused(ValueError):
-    """A request that does not match API v1; nothing changed (HTTP 400)."""
+    """A request that does not match API v1, or one screening refused; nothing changed (HTTP 400). ``details`` are
+    extra response fields (a screening refusal's ``code`` and ``category``)."""
+
+    def __init__(self, message: str, **details):
+        super().__init__(message)
+        self.details = details
 
 
 def _body(body, keys: dict) -> dict:
@@ -203,22 +208,32 @@ class Builder:
 
     def create(self, device: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'description': (str, MAX_TEXT)})
+        notes = self._screen(device, b['clientRequestId'], b['description'])
         name = b['description'].splitlines()[0][:40].strip() or 'New app'
         try:
             out = self.ledger.create(device, b['clientRequestId'], b['description'], name)
         except LedgerError as error:
             raise Refused(str(error)) from None
         self.wake.set()
-        return out
+        return {**out, 'notes': notes}
 
     def revise(self, device: str, project: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'request': (str, MAX_TEXT)})
+        notes = self._screen(device, b['clientRequestId'], b['request'])
         try:
             out = self.ledger.revise(device, project, b['clientRequestId'], b['request'])
         except LedgerError as error:
             raise Refused(str(error)) from None
         self.wake.set()
-        return out
+        return {**out, 'notes': notes}
+
+    def _screen(self, device: str, client_request_id: str, text: str) -> list[str]:
+        """Request screening (§3.6) before any job row exists; returns the accepted request's notes. A request the
+        ledger already accepted is not refused on a retry, so retries stay idempotent if the rules change."""
+        result = screening.screen(text)
+        if not result['ok'] and not self.ledger.known_request(device, client_request_id):
+            raise Refused(result['message'], code='out_of_scope', category=result['category'])
+        return result['notes']
 
     def retry(self, job_id: str, body) -> dict:
         """Run a failed, retryable job again as its next attempt (same jobId, attempt + 1)."""

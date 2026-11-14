@@ -61,7 +61,7 @@ def add_routes(app: FastAPI, remote: Any, builder: Builder, peer: Callable[[Any]
             data = await body(request) if with_body else None
             result = await asyncio.to_thread(fn, device.id, *args, *([data] if with_body else []))
         except Refused as refused:
-            return error(str(refused), 400)
+            return reply({'error': str(refused), **refused.details}, 400)
         if result is None:
             return error('not found', 404)
         return reply(result)

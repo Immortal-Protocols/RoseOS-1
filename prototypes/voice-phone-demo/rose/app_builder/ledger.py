@@ -78,6 +78,10 @@ class Ledger:
         row = self.db.execute('SELECT job_id, project_id FROM jobs WHERE client_key=?', (client_key,)).fetchone()
         return None if row is None else {'jobId': row[0], 'projectId': row[1]}
 
+    def known_request(self, device: str, client_request_id: str) -> bool:
+        with self.lock:
+            return self._existing(f'{device}\n{client_request_id}') is not None
+
     def create(self, device: str, client_request_id: str, description: str, name: str) -> dict:
         """A new project and its first job; retrying the same request returns the same ids."""
         key = f'{device}\n{client_request_id}'

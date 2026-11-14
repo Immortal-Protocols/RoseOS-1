@@ -5,6 +5,7 @@ signature verification in this environment, not installation on any phone.
 """
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -490,7 +491,8 @@ class BuildTest(Base):
     def test_a_large_manifest_keeps_its_identity_checks(self):
         def many(source, *a):
             m = source / 'AndroidManifest.xml'
-            perms = ''.join(f'<uses-permission android:name="android.permission.X{i}"/>' for i in range(300))
+            package = re.search(r'package="([^"]+)"', m.read_text()).group(1)  # the app's own permissions
+            perms = ''.join(f'<uses-permission android:name="{package}.X{i}"/>' for i in range(300))
             acts = ''.join(f'<activity android:name=".A{i}" android:exported="false"/>' for i in range(80))
             m.write_text(m.read_text().replace('<application', perms + '<application')
                          .replace('</application>', acts + '</application>'))

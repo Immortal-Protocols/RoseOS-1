@@ -162,8 +162,8 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 
 | Call | Request | Response |
 |---|---|---|
-| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId}` |
-| `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId}` |
+| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}`; 400 `{error, code: out_of_scope, category}` when screening refuses (§3.6) |
+| `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId, notes}`; 400 as above |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
 | `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`; 400 unless the job failed, is retryable, the project has no active job, and no later version has been delivered |
 | `GET /builder/v1/jobs/<jobId>` | | job (§3.2) |
@@ -244,6 +244,69 @@ failed, detail}`
 
 The server reports "installed" only from this receipt, never from publishing
 alone.
+
+### 3.6 Request screening and what generated apps may declare
+
+Create and revise screen the request text before any job exists
+(`rose/app_builder/screening.py`). The screen is offline, deterministic and
+uses no model. A refused request starts no writer, creates no project or job,
+and returns 400 with these fields:
+
+- `code`: always `out_of_scope`;
+- `category`: one of `platform`, `capability` or `harm`;
+- `error`: an owner-facing sentence ending "Nothing was started.", which never
+  quotes the request back.
+
+The categories cover:
+
+- `platform`: not an Android phone app (iPhone or iPad, a website or web app,
+  a browser extension, a desktop program, a watch or TV).
+- `capability`: powers generated apps never get. These are accessibility
+  services, device admin, SMS, the call log or call recording, VPN, drawing
+  over or reading other apps' notifications, a keyboard, controlling or
+  installing other apps, and root or system access.
+- `harm`: covert surveillance of another person, collecting credentials or
+  imitating a sign-in, and malware.
+
+Everything else is accepted. `notes` (a list of sentences, often empty) says
+what happens instead when the request names a library or needs a server:
+framework APIs only, and nothing is hosted online. A retry of a request the
+ledger already accepted is never refused, so idempotency holds if the rules
+change.
+
+The screen is a courtesy that reads English phrases. A reworded request can
+pass it, and the writer can add things the request never asked for. What
+holds is the manifest policy, checked on the source snapshot
+(`template.check_capabilities`) and again on the built APK's compiled manifest
+by attribute id (`toolchain.binary_permission_problem`):
+
+- `uses-permission` only from an allowlist (`template.ALLOWED_PERMISSIONS`):
+  - network, notifications, alarms, foreground services, camera, microphone,
+    location without background, media, Bluetooth, NFC, biometrics, activity,
+    contacts and calendar;
+  - or the app's own `<package>.*` permissions.
+
+  Refused: SMS, call log, phone state, overlays, querying or installing
+  packages, background location, settings, and every system, signature or
+  binding permission.
+- `android:permission`, `readPermission` and `writePermission` on any
+  element: only `BIND_JOB_SERVICE`, `BIND_QUICK_SETTINGS_TILE` or the app's
+  own. That refuses the binding permissions that make a component an
+  accessibility service, device admin, VPN, notification listener or
+  keyboard.
+- `<permission>` declarations only in the app's own namespace. No permission
+  name may come from a resource reference.
+
+A failure is category `compile` with the policy's sentence as the summary.
+This allowlist is App Core's proposed default. Widening it is Nathan's
+decision.
+
+Proof level: container tests only (`rose/tests/test_app_screening.py`, a
+route test in `test_builder_routes.py`). That covers the screen's categories
+and near-misses, a refusal recording nothing, retry idempotency, and the
+source check alone. It also includes real builds where an
+accessibility-service manifest is refused by the source check, and again by
+the built-APK check when the source check is bypassed.
 
 ## 4. Project 2: composer intent/result contract v1
 

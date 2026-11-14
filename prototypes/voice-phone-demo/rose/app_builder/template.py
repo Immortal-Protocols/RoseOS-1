@@ -38,6 +38,38 @@ ROOT_ATTRIBUTES = {'package'}  # unprefixed attributes allowed on <manifest>; `s
 MANIFEST_CHILDREN = {'application', 'uses-permission', 'uses-feature', 'queries', 'supports-screens',
                      'uses-configuration', 'compatible-screens', 'permission', 'permission-group'}
 DEPENDENCY_SUFFIXES = ('.gradle', '.kts', '.kt', '.jar', '.aar', '.so')
+# Permissions a generated app may request: ordinary ones and runtime ones the owner grants on the phone. Everything
+# else is refused, including SMS, call log and phone state, drawing over or querying other apps, installing packages,
+# background location, settings, and every system, signature or binding permission (accessibility, device admin, VPN,
+# notification listener, keyboard). Own permissions (``<package>.``) are allowed.
+ALLOWED_PERMISSIONS = frozenset(['com.android.alarm.permission.SET_ALARM'] + ['android.permission.' + name for name in (
+    'INTERNET', 'ACCESS_NETWORK_STATE', 'ACCESS_WIFI_STATE', 'CHANGE_WIFI_STATE', 'VIBRATE', 'WAKE_LOCK',
+    'POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM', 'USE_FULL_SCREEN_INTENT',
+    'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_DATA_SYNC', 'FOREGROUND_SERVICE_MEDIA_PLAYBACK',
+    'FOREGROUND_SERVICE_HEALTH', 'FOREGROUND_SERVICE_LOCATION', 'FOREGROUND_SERVICE_CAMERA',
+    'FOREGROUND_SERVICE_MICROPHONE', 'FOREGROUND_SERVICE_SHORT_SERVICE', 'CAMERA', 'RECORD_AUDIO',
+    'MODIFY_AUDIO_SETTINGS', 'ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'READ_MEDIA_IMAGES', 'READ_MEDIA_VIDEO',
+    'READ_MEDIA_AUDIO', 'READ_MEDIA_VISUAL_USER_SELECTED', 'BLUETOOTH_CONNECT', 'BLUETOOTH_SCAN', 'BLUETOOTH_ADVERTISE',
+    'NFC', 'USE_BIOMETRIC', 'ACTIVITY_RECOGNITION', 'BODY_SENSORS', 'READ_CONTACTS', 'WRITE_CONTACTS',
+    'READ_CALENDAR', 'WRITE_CALENDAR', 'ACCESS_NOTIFICATION_POLICY', 'NEARBY_WIFI_DEVICES')])
+# A component may require only these system permissions of its callers (a JobService and a Quick Settings tile), or
+# the app's own. Binding permissions such as BIND_ACCESSIBILITY_SERVICE are what turn a component into a system role.
+ALLOWED_COMPONENT_PERMISSIONS = frozenset(['android.permission.BIND_JOB_SERVICE',
+                                           'android.permission.BIND_QUICK_SETTINGS_TILE'])
+PERMISSION_ATTRIBUTES = ('permission', 'readPermission', 'writePermission')
+
+
+def permission_problem(name, package: str, component: bool = False) -> str | None:
+    """Why a requested (or, for a component, required) permission is not allowed, or None. Shared by the source
+    check and the check of the built APK."""
+    if not isinstance(name, str) or not name or name[:1] in '@?':
+        return 'Permission names must be written out, not taken from resources.'
+    if name.startswith(package + '.') and len(name) > len(package) + 1:
+        return None
+    allowed = ALLOWED_COMPONENT_PERMISSIONS if component else ALLOWED_PERMISSIONS
+    if name in allowed:
+        return None
+    return f'The permission {name} is not available to generated apps.'
 
 
 class TemplateRefused(ValueError):
@@ -92,6 +124,25 @@ def skeleton(package: str, label: str) -> dict[str, str]:
             '    }\n'
             '}\n'),
     }
+
+
+def check_capabilities(root, package: str):
+    """The permissions a parsed manifest requests, declares and requires of callers (§3.6)."""
+    for element in root.iter('uses-permission'):
+        problem = permission_problem(element.get(ANDROID + 'name'), package)
+        if problem:
+            raise TemplateRefused(problem)
+    for element in root.iter('permission'):  # declared permissions live in the app's own namespace
+        name = element.get(ANDROID + 'name')
+        if not isinstance(name, str) or not name.startswith(package + '.'):
+            raise TemplateRefused(f'An app may declare only its own permissions ({package}.*).')
+    for element in root.iter():
+        for attribute in PERMISSION_ATTRIBUTES:
+            value = element.get(ANDROID + attribute)
+            if value is not None:
+                problem = permission_problem(value, package, component=True)
+                if problem:
+                    raise TemplateRefused(problem)
 
 
 def unicode_escapes(text: str) -> str:
@@ -167,6 +218,7 @@ def check(source: Path, package: str) -> None:
     application = root.find('application')
     if application is not None and application.get(ANDROID + 'debuggable') is not None:
         raise TemplateRefused('android:debuggable is not allowed.')
+    check_capabilities(root, package)
     for java in source.glob('src/**/*.java'):
         text = unicode_escapes(java.read_text(encoding='utf-8', errors='replace'))  # as javac reads it
         code = re.sub(r'/\*.*?\*/|//[^\n]*', ' ', text, flags=re.S)  # comments cannot hide the declaration
