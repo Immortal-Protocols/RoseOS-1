@@ -2,6 +2,7 @@
 import {createInterface} from 'node:readline';
 import {Codex} from './codex.mjs';
 import {lifeResearchPolicy,publicPageReceipt} from './life-research.mjs';
+import {appBuildPolicy,appBuildCwd,APP_BUILD_ITEMS,APP_BUILD_ITEM_BUDGET} from './app-build.mjs';
 
 const sessions = new Map(), calls = new Map();
 let nextCall = 0;
@@ -23,9 +24,13 @@ async function handle(m) {
   if(sessions.has(m.session))throw Error('Session already exists');
   const research=m.purpose==='public_research';
   const character=m.purpose==='character_life';
+  const appBuild=m.purpose==='app_build';
   if(research && (!Array.isArray(m.tools)||m.tools.length))throw Error('Research cannot have phone tools');
+  // app_build: fixed instructions, no tools of any kind, and only a project source directory as cwd (app-build.mjs).
+  if(appBuild && (!Array.isArray(m.tools)||m.tools.length||!appBuildCwd(m.cwd)))throw Error('App build cannot have tools');
+  if(appBuild)m={...m,instructions:appBuildPolicy};  // never the caller's
   const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,threadId:c.thread,...event});};
-  const c=new Codex(m.cwd, '', null, {externalPhone:true,publicResearch:research,characterLife:character,model:m.model,
+  const c=new Codex(m.cwd, '', null, {externalPhone:true,publicResearch:research,characterLife:character,appBuild,model:m.model,
    developerInstructions:research?lifeResearchPolicy:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
    handleToolCall:params=>new Promise(resolve=>{
     const callId=String(++nextCall);
@@ -72,11 +77,20 @@ async function handle(m) {
    publish({event:'failure',message:'Character work requires registered app/memory tools'});
    c.interruptForModelSwitch().catch(()=>{});
   });
+  if(appBuild){
+   let items=0,refused=false;
+   c.on('toolActivity',(method,params)=>{
+    if(refused||method!=='item/started')return;
+    if(APP_BUILD_ITEMS.includes(params.item?.type)&&++items<=APP_BUILD_ITEM_BUDGET)return;
+    refused=true;publish({event:'failure',message:'App build tool boundary or budget exceeded'});
+    c.interruptForModelSwitch().catch(()=>{});
+   });
+  }
   try {await c.init();return {threadId:c.thread,model:c.selectedModel,serviceTier:c.actualServiceTier,authMode:c.authMode};}
   catch(error){
-   if((research||character) && !await c.closeConfirmed())
+   if((research||character||appBuild) && !await c.closeConfirmed())
     throw Object.assign(Error('Research process stop unconfirmed'),{code:'research_stop_unconfirmed'});
-   if(!research&&!character)c.close();
+   if(!research&&!character&&!appBuild)c.close();
    sessions.delete(m.session);throw error;
   }
  }
@@ -91,7 +105,7 @@ async function handle(m) {
   cancelCalls(m.session);
   // Let pending dynamic-tool replies reach the child before closing its pipe.
   await new Promise(resolve=>setImmediate(resolve));
-  if(c.runtime.publicResearch||c.runtime.characterLife){
+  if(c.runtime.publicResearch||c.runtime.characterLife||c.runtime.appBuild){
    await c.interruptForModelSwitch().catch(()=>{});
    if(!await c.closeConfirmed())throw Error('Research process stop unconfirmed');
    sessions.delete(m.session);return {stopped:true};
@@ -110,6 +124,6 @@ createInterface({input:process.stdin}).on('line',line=>{
 process.stdin.on('end',async()=>{
  for(const session of sessions.keys())cancelCalls(session);
  await new Promise(resolve=>setImmediate(resolve));
- const stopped=await Promise.all([...sessions.values()].map(c=>(c.runtime.publicResearch||c.runtime.characterLife)?c.closeConfirmed():(c.close(),true)));
+ const stopped=await Promise.all([...sessions.values()].map(c=>(c.runtime.publicResearch||c.runtime.characterLife||c.runtime.appBuild)?c.closeConfirmed():(c.close(),true)));
  process.exit(stopped.every(Boolean)?0:1);
 });

@@ -114,6 +114,8 @@ directory beside it in `repo.git`), outside
   project pin. Key creation is off unless the host owner enables it.
 - **Service:** API v1 validation and the single worker, with git-recorded
   source revisions and a reset to the last delivered version after any failure.
+- **Generator** (`generator.py`, §4A): the Codex app writer, an `app_build`
+  session on the existing bridge per job. Constructed by no host.
 
 Proof levels:
 
@@ -124,14 +126,19 @@ Proof levels:
   to a signed artifact download, are covered by tests against the real listener
   app. Pairing itself (`POST /pair`) is covered by the existing remote-link
   test, not by these.
-- **Not done:** enabling the builder on a host, the Codex generator, and
-  Home/App's install client against the real API. Nothing has been installed.
+- **Container:** the generator path from `CodexClient` through the real
+  bridge and `codex.mjs` to a fake app-server, then the Builder's check,
+  compile and sign (§4A). No model ran.
+- **Not done:** enabling the builder on a host, a real Codex app writer turn,
+  and Home/App's install client against the real API. Nothing has been
+  installed.
 
 Data survives an update because the package, signer and higher versionCode keep
 Android's update path; the revise prompt also requires keeping storage keys
-and schema migrations. Those requirements still have to be written into the
-generator's instructions, which are not written yet. Acceptance still needs a seeded-data → update →
-read-back test on a stock-Android phone and a RoseOS phone, run separately.
+and schema migrations. The writer's fixed instructions (`app-build.mjs`) say
+so, but instructions are not proof. Acceptance still needs a seeded-data →
+update → read-back test on a stock-Android phone and a RoseOS phone, run
+separately.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 
@@ -388,7 +395,7 @@ one.
 - **Layout format:** OS Product dropped its own, so `rose-layout-v1` is the
   one format.
 
-## 4A. Codex generator design (next; not implemented)
+## 4A. Codex generator (implemented in source; enabled nowhere)
 
 The builder takes an injected `generate(source, kind, request, cancelled)`. The
 production generator will be a Codex thread opened through the existing
@@ -417,8 +424,47 @@ app-server client.
   that only mounts the project source. That is blocker 3 below: it belongs to
   the Server Worker, and nothing here claims it.
 - **Shared code.** `codex.mjs` also carries the research and character-life
-  isolation checks. The `app_build` purpose will be added beside them without
-  changing their behaviour, as its own reviewed change.
+  isolation checks. The `app_build` purpose sits beside them; their launch
+  arguments, thread parameters and turns are unchanged, and a test pins that.
+
+**Implemented** (source only):
+
+- `workspace/rose-agent/server/app-build.mjs`: the fixed policy, the thread
+  config and the per-turn sandbox. The config is the research isolation with web
+  search off and the shell kept, plus `sandbox_workspace_write` network off and
+  no temporary directories. Every turn carries
+  `sandboxPolicy: {type: workspaceWrite, writableRoots: [], networkAccess:
+  false, excludeTmpdirEnvVar: true, excludeSlashTmp: true}`. The cwd must be an
+  absolute `…/source` path.
+- The bridge `open` with `purpose: app_build`:
+  - refuses any tool or other cwd;
+  - ignores the caller's instructions;
+  - stops the turn on any item other than messages, reasoning, plans, commands
+    and file changes, or on more than 400 items;
+  - closes only with a confirmed child exit, as research does.
+- `rose/app_builder/generator.py`: `CodexGenerator` is the Builder's `generate`.
+  Each job gets one bridge process and one turn, bounded by `timeout_s` and
+  stopped on cancel. It returns only after the writer confirms it stopped; an
+  unconfirmed stop fails the job, because something may still be writing. Its
+  `command` argument is where the Server Worker's separate-user launch goes.
+- Writer output gets no trust: the Builder's `template.check` and build
+  checks still apply. A test has the fake writer add `debuggable`, and the job
+  fails with nothing delivered.
+
+Proof levels:
+
+- **Container:** `app-build.test.mjs` (fake app-server: launch arguments,
+  thread and turn parameters, refusals, bridge boundary) and
+  `rose/tests/test_app_generator.py` (fake client; real bridge; Builder with
+  the real bridge, compiled and signed with throwaway keys).
+- **Assumed, not verified:** the app-server field names `sandbox:
+  workspace-write`, the turn's `sandboxPolicy` and the
+  `sandbox_workspace_write.*` config keys come from the Codex app-server
+  contract. No Codex binary exists in this container. Whether a real
+  `codex-cli` 0.167.x honours them (writes outside the project and network
+  refused) needs a live check by the Server Worker before any enabling.
+- **Not done:** any real model turn, read isolation (blocker 3) and any host
+  wiring.
 
 ## 5. Blockers (exact) and owners
 
@@ -440,11 +486,14 @@ app-server client.
    35.0.0 and JDK 21 with recorded hashes), or a separate builder is
    authorized. A separate builder is a provisioning decision; no new paid
    infrastructure is assumed.
-3. **Build isolation on that host (Server Worker).** The per-job Codex thread
-   needs `workspace-write` scoped to the project and no access to
-   `ROSE_CONFIG_DIR` (pairing, TLS, provider tokens). Enabling it is a
-   security-relevant runtime change, applied only by the Server Worker when
-   authorized.
+3. **Build isolation on that host (Server Worker).** Source now asks Codex for
+   `workspace-write` scoped to the project with network off (§4A). That part is
+   unverified against a real Codex binary. Read access to `ROSE_CONFIG_DIR`
+   (pairing, TLS, provider tokens, project keys) is not blocked by Codex at
+   all. The writer needs a separate OS user or a container that mounts only
+   the project source, launched through `CodexGenerator(command=...)`.
+   Enabling it is a security-relevant runtime change, applied only by the
+   Server Worker when authorized.
 4. **Runtime (Nathan).** The Rose server is stopped at Nathan's request. No
    endpoint, build or install can be exercised until he asks the Server Worker
    to restart it and a deployment is authorized.

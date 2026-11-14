@@ -7,6 +7,7 @@
 - ``toolchain``: the pinned aapt/javac/d8/zipalign build and ``scripts/sign-apk.py`` signing, run with a scrubbed
   environment, a timeout and cancellation.
 - ``service``: the builder API v1 calls and the single worker that runs jobs.
+- ``generator``: the Codex app writer (an ``app_build`` session on the existing bridge), the worker's ``generate``.
 
 Nothing here is wired to a listener or enabled on a host: routes, the Codex generation thread, key creation and the
 build host each need their own authorization.
