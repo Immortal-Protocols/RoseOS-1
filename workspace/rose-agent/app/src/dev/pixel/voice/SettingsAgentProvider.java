@@ -76,8 +76,11 @@ public final class SettingsAgentProvider extends ContentProvider {
    in=getContext().getAssets().open("youtube-agent-tools.json");out.reset();while((n=in.read(b))!=-1)out.write(b,0,n);in.close();JSONArray yt=new JSONArray(out.toString("UTF-8"));for(int i=0;i<yt.length();i++)tools.put(yt.get(i));
    JSONArray cz=CustomizationAgent.catalog(getContext());for(int i=0;i<cz.length();i++)tools.put(cz.get(i));
    // Project 2 (section 4.1): the workspace_compose kinds this phone can honour; prompt only with a real model.
-   return new JSONObject().put("status","ok").put("schemaVersion",1).put("versionCode",getContext().getPackageManager().getPackageInfo(getContext().getPackageName(),0).getLongVersionCode()).put("tools",tools)
-    .put("kinds",new JSONArray(WorkspaceHub.kinds(getContext())));
+   JSONObject caps=new JSONObject().put("status","ok").put("schemaVersion",1).put("versionCode",getContext().getPackageManager().getPackageInfo(getContext().getPackageName(),0).getLongVersionCode()).put("tools",tools);
+   // A workspace problem only leaves kinds out (App Core then offers no workspace tool); every other tool's
+   // capabilities still answer.
+   try{caps.put("kinds",new JSONArray(WorkspaceHub.kinds(getContext())));}catch(RuntimeException ignored){}
+   return caps;
   }
   if(method.startsWith("youtube_"))return youtube.execute(method,p);
   if(CustomizationAgent.handles(method))return CustomizationAgent.execute(getContext(),method,p);

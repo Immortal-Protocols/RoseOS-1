@@ -178,6 +178,9 @@ A bad request is `rejected` with a fixed reason.
 - a repeat after the answer gets that first answer again, with the revision unchanged and nothing composed;
 - a refusal is remembered the same way, even if the kind is offered later.
 
+This memory is kept in memory only, so it is lost if Rose Agent's process restarts. A re-sent command id is
+still answered once from VoiceService's durable receipts, and App Core does not re-ask a `requestId`.
+
 **Answers** follow §4.2: `{schemaVersion: 1, requestId, status, revision?, reason?}`.
 
 | Case | Answer |
@@ -193,7 +196,8 @@ A bad request is `rejected` with a fixed reason.
 **The revision** grows with every change to the layout or its pins, undo included. The highest revision saved
 is kept apart from the store, so it never goes back.
 
-**`capabilities`** adds `kinds` (§4.1). `prompt` is listed only with a real model. The starter ignores words,
+**`capabilities`** adds `kinds` (§4.1). If the workspace fails there, only `kinds` is left out, and every
+other tool's capabilities still answer. `prompt` is listed only with a real model. The starter ignores words,
 so today the kinds are `arrange`, `regenerate` and `undo`.
 
 **Not here yet: D4, the offer outside Home.** "Preparing workspace / Workspace ready · Show workspace"
