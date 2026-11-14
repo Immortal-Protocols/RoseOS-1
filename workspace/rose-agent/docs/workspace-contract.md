@@ -261,13 +261,34 @@ mounted only when the server enables it, which nothing does yet. The phone treat
   (head at most 8 KiB, body at most 16 KiB, no chunked encoding). Anything truncated or malformed is no
   answer, which the page shows as uncertain. h11, the HTTP parser behind uvicorn, reads its request, and it
   reads an h11-framed reply.
-- **The card's line.** `WorkspaceTaskCard` builds it from the reply and the phone's own task stream
-  (`VoiceService.taskStateJson`, the snapshot Home's `TaskStatusCard` shows).
-  - It follows the stream only when the reply named a `taskId` and the stream's current task is that one, as
-    "Rose is working", "Finished", "Failed" or "Stopped".
-  - With no `taskId`, which is App Core's usual case, it stays "Started · in Rose's work" and never claims
-    finished.
-  - A stale or unreadable stream is not believed.
+- **The card's line, from App Core's page-task state** (agreed with App Core on 2026-11-14).
+  - **The contract (App Core's side).** `accepted` and `duplicate` carry `taskId: "wt-<16 hex>"`, minted and
+    stored by the server. The state is `{schemaVersion 1, taskId, requestId, actionId, state, detail,
+    phoneTasks, createdAt, updatedAt}`, where `state` is `running`, `done`, `failed`, `cancelled` or
+    `uncertain`, and every value except `running` is final. It arrives three ways:
+    - live, as `{kind: "workspace_task"}` on `/ws/events`;
+    - replayed on reconnect, for the 20 most recent;
+    - read with a signed `GET /workspace/v1/tasks/<taskId>`, which is device-scoped and gives a 404 `unknown`
+      otherwise.
+  - **The phone's record (`WorkspaceTaskTracker`).** For each of the last 20 taps it saves the action,
+    `requestId`, `taskId` once known, and the last state with its `updatedAt`, so a restart keeps them.
+  - **Strict parsing.** The phone refuses a `taskId` not matching `wt-[0-9a-f]{16}`, an unknown state or phone
+    task status, more than 8 phone tasks, a phone task id over 128 characters, and a `detail` over 200. A
+    refused state is ignored, never shown.
+  - **Ordering.** An update older than the one held is dropped. A final state never changes, and a final with
+    the same `updatedAt` wins over `running`.
+  - **Lost replies.** A reply that never arrived leaves only the `requestId`. The reconnect replay carries it,
+    so the record is matched back by `requestId` and action.
+  - **Lines.** `running` is "Rose is working", `done` "Done", `failed` "Failed", `cancelled` "Stopped", and
+    `uncertain` "Not sure how it ended". Before any state arrives, the line comes from the POST's outcome, so
+    `accepted` is only "Started", never done.
+  - **Wiring.** `LocalRoseLink` hands every `workspace_task` event, replayed ones included, to
+    `WorkspaceHub.taskEvent` before it drops other replayed events.
+  - **Recovery.** `WorkspaceHub.recoverTasks` reads the GET, one attempt each, for taps with a `taskId` and no
+    end yet, when the page is reached. It does this only while the gate is on.
+  - **No double start.** A task already asked and not ended shows its line instead of asking again. Only when
+    the phone never learned whether a task started does the sheet offer **Ask again**, as a new, explicit
+    confirmation.
 
 **Not proven:** none of this has run on Android, sent a request, or started a task.
 ## Open decisions

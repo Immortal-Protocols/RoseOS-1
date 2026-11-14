@@ -24,10 +24,14 @@ final class WorkspaceHttp {
  static final int MAX_REPLY=16*1024,MAX_HEAD=8*1024;
 
  /** The request bytes: POST path HTTP/1.1, Host, the given headers in order, Content-Length, Connection: close, the body. */
- static byte[] post(String host,int port,String path,Map<String,String> headers,byte[] body){
-  if(!safe(host)||!safe(path)||!path.startsWith("/")||port<1||port>65535)throw new IllegalArgumentException("bad target");
+ static byte[] post(String host,int port,String path,Map<String,String> headers,byte[] body){return request("POST",host,port,path,headers,body);}
+ /** A GET: the same framing with no body (Content-Length: 0). */
+ static byte[] get(String host,int port,String path,Map<String,String> headers){return request("GET",host,port,path,headers,new byte[0]);}
+
+ private static byte[] request(String method,String host,int port,String path,Map<String,String> headers,byte[] body){
+  if(!safe(host)||!safe(path)||!path.startsWith("/")||path.indexOf(' ')>=0||port<1||port>65535)throw new IllegalArgumentException("bad target");
   StringBuilder b=new StringBuilder();
-  b.append("POST ").append(path).append(" HTTP/1.1\r\n");
+  b.append(method).append(' ').append(path).append(" HTTP/1.1\r\n");
   b.append("Host: ").append(host.indexOf(':')>=0?"["+host+"]":host).append(':').append(port).append("\r\n");
   for(Map.Entry<String,String> h:headers.entrySet()){
    String name=h.getKey(),value=h.getValue();

@@ -64,6 +64,7 @@ final class WorkspaceHub {
   state.raiseRevision(prefs().getLong(REVISION,0));
   composer=new WorkspaceComposer(state);
   requests=new WorkspaceRequests(state,composer);
+  tasks=WorkspaceTaskTracker.fromJson(prefs().getString(TASKS,null));
  }
 
  /** True only with a real model on the phone: today the starter, so prompt is not offered (WorkspaceAgent.kinds). */
@@ -73,7 +74,7 @@ final class WorkspaceHub {
 
  void attach(Listener page){listener=page;}
  void detach(Listener page){if(listener==page){listener=null;pageShown=false;windowVisible=false;}}
- void shown(boolean now){pageShown=now&&listener!=null;if(onScreen())composer.workspaceShown();}
+ void shown(boolean now){pageShown=now&&listener!=null;if(onScreen())composer.workspaceShown();if(now)recoverTasks();}
  /** Home's window became visible or not (the person left for another app, or came back). */
  void windowVisible(boolean now){windowVisible=now&&listener!=null;if(onScreen())composer.workspaceShown();}
  /** On screen for section 4.2: the workspace page is the pager's page and Home is in front. Otherwise a commit is prepared, not shown. */
@@ -86,31 +87,63 @@ final class WorkspaceHub {
  void reopen(int index){if(!composer.busy()&&state.reopen(index))changed(null);}
  void actionResult(String id,String status){state.actionResult(id,status);save();}
 
- // ---------- Rose tasks (App Core section 4.3) ----------
+ // ---------- Rose tasks (App Core section 4.3, page-task state v1) ----------
 
- /** The last outcome of each Rose task tapped this session, for its card line (WorkspaceTaskCard). */
- private final Map<String,WorkspaceTaskClient.Outcome> taskOutcomes=new java.util.HashMap<>();
- WorkspaceTaskClient.Outcome taskOutcome(String id){return taskOutcomes.get(id);}
+ static final String TASKS="tasks";
+ /** Each confirmed tap and what App Core has said of it; saved, so a restart keeps it (WorkspaceTaskTracker). */
+ WorkspaceTaskTracker tasks;
  boolean tasksEnabled(){return WorkspaceTaskGate.enabled(app);}
+ String taskLine(String id){return tasks.line(id);}
+ private WorkspaceTaskClient taskClient(){return new WorkspaceTaskClient(WorkspaceTaskGate.gate(app),new WorkspaceTaskTransport(app),WorkspaceTaskTransport.signer(app));}
 
  /**
-  * The person confirmed task id on the confirm sheet. One signed POST /workspace/v1/tasks, with a fresh
-  * requestId for this tap that every retry reuses. Only for a task in the current snapshot, and only while the
-  * gate is on (WorkspaceTaskClient refuses otherwise). Runs on the worker; the card updates on the main thread.
+  * The person confirmed task id on the confirm sheet: one signed POST /workspace/v1/tasks, with a fresh
+  * requestId that every retry reuses. Only for a task in the current snapshot, and only while the gate is on
+  * (WorkspaceTaskClient refuses otherwise). Runs on the task worker; the card updates on the main thread.
   */
  void startTask(String id){
   final WorkspaceSnapshot.Task task=lastRead==null?null:lastRead.snapshot.task(id);
   final String requestId="tap-"+java.util.UUID.randomUUID();
-  final WorkspaceTaskClient client=new WorkspaceTaskClient(WorkspaceTaskGate.gate(app),new WorkspaceTaskTransport(app),WorkspaceTaskTransport.signer(app));
-  taskOutcomes.put(id,new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.SENDING,null,null,0));
+  final WorkspaceTaskClient client=taskClient();
+  tasks.tapped(id,requestId);saveTasks();
   if(listener!=null)listener.changed(null);
   taskWorker.execute(()->{
    WorkspaceTaskClient.Outcome o;
    try{o=client.start(requestId,task,true);}catch(Throwable t){o=new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.UNCERTAIN,"internal",null,0);}
    final WorkspaceTaskClient.Outcome done=o;
-   main.post(()->{taskOutcomes.put(id,done);actionResult(id,done.kind.name().toLowerCase(java.util.Locale.ROOT));if(listener!=null)listener.changed(null);});
+   main.post(()->{tasks.replied(requestId,done);saveTasks();actionResult(id,done.kind.name().toLowerCase(java.util.Locale.ROOT));if(listener!=null)listener.changed(null);});
   });
  }
+
+ /**
+  * A /ws/events message (LocalRoseLink, any thread): a live or replayed workspace_task state is applied to
+  * its tap's record on the main thread. Anything else is ignored.
+  */
+ static void taskEvent(Context context,String raw){
+  final WorkspaceTaskTracker.State s=WorkspaceTaskTracker.event(raw);
+  if(s==null)return;
+  final WorkspaceHub hub=get(context);
+  hub.main.post(()->{if(hub.tasks.apply(s)!=null){hub.saveTasks();if(hub.listener!=null)hub.listener.changed(null);}});
+ }
+
+ /**
+  * Reads App Core's state for every tap whose end is not known yet (signed GET, gate on only): after a restart,
+  * or when the page is reached. A 404 or a failure changes nothing.
+  */
+ void recoverTasks(){
+  if(!tasksEnabled())return;
+  final java.util.List<String> open=tasks.openTaskIds();if(open.isEmpty())return;
+  final WorkspaceTaskClient client=taskClient();
+  taskWorker.execute(()->{
+   for(String id:open){
+    final WorkspaceTaskTracker.State s;
+    try{s=client.lookup(id);}catch(Throwable t){continue;}
+    if(s!=null)main.post(()->{if(tasks.apply(s)!=null){saveTasks();if(listener!=null)listener.changed(null);}});
+   }
+  });
+ }
+
+ private void saveTasks(){try{prefs().edit().putString(TASKS,tasks.toJson()).apply();}catch(RuntimeException ignored){}}
 
  // ---------- a conversation (WorkspaceAgent) ----------
 
