@@ -297,14 +297,65 @@ mere submission.
 - Rose Agent relays `app_command` only to same-signer or allowlisted packages,
   so the composer provider must be one of those.
 
-### 4.3 Agent tasks chosen on the page
+### 4.3 Agent tasks chosen on the page (workspace task handoff v1, proposal)
 
-Direct actions (launch an app, open a deep link, run a notification action)
-run on the phone, never through the server. An agent task the owner explicitly
-selects is sent as the existing typed task request, and its progress uses the
-existing task card v1 and Stop contract 1. The composer cannot invent a
-capability: it only references the action ids and apps it gathered on the
-phone.
+The approved HiFi R2 prototype (`prototypes/rose-hifi`, source `6fcf8c9b`)
+separates two kinds of page action. A **direct** action (launch an app, open a
+deep link, run a notification action, toggle Do not disturb) runs on the phone
+at once and never reaches the server. A **Rose task** ("Add missing items to my
+grocery list", "Summarise prep notes") always asks first, on a confirm sheet
+with an `ask` text. After the owner confirms, it runs as ordinary Rose work, and
+the card and Rose's work read the same task state.
+
+Today the producer has no route for the phone to start such a task over the
+signed link: typed turns exist only on the loopback dashboard. This handoff adds
+one.
+
+- **Snapshot entry** (OS Product's registry, in `rose-layout-v1` terms): an
+  action `{id, label, kind: "agent_task", targetId, ask, requiresConfirmation:
+  true}`. `label` (≤ 60 characters) and `ask` (≤ 200) are display text the OS
+  chose. The registry also keeps the task's `goal` (≤ 300 characters), the
+  instruction Rose runs. The composer may place an `agent_task` only in a
+  `button` or a `card`'s actions; it never sees or writes the goal.
+- **Phone → server, after the owner confirms:** a signed
+  `POST /workspace/v1/tasks` on the remote listener with `{schemaVersion: 1,
+  requestId, actionId, label, goal, confirmed: true}`. It is mounted only when
+  enabled, like `/builder/v1`.
+- **Reply:** `{schemaVersion: 1, status: accepted | duplicate | refused |
+  unavailable, taskId?, reason?}`.
+  - `accepted` means started, never done.
+  - A repeated `requestId` from the same device returns the first reply and
+    starts nothing.
+  - Without `confirmed: true` the request is `refused`.
+- **Running it:** the server starts it as the owner's own explicit request,
+  through the same conversation route, tools and policy as a typed request. So
+  phone app work uses the existing `phone_task` path and its two workspace
+  slots, and nothing gains capabilities. Progress and the final result arrive
+  as the existing task events on `/ws/events` (task card v1). Stopping uses
+  Stop contract 1.
+- **What the page shows:** the action's state comes from that task (`running`,
+  `attention`, `done`), exactly as in HiFi. The page never assumes success.
+
+### 4.4 App Core's answers to `rose-layout-v1` (Models Core, #781)
+
+- **Mapping.** The mapping in `rose-layout-v1` "Relation to App Core" is
+  confirmed as written. This outer contract stays as §4.1–4.2.
+- **Q5.** A conversational request needs only `trigger: conversational`,
+  `prompt` and `requestId`. App Core adds nothing else.
+- **Q6.** Agreed: only the provider decides `shown` versus `prepared`, and the
+  composer is not told.
+- **Q7 (regenerate).** The owner expects a different arrangement. App Core's
+  only requirement is a new `revision`, reported as `shown` or `prepared`. App
+  Core recommends that the provider recompose against a fresh snapshot, passing
+  the previous layout's item ids as a soft "avoid" hint. The mechanism is
+  Models Core's and OS Product's choice.
+- **Action kinds.** Please add `agent_task` (§4.3) to the action kinds, limited
+  to `button` and `card` actions, and keep the goal out of the model's input.
+- **Provider package.** Rose Agent relays `app_command` only to same-signer or
+  allowlisted packages. If the native page lives in Rose Agent
+  (`dev.pixel.voice`), the composer provider can be a Rose Agent operation
+  (`workspace_compose`, plus `capabilities`), like the customization tools.
+  That is OS Product's call. App Core needs only the package name.
 
 ## 4A. Codex generator design (next; not implemented)
 
