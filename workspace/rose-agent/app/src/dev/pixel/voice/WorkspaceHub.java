@@ -132,12 +132,18 @@ final class WorkspaceHub {
   */
  void recoverTasks(){
   if(!tasksEnabled())return;
-  final java.util.List<String> open=tasks.openTaskIds();if(open.isEmpty())return;
+  final java.util.List<String> open=tasks.openTaskIds(),lost=tasks.lostReplies();if(open.isEmpty()&&lost.isEmpty())return;
   final WorkspaceTaskClient client=taskClient();
   taskWorker.execute(()->{
    for(String id:open){
     final WorkspaceTaskTracker.State s;
     try{s=client.lookup(id);}catch(Throwable t){continue;}
+    if(s!=null)main.post(()->{if(tasks.apply(s)!=null){saveTasks();if(listener!=null)listener.changed(null);}});
+   }
+   // A lost reply: one read by requestId each. apply() re-associates it only when the actionId matches too.
+   for(String requestId:lost){
+    final WorkspaceTaskTracker.State s;
+    try{s=client.lookupRequest(requestId);}catch(Throwable t){continue;}
     if(s!=null)main.post(()->{if(tasks.apply(s)!=null){saveTasks();if(listener!=null)listener.changed(null);}});
    }
   });

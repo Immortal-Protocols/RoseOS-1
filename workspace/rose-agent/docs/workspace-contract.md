@@ -287,6 +287,17 @@ mounted only when the server enables it, which nothing does yet. The phone treat
     `WorkspaceHub.taskEvent` before it drops other replayed events.
   - **Recovery.** `WorkspaceHub.recoverTasks` reads the GET, one attempt each, for taps with a `taskId` and no
     end yet, when the page is reached. It does this only while the gate is on.
+  - **A lost reply outside the snapshot.** The reconnect snapshot holds the device's 20 most recently updated
+    tasks, while the phone keeps one record per action. So a tap whose reply was lost (UNCERTAIN, no `taskId`)
+    can drop out of the snapshot while the phone still holds it, for example when another action is tapped
+    20 times. For these taps `recoverTasks` also makes one signed `GET /workspace/v1/tasks?requestId=<id>`
+    each; the signature covers the query. This is App Core's device-scoped read by `requestId`, agreed on
+    2026-11-14.
+    - Only `requestId`s matching `[A-Za-z0-9._-]{1,64}` are sent.
+    - A 200 applies only when its `requestId` and `actionId` match the tap. It then goes through the same
+      ordering and finality rules.
+    - A 404 `unknown` changes nothing. The line stays "Not sure it started", and Ask again keeps its warning.
+    - The read never re-sends the POST, so a request that never arrived is never started late.
   - **No double start.** A task already asked and not ended shows its line instead of asking again. Only when
     the phone never learned whether a task started does the sheet offer **Ask again**, as a new, explicit
     confirmation (`WorkspaceTaskTracker.mayAskAgain`).

@@ -676,3 +676,12 @@ test('Project 2: Ask again is offered only after an unknown send, and always wit
  assert.match(hub,/void startTask\(String id\)\{[\s\S]*?final String requestId="tap-"\+java\.util\.UUID\.randomUUID\(\);[\s\S]*?client\.start\(requestId,task,true\)/);
  assert.equal((page+hub).split('startTask(').length-1,3,'startTask is called from Ask Rose and Ask again only, and defined once');
 });
+
+test('Project 2: a lost reply is recovered by a read by requestId, never by re-sending the task',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java');
+ const recover=hub.slice(hub.indexOf('void recoverTasks(){'),hub.indexOf('/**',hub.indexOf('void recoverTasks(){')));
+ assert.match(recover,/if\(!tasksEnabled\(\)\)return;/);
+ assert.match(recover,/lost=tasks\.lostReplies\(\)/);
+ assert.match(recover,/for\(String requestId:lost\)\{[\s\S]*?s=client\.lookupRequest\(requestId\);[\s\S]*?tasks\.apply\(s\)/);
+ assert.doesNotMatch(recover,/startTask|client\.start\(/,'recovery never starts a task');
+});

@@ -22,7 +22,7 @@ public final class WorkspaceTaskTrackerTest {
  static WorkspaceTaskClient.Outcome accepted(String taskId){return new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.STARTED,null,taskId,1);}
 
  public static void main(String[] args)throws Exception{
-  t1();t2();t3();t4();t5();t6();t7();t8();strict();
+  t1();t2();t3();t4();t5();t6();t7();t8();t9();strict();
   System.out.println("WorkspaceTaskTrackerTest: "+checks+" checks passed (fakes; nothing sent)");
  }
 
@@ -127,6 +127,73 @@ public final class WorkspaceTaskTrackerTest {
   seen[0]=null;
   expect(new WorkspaceTaskClient(WorkspaceTaskClient.Gate.disabled(),fake,signer).lookup(ID)==null&&seen[0]==null,"gate off: no GET");
   expect(new WorkspaceTaskClient(new WorkspaceTaskClient.Gate(true),fake,signer).lookup("wt-NOTHEX")==null&&seen[0]==null,"a malformed taskId is never requested");
+ }
+
+ static String task(int i){return "wt-"+String.format("%016x",0xa000L+i);}
+ /** A fake App Core for the read by requestId: one GET answered from a map, and no POST, ever. */
+ static final class ByRequest implements WorkspaceTaskClient.Transport {
+  final Map<String,String> states=new LinkedHashMap<>();final java.util.List<String> gets=new java.util.ArrayList<>();
+  public WorkspaceTaskClient.Response post(String p,Map<String,String> h,byte[] b){throw new AssertionError("a lookup never re-sends the POST");}
+  public WorkspaceTaskClient.Response get(String p,Map<String,String> h){
+   gets.add(p+" "+h.get(LocalRoseAuth.H_SIGNATURE));
+   String q=p.startsWith("/workspace/v1/tasks?requestId=")?p.substring("/workspace/v1/tasks?requestId=".length()):null;
+   String body=q==null?null:states.get(q);
+   return body==null?new WorkspaceTaskClient.Response(404,"{\"schemaVersion\":1,\"status\":\"unknown\"}"):new WorkspaceTaskClient.Response(200,body);
+  }
+ }
+ static WorkspaceTaskClient byRequest(boolean on,ByRequest f){return new WorkspaceTaskClient(new WorkspaceTaskClient.Gate(on),f,(m,p)->{Map<String,String> h=new LinkedHashMap<>();h.put(LocalRoseAuth.H_SIGNATURE,m+" "+p);return h;});}
+ static WorkspaceTaskClient.Outcome lost(){return new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.UNCERTAIN,"no_reply",null,3);}
+
+ /**
+  * T9: a lost reply outside the reconnect snapshot. App Core's snapshot is the device's 20 most recently updated
+  * tasks; the phone keeps one record per action, at most 20. Once 20 newer updates are of tasks the phone no
+  * longer holds, the snapshot misses the tap, and only App Core's read by requestId (agreed 2026-11-14) finds it.
+  */
+ static void t9(){
+  final String R="task:r",RID=task(99);
+  // App Core's case: one other action, tapped 20 times, each ending before the next.
+  WorkspaceTaskTracker t=new WorkspaceTaskTracker();
+  t.tapped(R,"req-r");t.replied("req-r",lost());
+  java.util.List<String> snapshot=new java.util.ArrayList<>();
+  for(int i=0;i<20;i++){t.tapped("task:y","req-y"+i);t.replied("req-y"+i,accepted(task(i)));t.apply(parse(state(task(i),"req-y"+i,"task:y","done",300+i)));snapshot.add(state(task(i),"req-y"+i,"task:y","done",300+i));}
+  for(String f:snapshot)t.apply(WorkspaceTaskTracker.event(event(f)));
+  expect(t.byAction(R)!=null&&"Not sure it started · check Rose's work".equals(t.line(R))&&t.byAction(R).taskId==null,"the snapshot of 20 misses the lost reply, which the phone still holds");
+  expect(t.lostReplies().equals(java.util.Collections.singletonList("req-r")),"it is the one lost reply: "+t.lostReplies());
+  ByRequest server=new ByRequest();server.states.put("req-r",state(RID,"req-r",R,"done",299));
+  WorkspaceTaskTracker.State s=byRequest(true,server).lookupRequest("req-r");
+  expect(server.gets.equals(java.util.Collections.singletonList("/workspace/v1/tasks?requestId=req-r GET /workspace/v1/tasks?requestId=req-r")),"one signed GET; the signature covers the query: "+server.gets);
+  expect(t.apply(s)!=null&&RID.equals(t.byAction(R).taskId)&&"Done · in Rose's work".equals(t.line(R)),"the read re-associates it: Done, with App Core's taskId");
+  expect(t.lostReplies().isEmpty()&&t.openTaskIds().isEmpty(),"nothing left to read");
+
+  // OS Product's case: a long-running task this phone no longer holds (evicted after 20 taps) updates later.
+  WorkspaceTaskTracker u=new WorkspaceTaskTracker();
+  u.tapped("task:o","req-o");u.replied("req-o",accepted(task(50)));
+  u.tapped(R,"req-r2");u.replied("req-r2",lost());
+  java.util.List<String> snap=new java.util.ArrayList<>();
+  for(int i=0;i<19;i++){u.tapped("task:n"+i,"req-n"+i);u.replied("req-n"+i,accepted(task(60+i)));snap.add(state(task(60+i),"req-n"+i,"task:n"+i,"done",400+i));}
+  snap.add(state(task(50),"req-o","task:o","done",420));
+  expect(u.byAction("task:o")==null&&u.byAction(R)!=null,"the phone evicted task:o and still holds task:r");
+  for(String f:snap)u.apply(WorkspaceTaskTracker.event(event(f)));
+  expect(u.byAction(R).taskId==null&&u.lostReplies().equals(java.util.Collections.singletonList("req-r2")),"the snapshot missed it too");
+  ByRequest none=new ByRequest();
+  expect(byRequest(true,none).lookupRequest("req-r2")==null&&none.gets.size()==1,"404 unknown: one read, no state");
+  expect("Not sure it started · check Rose's work".equals(u.line(R))&&u.mayAskAgain(R),"404 changes nothing: still unsure, and Ask again keeps its warning");
+
+  // Strict: only lost replies are read, only valid requestIds are sent, and only a matching state applies.
+  WorkspaceTaskTracker v=new WorkspaceTaskTracker();
+  v.tapped("task:a","req-a");                                            // still sending
+  v.tapped("task:b","req-b");v.replied("req-b",accepted(task(1)));       // started, taskId known
+  v.tapped("task:c","req-c");v.replied("req-c",new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.REFUSED,"x",null,1));
+  v.tapped("task:d","req-d");v.replied("req-d",lost());v.apply(parse(state(task(2),"req-d","task:d","running",10)));  // re-associated
+  expect(v.lostReplies().isEmpty(),"sending, started, refused and re-associated taps are never read by requestId");
+  WorkspaceTaskTracker w=WorkspaceTaskTracker.fromJson("{\"v\":1,\"records\":[{\"actionId\":\"task:e\",\"requestId\":\"bad id\",\"sent\":\"UNCERTAIN\"}]}");
+  expect(w.lostReplies().isEmpty(),"a stored requestId that is not safe to put in a query is never read");
+  ByRequest f=new ByRequest();f.states.put("req-r",state(RID,"req-r",R,"done",1));
+  expect(byRequest(false,f).lookupRequest("req-r")==null&&f.gets.isEmpty(),"gate off: no read");
+  expect(byRequest(true,f).lookupRequest("req r")==null&&byRequest(true,f).lookupRequest("req&x=1")==null&&byRequest(true,f).lookupRequest(null)==null&&f.gets.isEmpty(),"an unsafe requestId is never sent");
+  expect(WorkspaceTaskTracker.readByRequest(new WorkspaceTaskClient.Response(200,state(RID,"req-other",R,"done",1)),"req-r")==null,"a state for another requestId is refused");
+  WorkspaceTaskTracker x=new WorkspaceTaskTracker();x.tapped(R,"req-x");x.replied("req-x",lost());
+  expect(x.apply(parse(state(RID,"req-x","task:elsewhere","done",1)))==null&&x.byAction(R).taskId==null,"the same requestId for another action is not re-associated");
  }
 
  /** T8: a final state is final: nothing after it, from any source, changes it. */
