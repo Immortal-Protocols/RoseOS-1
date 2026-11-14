@@ -121,9 +121,11 @@ class FullTest(unittest.TestCase):
         findmnt = type('Result', (), {'stdout': json.dumps({'filesystems': [
             {'uuid': mounts['filesystemUuid'], 'target': mounts['mountPoint']} ]})})()
         with mock.patch.object(full, 'guard'), mock.patch.object(yogi, 'identity_refusal'), \
-                mock.patch.object(yogi, 'preflight'), mock.patch.object(full.subprocess, 'run', return_value=findmnt):
+                mock.patch.object(yogi, 'preflight'), mock.patch.object(full.subprocess, 'run', return_value=findmnt), \
+                mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=['dev.pixel.voice']):
             reused = full.initialize(self.cfg, self.root/'new-run.json', ENV)
             self.assertFalse(reused['needsBootstrap'])
+            self.assertEqual(reused['appSourceDrift'], ['dev.pixel.voice'])
             for changed in ('importing', 'recovery-needed'):
                 value = yogi.read(journal); value['status'] = changed; journal.write_text(json.dumps(value))
                 with self.subTest(status=changed), self.assertRaisesRegex(yogi.Refused, 'completed bootstrap journal'):
