@@ -133,7 +133,7 @@ public final class WorkspaceAgentTest {
   // Undo while composing is refused rather than racing the composer.
   WorkspaceRequests.Step g=d.conversation(WorkspaceAgent.parse(json("{\"schemaVersion\":1,\"requestId\":\"c8\",\"kind\":\"arrange\"}")),false,true,reply);
   d.conversation(WorkspaceAgent.parse(json("{\"schemaVersion\":1,\"requestId\":\"c9\",\"kind\":\"undo\"}")),false,true,reply);
-  expect("busy".equals(got.get(7).get("reason")),"undo while composing is refused");
+  expect("rejected".equals(got.get(7).get("status"))&&"busy".equals(got.get(7).get("reason"))&&!got.get(7).containsKey("revision"),"undo while composing is rejected (a section 4.2 status), reason busy, nothing changed");
   d.abandonAll();
   expect("uncertain".equals(got.get(8).get("status"))&&"c8".equals(got.get(8).get("requestId"))&&d.waitingCount()==0,"stopping answers the waiting caller");
   expect(g.composes(),"c8 had started");
