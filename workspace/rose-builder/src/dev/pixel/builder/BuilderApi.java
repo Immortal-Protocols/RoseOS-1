@@ -6,8 +6,8 @@ import java.util.List;
 /**
  * Project 1: the phone's view of the Rose build service, mirroring App Core's builder API v1
  * (docs/APP-BUILDER.md §3). App Core owns orchestration, builds, signing, artifacts and the contract; this client only
- * asks and shows. The real transport (rose-auth-v1 signed requests under /builder/v1/, the app pairing as its own
- * device) is not in this module yet: the app runs against {@link FakeBuilderApi} only. Responses may gain fields
+ * asks and shows. {@link HttpsBuilderApi} is the real transport (rose-auth-v1 signed requests under /builder/v1/ over
+ * pinned TLS, this app paired as its own device); {@link FakeBuilderApi} is the labelled demo. Responses may gain fields
  * within v1 and a transport ignores unknown ones; requests carry exactly v1's fields.
  */
 interface BuilderApi {
@@ -45,7 +45,12 @@ interface BuilderApi {
   }
  }
  /** The builder can't be reached: shown as UNREACHABLE, never as an empty library. */
- final class Unreachable extends Exception { Unreachable(String m) { super(m); } }
+ final class Unreachable extends Exception {
+  /** The builder no longer knows this phone (a final 401): only pairing again helps. */
+  final boolean pairAgain;
+  Unreachable(String m) { this(m, false); }
+  Unreachable(String m, boolean pairAgain) { super(m); this.pairAgain = pairAgain; }
+ }
  /** The builder answered 400: the request no longer applies (for retry, the job isn't retryable or a newer version
   * exists). The client refreshes and shows the project as it now is. */
  final class Refused extends Exception { Refused(String m) { super(m); } }
@@ -67,8 +72,8 @@ interface BuilderApi {
  }
 
  /** clientRequestId makes it idempotent: a retry with the same id returns the same project and job. */
- Started create(String clientRequestId, String description) throws Unreachable, OutOfScope;
- Started revise(String projectId, String clientRequestId, String request) throws Unreachable, OutOfScope;
+ Started create(String clientRequestId, String description) throws Unreachable, OutOfScope, Refused;
+ Started revise(String projectId, String clientRequestId, String request) throws Unreachable, OutOfScope, Refused;
  CancelStatus cancel(String jobId) throws Unreachable;
  /** Fetches one version's APK by SHA-256 over the same signed link (§3.1 artifacts), stopping at its exact size
   * (apk.size, exact bytes): anything longer is refused. */
