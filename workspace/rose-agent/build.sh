@@ -16,7 +16,7 @@ if command -v sha256sum >/dev/null; then ZXING_ACTUAL="$(sha256sum "$ZXING")"; e
 [[ "${ZXING_ACTUAL%% *}" == "$ZXING_SHA256" ]] || {
   printf 'ZXing jar checksum mismatch: %s\nDelete it and run bash scripts/setup-zxing.sh.\n' "$ZXING" >&2; exit 1; }
 for file in "$BT/aapt" "$BT/d8" "$SDK/platforms/android-35/android.jar" \
-  "$APP/app/assets/connection.json" "$APP/app/assets/mac-screen-connection.json" \
+  "$APP/app/assets/connection.json" \
   "$ROOT/workspace/pixel-clipboard/clipboard-connection.json" \
   "$APP/app/res/raw/mac_screen_cert.pem" "$APP/app/res/xml/mac_screen_network.xml" \
   "$APP/server/node_modules/.bin/esbuild"; do
@@ -28,6 +28,8 @@ cp -R "$APP/app" "$OUT/app"
 STAGE="$OUT/app"
 # aapt regenerates these; the upstream handoff included a stale Manifest.java.
 rm -f "$STAGE/src/Manifest.java" "$STAGE/src/R.java"
+# Retired input (host-app-build.RETIRED_ASSETS): nothing reads it, so a stale local copy is never packaged.
+rm -f "$STAGE/assets/mac-screen-connection.json"
 mkdir -p "$OUT/classes" "$OUT/generated" "$OUT/dex"
 cp "$ROOT/workspace/pixel-clipboard/ClipboardSync.java" "$STAGE/src/dev/pixel/voice/"
 cp "$ROOT/workspace/pixel-clipboard/clipboard-connection.json" "$STAGE/assets/"

@@ -1,0 +1,42 @@
+{
+  "schema": "roseos.mustang-dedicated-runtime.v1",
+  "status": "bound",
+  "jobs": 24,
+  "tools": {
+    "aapt": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps/host/linux-x86/bin/aapt2",
+    "apksigner": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps/host/linux-x86/bin/apksigner",
+    "node": "/mnt/disks/mustang-data/roseos/tools/node/node-v24.22.2-linux-x64/bin/node"
+  },
+  "dataFilesystemUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+  "dataMount": "/mnt/disks/mustang-data",
+  "automaticStopHours": 4,
+  "networkEvidence": "os/build-only/mustang-runtime-network-evidence.json",
+  "sourceEvidence": "os/build-only/mustang-full-run-source.json",
+  "vendorEvidence": "os/build-only/mustang-vendor-42522784617.json",
+  "hostDependenciesEvidence": "os/build-only/mustang-hostdeps-42512135815.json",
+  "allocationState": "os/build-only/mustang-allocation-state-20261107.json",
+  "clockNumbering": "os/build-only/mustang-clock-numbering.json",
+  "appInputsRecord": "os/app-inputs/frankel-2026111201.json",
+  "compilerCache": {
+    "enabled": true,
+    "kind": "ccache",
+    "maxBytes": 21474836480
+  },
+  "baselineTargetFiles": null,
+  "baselineFactoryEvidence": null,
+  "runner": {
+    "groupName": "roseos-mustang-builder",
+    "groupId": "5",
+    "lifetime": "ephemeral",
+    "registrationEvidence": null
+  },
+  "signingRouteEvidence": "os/build-only/mustang-dedicated-signing-route.json",
+  "publication": {
+    "enabled": true,
+    "authorityRecord": "os/build-only/mustang-dedicated-publication-authority.json"
+  },
+  "basis": "Dedicated full-delivery bindings retain the separate numeric Mustang VM/3000GiB disk, protected group5 ephemeral JIT, jobs24, qualified native/hosted tools, original v1 signer, output capacity checks and owned four-hour STOP/cleanup. Current signed apps are Frankel2026111201, producer43216030196/sourceed67c9cf, voice374/calculator6/background43; immutable export43485652878 attempt1 artifact14067412309 is2917480 bytes, SHA256 f19da76f2ea7e6e9870c9cc73d4f064d78020fda85a9493dbb1f6e3243968e68. The downloaded12-file packet passed hashes and independent aapt/apksigner admission, toolsRechecked true, with zero declared app-source drift through4b04b6be. This is not an OTA extraction. The one-attempt voice370 exception is removed. Persistent ccache remains enabled; previous outputs and consumed clock journal remain intact. Nathan requested a new full OTA and daily automatic runs at06:00 America/Los_Angeles on2026-11-13. The ChatGPT automation invokes this existing manual-dispatch workflow, keeping the repository04:00 Frankel dispatcher and disabled Mustang lane unchanged to avoid duplicate scheduling. No new infrastructure, permissions, credentials, resource bounds or physical-device acceptance is implied.",
+  "candidateContinuity": "os/build-only/mustang-candidate-continuity-20261107.json",
+  "dataFilesystemTotalInodes": 196608000,
+  "dataDiskEvidence": "os/build-only/mustang-data-growth-20261111.json"
+}

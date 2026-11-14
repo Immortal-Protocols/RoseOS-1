@@ -1,0 +1,13 @@
+{
+  "schema": "roseos.mustang-numbering-policy.v1",
+  "device": "mustang",
+  "status": "unbound",
+  "epoch": null,
+  "authority": null,
+  "minimumTimestamp": null,
+  "legacyCeiling": "9999123199",
+  "failedRun": "41884368820",
+  "failedSource": "6be302942f348b58f8a0ce2406c7202f2dd676bf",
+  "legacyAllocationKnown": false,
+  "legacyProofSha256": "5eb94c78b2646d9b618877257345df6a30651d55375f187b839578588d85ff59"
+}

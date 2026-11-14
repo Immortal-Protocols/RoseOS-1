@@ -42,7 +42,7 @@ import org.robolectric.annotation.GraphicsMode;
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class HomeIconsRenderTest {
     static final File OUT = new File(System.getProperty("render.out", "target/render"));
-    static final int OXBLOOD_FIELD = 0xff35070e, LIGHT_WALL = 0xffa9bed6;
+    static final int OXBLOOD_FIELD = 0xff35070e, LIGHT_WALL = 0xffa9bed6; // the reference field near the grid; a light stand-in
 
     static Context context() { return RuntimeEnvironment.getApplication(); }
     static float density() { return context().getResources().getDisplayMetrics().density; }
@@ -68,8 +68,9 @@ public class HomeIconsRenderTest {
     }
 
     /** The 64dp tile with a mark in its 44dp centre, as HomeAppTile places it. */
-    static Bitmap tile(Drawable mark, int backdrop) {
-        int side = px(HomeAppLayout.TILE_DP), icon = px(HomeAppLayout.ICON_DP);
+    static Bitmap tile(Drawable mark, int backdrop) { return tile(mark, backdrop, px(HomeAppLayout.GLYPH_DP)); }
+    static Bitmap tile(Drawable mark, int backdrop, int icon) {
+        int side = px(HomeAppLayout.TILE_DP);
         Bitmap bitmap = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
         bitmap.eraseColor(backdrop);
         Canvas canvas = new Canvas(bitmap);
@@ -109,7 +110,7 @@ public class HomeIconsRenderTest {
     }
 
     @Test public void everyGlyphDrawsADistinctCreamMarkInsideItsIconArea() throws Exception {
-        int side = px(HomeAppLayout.TILE_DP), icon = px(HomeAppLayout.ICON_DP), inset = (side - icon) / 2;
+        int side = px(HomeAppLayout.TILE_DP), icon = px(HomeAppLayout.GLYPH_DP), inset = (side - icon) / 2;
         HashSet<String> distinct = new HashSet<>();
         int columns = 6, rows = (HomeGlyph.KEYS.length + columns - 1) / columns, gap = px(12);
         Bitmap sheet = Bitmap.createBitmap(columns * (side + gap) + gap, rows * (side + gap) + gap, Bitmap.Config.ARGB_8888);
@@ -134,43 +135,32 @@ public class HomeIconsRenderTest {
         assertFalse(HomeGlyph.known("no-such-app"));
     }
 
-    @Test public void tileIsSubduedAndTheMarkKeepsContrastOnEitherBackdrop() throws Exception {
+    @Test public void tileIsFaintGlassAndTheMarkKeepsContrastOnTheField() throws Exception {
         int side = px(HomeAppLayout.TILE_DP);
-        for (int backdrop : new int[]{OXBLOOD_FIELD, LIGHT_WALL}) {
-            Bitmap b = tile(new HomeGlyph("calendar"), backdrop);
-            int top = b.getPixel(side / 2, px(6)), lower = b.getPixel(px(10), side - px(10));
-            assertTrue("a dark, subdued tile over " + Integer.toHexString(backdrop), luminance(top) < .06 && luminance(lower) < .06);
-            assertTrue("warm oxblood, red over blue", ((top >> 16) & 255) > (top & 255) + 20);
-            double ratio = contrast(HomeGlyph.CREAM, lower);
-            assertTrue("cream mark against the tile: " + ratio, ratio >= 7);
-            save(b, backdrop == LIGHT_WALL ? "home-tile-calendar-on-light-wall" : "home-tile-calendar-on-oxblood");
-        }
-        // The rounded corner shows the backdrop: the tile is a rounded square, not a block.
-        Bitmap b = tile(new HomeGlyph("phone"), LIGHT_WALL);
-        assertEquals(LIGHT_WALL, b.getPixel(0, 0));
+        Bitmap b = tile(new HomeGlyph("calendar"), OXBLOOD_FIELD);
+        int inside = b.getPixel(px(6), side / 2);
+        int dr = ((inside >> 16) & 255) - ((OXBLOOD_FIELD >> 16) & 255);
+        assertTrue("#410: faint warm glass, a few levels above the field (" + dr + ")", dr > 2 && dr < 24);
+        assertTrue("warm: red over blue", ((inside >> 16) & 255) > (inside & 255));
+        double ratio = contrast(HomeGlyph.CREAM, inside);
+        assertTrue("cream mark against the tile: " + ratio, ratio >= 7);
+        save(b, "home-tile-calendar-on-oxblood");
+        assertEquals("the rounded corner shows the field", OXBLOOD_FIELD, b.getPixel(0, 0));
     }
 
-    @Test public void anotherAppKeepsItsOwnMarkThroughItsMonochromeLayer() throws Exception {
-        ShapeDrawable mark = new ShapeDrawable(new OvalShape());
-        mark.getPaint().setColor(0xff000000);
-        AdaptiveIconDrawable withMono = new AdaptiveIconDrawable(new ColorDrawable(0xffd97757), new ColorDrawable(0xffffffff), mark);
-        Drawable themed = HomeGlyph.themed(withMono);
-        assertNotNull("an app with a monochrome layer is drawn from it", themed);
+    @Test public void anotherAppKeepsItsOwnIconWithTheReferenceShadow() throws Exception {
         int side = px(HomeAppLayout.TILE_DP), icon = px(HomeAppLayout.ICON_DP), inset = (side - icon) / 2;
-        Bitmap b = tile(themed, OXBLOOD_FIELD);
-        int inside = creamCount(b, inset, inset, inset + icon, inset + icon);
-        assertTrue("the app's own shape, tinted cream (" + inside + ")", inside > icon * icon / 4);
-        assertEquals("clipped to the icon area", inside, creamCount(b, 0, 0, side, side));
-        assertFalse("its own colours are not drawn", b.getPixel(side / 2, side / 2) == 0xffd97757);
-        save(b, "home-tile-themed-monochrome");
-        assertNull("no monochrome layer: the app's own icon is used unchanged",
-            HomeGlyph.themed(new AdaptiveIconDrawable(new ColorDrawable(0xffd97757), new ColorDrawable(0xffffffff))));
-        assertNull("a plain icon: unchanged", HomeGlyph.themed(new ColorDrawable(0xff00ff00)));
-        assertNull("no icon", HomeGlyph.themed(null));
+        ShapeDrawable own = new ShapeDrawable(new OvalShape());
+        own.getPaint().setColor(0xffd97757);
+        Bitmap b = tile(new HomeAppTile.Shadowed(own, density(), px(HomeAppLayout.ICON_DP)), OXBLOOD_FIELD, icon);
+        assertEquals("its own colour, unrestyled", 0xffd97757, b.getPixel(side / 2, side / 2));
+        int below = b.getPixel(side / 2, inset + icon + px(1));
+        assertTrue("a soft dark shadow under it", luminance(below) <= luminance(b.getPixel(side / 2, px(2))) + .001);
+        save(b, "home-tile-own-icon");
     }
 
     @Test public void cellIsOneNamedTouchTarget() {
-        View cell = HomeAppTile.tile(context(), new HomeGlyph("mail"), "Mail");
+        View cell = HomeAppTile.tile(context(), new HomeGlyph("mail"), "Mail", true, true);
         cell.measure(View.MeasureSpec.makeMeasureSpec(px(84), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         assertTrue("at least 48dp wide", cell.getMeasuredWidth() >= px(48));
         assertTrue("at least 48dp tall", cell.getMeasuredHeight() >= px(48));
@@ -186,31 +176,43 @@ public class HomeIconsRenderTest {
         assertEquals(1, clicks[0]);
     }
 
-    /** The study's Home rows, in the production grid: the eight marks it shows (here phone, messages, the direction
-     * arrow, camera, mail, calendar, lines and the "…" folder), four columns, over the Oxblood field and the light wall. */
-    @Test public void homeRowsRenderLikeTheStudy() throws Exception {
-        String[][] apps = {{"phone", "Phone"}, {"messages", "Messages"}, {"compass", "Compass"}, {"camera", "Camera"},
-            {"mail", "Mail"}, {"calendar", "Calendar"}, {"notes", "Notes"}, {"more", "System"}};
-        for (int backdrop : new int[]{OXBLOOD_FIELD, LIGHT_WALL}) {
-            HomeAppPage page = new HomeAppPage(context(), 4, null);
-            for (String[] app : apps) page.addView(HomeAppTile.tile(context(), new HomeGlyph(app[0]), app[1]));
-            page.setPadding(px(24), px(24), px(24), 0);
-            Bitmap b = draw(page, px(411), px(420), backdrop);
-            assertEquals(8, page.getChildCount());
-            View first = page.getChildAt(0), fifth = page.getChildAt(4);
-            assertTrue("two rows of four", fifth.getTop() > first.getBottom() - 1 && fifth.getLeft() == first.getLeft());
-            assertTrue("the grid sits at the bottom of the page", page.getChildAt(7).getBottom() <= b.getHeight());
-            int marks = creamCount(b, 0, 0, b.getWidth(), b.getHeight());
-            assertTrue("eight cream marks drawn: " + marks, marks > 8 * px(44) * px(44) / 60);
-            save(b, backdrop == LIGHT_WALL ? "home-rows-on-light-wall" : "home-rows-on-oxblood");
+    /** F05: Settings is a gear (teeth on a ring and a centre hole), recognisably not the reference's sun-like rays. */
+    @Test public void settingsGlyphIsAGear() throws Exception {
+        int side = 192;
+        float k = side / HomeGlyph.GRID;
+        Bitmap b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+        b.eraseColor(0xff1a0a0d);
+        HomeGlyph g = new HomeGlyph("settings");
+        g.setBounds(0, 0, side, side);
+        g.draw(new Canvas(b));
+        save(b, "home-glyph-settings");
+        for (int i = 0; i < 8; i++) {
+            double tooth = Math.toRadians(-90 + i * 45), gap = tooth + Math.toRadians(22.5);
+            // The ring between two teeth is inked (the sun's rays left these arcs empty).
+            assertTrue("ring between teeth " + i, inked(b, 24 + 11.5 * Math.cos(gap), 24 + 11.5 * Math.sin(gap), k));
+            // Each tooth's flat top is inked, and the space just beyond the ring between teeth is not.
+            assertTrue("tooth top " + i, inked(b, 24 + 15.5 * Math.cos(tooth), 24 + 15.5 * Math.sin(tooth), k));
+            assertFalse("open between teeth " + i, inked(b, 24 + 15.5 * Math.cos(gap), 24 + 15.5 * Math.sin(gap), k));
         }
+        assertTrue("the centre hole's rim", inked(b, 24 + 4.6, 24, k));
+        assertFalse("the centre is open", inked(b, 24, 24, k));
+    }
+
+    /** Whether the glyph's ink (warm, far brighter than the backdrop) lies within one grid unit of (x, y). */
+    static boolean inked(Bitmap b, double x, double y, float k) {
+        int cx = (int) Math.round(x * k), cy = (int) Math.round(y * k), r = Math.round(k * .6f);
+        for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
+            int px = b.getPixel(Math.max(0, Math.min(b.getWidth() - 1, cx + dx)), Math.max(0, Math.min(b.getHeight() - 1, cy + dy)));
+            if (((px >> 8) & 255) > 120) return true;
+        }
+        return false;
     }
 
     static List<View> tiles(int n, int[] clicks) {
         ArrayList<View> tiles = new ArrayList<>();
         String[] keys = {"camera", "mail", "calendar", "weather", "clock", "calculator", "files", "settings", "browser"};
         for (int i = 0; i < n; i++) {
-            View t = HomeAppTile.tile(context(), i < keys.length ? new HomeGlyph(keys[i]) : new HomeGlyph("more"), "App " + (i + 1));
+            View t = HomeAppTile.tile(context(), new HomeGlyph(i < keys.length ? keys[i] : "system"), "App " + (i + 1), true, true);
             t.setOnClickListener(v -> clicks[0]++);
             tiles.add(t);
         }

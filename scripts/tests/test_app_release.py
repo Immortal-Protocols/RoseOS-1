@@ -17,6 +17,9 @@ import textwrap
 import unittest
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 PY = sys.executable
@@ -33,8 +36,9 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # OCT30-INFRA-S014 moved both jobs once: the builder allocates the latest-beta candidate and exports its identity, and
 # the publisher takes that identity, re-derives the allocation and promotes only latest-beta or an explicit --promote.
 # + RELEASE020 M2/M2c: opt-in packaging and the default-off dedicated-signer route (publisher also needs signed-builder)
-OS_JOBS_AT_BASE = {'builder': 'ca7c630e8d3c9c82a408fafeecbd6165f594c79b0e6cba150ba3b4340dc0cff4',
-    'publisher': '2b8ce2b79cbb9ffe29e05762f46dc3d1f17b385479d06998f538b7926afc61fe'}
+# + latest-draft: same allocator/signing jobs, allocation-bound unpublished draft; behavioral tests in test_release_allocate.
+OS_JOBS_AT_BASE = {'builder': '990899e120abc4d6fa3e3477cb878b0843f0de78755a8ae34ba5f8ec823d0136',
+    'publisher': 'f2c53fc786f3e51c0b4c5f81491b25d2a2992409b06730ddf7482aa6dd9985ca'}
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))
@@ -414,21 +418,32 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         self.jobs = jobs(WORKFLOW)
 
     def test_os_jobs_are_unchanged_apart_from_their_mode_condition(self):
-        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", self.jobs['builder'])
         for name, digest in OS_JOBS_AT_BASE.items():
-            block = self.jobs[name].replace("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", '')
+            block = self.jobs[name].replace("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", '')
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
         self.assertIn("    if: always() && needs.builder.result == 'success' && ", self.jobs['publisher'])  # skipped whenever builder is
-        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, rango-factory-observe, blazer-prep, rango-factory-package, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
+        # cleanup still waits for every job that may hold the builder (other devices' jobs may follow these)
+        self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'rango-builder',
+                              'rango-publisher', 'rango-factory-observe', 'blazer-prep', 'rango-factory-package',
+                              'rango-factory-inspect', 'blazer-compile', 'blazer-integrate', 'app-builder',
+                              'alpha-builder', 'alpha-successor', 'alpha-apk-diagnostic', 'alpha-verify-retained', 'alpha-export',
+                              'app-reuse', 'request-signing', 'signed-builder', 'publisher'}, set(shape.cleanup_needs()))
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
-        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, rango-factory-package, models-sign, rango-retained, blazer-prep, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe\]\n        default: latest-beta\n")
+        mode = shape.inputs()['mode']
+        self.assertEqual((mode['type'], mode['default'], mode['options'][:4]), ('choice', 'latest-beta',
+                         ['latest-beta', 'os-release', 'device-readiness', 'app-only']))
+        self.assertLessEqual({'emulator-alpha', 'signing-bootstrap', 'rango-retained', 'app-reuse'}, set(mode['options']))
+        self.assertNotIn('models-sign', mode['options'])  # Rose Models is retired (#651)
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']
         self.assertIn("    needs: controller\n    if: inputs.mode == 'app-only'\n    runs-on: [self-hosted, roseos-frankel-builder]\n", app)
         runs = re.findall(r'^      (?:- |  )run: (.+)$', app, re.M)
-        self.assertEqual(runs, ['python3 scripts/release-pipeline.py preflight --job builder', 'python3 scripts/host-app-release.py --check',
+        self.assertEqual(runs, ['python3 scripts/release-pipeline.py preflight --job builder',
+            'python3 scripts/builder-reclaim.py apply --current-run "$GITHUB_RUN_ID" --label "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-app-builder"',
+            'python3 scripts/host-app-release.py --check',
             '|', 'python3 scripts/release-allocate.py app --out "$ROSE_BASE/app-allocation.json"',
             'python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"',
             'ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"',
@@ -449,7 +464,11 @@ class WorkflowAppOnlyTest(unittest.TestCase):
     def test_guard_limits_app_only_to_rose_agent_without_resume_or_promotion(self):
         guard = self.jobs['guard']
         # AGENT-BETA-AUTO: the literal apps=auto is admitted only for app-only (the builder allocates the version).
-        self.assertIn('[[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || ( "$MODE" == app-only && "$APPS" == auto ) ]] || python3', guard)
+        # The bare modes it lists may grow; app-only is admitted there only with the literal apps=auto, never bare.
+        line = re.search(r'\[\[ ((?:"\$MODE" == [\w-]+ \|\| )+)\( "\$MODE" == app-only && "\$APPS" == auto \) \]\] \|\| python3', guard)
+        self.assertTrue(line)
+        self.assertNotIn('app-only', re.findall(r'"\$MODE" == ([\w-]+)', line[1]))
+        self.assertIn('latest-beta', re.findall(r'"\$MODE" == ([\w-]+)', line[1]))
         publisher = self.jobs['app-publisher']
         self.assertIn('      CANDIDATE_SHA: ${{ needs.app-builder.outputs.candidate_sha || inputs.candidate_sha }}\n', publisher)
         self.assertIn('      APPS: ${{ needs.app-builder.outputs.apps || inputs.apps }}\n', publisher)

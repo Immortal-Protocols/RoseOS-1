@@ -1,0 +1,56 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42581537518",
+  "runNumber": 24,
+  "runAttempt": 1,
+  "source": "0af311990076e7a3f5472b9abec02d5d4f830880",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "guardConclusion": "success",
+  "controllerConclusion": "success",
+  "enrollConclusion": "success",
+  "builderJobId": 129041593474,
+  "builderGroupId": 5,
+  "builderRunner": "mustang-42581537518",
+  "failedStep": "Install the pinned public artifact CLI in this job's temp directory",
+  "error": "HTTPError",
+  "httpStatusObserved": false,
+  "errorObservedAt": "2026-11-09T07:49:00Z",
+  "produceStep": "skipped",
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129041715912,
+  "cleanupConclusion": "success",
+  "ownedStopStepConclusion": "success",
+  "metadataCleanupStepConclusion": "success",
+  "runnerCleanupStepConclusion": "success",
+  "lifecycleBindingStepConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T08:01:53.493046+00:00",
+    "instance": {
+      "id": "5585425566393384049",
+      "name": "roseos-mustang-builder-20261107-a",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStartTimestamp": "2026-11-08T23:48:01.906-08:00",
+      "lastStopTimestamp": "2026-11-08T23:50:09.980-08:00"
+    }
+  },
+  "lifecyclePayloadByteVerified": false,
+  "nextInitializationRunNumber": 25,
+  "basis": "Exact-run Actions metadata and permitted job error show failure in CLI setup before host-check/baseline/app fetch/produce. HTTP status and failed request phase were not reported; no denial status is invented and the CLI resource is not retried. Completed cleanup outcomes plus direct exact numeric VM metadata establish TERMINATED and absent JIT metadata independently of lifecycle payload bytes. No journal read/reset or allocation is claimed. The initialization fence can advance from the unused run24 to25; a conflicting existing origin still refuses."
+}

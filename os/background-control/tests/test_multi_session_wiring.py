@@ -29,9 +29,9 @@ SHARED = {'appsGeneration', 'appsSignature', 'posting', 'active'}
 
 class MultiSessionWiringTest(unittest.TestCase):
     def test_every_per_session_field_moves_with_its_slot(self):
-        statics = {'session', 'generation', 'started', 'id', 'target', 'taskId', 'status', 'error', 'snapshotId', 'stops', 'width',
+        statics = {'session', 'generation', 'started', 'id', 'target', 'taskId', 'status', 'error', 'snapshotId', 'visualSnapshotId', 'stops', 'width',
                    'height', 'operations', 'blocked', 'consent', 'replacement', 'sessionToken', 'pendingToken', 'pending', 'nodes',
-                   'parents', 'labels', 'truncated', 'snapshotTime', 'anyApp', 'observed', 'lastPreview'}
+                   'parents', 'labels', 'truncated', 'snapshotTime', 'anyApp', 'observed', 'lastPreview', 'visionSearch'}
         # No other mutable static field exists: every one is per-session (above) or shared on purpose.
         declared = set()
         for stmt in re.findall(r'\bstatic (?!final\b|synchronized\b|void\b|class\b|interface\b)[\w.]+(?:<[^<>]*>)?(?:\[\])? ([\w,=" .<>()]*?);', CONTROLLER):
@@ -150,6 +150,29 @@ class MultiSessionWiringTest(unittest.TestCase):
     def test_one_request_at_a_time_across_slots(self):
         self.assertIn('if(!replacement.clear()||posting||othersUnanswered())return;', CONTROLLER)
         self.assertIn('static void dispatch(){dispatchOne();for(Slot s:slots)if(s!=active){Slot was=enter(s);try{dispatchOne();}finally{leave(was);}}}', CONTROLLER)
+
+    def test_viewer_stop_is_the_bound_pair_rechecked_and_reachable_from_no_entry(self):
+        # #410 (Nathan-approved): the viewer's confirmed Stop. Every precondition is decided by MultiSession.viewerStop under
+        # the controller lock, against the slot that holds the bound id: its current task and the session object the viewer
+        # attached (identity, not equality), and the lock state; then the owner's own Stop (USER) of that slot only.
+        stop = span('static synchronized JSONObject viewerStop(', 'static JSONObject capture()')
+        self.assertIn('MultiSession.Slot[] v=view(false);int i=b.mode==WatchBinding.Mode.BOUND?MultiSession.bySession(v,b.session):-1;', stop)
+        self.assertIn('MultiSession.viewerStop(v,b.mode==WatchBinding.Mode.BOUND,b.session,b.task,s==null?null:s.taskId,\n'
+                      '   s!=null&&attachedSession!=null&&s.session==attachedSession,locked(c));', stop)
+        refusal = stop.index('if(r.refused())return new JSONObject().put("status",r.refusal).put("actionExecuted",false).put("confirmed",false);')
+        self.assertLess(refusal, stop.index('stop(c,StopLedger.USER)'), 'a refusal returns before anything is stopped')
+        self.assertEqual(stop.count('stop(c,'), 1)
+        self.assertIn('Slot was=enter(slots[r.slot]);', stop)
+        self.assertIn('finally{leave(was);}', stop)
+        # owner_stop's confirmation rule, for the bound pair: never acceptance alone.
+        self.assertIn('.put("confirmed","stopped".equals(status)\n   &&StopLedger.USER.equals(stops.reason())&&b.session.equals(stops.sessionId())'
+                      '&&Objects.equals(b.task,stops.taskId()));', stop)
+        self.assertNotIn('agentStop', stop)
+        # Not an operation: no provider method, receiver, intent extra or route reaches it; owner_stop is unchanged.
+        for source, name in ((PROVIDER, 'AgentProvider'), (RECEIVER, 'StopReceiver'), (ROUTE, 'route')):
+            self.assertNotIn('viewerStop', source, name)
+        self.assertEqual(CONTROLLER.count('viewerStop('), 2, 'its definition and the MultiSession decision only')
+        self.assertNotIn('"viewer_stop"', PROVIDER + CONTROLLER)
 
 
 if __name__ == '__main__':

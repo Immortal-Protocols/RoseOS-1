@@ -15,6 +15,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 MODE = 'rango-factory-package'
@@ -74,7 +77,8 @@ class Pins(unittest.TestCase):
         self.assertEqual(pins['fastbootSha256'], 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9')
         result = wire('check')
         self.assertEqual((result.returncode, result.stdout),
-            (0, 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=297\n'))
+            (0, 'package_seconds=5100\nobserve_seconds=600\nfirmware_seconds=570\nclassify_seconds=7200\nstage_seconds=900\n'
+             'job_minutes=297\n'))
 
     def test_drift_from_any_committed_source_refuses(self):
         for name, change in (('otatools', {'sha256': 'a' * 64}), ('releaseScript', {'sha256': 'b' * 64}),
@@ -90,13 +94,14 @@ class Pins(unittest.TestCase):
 
     def test_bounds_cover_every_step_and_are_not_a_measurement(self):
         bounds, minutes = wiring.check()
-        self.assertEqual(bounds, {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200, 'stageSeconds': 900})
+        self.assertEqual(bounds, {'packageSeconds': 5100, 'observeSeconds': 600, 'firmwareSeconds': 570,
+                                  'classifySeconds': 7200, 'stageSeconds': 900})
         self.assertEqual(wiring.INSTALLER, {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45})
         self.assertEqual(minutes, 297)  # the approved total including the private export (900 s + 30 s staging, 45-min upload)
         self.assertLessEqual(bounds['stageSeconds'] + 30 + wiring.INSTALLER['uploadMinutes'] * 60, 3630)
         self.assertGreater(bounds['packageSeconds'], 3600 + 10)  # beyond the helper's 60-min generation and kill grace
         self.assertGreaterEqual(bounds['classifySeconds'], 2 * 3600)  # two tool calls, each 3600 s in the helper
-        self.assertGreaterEqual(minutes * 60, sum(bounds.values()) + 4 * 30 + wiring.INSTALLER['uploadMinutes'] * 60)
+        self.assertGreaterEqual(minutes * 60, sum(bounds.values()) + 5 * 30 + wiring.INSTALLER['uploadMinutes'] * 60)
         self.assertIn('not measurements', wiring.__doc__)
         self.assertIn('not a usage cap', wiring.__doc__)
 
@@ -123,16 +128,15 @@ class Invocations(unittest.TestCase):
             '--fastboot-sha256', 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9',
             '--lock', LOCK, '--out', str(self.root/'package')])
 
-    def test_wiring_argv_is_exactly_the_helpers_declared_interface(self):
-        """Static compatibility with the merged helper: every flag the wiring passes is declared, and every required
-        flag is passed (no packaging is run; argparse only)."""
+    def declared(self, script):
+        """The flags a helper's main() declares, recorded through argparse alone (nothing is run)."""
         import argparse
         declared, original = {}, argparse.ArgumentParser.add_argument
 
         def record(parser, *flags, **kwargs):
             declared[flags[0]] = kwargs.get('required', False)
             return original(parser, *flags, **kwargs)
-        spec = importlib.util.spec_from_file_location('host_factory_package', ROOT/'scripts/host-factory-package.py')
+        spec = importlib.util.spec_from_file_location(script.stem.replace('-', '_'), script)
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         argparse.ArgumentParser.add_argument = record
@@ -146,10 +150,21 @@ class Invocations(unittest.TestCase):
                     sys.stderr = stderr
         finally:
             argparse.ArgumentParser.add_argument = original
-        passed = [a for a in wiring.package_argv(self.root)[2:] if a.startswith('--')]
-        self.assertEqual(set(passed) - set(declared), set(), 'the wiring passes a flag the helper does not declare')
+        return declared
+
+    def assert_matches(self, script, argv):
+        declared = self.declared(script)
+        passed = [a for a in argv[2:] if a.startswith('--')]
+        self.assertEqual(set(passed) - set(declared), set(), f'the wiring passes a flag {script.name} does not declare')
         self.assertEqual({f for f, required in declared.items() if required} - set(passed), set(),
-                         'the helper requires a flag the wiring does not pass')
+                         f'{script.name} requires a flag the wiring does not pass')
+        return passed
+
+    def test_wiring_argv_is_exactly_the_helpers_declared_interface(self):
+        """Static compatibility with the merged helpers: every flag the wiring passes is declared, and every required
+        flag is passed (no packaging or observation is run; argparse only)."""
+        passed = self.assert_matches(ROOT/'scripts/host-factory-package.py', wiring.package_argv(self.root))
+        self.assert_matches(ROOT/'scripts/rango-firmware-observe.py', wiring.firmware_argv(self.root, '1', '1'))
         self.assertNotIn('--avb-pkmd', passed)
 
     def test_exact_inspection_calls(self):
@@ -157,6 +172,15 @@ class Invocations(unittest.TestCase):
             'observe', TF, '--flavor', 'rango', '--build', '2026103001',
             '--source', 'os-release rango-factory-package run 41500000000 attempt 1',
             '--out', str(self.root/'inspection/target-files-observation.json')])
+        self.assertEqual(wiring.firmware_argv(self.root, '41500000000', '1')[1:], [str(ROOT/'scripts/rango-firmware-observe.py'),
+            '--target-files', TF, '--target-files-sha256', '73db76e500bcb71757da6dbc43337067af23395a38eaac940b9ae7d5aca0baf0',
+            '--device', 'rango', '--build', '2026103001', '--source', 'os-release rango-factory-package run 41500000000 attempt 1',
+            '--out', str(self.root/'inspection/firmware-observation.json')])
+        with_firmware = wiring.classify_argv(self.root, firmware=True)
+        self.assertEqual(with_firmware[with_firmware.index('--firmware-observation') + 1],
+                         str(self.root/'inspection/firmware-observation.json'))
+        self.assertEqual([a for a in with_firmware if a not in ('--firmware-observation',
+                          str(self.root/'inspection/firmware-observation.json'))], wiring.classify_argv(self.root))
         self.assertEqual(wiring.classify_argv(self.root)[1:], [str(ROOT/'scripts/factory-package.py'), 'classify',
             str(self.root/'package/rango-install-2026103001.zip'), '--flavor', 'rango', '--target-files', TF,
             '--target-files-observation', str(self.root/'inspection/target-files-observation.json'),
@@ -238,12 +262,8 @@ class Invocations(unittest.TestCase):
 
 
 class Guard(unittest.TestCase):
-    BASE = {'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '', 'APPS': '', 'PROMOTE': 'false',
-            'CHANNEL': 'beta', 'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '', 'RESUME_UNSIGNED_SHA256': '',
-            'RESUME_SIGNED_SHA256': '', 'CAMPAIGN': '', 'APP_PUBLISH': 'false', 'ROSE_RANGO_PUBLISH': 'false',
-            'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '',
-            'REUSE_BINDING': '', 'ALPHA_RECOVER': 'false', 'ROSE_DEVICE': 'frankel', 'BLAZER_PREP_STAGE': 'none',
-            'GITHUB_SHA': 'f' * 40}
+    # The bare dispatch's workflow env (every input at its declared default), plus the guard step's own env.
+    BASE = shape.dispatch_env(MODE=MODE, PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false', GITHUB_SHA='f' * 40)
 
     def run_guard(self, **change):
         guard = 'set -euo pipefail\n' + script(step(jobs()['guard'], 'Candidate is an exact commit on main'))
@@ -258,13 +278,13 @@ class Guard(unittest.TestCase):
                        {'RESUME_SOURCE_RUN': '1'}, {'RESUME_UNSIGNED_SHA256': 'a' * 64}, {'RESUME_SIGNED_SHA256': 'a' * 64},
                        {'CAMPAIGN': 'start'}, {'APP_PUBLISH': 'true'}, {'ROSE_RANGO_PUBLISH': 'true'},
                        {'ROSE_FIRST_USE_ENROLL': 'true'}, {'ROSE_RECOVER_RUN': '41000000000'},
-                       {'BOOTSTRAP_PROFILE': 'fold-rango-factory-v1'}, {'MODELS_BOOTSTRAP_RUN': '1'}, {'REUSE_BINDING': '{}'},
+                       {'BOOTSTRAP_PROFILE': 'fold-rango-factory-v1'}, {'REUSE_BINDING': '{}'},
                        {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'rango'}, {'BLAZER_PREP_STAGE': 'source'}):
             with self.subTest(change=change):
                 self.assertNotEqual(self.run_guard(**change), 0)
 
     def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
-        self.assertIn('signing-bootstrap, rango-factory-package, models-sign,', WORKFLOW)
+        self.assertIn(MODE, shape.modes())
         self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]),
                          ['workflow_dispatch'])
         guard = jobs()['guard']
@@ -289,6 +309,7 @@ class Job(unittest.TestCase):
             '    permissions:\n      contents: read\n    env:\n'
             '      PACKAGE_SECONDS: ${{ needs.guard.outputs.factory_package_seconds }}\n'
             '      OBSERVE_SECONDS: ${{ needs.guard.outputs.factory_observe_seconds }}\n'
+            '      FIRMWARE_SECONDS: ${{ needs.guard.outputs.factory_firmware_seconds }}\n'
             '      CLASSIFY_SECONDS: ${{ needs.guard.outputs.factory_classify_seconds }}\n'
             '      STAGE_SECONDS: ${{ needs.guard.outputs.factory_stage_seconds }}')
         body = code(self.job.replace(step(self.job, 'Private installer artifact (exactly SHA256SUMS and the ZIP)'), ''))
@@ -302,6 +323,8 @@ class Job(unittest.TestCase):
         for name, var, command, extra in (('Package the install archive (bounded, under the helper\'s shared lock)', 'PACKAGE',
                                            'package', record),
                                           ('Observe the signed target-files (bounded)', 'OBSERVE', 'observe', ''),
+                                          ('Observe the firmware-carried partitions (bounded)', 'FIRMWARE',
+                                           'firmware-observe', ''),
                                           ('Classify the install archive (bounded)', 'CLASSIFY', 'classify', '')):
             self.assertEqual(script(step(self.job, name)), f'timeout --kill-after=30s "${{{var}_SECONDS}}s" python3 '
                 f'scripts/rango-factory-package-wiring.py {command} --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"{extra}\n')
@@ -315,10 +338,12 @@ class Job(unittest.TestCase):
         (bin_dir/'python3').write_text('#!/bin/sh\nprintf "%s\\n" "$CHECK_OUTPUT"\n')
         (bin_dir/'python3').chmod(0o755)
         text = script(step(self.job, 'Recheck the pins and bounds on the builder'))
-        good = 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=297'
+        good = ('package_seconds=5100\nobserve_seconds=600\nfirmware_seconds=570\nclassify_seconds=7200\nstage_seconds=900\n'
+                'job_minutes=297')
         def run(**env):
             base = {'PATH': f'{bin_dir}:/usr/bin:/bin', 'RUNNER_TEMP': str(self.tmp), 'CHECK_OUTPUT': good,
-                    'PACKAGE_SECONDS': '5400', 'OBSERVE_SECONDS': '900', 'CLASSIFY_SECONDS': '7200', 'STAGE_SECONDS': '900'}
+                    'PACKAGE_SECONDS': '5100', 'OBSERVE_SECONDS': '600', 'FIRMWARE_SECONDS': '570', 'CLASSIFY_SECONDS': '7200',
+                    'STAGE_SECONDS': '900'}
             return subprocess.run(['bash', '-c', text], env={**base, **env}, capture_output=True).returncode
         self.assertEqual(run(), 0)
         for change in ({'PACKAGE_SECONDS': '3600'}, {'CLASSIFY_SECONDS': ''}, {'STAGE_SECONDS': '60'}, {'OBSERVE_SECONDS': '900s'},
@@ -341,12 +366,14 @@ class Job(unittest.TestCase):
 class Ownership(unittest.TestCase):
     def test_owned_start_cleanup_covers_this_mode_and_joins_cleanup(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package'"
-        self.assertIn(f'      - if: {own}\n        run: python3 scripts/release-pipeline.py start-builder --ownership-record', controller)
-        self.assertIn(f'        if: always() && ({own})\n        run: python3 scripts/release-pipeline.py builder-ownership', controller)
-        self.assertIn(f'      - if: {own}\n        env:\n          STARTED: ${{{{ needs.controller.outputs.started }}}}\n'
+        # owned_modes() reads every ownership condition (plain/owned start, ownership record, plain/owned stop) and
+        # requires them to agree; the exact owned commands stay pinned here.
+        self.assertIn(MODE, shape.owned_modes())
+        self.assertIn('\n        run: python3 scripts/release-pipeline.py start-builder --ownership-record', controller)
+        self.assertIn('\n        run: python3 scripts/release-pipeline.py builder-ownership', controller)
+        self.assertIn('\n        env:\n          STARTED: ${{ needs.controller.outputs.started }}\n'
                       '        run: python3 scripts/release-pipeline.py stop-builder --only-if-started "$STARTED"\n', cleanup)
-        self.assertIn('blazer-prep, rango-factory-package, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn(MODE, shape.cleanup_needs())
 
 
 
@@ -541,6 +568,118 @@ class AttemptRecord(unittest.TestCase):
                      ('classify', '--run-id', self.RUN, '--attempt', self.ATTEMPT, '--attempt-record', record)):
             self.assertEqual(wire(*argv).returncode, 2, argv)
         self.assertFalse(self.record.exists())
+
+
+
+class FirmwareObserve(unittest.TestCase):
+    """Signing's rango-firmware-observe.py: exit 0 with a new output is an observation classify receives, exit 3 is a
+    recorded refusal (classify then reports the missing coverage), anything else fails; nothing is guessed."""
+    def setUp(self):
+        self.parent = Path(tempfile.mkdtemp())
+        self.root = wiring.task_root('41500000000', '1', parent=self.parent)
+        (self.root/'package').mkdir(parents=True)
+        (self.root/'package/factory-package-receipt.json').write_text(json.dumps({'status': 'packaged'}))
+        (self.root/'package/rango-install-2026103001.zip').write_bytes(b'PK')
+        (self.root/'inspection').mkdir()
+        (self.root/'inspection/target-files-observation.json').write_text('{}')
+
+    def observer(self, code, output, write=None):
+        """A stand-in for subprocess.run of the observer: stdout captured; optionally it writes the output file."""
+        self.calls = []
+
+        def run(argv, stdout=None, **kwargs):
+            self.calls.append(argv)
+            self.assertEqual((stdout, kwargs), (subprocess.PIPE, {'text': True}))
+            if write is not None:
+                (self.root/'inspection/firmware-observation.json').write_text(write)
+            return subprocess.CompletedProcess(argv, code, stdout=output)
+        return run
+
+    def attempt(self):
+        return json.loads((self.root/'inspection/firmware-attempt.json').read_text())
+
+    def classify_flags(self):
+        seen = []
+
+        def run(argv, stdout):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 3)
+        self.assertEqual(wiring.classify(self.root, run), 0)
+        return seen[0]
+
+    def test_observation_is_passed_to_classify(self):
+        result = json.dumps({'observed': 'x', 'carried': {'bootloader': 9, 'radio': 14}, 'uncarried': []})
+        self.assertEqual(wiring.firmware_observe(self.root, '41500000000', '1',
+                                                 self.observer(0, result, write='{"schema": "x"}')), 0)
+        self.assertEqual(self.calls, [wiring.firmware_argv(self.root, '41500000000', '1')])
+        self.assertEqual({k: self.attempt()[k] for k in ('exit', 'category')}, {'exit': 0, 'category': 'observed'})
+        self.assertNotIn('detail', self.attempt())
+        argv = self.classify_flags()
+        self.assertEqual(argv[argv.index('--firmware-observation') + 1], str(self.root/'inspection/firmware-observation.json'))
+
+    def test_refusal_is_recorded_and_classify_runs_without_it(self):
+        refusal = json.dumps({'refused': 'format_invalid: RADIO/radio.img is not an FBPK container'})
+        self.assertEqual(wiring.firmware_observe(self.root, '41500000000', '1', self.observer(3, refusal)), 0)
+        self.assertEqual({k: self.attempt()[k] for k in ('exit', 'category', 'detail')}, {'exit': 3,
+            'category': 'format_invalid', 'detail': 'format_invalid: RADIO/radio.img is not an FBPK container'})
+        self.assertNotIn('--firmware-observation', self.classify_flags())
+
+    def test_unexpected_exits_fail_and_never_count_as_an_observation(self):
+        cases = ((2, '', None, 2, 'no_result'), (1, 'Traceback', None, 1, 'no_result'),
+                 (0, json.dumps({'observed': 'x'}), None, 1, 'no_output'),
+                 (3, json.dumps({'refused': 'x_y: z'}), '{}', 3, 'unexpected_output'),
+                 (3, 'not json', None, 3, 'no_result'))
+        for code, stdout, write, status, category in cases:
+            with self.subTest(code=code, category=category):
+                for name in ('firmware-attempt.json', 'firmware-observation.json'):
+                    (self.root/'inspection'/name).unlink(missing_ok=True)
+                self.assertEqual(wiring.firmware_observe(self.root, '41500000000', '1',
+                                                         self.observer(code, stdout, write)), status)
+                self.assertEqual(self.attempt()['category'], category)
+                self.assertFalse(wiring.firmware_observed(self.root))
+
+    def test_spawn_failure_reuse_and_missing_prerequisites_refuse(self):
+        def fails(argv, **kwargs):
+            raise FileNotFoundError('python3')
+        self.assertEqual(wiring.firmware_observe(self.root, '41500000000', '1', fails), 1)
+        self.assertEqual(self.attempt()['category'], 'spawn_failed')
+        with self.assertRaises(FileExistsError):  # the attempt record is write-once
+            wiring.firmware_observe(self.root, '41500000000', '1', self.observer(0, '', '{}'))
+        (self.root/'inspection/firmware-attempt.json').unlink()
+        (self.root/'inspection/firmware-observation.json').write_text('{}')
+        with self.assertRaisesRegex(wiring.Invalid, 'never reused'):
+            wiring.firmware_observe(self.root, '41500000000', '1', self.observer(0, '', '{}'))
+        other = wiring.task_root('5', '1', parent=self.parent)
+        (other/'package').mkdir(parents=True)
+        (other/'package/factory-package-receipt.json').write_text(json.dumps({'status': 'packaged'}))
+        (other/'package/rango-install-2026103001.zip').write_bytes(b'PK')
+        with self.assertRaisesRegex(wiring.Invalid, 'observation step did not run'):
+            wiring.firmware_observe(other, '5', '1', self.observer(0, '', '{}'))
+
+    def test_a_replaced_or_linked_observation_is_not_passed(self):
+        wiring.firmware_observe(self.root, '41500000000', '1', self.observer(0, '{}', write='{}'))
+        output = self.root/'inspection/firmware-observation.json'
+        output.unlink()
+        output.symlink_to(self.root/'inspection/target-files-observation.json')
+        self.assertFalse(wiring.firmware_observed(self.root))
+        self.assertNotIn('--firmware-observation', self.classify_flags())
+
+    def test_firmware_files_join_the_sanitized_reports_and_the_installer_export_is_unchanged(self):
+        wiring.firmware_observe(self.root, '41500000000', '1', self.observer(0, '{}', write='{"schema": "x"}'))
+        (self.root/'inspection/classify.json').write_text('{}')
+        upload = self.parent/'upload'
+        wiring.report(self.root, upload)
+        self.assertEqual(sorted(p.name for p in upload.iterdir()), ['classify.json', 'cleanup.json', 'factory-package-receipt.json',
+            'firmware-attempt.json', 'firmware-observation.json', 'target-files-observation.json'])
+        artifact = step(jobs()[MODE], 'Private installer artifact (exactly SHA256SUMS and the ZIP)')
+        self.assertNotIn('firmware', artifact)
+        firmware = step(jobs()[MODE], 'Observe the firmware-carried partitions (bounded)')
+        self.assertNotIn('if:', firmware)
+        names = re.findall(r'(?m)^      - name: (.+)$', jobs()[MODE])
+        self.assertLess(names.index('Observe the signed target-files (bounded)'),
+                        names.index('Observe the firmware-carried partitions (bounded)'))
+        self.assertLess(names.index('Observe the firmware-carried partitions (bounded)'),
+                        names.index('Classify the install archive (bounded)'))
 
 
 if __name__ == '__main__':

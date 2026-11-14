@@ -1,4 +1,4 @@
-"""Rose remote link v1: Rose Agent reaches this Mac over Wi-Fi or Tailscale.
+"""Rose remote link v1: Rose Agent reaches this Mac over Tailscale.
 
 The dashboard server stays on 127.0.0.1 and unauthenticated. A second
 listener (TLS, 0.0.0.0, port 8443 by default) serves only what a paired phone
@@ -88,7 +88,6 @@ _NONCE = re.compile(r"[A-Za-z0-9_-]{22}")
 _TIME = re.compile(r"[0-9]{1,16}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _TAILNET = ipaddress.ip_network("100.64.0.0/10")
-_PRIVATE = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
 
 
 def now_ms(clock: Callable[[], float] = time.time) -> int:
@@ -447,7 +446,7 @@ def tailscale_self() -> tuple[str | None, list[str]]:
         status = json.loads(out.stdout) if out.returncode == 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
         return None, []
-    if status.get("BackendState") not in (None, "Running"):
+    if status.get("BackendState") != "Running":
         return None, []
     me = status.get("Self") or {}
     name = str(me.get("DNSName") or "").rstrip(".") or None
@@ -459,59 +458,49 @@ def tailscale_self() -> tuple[str | None, list[str]]:
     return name, ips
 
 
-def interface_ipv4s() -> list[str]:
-    """IPv4 addresses of interfaces that are up (macOS ``ifconfig``), in interface order."""
+def configured_hosts(hosts: list[str]) -> list[str]:
+    """Explicit Tailscale QR addresses, with the same v1 grammar as Rose Agent."""
+    out = []
+    for value in hosts:
+        host = value.strip().lower()
+        if not host or len(host) > 253:
+            raise ValueError('Pair host must be a DNS name or IPv4 address')
+        if re.fullmatch(r'[0-9.]+', host):
+            try:
+                ipaddress.IPv4Address(host)
+            except ValueError:
+                raise ValueError('Invalid pairing IPv4 address') from None
+        elif not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in host.split('.')):
+            raise ValueError('Pair host must not include a scheme, path, credentials or port')
+        if not tailscale_host(host):
+            raise ValueError("Pair hosts must be Tailscale IPv4 addresses or full MagicDNS names ending in .ts.net")
+        if host not in out:
+            out.append(host)
+    if len(out) > MAX_HOSTS:
+        raise ValueError('Too many pairing hosts')
+    return out
 
+
+def tailscale_host(host: str) -> bool:
+    """A Tailscale IPv4 address or a full MagicDNS name; never LAN or loopback."""
     try:
-        out = subprocess.run(["/sbin/ifconfig"], capture_output=True, text=True, timeout=3).stdout
-    except (OSError, subprocess.SubprocessError):
-        out = ""
-    addrs, up = [], False
-    for line in out.splitlines():
-        if line and not line[0].isspace():
-            flags = line.split("<", 1)[1].split(">", 1)[0].split(",") if "<" in line else []
-            up = "UP" in flags and "RUNNING" in flags
-        elif up:
-            parts = line.split()
-            if len(parts) >= 2 and parts[0] == "inet":
-                addrs.append(parts[1])
-    if not addrs:  # no ifconfig: the address of the default route
-        with contextlib.suppress(OSError), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("192.0.2.1", 9))  # TEST-NET, nothing is sent
-            addrs.append(s.getsockname()[0])
-    return addrs
+        return ipaddress.IPv4Address(host) in _TAILNET
+    except ValueError:
+        return (len(host) <= 253 and host.endswith(".ts.net") and
+                all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                    for label in host.split(".")))
 
 
 def discover_hosts() -> list[str]:
-    """Addresses for the QR: MagicDNS name, Tailscale IPv4s, then private LAN IPv4s (max 8)."""
-
-    name, ts_ips = tailscale_self()
-    tailnet, lan = [], []
-    for a in interface_ipv4s():
-        try:
-            ip = ipaddress.ip_address(a)
-        except ValueError:
-            continue
-        if ip in _TAILNET:
-            tailnet.append(a)
-        elif any(ip in n for n in _PRIVATE):
-            lan.append(a)
-    out: list[str] = []
-    for h in ([name] if name else []) + ts_ips + tailnet + lan:
-        if h and h not in out:
-            out.append(h)
-    return out[:MAX_HOSTS]
+    """Only addresses from the running Tailscale client; no LAN/interface fallback."""
+    name, ips = tailscale_self()
+    return list(dict.fromkeys(h for h in ([name] if name else []) + ips
+                              if tailscale_host(h)))[:MAX_HOSTS]
 
 
 def route_of(host: str) -> str:
-    """'Tailscale' for MagicDNS names and 100.64.0.0/10, else 'Wi-Fi' (the phone's labels)."""
-
-    if host.endswith(".ts.net"):
-        return "Tailscale"
-    with contextlib.suppress(ValueError):
-        if ipaddress.ip_address(host) in _TAILNET:
-            return "Tailscale"
-    return "Wi-Fi"
+    """Labels allowed endpoints consistently with the phone."""
+    return "Tailscale" if tailscale_host(host) else "Unsupported"
 
 
 def pair_uri(name: str, hosts: list[str], port: int, pin: str, code: str) -> str:
@@ -613,9 +602,12 @@ class Remote:
 
     # ------------------------------------------------------------- pairing
     def new_invite(self) -> dict:
-        hosts = self.discover()
+        try:
+            hosts = configured_hosts(self.discover())
+        except ValueError as exc:
+            raise LookupError(str(exc)) from None
         if not hosts:
-            raise LookupError("No Wi-Fi or Tailscale address found on this Mac.")
+            raise LookupError("Tailscale is not connected on this Mac. Connect Tailscale, then create a new pairing code.")
         code, inv = self.pairing.new()
         uri = pair_uri(self.name, hosts, self.port, self.identity.pin, code)
         png = "data:image/png;base64," + base64.b64encode(qr.png(uri, scale=8, border=4)).decode()

@@ -1,7 +1,9 @@
-# Original Pixel Fold port notes
+# Pixel 11 Pro Fold experimental port
 
-These are the additional source patches used for the experimental original Pixel
-Fold (`yogi`). They are not for Samsung Fold phones and are not applied by the
+These are the additional source patches for the experimental Pixel 11 Pro Fold
+(`yogi`). The older "original Fold" description was incorrect. They are not for
+Pixel 10 Pro Fold (`rango`), the original Pixel Fold (`felix`) or Samsung phones,
+and are not applied by the
 normal `apply-os-changes.py` command. The base manifest is not a complete recipe
 for this unsupported port: matching vendor sources, stock-kernel inputs, and the
 device product configuration are separate requirements.
@@ -24,10 +26,27 @@ embedded in this repository.
 
 Play Store's newer data-loader path failed on this experimental port. The live
 prototype used `debug.inc.disable_dataloader=true` in its product properties to
-select the compatible path. That workaround is not applied to supported Pixels.
+select the compatible path. `product-tray.patch` now retains that workaround
+alongside the tray enablement. It is not applied to supported Pixels.
 The temporary pre-unlock debugging experiment is deliberately not included.
 
-The live Fold reached setup, ran apps, supported the left-side viewer, and kept
-the same background session when closed. A clean reproduction of this port from
+The inherited prototype notes report reaching setup, running apps, supporting the
+left-side viewer, and keeping a background session when closed. That is historical
+evidence, not acceptance of the current candidate. A clean reproduction from
 the exported repository has not been completed. These patches preserve the work
 for review; do not flash a supported Pixel or a Samsung with a Fold image.
+
+## Source preparation
+
+See [the Yogi build guide](../../docs/YOGI-BUILD.md). `source.json` binds the
+public upstream preimages and generated vendor metadata. The actual generator
+adds `BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES`; the allocator patch uses that
+generated context. The separate `adevtool-yogi-reference.patch` records the
+Yogi-only generator reference delta, with byte identities in `source.json`.
+Regenerate normally against this explicit reference before compilation.
+
+`scripts/prepare-yogi-port.py check SOURCE` checks project revisions, local
+changes, exact preimages and ordered patch application without changing source.
+`apply SOURCE --lock-file LOCK` repeats those checks under the existing builder
+lock before applying. This is source preparation only: it does not generate
+vendor files, prove stock-kernel integrity, build, sign, publish or flash.

@@ -1,0 +1,4000 @@
+{
+ "schemaVersion": 3,
+ "kind": "rose-launcher3-compile-inputs",
+ "owner": "OS Product (#410). Release owns the adapter; this states inputs only.",
+ "target": "Launcher3QuickStepLib",
+ "proves": "the patched handlers and overlays type-check and compile on the real classpath, plus the generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime.",
+ "provenance": "every hash here is an expected value derived from pinned public sources and the committed patches; an adapter compares current bytes with them and never records current bytes as provenance",
+ "candidatePatches": "every project in the trusted patcher's own registration order for frankel's applyArgs (re-pinned 2026-11-07 to the live apply-os-changes.py): frameworks/base through rose-edge-wmshell.patch and rose-shade-systemui.patch, build/release, and Launcher3 switcher, rose-edge and rose-edge-resize. #440's candidateDelta is retired and empty, so a tree integrated by this patcher is at these final images",
+ "branches": {
+  "verifyIntegrated": "every affected file equals post (config.xml only through integrationRewrite with its bound inputs), every required overlay is present with its sha256 (notAnInput overlays may be present with any bytes), every unlisted path matches its treePin, no extra path, no patch is applied again",
+  "reconstruct": "every affected file equals pre (sha256 and gitBlob at revision), new files and every overlay target are absent beforehand, patches are applied in order and must give exactly post; required overlays are then copied; every unlisted path matches its treePin, no extra path",
+  "verifyBaseApplyCandidate": {
+   "status": "proposal, stated as data only: Release implements it, and any run needs separate authority",
+   "conditions": [
+    {
+     "id": "base-exact",
+     "text": "the integrating bundle matches base.bundleContent; every affected file of every project equals base.projects post (config.xml only through integrationRewrite with its bound inputs); every required base overlay is present with its sha256 (notAnInput overlays may be present with any bytes); every unlisted path matches the project treePin; no extra path"
+    },
+    {
+     "id": "delta-preimages",
+     "text": "every candidateDelta file and overlay is at its before image, or absent where before is null; anything at after, or neither, refuses"
+    },
+    {
+     "id": "isolated-apply",
+     "text": "in an isolated copy only, each candidateDelta patch (sha256-checked bytes at bundlePath) passes candidateDelta.application, and each candidateDelta overlay is copied from its sha256-checked bundlePath"
+    },
+    {
+     "id": "final-exact",
+     "text": "the copy then equals projects and overlays exactly, with the same treePin and config.xml rules; only then does the compile proceed"
+    }
+   ],
+   "otherwise": "refuse at the first failed condition, naming its id; partial, already applied or unknown state refuses"
+  },
+  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by an older patcher (for example Launcher3 switcher only) is such a state and is refused: with candidateDelta empty, no branch completes it. Never reset or trust a snapshot.",
+  "requires": {
+   "verifyIntegrated": [
+    "sourceTree",
+    "lunch",
+    "policyReceipt"
+   ],
+   "reconstruct": [
+    "sourceTree",
+    "lunch",
+    "reconstructSource"
+   ],
+   "verifyBaseApplyCandidate": [
+    "sourceTree",
+    "lunch",
+    "policyReceipt",
+    "bundleReport"
+   ]
+  },
+  "forbids": {
+   "verifyIntegrated": [
+    "bundleReport",
+    "reconstructSource",
+    "Git metadata or objects of the three contract projects in the checked tree (the lunch inputs' admitted gitRequirement.publicFetch of vendor/adevtool/.git, outside them, excepted)"
+   ],
+   "reconstruct": [
+    "bundleReport"
+   ],
+   "verifyBaseApplyCandidate": [
+    "reconstructSource"
+   ]
+  },
+  "definitions": {
+   "sourceTree": "the checked tree, bound by Infra provenance (path and run), never by this contract",
+   "lunch": "the lunch inputs in lunchInputs, satisfied on the copy",
+   "policyReceipt": "the integrating run's own --background-policy file, associated with this tree by Infra provenance (run, source path, receipt hash recorded by that run); a receipt reconstructed from config.xml or any other tree file is refused",
+   "reconstructSource": "an approved source of genuine Git objects for each project at revision (read from a repository, never bytes hashed from the checked tree); none is approved",
+   "bundleReport": "a document in base.bundleReport's form from its stated producer"
+  }
+ },
+ "projects": [
+  {
+   "path": "frameworks/base",
+   "repo": "GrapheneOS/platform_frameworks_base",
+   "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+   "patches": [
+    {
+     "name": "frameworks-base.patch",
+     "sha256": "2972a450d6d302544e22904850a52d941871c8d3b4a4f3a863467eba5b216b6e"
+    },
+    {
+     "name": "rose-agent-self-update-frameworks-base.patch",
+     "sha256": "60305607a717ff2473b1e9dfcd63657acf2848889ea6f51e4e564a6063795182"
+    },
+    {
+     "name": "background-control-frameworks-base.patch",
+     "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
+    },
+    {
+     "name": "background-control-modern-frameworks-base.patch",
+     "sha256": "4afcf3115fff59363910fb2a11df52ae928cfaf41f13776a269c2c5a0ec8b0f7"
+    },
+    {
+     "name": "background-control-resource-import-fix.patch",
+     "sha256": "1872f2bdabf775d88f98f214f7c770968f733ab679f12fd75071384812800354"
+    },
+    {
+     "name": "locked-control-frameworks-base.patch",
+     "sha256": "8a9c06333f30462513839f55471678c84f7ce78233a386b2a11a0a293dca9abd"
+    },
+    {
+     "name": "rose-edge-wmshell.patch",
+     "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
+    },
+    {
+     "name": "rose-shade-systemui.patch",
+     "sha256": "df6179afa0c87691122e97873982fab5d8465631176d0ea56b6f097a973921d5"
+    }
+   ],
+   "files": [
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+     "pre": {
+      "sha256": "76de3a4fe55c5bb6f73a5df642c3ee736f64c0bc8ad95c264ae6c2a603bca711",
+      "gitBlob": "83e23b3a523f0f031708e78aa9df86bdd5b48ebe"
+     },
+     "post": {
+      "sha256": "b0d4eb9bc935f533c8dc139cd34b6a1a5794abda28ca2a5aff57461917ab1d8a",
+      "gitBlob": "11bf152bf18bf00dff7d8473e3496c820a6e9383"
+     },
+     "chain": [
+      {
+       "patch": "frameworks-base.patch",
+       "before": "83e23b3a523f0f031708e78aa9df86bdd5b48ebe",
+       "after": "11bf152bf18bf00dff7d8473e3496c820a6e9383",
+       "index": [
+        "83e23b3a5",
+        "11bf152bf"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+     "pre": {
+      "sha256": "b73c6f710a9731203bf56cefd8e673cbf84adc241c59f09a54828c7841be8918",
+      "gitBlob": "b0a5d4e5259b037d187d9178c9eeea90cc731745"
+     },
+     "post": {
+      "sha256": "6c0247373b4acc548678b6e56d84becece7c28298a18de98704bc29711cb01e1",
+      "gitBlob": "246137bda252d651d28ad9ec78f1873aa8a30810"
+     },
+     "chain": [
+      {
+       "patch": "frameworks-base.patch",
+       "before": "b0a5d4e5259b037d187d9178c9eeea90cc731745",
+       "after": "246137bda252d651d28ad9ec78f1873aa8a30810",
+       "index": [
+        "b0a5d4e52",
+        "246137bda"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "packages/SystemUI/AndroidManifest.xml",
+     "pre": {
+      "sha256": "8226ea45e5471d78c9ecb4db68098a83fad096b5fec6cf2b07ee1c2c133c49a4",
+      "gitBlob": "d2a7ba046774f0443c41d23dfa4f61136ca1bffb"
+     },
+     "post": {
+      "sha256": "32087f0b46a5e8fca67edbce60290ad2ebafa1e86c0f6f3fc1b08358ad49623f",
+      "gitBlob": "d36ec5030eb1185d8785f25e42a73cd299565763"
+     },
+     "chain": [
+      {
+       "patch": "frameworks-base.patch",
+       "before": "d2a7ba046774f0443c41d23dfa4f61136ca1bffb",
+       "after": "d36ec5030eb1185d8785f25e42a73cd299565763",
+       "index": [
+        "d2a7ba046",
+        "d36ec5030"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
+     "pre": {
+      "sha256": "91312684ddb3d2797bc982d0e805b2df3aedd42744f3428f44acc2261396d8ff",
+      "gitBlob": "db91ce3c182f9bb8e290dc05874a914fd2b3acba"
+     },
+     "post": {
+      "sha256": "4d7ec194bbf9abdf1ad6bdae56973615515e0927e20925df2bccb488421f4e80",
+      "gitBlob": "79b1220a8b0de3b7b1d17dbc61b18ebef0166c0e"
+     },
+     "chain": [
+      {
+       "patch": "frameworks-base.patch",
+       "before": "db91ce3c182f9bb8e290dc05874a914fd2b3acba",
+       "after": "79b1220a8b0de3b7b1d17dbc61b18ebef0166c0e",
+       "index": [
+        "db91ce3c1",
+        "79b1220a8"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
+     "pre": {
+      "sha256": "cdf4f1492010715b612a414ea00be170031eac54b2fca72798d3f65cb92b585e",
+      "gitBlob": "013eae5ed025b8a0cfb3a08f940a38487e35d347"
+     },
+     "post": {
+      "sha256": "92b4589b3b79125dc0d7478519aed84d2a1ded8f197b5d32a4933bf9d9470089",
+      "gitBlob": "68606fa279b73e36c50a41c554a8e5a8106d39b5"
+     },
+     "chain": [
+      {
+       "patch": "frameworks-base.patch",
+       "before": "013eae5ed025b8a0cfb3a08f940a38487e35d347",
+       "after": "68606fa279b73e36c50a41c554a8e5a8106d39b5",
+       "index": [
+        "013eae5ed",
+        "68606fa27"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt",
+     "pre": {
+      "sha256": "56a94dfef22408b8938c3fefdf0dac79e706f455881ea928a3877bcdbf7e9474",
+      "gitBlob": "0131aab45db636022a32030628fe90f0eafb416e"
+     },
+     "post": {
+      "sha256": "4c1efb6de31cd94cd7ee93212aa6d3d2113171907d9d07d854a2e5b9e742ce4f",
+      "gitBlob": "8ba883695d4557f3caaec42f9b9935cae1bea046"
+     },
+     "chain": [
+      {
+       "patch": "frameworks-base.patch",
+       "before": "0131aab45db636022a32030628fe90f0eafb416e",
+       "after": "8ba883695d4557f3caaec42f9b9935cae1bea046",
+       "index": [
+        "0131aab45",
+        "8ba883695"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "services/core/java/com/android/server/pm/PackageInstallerSession.java",
+     "pre": {
+      "sha256": "5ff683567eef824f49bb0e6f1eb9cee1c506ad6ac688970d20802506564a1216",
+      "gitBlob": "55450b0fb5188c15a87d40e01aef8663a6dddfc3"
+     },
+     "post": {
+      "sha256": "0d8a3a890b3725a052e2046fc9ef43a97c32c85a785b2aef1d605df6c505f2c8",
+      "gitBlob": "bb8f5ca22ee614b8bac1b433b8c67835228efbae"
+     },
+     "chain": [
+      {
+       "patch": "rose-agent-self-update-frameworks-base.patch",
+       "before": "55450b0fb5188c15a87d40e01aef8663a6dddfc3",
+       "after": "bb8f5ca22ee614b8bac1b433b8c67835228efbae",
+       "index": [
+        "55450b0",
+        "bb8f5ca"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "core/res/res/values/config.xml",
+     "pre": {
+      "sha256": "d9121e6c004d52b9f4e21d2e051f12efd7ab46f37b8c288e0314392a6d16b53f",
+      "gitBlob": "c53d2c81ffba934d9c7dfd0ac669f25cc6b09c8e"
+     },
+     "post": {
+      "sha256": "bed8c838cb8e915e3ab9aca9dc260169481ea853b79adb6696f1e355ecf23cf5",
+      "gitBlob": "01b107b1766afac2d8e9d4fc8a8ae1bfbe1d4804"
+     },
+     "chain": [
+      {
+       "patch": "background-control-frameworks-base.patch",
+       "before": "c53d2c81ffba934d9c7dfd0ac669f25cc6b09c8e",
+       "after": "f82e65950408142ac1c83669aea2860bd9ec82a4",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "f82e65950408142ac1c83669aea2860bd9ec82a4",
+       "after": "6c7d52a5887b18454d16a55c7a107505be209fbb",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "locked-control-frameworks-base.patch",
+       "before": "6c7d52a5887b18454d16a55c7a107505be209fbb",
+       "after": "01b107b1766afac2d8e9d4fc8a8ae1bfbe1d4804",
+       "index": [
+        "6c7d52a",
+        "01b107b"
+       ],
+       "base": "exact"
+      }
+     ],
+     "integrationRewrite": {
+      "by": "scripts/apply-os-changes.py, the `if policy:` block, after patching",
+      "elements": [
+       "config_pixelComputerControlAgents",
+       "config_pixelComputerControlTargets",
+       "config_pixelComputerControlPrototypeAgents",
+       "config_pixelComputerControlReferenceDisplayAddress",
+       "config_pixelComputerControlLockedSessions"
+      ],
+      "markers": {
+       "config_pixelComputerControlAgents": "    <string-array name=\"config_pixelComputerControlAgents\" translatable=\"false\" />",
+       "config_pixelComputerControlTargets": "    <string-array name=\"config_pixelComputerControlTargets\" translatable=\"false\" />",
+       "config_pixelComputerControlPrototypeAgents": "    <string-array name=\"config_pixelComputerControlPrototypeAgents\" translatable=\"false\" />",
+       "config_pixelComputerControlReferenceDisplayAddress": "    <string name=\"config_pixelComputerControlReferenceDisplayAddress\" translatable=\"false\"></string>",
+       "config_pixelComputerControlLockedSessions": "    <bool name=\"config_pixelComputerControlLockedSessions\">false</bool>"
+      },
+      "generatingInputs": {
+       "policyReceipt": "agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside this contract; it is the integrating run's own --background-policy file (branches.definitions.policyReceipt), never one reconstructed from config.xml or any other tree file",
+       "referenceDisplayAddress": "--reference-display-address, absent unless given; decimal, 0 < value < 2^63",
+       "lockedControl": "--locked-control, false unless given"
+      },
+      "inputRules": {
+       "packageName": "[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+",
+       "certificate": "[0-9A-F]{64}",
+       "rows": "every agent and target row has a packageName and at least one certificate"
+      },
+      "templates": {
+       "array": "    <string-array name=\"config_pixelComputerControl{name}\" translatable=\"false\">\n{entries}    </string-array>",
+       "entry": "        <item>{packageName}:{certificate}</item>\n",
+       "arrays": {
+        "config_pixelComputerControlAgents": "Agents: the agent row",
+        "config_pixelComputerControlTargets": "Targets: every target row, in receipt order",
+        "config_pixelComputerControlPrototypeAgents": "PrototypeAgents: the agent row, only when prototypeControl is true; otherwise the marker"
+       },
+       "config_pixelComputerControlReferenceDisplayAddress": "    <string name=\"config_pixelComputerControlReferenceDisplayAddress\" translatable=\"false\">{address}</string> when given; otherwise the marker",
+       "config_pixelComputerControlLockedSessions": "    <bool name=\"config_pixelComputerControlLockedSessions\">true</bool> when lockedControl; otherwise the marker"
+      },
+      "compare": [
+       "each element name opens exactly once in the file",
+       "each element is exactly its expected text (template from the bound inputs, or its marker)",
+       "replacing exactly those texts with their markers gives post (sha256); nothing else is normalised",
+       "a missing input or binding, a value outside inputRules, or any other difference refuses"
+      ],
+      "reference": "scripts/launcher3-compile-contract.py verify_integrated_config implements exactly this"
+     }
+    },
+    {
+     "path": "core/res/res/values/symbols.xml",
+     "pre": {
+      "sha256": "2b0ff745f6971afe0e5f58e0cd24b7ebe16a3e967676344277e190bc049a04b4",
+      "gitBlob": "5300fe8a3c6206ef126c32efab5d84e5884cc473"
+     },
+     "post": {
+      "sha256": "7f751e1b5e80396dc19a8be256f46c1c530aee2e0a4667e87d29d4159a0b829a",
+      "gitBlob": "3cecf6ad18c47e36b7071dd0bbbb2fc3e192f6d9"
+     },
+     "chain": [
+      {
+       "patch": "background-control-frameworks-base.patch",
+       "before": "5300fe8a3c6206ef126c32efab5d84e5884cc473",
+       "after": "7d2def3ca180af22191c466a247ee189b1cb7cc7",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "7d2def3ca180af22191c466a247ee189b1cb7cc7",
+       "after": "a4cd6aebbbb2a61fd9a3f0cedafed18179add8f9",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "locked-control-frameworks-base.patch",
+       "before": "a4cd6aebbbb2a61fd9a3f0cedafed18179add8f9",
+       "after": "3cecf6ad18c47e36b7071dd0bbbb2fc3e192f6d9",
+       "index": [
+        "a4cd6ae",
+        "3cecf6a"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java",
+     "pre": {
+      "sha256": "f96c32b111b4021187200adc2ec1944bcdbf7a913325b8aa92e4702c67f4a79b",
+      "gitBlob": "67dee3c467c393711b2d55046cbe44fb8ca15a4d"
+     },
+     "post": {
+      "sha256": "3ec881c4303dff9689467f1b6f68ac92c5d7f6e9e6253cbb2a36540cf609037b",
+      "gitBlob": "e60fbd20f19607670d58fc713816aa6d8a5df7d5"
+     },
+     "chain": [
+      {
+       "patch": "background-control-frameworks-base.patch",
+       "before": "67dee3c467c393711b2d55046cbe44fb8ca15a4d",
+       "after": "bff72fd1b96001ffcc2c54d80848c87a687a3fae",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "bff72fd1b96001ffcc2c54d80848c87a687a3fae",
+       "after": "9789eb4596f74c0e23a368ff28adccb817b3b3a3",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "locked-control-frameworks-base.patch",
+       "before": "9789eb4596f74c0e23a368ff28adccb817b3b3a3",
+       "after": "e60fbd20f19607670d58fc713816aa6d8a5df7d5",
+       "index": [
+        "9789eb4",
+        "e60fbd2"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java",
+     "pre": {
+      "sha256": "66447d84e061d2a0304f51f9e06fa45032db3f2a1e5ac035689cb4522fd0f735",
+      "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
+     },
+     "post": {
+      "sha256": "eef0edf1c1a943b6a88e34c4146684b4dfe6b59e50cdb4ac982e2ea04a88d525",
+      "gitBlob": "8b6802619b08ef1f38e104e12635094e613c8b17"
+     },
+     "chain": [
+      {
+       "patch": "background-control-frameworks-base.patch",
+       "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
+       "after": "a35500ee45acc5622d8ce066285da4ccf213e166",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "a35500ee45acc5622d8ce066285da4ccf213e166",
+       "after": "c250385b9263eb3c6d465137d82c02efa13800b9",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "background-control-resource-import-fix.patch",
+       "before": "c250385b9263eb3c6d465137d82c02efa13800b9",
+       "after": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "locked-control-frameworks-base.patch",
+       "before": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+       "after": "8b6802619b08ef1f38e104e12635094e613c8b17",
+       "index": [
+        "0a88d97",
+        "5f4a32d"
+       ],
+       "base": "different"
+      }
+     ]
+    },
+    {
+     "path": "services/accessibility/java/com/android/server/accessibility/ProxyManager.java",
+     "pre": {
+      "sha256": "63b5b2746d67999c563a3a2a0a36641c5679e94c4a7ad3cd2ab91aca093b61a1",
+      "gitBlob": "f107647b5576d6e517e2ef5e2e28d5c23764492e"
+     },
+     "post": {
+      "sha256": "c31128b341a948644a3d1cf501f72d2a3ab3b9bb511ecb312a1f0afdef1ee6a8",
+      "gitBlob": "69185fe5413df2e5d0b88183e29f0a4b79137c86"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "f107647b5576d6e517e2ef5e2e28d5c23764492e",
+       "after": "69185fe5413df2e5d0b88183e29f0a4b79137c86",
+       "index": [
+        "f107647b5",
+        "69185fe54"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/IVirtualDeviceManager.aidl",
+     "pre": {
+      "sha256": "bfc6efe50adc8900def427769de91d9e6cc61116a65656d4b69e50bb570a9581",
+      "gitBlob": "ce355150b61754429ab9724969e2209dc80dec0f"
+     },
+     "post": {
+      "sha256": "4bdf68920df927579e10c9f1a8ec5fb18ebc19401bfbaccb2064203b6d53d16b",
+      "gitBlob": "cb620f7dec5c68ee85f1792963c0a1d473b537f4"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "ce355150b61754429ab9724969e2209dc80dec0f",
+       "after": "cb620f7dec5c68ee85f1792963c0a1d473b537f4",
+       "index": [
+        "ce355150",
+        "cb620f7d"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/VirtualDeviceManager.java",
+     "pre": {
+      "sha256": "71fcaaea4eb03c53c6f89b4803c56014fe31218acef5a3d396ffc143e7185e1f",
+      "gitBlob": "5a035b2ae7fceb7a43738f3de1720ae332a05326"
+     },
+     "post": {
+      "sha256": "cdea6b8243e8d98a37bd6b53a5a1858e8864beac78386fea87d1987ab51586b0",
+      "gitBlob": "714a3c2cec59e7ca0121f7eb64a37d92bf2d8f4d"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "5a035b2ae7fceb7a43738f3de1720ae332a05326",
+       "after": "714a3c2cec59e7ca0121f7eb64a37d92bf2d8f4d",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/computercontrol/AutomatedApps.aidl",
+     "pre": null,
+     "post": {
+      "sha256": "2deb4c6614e621fc25aa5809b9d7f3bf49a482cbc2f1f8d1fb20100badfd56f6",
+      "gitBlob": "4b0bc5312a27c479947304b1af5674fe539ba800"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": null,
+       "after": "4b0bc5312a27c479947304b1af5674fe539ba800",
+       "index": [
+        "00000000",
+        "4b0bc531"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/computercontrol/AutomatedApps.java",
+     "pre": null,
+     "post": {
+      "sha256": "f4dd864dbb8db0f1ddf254476a39591572bb99025aa5209471ca4766d7501918",
+      "gitBlob": "c5d54a55a453f4a1562ae341dec1aa0b75deee1c"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": null,
+       "after": "c5d54a55a453f4a1562ae341dec1aa0b75deee1c",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/computercontrol/AutomatedPackageListener.java",
+     "pre": {
+      "sha256": "e39e3f93a046664ae045473c2bebd3a7c856cc58ff22a7019bd722ac2f3b0fe3",
+      "gitBlob": "36d2ef0e12cb45fa5cf5a9f64f1259cb50d03fe6"
+     },
+     "post": {
+      "sha256": "dc8624ad3d8f35648616096394b8cbf33437f92ad35e3e8f44b069a1accedef8",
+      "gitBlob": "3e21c0a2f763b1c51af3ffb9986c0fae8f8c73a3"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "36d2ef0e12cb45fa5cf5a9f64f1259cb50d03fe6",
+       "after": "3e21c0a2f763b1c51af3ffb9986c0fae8f8c73a3",
+       "index": [
+        "36d2ef0e",
+        "3e21c0a2"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/computercontrol/ComputerControlSession.java",
+     "pre": {
+      "sha256": "3ab33c355e774bcd00a7f3ee9692438ee5a48a53df464f3da577cce7b601fb59",
+      "gitBlob": "e1abf841b0b7862415b3a42f3e526384f98ec735"
+     },
+     "post": {
+      "sha256": "52f46a34ba8e3186a07c5f45edff773b0d201ff0a46640f0b79cbcf9ce5f1496",
+      "gitBlob": "9a8b9b71d1240a798299da1effca5e2cca5c74cd"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "e1abf841b0b7862415b3a42f3e526384f98ec735",
+       "after": "9a8b9b71d1240a798299da1effca5e2cca5c74cd",
+       "index": [
+        "e1abf841",
+        "9a8b9b71"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/computercontrol/IAutomatedPackageListener.aidl",
+     "pre": {
+      "sha256": "f517dec31a738885227ffb7271be38f14f5acc904e3a164ca624e52ef153a5da",
+      "gitBlob": "72506eaa64a5bfe9669bd7eccd00166d4ccd56a8"
+     },
+     "post": {
+      "sha256": "2e8106a32ea89088f24f85b523dd997e7f3365cb7ead4bdc57eb1fdf190591fe",
+      "gitBlob": "fc5ca6f4e3ac79a9a432d7c923b5419683a18725"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "72506eaa64a5bfe9669bd7eccd00166d4ccd56a8",
+       "after": "fc5ca6f4e3ac79a9a432d7c923b5419683a18725",
+       "index": [
+        "72506eaa",
+        "fc5ca6f4"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "core/java/android/companion/virtual/computercontrol/IComputerControlSession.aidl",
+     "pre": {
+      "sha256": "83aea3fbe508f0b0a03f62f8907998bb0dba362bbbaf421b867e5f4207edeaa4",
+      "gitBlob": "baed11a11e1dcb36c798bf352a88c69dd99c8e28"
+     },
+     "post": {
+      "sha256": "e078c72405c096e6b0a203132d00b32b823d2c1ce6cf752603a61f8cc1d44520",
+      "gitBlob": "4346d7e5c7dc6f18bff6dc3fff29fe9ec04699ff"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "baed11a11e1dcb36c798bf352a88c69dd99c8e28",
+       "after": "4346d7e5c7dc6f18bff6dc3fff29fe9ec04699ff",
+       "index": [
+        "baed11a1",
+        "4346d7e5"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
+     "pre": {
+      "sha256": "fb5b292482f95b5922e0545d60852599499bb2a740fab0d3783e8b5a40f48780",
+      "gitBlob": "b756433b4db51ba09298bf15a7e575236f6d4ec4"
+     },
+     "post": {
+      "sha256": "5ff3c9493a047eb424ccffb08db916d9ef1567e6738db70052d5d1ffbccc6433",
+      "gitBlob": "15b8b5191a0a9fe4371b12c8481c5151d91aa291"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "b756433b4db51ba09298bf15a7e575236f6d4ec4",
+       "after": "15b8b5191a0a9fe4371b12c8481c5151d91aa291",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    },
+    {
+     "path": "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
+     "pre": {
+      "sha256": "8c61474247ec68de7f1e50a4f15d248627a5e38013846743fcd9a74c8b67939b",
+      "gitBlob": "9cbc59bc73c08f181c58471808f5a7c76d60ceea"
+     },
+     "post": {
+      "sha256": "4b38dc3c9d82b1f61864abbe4f223095616337c4c246b562b35d4fb4410a8191",
+      "gitBlob": "128651ce79fd4f0065b075cd025b14c00679cab8"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "9cbc59bc73c08f181c58471808f5a7c76d60ceea",
+       "after": "128651ce79fd4f0065b075cd025b14c00679cab8",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    },
+    {
+     "path": "services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java",
+     "pre": {
+      "sha256": "c7ad5bcd9dfda3735522c6bf0e737d0c8e7fd36cf3450f37a049962e8b6c40c8",
+      "gitBlob": "35217902eaaf3140dd64387efe353a8483f8b7e3"
+     },
+     "post": {
+      "sha256": "6bacccb12b77cadf6285fa9e9c124c033a8913f368fb7a40244ab3bd38f5c233",
+      "gitBlob": "ddb50757ce9bba67c34669a5af838c91947cd53d"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "35217902eaaf3140dd64387efe353a8483f8b7e3",
+       "after": "ddb50757ce9bba67c34669a5af838c91947cd53d",
+       "index": [
+        "35217902",
+        "ddb50757"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java",
+     "pre": {
+      "sha256": "2ce9b1b44835e5ed2ee3e66a1cfe49d5d976e9961f605787ba7bf116850afd2e",
+      "gitBlob": "81eb70ec725d496360d557040a03e62c12cc6e45"
+     },
+     "post": {
+      "sha256": "4f40c19911f5f36be6393cc66cf9f449d3df09e1e73a2d352a270c48eab05be2",
+      "gitBlob": "d655a8e44f69abf950bfed4eb5fd70856ac565d8"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "81eb70ec725d496360d557040a03e62c12cc6e45",
+       "after": "d655a8e44f69abf950bfed4eb5fd70856ac565d8",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    },
+    {
+     "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java",
+     "pre": {
+      "sha256": "f2b05ab0175a387a29ae9c4c3ba1781df1e9b4d7c013eeeab3460365bbdeecc0",
+      "gitBlob": "6cb9f11fbad153ef486254087497f6a2d3cefca3"
+     },
+     "post": {
+      "sha256": "0cd84d2b184f267992ab200b976380b4fb7d9e48e4c3e2a3f922dc9c8a1df537",
+      "gitBlob": "183cd0c0f858306d2f3f9ae1bb70d96480a88e93"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "6cb9f11fbad153ef486254087497f6a2d3cefca3",
+       "after": "183cd0c0f858306d2f3f9ae1bb70d96480a88e93",
+       "index": [
+        "6cb9f11f",
+        "183cd0c0"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java",
+     "pre": null,
+     "post": {
+      "sha256": "9e47e35b248c9663f73efbf0bf6331df968b585471fbe977a776c080a5a37e30",
+      "gitBlob": "e6ce4f93866eab3a6aab5e221d067e27d7d389d5"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": null,
+       "after": "e6ce4f93866eab3a6aab5e221d067e27d7d389d5",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    },
+    {
+     "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java",
+     "pre": {
+      "sha256": "b0ace1a81f4c49dbcfb724d16951ac717684ab4a6ee97f6ea58ae7c850ebbf52",
+      "gitBlob": "82fe6749b3188b1ceea85faa77300ff281aafa2e"
+     },
+     "post": {
+      "sha256": "a1262dd25d3735e22ebfd983f1aaa82d7d33b7d730f782d108ed786545271a42",
+      "gitBlob": "3d2db43de86f7ca41ce3678816e43e281691b2c8"
+     },
+     "chain": [
+      {
+       "patch": "background-control-modern-frameworks-base.patch",
+       "before": "82fe6749b3188b1ceea85faa77300ff281aafa2e",
+       "after": "b7c5471412b58ed6ee616a20c11c44a522148ba5",
+       "index": null,
+       "base": "noIndex"
+      },
+      {
+       "patch": "locked-control-frameworks-base.patch",
+       "before": "b7c5471412b58ed6ee616a20c11c44a522148ba5",
+       "after": "3d2db43de86f7ca41ce3678816e43e281691b2c8",
+       "index": [
+        "82fe674",
+        "079a2e4"
+       ],
+       "base": "different"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+     "pre": null,
+     "post": {
+      "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+      "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "f8e557e537a395c27be11aff0fad847da02e44ec",
+       "index": [
+        "0000000",
+        "f8e557e"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+     "pre": {
+      "sha256": "62d968a9484b7cc64dcf599996be38125b0aba0ceddd60bf75efec3afbd744d9",
+      "gitBlob": "237f47124837e3f939172f25f18a2d3444423641"
+     },
+     "post": {
+      "sha256": "17767983aa31d6269f30eb992787e32a34c4600b8493b875273027562b91686a",
+      "gitBlob": "236bd8168e93d206cea91a0954f07ddacf971bf4"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": "237f47124837e3f939172f25f18a2d3444423641",
+       "after": "236bd8168e93d206cea91a0954f07ddacf971bf4",
+       "index": [
+        "237f471",
+        "236bd81"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+     "pre": null,
+     "post": {
+      "sha256": "4f2b67d421a4897956a20f38a29c8ad67d5ec10b9f748ce9a95aefb076da73ee",
+      "gitBlob": "5b3e5cd455ffc4af929e516feb4498347f4a2432"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "5b3e5cd455ffc4af929e516feb4498347f4a2432",
+       "index": [
+        "0000000",
+        "5b3e5cd"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+     "pre": null,
+     "post": {
+      "sha256": "29a37cf4f88f6bf3bd9729ee015f41b6eff3a51d8480f1e082b516faa322cfe5",
+      "gitBlob": "08838b143685050c414779876534b775f91c9640"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "08838b143685050c414779876534b775f91c9640",
+       "index": [
+        "0000000",
+        "08838b1"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+     "pre": null,
+     "post": {
+      "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+      "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "8fd02b96f9b059f72df3e112f27cd84e036196ad",
+       "index": [
+        "0000000",
+        "8fd02b9"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
+     "pre": null,
+     "post": {
+      "sha256": "a9cd77478dae0cccd0e9ecbdc37877369d1b1f81f55a758b6a1a4829dfae333e",
+      "gitBlob": "a4003dcc986bd33c78572f33f33e38697e34123e"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "a4003dcc986bd33c78572f33f33e38697e34123e",
+       "index": [
+        "0000000",
+        "a4003dc"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
+     "pre": {
+      "sha256": "9ba02efa08a38d9bf98831bca55eca82704b802d95a34415ece5420214c51f37",
+      "gitBlob": "9b2c98685f8c45272d39df42dafa7294486c6552"
+     },
+     "post": {
+      "sha256": "3132689774e6bb341a4b1e2d7235a4edbbd3b8475285f45fedef115e7a898731",
+      "gitBlob": "e7bb8771233a2af4df1e5a7a90ce0217246f9058"
+     },
+     "chain": [
+      {
+       "patch": "rose-shade-systemui.patch",
+       "before": "9b2c98685f8c45272d39df42dafa7294486c6552",
+       "after": "e7bb8771233a2af4df1e5a7a90ce0217246f9058",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    }
+   ],
+   "treePin": {
+    "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+    "rootTree": "ee02f0be7fb9f96722f897c64f642cb056c522e1",
+    "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+    "objectFormat": "sha1",
+    "listing": {
+     "path": "os/tests/fixtures/launcher3-compile-contract/trees/frameworks__base.ls-tree.txt.gz",
+     "sha256": "ea86d70867c9c82e52505c6efaaaf41e9bc4a53e5078c28f71c7c92ca16a2ee6",
+     "compressedSha256": "d743dde2eaa6793465f6a73c20ee1dd425100398a486a8024eb8885144d418f8",
+     "paths": 65227,
+     "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
+    },
+    "unlisted": {
+     "excludedPaths": [
+      "core/java/android/companion/virtual/IVirtualDeviceManager.aidl",
+      "core/java/android/companion/virtual/VirtualDeviceManager.java",
+      "core/java/android/companion/virtual/computercontrol/AutomatedApps.aidl",
+      "core/java/android/companion/virtual/computercontrol/AutomatedApps.java",
+      "core/java/android/companion/virtual/computercontrol/AutomatedPackageListener.java",
+      "core/java/android/companion/virtual/computercontrol/ComputerControlSession.java",
+      "core/java/android/companion/virtual/computercontrol/IAutomatedPackageListener.aidl",
+      "core/java/android/companion/virtual/computercontrol/IComputerControlSession.aidl",
+      "core/res/res/values/config.xml",
+      "core/res/res/values/symbols.xml",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
+      "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
+      "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
+      "packages/SystemUI/AndroidManifest.xml",
+      "packages/SystemUI/assets/fonts/Nunito.ttf",
+      "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+      "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+      "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
+      "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+      "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
+      "packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt",
+      "services/accessibility/java/com/android/server/accessibility/ProxyManager.java",
+      "services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java",
+      "services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java",
+      "services/core/java/com/android/server/pm/PackageInstallerSession.java"
+     ],
+     "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
+     "count": 65201,
+     "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+     "order": "the raw bytes of path",
+     "digest": "ef00b628eca1f5aa2f7e76f38dcbe3eb56fd339ee93612aa746fac54f4ae34ab",
+     "digestOf": "the concatenated records, sha256"
+    },
+    "modes": [
+     "100644",
+     "100755",
+     "120000"
+    ],
+    "gitlinks": "none: generation refuses any mode 160000 entry",
+    "blobHash": {
+     "argv": [
+      "git",
+      "hash-object",
+      "-t",
+      "blob",
+      "--no-filters",
+      "--stdin"
+     ],
+     "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+     "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+     "never": [
+      "-w (no object writes)",
+      "--literally",
+      "--path (no attribute filters)",
+      "a plain SHA-1"
+     ],
+     "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+    },
+    "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
+    "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
+   }
+  },
+  {
+   "path": "packages/apps/Launcher3",
+   "repo": "GrapheneOS/platform_packages_apps_Launcher3",
+   "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+   "patches": [
+    {
+     "name": "rose-switcher-launcher3.patch",
+     "sha256": "654bb0cbc5db6c47bfe79e0bc4b6264ce26547617a9e8d8a4cffd91baea6fdbc"
+    },
+    {
+     "name": "rose-edge-launcher3.patch",
+     "sha256": "c240d8121235e48716d108ca2d43be56d142ee2e7a4d00ec6f1a58e253332e28"
+    },
+    {
+     "name": "rose-edge-resize-launcher3.patch",
+     "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
+    }
+   ],
+   "files": [
+    {
+     "path": "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+     "pre": null,
+     "post": {
+      "sha256": "6a64ea861ab855db9eacc0141bdb17288362fa3e090e2bdb69e06b8237497ccf",
+      "gitBlob": "3710dbc8098b21847933d8f8b546a07d5a006eea"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": null,
+       "after": "3710dbc8098b21847933d8f8b546a07d5a006eea",
+       "index": [
+        "0000000",
+        "3710dbc"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
+     "pre": null,
+     "post": {
+      "sha256": "0ef72937c09e367d74425b953b97ce5592459ff865aedb7f7bcfc950f9124cd9",
+      "gitBlob": "a7fef80ec8c22db64a0f468e3cc6fdb4e211767e"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": null,
+       "after": "a7fef80ec8c22db64a0f468e3cc6fdb4e211767e",
+       "index": [
+        "0000000",
+        "a7fef80"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
+     "pre": null,
+     "post": {
+      "sha256": "101b407fe881870d242af9edcd5ee203cb0bd247dc1f2f966a45a340e9fc3602",
+      "gitBlob": "0779a24da9544dcfc90b61bd49972c7ab80672ef"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": null,
+       "after": "0779a24da9544dcfc90b61bd49972c7ab80672ef",
+       "index": [
+        "0000000",
+        "0779a24"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/res/layout/fallback_recents_activity.xml",
+     "pre": {
+      "sha256": "8df1879fb83e2a9f5b11b657a498e6153504171cb702f859d136f37ab968a9f7",
+      "gitBlob": "65f606a4a4ffe3cb1be3e72e5ecd54a9399c7542"
+     },
+     "post": {
+      "sha256": "b52909e663a6b717541813a5dc77d3ca96edee00333b601ceab8869f6ca1a029",
+      "gitBlob": "e068d38a59798eaf01150f1afc319307863d3428"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": "65f606a4a4ffe3cb1be3e72e5ecd54a9399c7542",
+       "after": "e068d38a59798eaf01150f1afc319307863d3428",
+       "index": [
+        "65f606a",
+        "e068d38"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/res/layout/icon_app_chip_view.xml",
+     "pre": {
+      "sha256": "39f08f41ca50a248942ec9c756d474659ee31fe91c486788ae1cfd5bd6306071",
+      "gitBlob": "76f4cc9979734495bd8d976e1d201d8c013c448c"
+     },
+     "post": {
+      "sha256": "74123c696d39a7560321d674e9b6d8387a2f0e1eb9c5539f9833a6da5c4bd963",
+      "gitBlob": "317a281220b13bd12bff62eacdd03cb8525644e9"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": "76f4cc9979734495bd8d976e1d201d8c013c448c",
+       "after": "317a281220b13bd12bff62eacdd03cb8525644e9",
+       "index": [
+        "76f4cc9",
+        "317a281"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/res/layout/task.xml",
+     "pre": {
+      "sha256": "6fab27a7a95e9bda31d7fd4fb4a041ff49bf25c88e1744e30fff78dc50780b19",
+      "gitBlob": "fa1d9f039c19ff69f2f8fdc12ea0c7918646ecaf"
+     },
+     "post": {
+      "sha256": "7518558b2847fd55b5ceca032daff236b84ab58b65fb97f16fe67cead7b44ed6",
+      "gitBlob": "d09e58598921367d916382761eaf46f4f4247578"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": "fa1d9f039c19ff69f2f8fdc12ea0c7918646ecaf",
+       "after": "d09e58598921367d916382761eaf46f4f4247578",
+       "index": [
+        "fa1d9f0",
+        "d09e585"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/res/values/rose_agent_strip.xml",
+     "pre": null,
+     "post": {
+      "sha256": "770ba6b4a01853490994c6c4f4ac3e3932efa76abb5d3966e9489f071444ab05",
+      "gitBlob": "ace444be80360631c33b09e011c1db633de15614"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": null,
+       "after": "ace444be80360631c33b09e011c1db633de15614",
+       "index": [
+        "0000000",
+        "ace444b"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/BaseContainerInterface.java",
+     "pre": {
+      "sha256": "a416df4aaa95b3cc954cef5ada99bc3f1078ddbdb56ccb4365be861eda6cf829",
+      "gitBlob": "37eac47136d2815a7a9ca76aad7f6bcd40270e67"
+     },
+     "post": {
+      "sha256": "467d57fa88cf2c403bcfa541f0e5b40f1e75f7ab80ca23a11f79adf45df0cf55",
+      "gitBlob": "fbcab762f9b415676c1f6bf48d1837fca437d5e6"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": "37eac47136d2815a7a9ca76aad7f6bcd40270e67",
+       "after": "fbcab762f9b415676c1f6bf48d1837fca437d5e6",
+       "index": [
+        "37eac47",
+        "fbcab76"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
+     "pre": {
+      "sha256": "dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa",
+      "gitBlob": "d9f14ac530bc9f81910e305536f1e39a0ef6e564"
+     },
+     "post": {
+      "sha256": "9a09daae6ebf7f3838b1740b7229a4b398fd4a48c5ae1261e7c009fa110d698e",
+      "gitBlob": "3a8cda8859284e1a8c8bde5c990ae76f94c8e126"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": "d9f14ac530bc9f81910e305536f1e39a0ef6e564",
+       "after": "3a8cda8859284e1a8c8bde5c990ae76f94c8e126",
+       "index": [
+        "d9f14ac",
+        "3a8cda8"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/RecentsActivity.java",
+     "pre": {
+      "sha256": "b9bd0251eef6b4cd3159dea08657881cfad74fbe42034f03b773c2fda8d8b804",
+      "gitBlob": "34a3adbacb3337d5828a0831d0213712b0c707f3"
+     },
+     "post": {
+      "sha256": "c9d9bb4e7486108f32ce80db028508c34dadf74b5354bab70ebb52604aa46b0a",
+      "gitBlob": "7f3a26bdff0b7e2c325562923e6e445bf8e26346"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": "34a3adbacb3337d5828a0831d0213712b0c707f3",
+       "after": "7f3a26bdff0b7e2c325562923e6e445bf8e26346",
+       "index": [
+        "34a3adb",
+        "7f3a26b"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
+     "pre": {
+      "sha256": "7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f",
+      "gitBlob": "13c6ffe75886d1f462ed9e2bbd7f6d09552e4df7"
+     },
+     "post": {
+      "sha256": "810d74f3f105d89423b44de8f1ea2e419ef6a823a9bd87917cbe2c84889ccf37",
+      "gitBlob": "997f8c8d870db8740380d94df38e4d10353f25c3"
+     },
+     "chain": [
+      {
+       "patch": "rose-switcher-launcher3.patch",
+       "before": "13c6ffe75886d1f462ed9e2bbd7f6d09552e4df7",
+       "after": "997f8c8d870db8740380d94df38e4d10353f25c3",
+       "index": [
+        "13c6ffe",
+        "997f8c8"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java",
+     "pre": {
+      "sha256": "7bd5815f17eed4c5e59cfe323f8f61ad6d3c5bfbdedc2d95a83183984350e0df",
+      "gitBlob": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188"
+     },
+     "post": {
+      "sha256": "7e91f9fdfd773dfc7355532eb6bc73a659b159e34d09db06f599bd0763bc40b5",
+      "gitBlob": "940c58e6c52c02eb211a348ad16f50f9341a0a13"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-launcher3.patch",
+       "before": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188",
+       "after": "940c58e6c52c02eb211a348ad16f50f9341a0a13",
+       "index": [
+        "afa87a5",
+        "940c58e"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
+     "pre": {
+      "sha256": "194138f4ee572d6edef485087a08ae3377ad941b06bf8b5342d63b23e9805161",
+      "gitBlob": "8c46fbde20449710dbc23b306441f3c9758c80dc"
+     },
+     "post": {
+      "sha256": "a76f7267a8086001ced822a0befb678cf8a8a815e6dea1d24556ce3fbb769d78",
+      "gitBlob": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-launcher3.patch",
+       "before": "8c46fbde20449710dbc23b306441f3c9758c80dc",
+       "after": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2",
+       "index": [
+        "8c46fbd",
+        "9a13ec3"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java",
+     "pre": {
+      "sha256": "c080919fbc48e1871591d7da4ee42d154d60865d771d7a4331120d48a136a59c",
+      "gitBlob": "8148e084538ee9ef14a0795fb89be14521bdd180"
+     },
+     "post": {
+      "sha256": "6c65b9d6a96f53661383eb5dfcb9ec0bd682e05032b3b9b49b5b9e76858a09cf",
+      "gitBlob": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-launcher3.patch",
+       "before": "8148e084538ee9ef14a0795fb89be14521bdd180",
+       "after": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d",
+       "index": [
+        "8148e08",
+        "7dbbada"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+     "pre": {
+      "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
+      "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
+     },
+     "post": {
+      "sha256": "f3a894b1271d4afd2410c6337da3712b639bad564f19de1b2a702f68f40eaea3",
+      "gitBlob": "a881058aee94c322041b7ec2307baf022a48afab"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-resize-launcher3.patch",
+       "before": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9",
+       "after": "a881058aee94c322041b7ec2307baf022a48afab",
+       "index": [
+        "8f75b94",
+        "a881058"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
+     "pre": {
+      "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
+      "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
+     },
+     "post": {
+      "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
+      "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-resize-launcher3.patch",
+       "before": "256c991afb42d068a1d5f4520ea003f845a5c6f3",
+       "after": "e75c0302ed42eb5d12c3cf356097dfff88477106",
+       "index": [
+        "256c991",
+        "e75c030"
+       ],
+       "base": "exact"
+      }
+     ]
+    }
+   ],
+   "treePin": {
+    "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+    "rootTree": "31263ca2e7dfa16a8ce3fd06a5740517b43303ad",
+    "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+    "objectFormat": "sha1",
+    "listing": {
+     "path": "os/tests/fixtures/launcher3-compile-contract/trees/packages__apps__Launcher3.ls-tree.txt.gz",
+     "sha256": "b9ad6d98d76bdf191dfab53540ca45338f15e010805e26cb32e3a2a2aa2462c8",
+     "compressedSha256": "e1e3829c95f413b5169996367a7da8c19ef285408a0ed08c72af5b4ab06b2f7b",
+     "paths": 3450,
+     "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
+    },
+    "unlisted": {
+     "excludedPaths": [
+      "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+      "quickstep/res/drawable-nodpi/rose_glacier_field.png",
+      "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
+      "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
+      "quickstep/res/layout/fallback_recents_activity.xml",
+      "quickstep/res/layout/icon_app_chip_view.xml",
+      "quickstep/res/layout/task.xml",
+      "quickstep/res/values/rose_agent_strip.xml",
+      "quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java",
+      "quickstep/src/com/android/quickstep/BaseContainerInterface.java",
+      "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
+      "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
+      "quickstep/src/com/android/quickstep/RecentsActivity.java",
+      "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+      "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
+      "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+      "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
+      "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
+     ],
+     "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
+     "count": 3438,
+     "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+     "order": "the raw bytes of path",
+     "digest": "08f7beeabd9fa919be2a4f616913e1d82f5c1848f87d0984c9063cfe7e87ae16",
+     "digestOf": "the concatenated records, sha256"
+    },
+    "modes": [
+     "100644",
+     "100755",
+     "120000"
+    ],
+    "gitlinks": "none: generation refuses any mode 160000 entry",
+    "blobHash": {
+     "argv": [
+      "git",
+      "hash-object",
+      "-t",
+      "blob",
+      "--no-filters",
+      "--stdin"
+     ],
+     "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+     "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+     "never": [
+      "-w (no object writes)",
+      "--literally",
+      "--path (no attribute filters)",
+      "a plain SHA-1"
+     ],
+     "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+    },
+    "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
+    "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
+   }
+  },
+  {
+   "path": "build/release",
+   "repo": "GrapheneOS/platform_build_release",
+   "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22",
+   "patches": [
+    {
+     "name": "background-control-build-release.patch",
+     "sha256": "ef76fa1ef3565bfd2e5fc0527217253cde2cba5d98fe6f3ade50e37bd98e052d"
+    }
+   ],
+   "files": [
+    {
+     "path": "release_configs/cur.textproto",
+     "pre": {
+      "sha256": "c2fdf302ccfe836de3b339b4c3d21c157103c12c3be725df0d0bb66b5acccb0d",
+      "gitBlob": "b354177a9691e23ff973ec51e4cec7fbeeda2541"
+     },
+     "post": {
+      "sha256": "5765031c9edf804e15a01c5565711ad3237d27d3f0d882425b654a5fcf18e2c8",
+      "gitBlob": "a5615af453d501e034515712ce56cd275db0f774"
+     },
+     "chain": [
+      {
+       "patch": "background-control-build-release.patch",
+       "before": "b354177a9691e23ff973ec51e4cec7fbeeda2541",
+       "after": "a5615af453d501e034515712ce56cd275db0f774",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
+    }
+   ],
+   "treePin": {
+    "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22",
+    "rootTree": "8db73ecd6007deb2a277847d73add8b0dffbc458",
+    "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+    "objectFormat": "sha1",
+    "listing": {
+     "path": "os/tests/fixtures/launcher3-compile-contract/trees/build__release.ls-tree.txt.gz",
+     "sha256": "7ad32dc8b842d12175871386ee8c698abf9e319c3ee70ab7a1bc9b32432fd04a",
+     "compressedSha256": "92917f7791d5c8cac880828c78b250201e25a805130aa7393e28c255da18e5b3",
+     "paths": 18290,
+     "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
+    },
+    "unlisted": {
+     "excludedPaths": [
+      "aconfig/pixel_background_control/Android.bp",
+      "aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+      "aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+      "release_configs/cur.textproto",
+      "release_configs/pixel_background_control.textproto"
+     ],
+     "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
+     "count": 18289,
+     "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+     "order": "the raw bytes of path",
+     "digest": "e713cc1a3b190b8525b7d7c3543d60c1d854848c1132bcbc2735873c74a249f7",
+     "digestOf": "the concatenated records, sha256"
+    },
+    "modes": [
+     "100644"
+    ],
+    "gitlinks": "none: generation refuses any mode 160000 entry",
+    "blobHash": {
+     "argv": [
+      "git",
+      "hash-object",
+      "-t",
+      "blob",
+      "--no-filters",
+      "--stdin"
+     ],
+     "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+     "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+     "never": [
+      "-w (no object writes)",
+      "--literally",
+      "--path (no attribute filters)",
+      "a plain SHA-1"
+     ],
+     "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+    },
+    "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
+    "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
+   }
+  }
+ ],
+ "overlays": [
+  {
+   "target": "build/release/aconfig/pixel_background_control/Android.bp",
+   "sha256": "31d30004cdd2e4420b25397a0df0c1ed2ebb6809585127348f38565f4e97f1a7",
+   "role": "required"
+  },
+  {
+   "target": "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+   "sha256": "5b75a5813cc4bbd6339be9a828e6c18f66b96a869513209d9db31a39371324fd",
+   "role": "required"
+  },
+  {
+   "target": "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+   "sha256": "c1852a5dba09d97ffc4b4a854822e5560252bc949f38572be800e67307c56b7f",
+   "role": "required"
+  },
+  {
+   "target": "build/release/release_configs/pixel_background_control.textproto",
+   "sha256": "bdaff12f1cd200b3793dabd32633de7489033e890be7c9fc6a055b1d6bf1811a",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
+   "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+   "sha256": "21db4354e7b31c9bf23a2c79a622b9f8f530720d64332ff8869b9443e809b7ea",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+   "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+   "sha256": "8b8ea1575815ff6cc4f1dca736584c57fb524e5c0e94a81b91d20bc59f9a0ef4",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+   "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+   "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+   "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+   "sha256": "ff38ddd9d8a66aa24c3b6745fded164402631aa449183fc70c4906adf483879a",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+   "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+   "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+   "sha256": "ba6cce960eb7668386b34ed762dc0db022e7cef733e86b8109dba0493875896a",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+   "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+   "sha256": "5a1c3bb9c27e46397ed4ca3d4370403cb2278916815e3d754ae11c19fe648d95",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+   "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392",
+   "role": "required"
+  }
+ ],
+ "unaffected": [
+  "inside the three projects, every path not listed in files or overlays must match that project's treePin, and any extra file is refused",
+  "other pinned projects lunch needs are at the integrating run's state (Infra provenance); projects the integration also patches (build/make, packages/modules/Permission, packages/apps/Updater) and paths it generates (packages/apps/RosePreinstall/*, PixelBackgroundControl/Agent.apk) are not at their pinned revision and are not inputs of this proof",
+  "the generated vendor module and the lunch markers: lunchInputs"
+ ],
+ "notInputs": [
+  "packages/apps/PixelBackgroundControl and Agent.apk",
+  "the policy receipt in reconstruct (verifyIntegrated, and verifyBaseApplyCandidate's base-exact and final-exact, need it, bound, to check config.xml)",
+  "build/make patches",
+  "packages/apps/Updater",
+  "packages/modules/Permission",
+  "preinstall APKs",
+  "frameworks/base overlays (WindowManager-Shell, SystemUI-core: not on the library classpath)"
+ ],
+ "outputsToBind": [
+  "Soong source and resource lists of Launcher3QuickStepLib contain every Launcher3 post-image and required overlay at these hashes",
+  "its javac/kotlinc classpath contains the patched framework (AutomatedPackageListener declares onAutomatedDevicesChanged)",
+  "m Launcher3QuickStepLib succeeds",
+  "flagEvidence: each flag's expectedLine from its own aconfig_declarations module output",
+  "lunch product, variant, BUILD_ID and release-config maps in effect"
+ ],
+ "base": {
+  "bundleContent": {
+   "patches": [
+    {
+     "project": "frameworks/base",
+     "name": "frameworks-base.patch",
+     "sha256": "2972a450d6d302544e22904850a52d941871c8d3b4a4f3a863467eba5b216b6e"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-agent-self-update-frameworks-base.patch",
+     "sha256": "60305607a717ff2473b1e9dfcd63657acf2848889ea6f51e4e564a6063795182"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-frameworks-base.patch",
+     "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-modern-frameworks-base.patch",
+     "sha256": "4afcf3115fff59363910fb2a11df52ae928cfaf41f13776a269c2c5a0ec8b0f7"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-resource-import-fix.patch",
+     "sha256": "1872f2bdabf775d88f98f214f7c770968f733ab679f12fd75071384812800354"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "locked-control-frameworks-base.patch",
+     "sha256": "8a9c06333f30462513839f55471678c84f7ce78233a386b2a11a0a293dca9abd"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-edge-wmshell.patch",
+     "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-shade-systemui.patch",
+     "sha256": "df6179afa0c87691122e97873982fab5d8465631176d0ea56b6f097a973921d5"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-switcher-launcher3.patch",
+     "sha256": "654bb0cbc5db6c47bfe79e0bc4b6264ce26547617a9e8d8a4cffd91baea6fdbc"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-launcher3.patch",
+     "sha256": "c240d8121235e48716d108ca2d43be56d142ee2e7a4d00ec6f1a58e253332e28"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-resize-launcher3.patch",
+     "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
+    },
+    {
+     "project": "build/release",
+     "name": "background-control-build-release.patch",
+     "sha256": "ef76fa1ef3565bfd2e5fc0527217253cde2cba5d98fe6f3ade50e37bd98e052d"
+    }
+   ],
+   "overlays": [
+    {
+     "target": "build/release/aconfig/pixel_background_control/Android.bp",
+     "sha256": "31d30004cdd2e4420b25397a0df0c1ed2ebb6809585127348f38565f4e97f1a7"
+    },
+    {
+     "target": "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+     "sha256": "5b75a5813cc4bbd6339be9a828e6c18f66b96a869513209d9db31a39371324fd"
+    },
+    {
+     "target": "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+     "sha256": "c1852a5dba09d97ffc4b4a854822e5560252bc949f38572be800e67307c56b7f"
+    },
+    {
+     "target": "build/release/release_configs/pixel_background_control.textproto",
+     "sha256": "bdaff12f1cd200b3793dabd32633de7489033e890be7c9fc6a055b1d6bf1811a"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
+     "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+     "sha256": "21db4354e7b31c9bf23a2c79a622b9f8f530720d64332ff8869b9443e809b7ea"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+     "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+     "sha256": "8b8ea1575815ff6cc4f1dca736584c57fb524e5c0e94a81b91d20bc59f9a0ef4"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+     "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+     "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+     "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+     "sha256": "ff38ddd9d8a66aa24c3b6745fded164402631aa449183fc70c4906adf483879a"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+     "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+     "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+     "sha256": "ba6cce960eb7668386b34ed762dc0db022e7cef733e86b8109dba0493875896a"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+     "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+     "sha256": "5a1c3bb9c27e46397ed4ca3d4370403cb2278916815e3d754ae11c19fe648d95"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+     "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392"
+    }
+   ],
+   "notAnInputOverlays": [
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+    "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+    "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java"
+   ]
+  },
+  "match": "the integrating bundle's source contents (the patches it applied to these projects and the overlays it copied into them, as Infra reports them) must equal bundleContent exactly; any other bundle does not match and refuses",
+  "projects": [
+   {
+    "path": "frameworks/base",
+    "repo": "GrapheneOS/platform_frameworks_base",
+    "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+    "patches": [
+     {
+      "name": "frameworks-base.patch",
+      "sha256": "2972a450d6d302544e22904850a52d941871c8d3b4a4f3a863467eba5b216b6e"
+     },
+     {
+      "name": "rose-agent-self-update-frameworks-base.patch",
+      "sha256": "60305607a717ff2473b1e9dfcd63657acf2848889ea6f51e4e564a6063795182"
+     },
+     {
+      "name": "background-control-frameworks-base.patch",
+      "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
+     },
+     {
+      "name": "background-control-modern-frameworks-base.patch",
+      "sha256": "4afcf3115fff59363910fb2a11df52ae928cfaf41f13776a269c2c5a0ec8b0f7"
+     },
+     {
+      "name": "background-control-resource-import-fix.patch",
+      "sha256": "1872f2bdabf775d88f98f214f7c770968f733ab679f12fd75071384812800354"
+     },
+     {
+      "name": "locked-control-frameworks-base.patch",
+      "sha256": "8a9c06333f30462513839f55471678c84f7ce78233a386b2a11a0a293dca9abd"
+     },
+     {
+      "name": "rose-edge-wmshell.patch",
+      "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
+     },
+     {
+      "name": "rose-shade-systemui.patch",
+      "sha256": "df6179afa0c87691122e97873982fab5d8465631176d0ea56b6f097a973921d5"
+     }
+    ],
+    "files": [
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+      "pre": {
+       "sha256": "76de3a4fe55c5bb6f73a5df642c3ee736f64c0bc8ad95c264ae6c2a603bca711",
+       "gitBlob": "83e23b3a523f0f031708e78aa9df86bdd5b48ebe"
+      },
+      "post": {
+       "sha256": "b0d4eb9bc935f533c8dc139cd34b6a1a5794abda28ca2a5aff57461917ab1d8a",
+       "gitBlob": "11bf152bf18bf00dff7d8473e3496c820a6e9383"
+      },
+      "chain": [
+       {
+        "patch": "frameworks-base.patch",
+        "before": "83e23b3a523f0f031708e78aa9df86bdd5b48ebe",
+        "after": "11bf152bf18bf00dff7d8473e3496c820a6e9383",
+        "index": [
+         "83e23b3a5",
+         "11bf152bf"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+      "pre": {
+       "sha256": "b73c6f710a9731203bf56cefd8e673cbf84adc241c59f09a54828c7841be8918",
+       "gitBlob": "b0a5d4e5259b037d187d9178c9eeea90cc731745"
+      },
+      "post": {
+       "sha256": "6c0247373b4acc548678b6e56d84becece7c28298a18de98704bc29711cb01e1",
+       "gitBlob": "246137bda252d651d28ad9ec78f1873aa8a30810"
+      },
+      "chain": [
+       {
+        "patch": "frameworks-base.patch",
+        "before": "b0a5d4e5259b037d187d9178c9eeea90cc731745",
+        "after": "246137bda252d651d28ad9ec78f1873aa8a30810",
+        "index": [
+         "b0a5d4e52",
+         "246137bda"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "packages/SystemUI/AndroidManifest.xml",
+      "pre": {
+       "sha256": "8226ea45e5471d78c9ecb4db68098a83fad096b5fec6cf2b07ee1c2c133c49a4",
+       "gitBlob": "d2a7ba046774f0443c41d23dfa4f61136ca1bffb"
+      },
+      "post": {
+       "sha256": "32087f0b46a5e8fca67edbce60290ad2ebafa1e86c0f6f3fc1b08358ad49623f",
+       "gitBlob": "d36ec5030eb1185d8785f25e42a73cd299565763"
+      },
+      "chain": [
+       {
+        "patch": "frameworks-base.patch",
+        "before": "d2a7ba046774f0443c41d23dfa4f61136ca1bffb",
+        "after": "d36ec5030eb1185d8785f25e42a73cd299565763",
+        "index": [
+         "d2a7ba046",
+         "d36ec5030"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
+      "pre": {
+       "sha256": "91312684ddb3d2797bc982d0e805b2df3aedd42744f3428f44acc2261396d8ff",
+       "gitBlob": "db91ce3c182f9bb8e290dc05874a914fd2b3acba"
+      },
+      "post": {
+       "sha256": "4d7ec194bbf9abdf1ad6bdae56973615515e0927e20925df2bccb488421f4e80",
+       "gitBlob": "79b1220a8b0de3b7b1d17dbc61b18ebef0166c0e"
+      },
+      "chain": [
+       {
+        "patch": "frameworks-base.patch",
+        "before": "db91ce3c182f9bb8e290dc05874a914fd2b3acba",
+        "after": "79b1220a8b0de3b7b1d17dbc61b18ebef0166c0e",
+        "index": [
+         "db91ce3c1",
+         "79b1220a8"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
+      "pre": {
+       "sha256": "cdf4f1492010715b612a414ea00be170031eac54b2fca72798d3f65cb92b585e",
+       "gitBlob": "013eae5ed025b8a0cfb3a08f940a38487e35d347"
+      },
+      "post": {
+       "sha256": "92b4589b3b79125dc0d7478519aed84d2a1ded8f197b5d32a4933bf9d9470089",
+       "gitBlob": "68606fa279b73e36c50a41c554a8e5a8106d39b5"
+      },
+      "chain": [
+       {
+        "patch": "frameworks-base.patch",
+        "before": "013eae5ed025b8a0cfb3a08f940a38487e35d347",
+        "after": "68606fa279b73e36c50a41c554a8e5a8106d39b5",
+        "index": [
+         "013eae5ed",
+         "68606fa27"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt",
+      "pre": {
+       "sha256": "56a94dfef22408b8938c3fefdf0dac79e706f455881ea928a3877bcdbf7e9474",
+       "gitBlob": "0131aab45db636022a32030628fe90f0eafb416e"
+      },
+      "post": {
+       "sha256": "4c1efb6de31cd94cd7ee93212aa6d3d2113171907d9d07d854a2e5b9e742ce4f",
+       "gitBlob": "8ba883695d4557f3caaec42f9b9935cae1bea046"
+      },
+      "chain": [
+       {
+        "patch": "frameworks-base.patch",
+        "before": "0131aab45db636022a32030628fe90f0eafb416e",
+        "after": "8ba883695d4557f3caaec42f9b9935cae1bea046",
+        "index": [
+         "0131aab45",
+         "8ba883695"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "services/core/java/com/android/server/pm/PackageInstallerSession.java",
+      "pre": {
+       "sha256": "5ff683567eef824f49bb0e6f1eb9cee1c506ad6ac688970d20802506564a1216",
+       "gitBlob": "55450b0fb5188c15a87d40e01aef8663a6dddfc3"
+      },
+      "post": {
+       "sha256": "0d8a3a890b3725a052e2046fc9ef43a97c32c85a785b2aef1d605df6c505f2c8",
+       "gitBlob": "bb8f5ca22ee614b8bac1b433b8c67835228efbae"
+      },
+      "chain": [
+       {
+        "patch": "rose-agent-self-update-frameworks-base.patch",
+        "before": "55450b0fb5188c15a87d40e01aef8663a6dddfc3",
+        "after": "bb8f5ca22ee614b8bac1b433b8c67835228efbae",
+        "index": [
+         "55450b0",
+         "bb8f5ca"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "core/res/res/values/config.xml",
+      "pre": {
+       "sha256": "d9121e6c004d52b9f4e21d2e051f12efd7ab46f37b8c288e0314392a6d16b53f",
+       "gitBlob": "c53d2c81ffba934d9c7dfd0ac669f25cc6b09c8e"
+      },
+      "post": {
+       "sha256": "bed8c838cb8e915e3ab9aca9dc260169481ea853b79adb6696f1e355ecf23cf5",
+       "gitBlob": "01b107b1766afac2d8e9d4fc8a8ae1bfbe1d4804"
+      },
+      "chain": [
+       {
+        "patch": "background-control-frameworks-base.patch",
+        "before": "c53d2c81ffba934d9c7dfd0ac669f25cc6b09c8e",
+        "after": "f82e65950408142ac1c83669aea2860bd9ec82a4",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "f82e65950408142ac1c83669aea2860bd9ec82a4",
+        "after": "6c7d52a5887b18454d16a55c7a107505be209fbb",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "locked-control-frameworks-base.patch",
+        "before": "6c7d52a5887b18454d16a55c7a107505be209fbb",
+        "after": "01b107b1766afac2d8e9d4fc8a8ae1bfbe1d4804",
+        "index": [
+         "6c7d52a",
+         "01b107b"
+        ],
+        "base": "exact"
+       }
+      ],
+      "integrationRewrite": {
+       "by": "scripts/apply-os-changes.py, the `if policy:` block, after patching",
+       "elements": [
+        "config_pixelComputerControlAgents",
+        "config_pixelComputerControlTargets",
+        "config_pixelComputerControlPrototypeAgents",
+        "config_pixelComputerControlReferenceDisplayAddress",
+        "config_pixelComputerControlLockedSessions"
+       ],
+       "markers": {
+        "config_pixelComputerControlAgents": "    <string-array name=\"config_pixelComputerControlAgents\" translatable=\"false\" />",
+        "config_pixelComputerControlTargets": "    <string-array name=\"config_pixelComputerControlTargets\" translatable=\"false\" />",
+        "config_pixelComputerControlPrototypeAgents": "    <string-array name=\"config_pixelComputerControlPrototypeAgents\" translatable=\"false\" />",
+        "config_pixelComputerControlReferenceDisplayAddress": "    <string name=\"config_pixelComputerControlReferenceDisplayAddress\" translatable=\"false\"></string>",
+        "config_pixelComputerControlLockedSessions": "    <bool name=\"config_pixelComputerControlLockedSessions\">false</bool>"
+       },
+       "generatingInputs": {
+        "policyReceipt": "agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside this contract; it is the integrating run's own --background-policy file (branches.definitions.policyReceipt), never one reconstructed from config.xml or any other tree file",
+        "referenceDisplayAddress": "--reference-display-address, absent unless given; decimal, 0 < value < 2^63",
+        "lockedControl": "--locked-control, false unless given"
+       },
+       "inputRules": {
+        "packageName": "[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+",
+        "certificate": "[0-9A-F]{64}",
+        "rows": "every agent and target row has a packageName and at least one certificate"
+       },
+       "templates": {
+        "array": "    <string-array name=\"config_pixelComputerControl{name}\" translatable=\"false\">\n{entries}    </string-array>",
+        "entry": "        <item>{packageName}:{certificate}</item>\n",
+        "arrays": {
+         "config_pixelComputerControlAgents": "Agents: the agent row",
+         "config_pixelComputerControlTargets": "Targets: every target row, in receipt order",
+         "config_pixelComputerControlPrototypeAgents": "PrototypeAgents: the agent row, only when prototypeControl is true; otherwise the marker"
+        },
+        "config_pixelComputerControlReferenceDisplayAddress": "    <string name=\"config_pixelComputerControlReferenceDisplayAddress\" translatable=\"false\">{address}</string> when given; otherwise the marker",
+        "config_pixelComputerControlLockedSessions": "    <bool name=\"config_pixelComputerControlLockedSessions\">true</bool> when lockedControl; otherwise the marker"
+       },
+       "compare": [
+        "each element name opens exactly once in the file",
+        "each element is exactly its expected text (template from the bound inputs, or its marker)",
+        "replacing exactly those texts with their markers gives post (sha256); nothing else is normalised",
+        "a missing input or binding, a value outside inputRules, or any other difference refuses"
+       ],
+       "reference": "scripts/launcher3-compile-contract.py verify_integrated_config implements exactly this"
+      }
+     },
+     {
+      "path": "core/res/res/values/symbols.xml",
+      "pre": {
+       "sha256": "2b0ff745f6971afe0e5f58e0cd24b7ebe16a3e967676344277e190bc049a04b4",
+       "gitBlob": "5300fe8a3c6206ef126c32efab5d84e5884cc473"
+      },
+      "post": {
+       "sha256": "7f751e1b5e80396dc19a8be256f46c1c530aee2e0a4667e87d29d4159a0b829a",
+       "gitBlob": "3cecf6ad18c47e36b7071dd0bbbb2fc3e192f6d9"
+      },
+      "chain": [
+       {
+        "patch": "background-control-frameworks-base.patch",
+        "before": "5300fe8a3c6206ef126c32efab5d84e5884cc473",
+        "after": "7d2def3ca180af22191c466a247ee189b1cb7cc7",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "7d2def3ca180af22191c466a247ee189b1cb7cc7",
+        "after": "a4cd6aebbbb2a61fd9a3f0cedafed18179add8f9",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "locked-control-frameworks-base.patch",
+        "before": "a4cd6aebbbb2a61fd9a3f0cedafed18179add8f9",
+        "after": "3cecf6ad18c47e36b7071dd0bbbb2fc3e192f6d9",
+        "index": [
+         "a4cd6ae",
+         "3cecf6a"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java",
+      "pre": {
+       "sha256": "f96c32b111b4021187200adc2ec1944bcdbf7a913325b8aa92e4702c67f4a79b",
+       "gitBlob": "67dee3c467c393711b2d55046cbe44fb8ca15a4d"
+      },
+      "post": {
+       "sha256": "3ec881c4303dff9689467f1b6f68ac92c5d7f6e9e6253cbb2a36540cf609037b",
+       "gitBlob": "e60fbd20f19607670d58fc713816aa6d8a5df7d5"
+      },
+      "chain": [
+       {
+        "patch": "background-control-frameworks-base.patch",
+        "before": "67dee3c467c393711b2d55046cbe44fb8ca15a4d",
+        "after": "bff72fd1b96001ffcc2c54d80848c87a687a3fae",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "bff72fd1b96001ffcc2c54d80848c87a687a3fae",
+        "after": "9789eb4596f74c0e23a368ff28adccb817b3b3a3",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "locked-control-frameworks-base.patch",
+        "before": "9789eb4596f74c0e23a368ff28adccb817b3b3a3",
+        "after": "e60fbd20f19607670d58fc713816aa6d8a5df7d5",
+        "index": [
+         "9789eb4",
+         "e60fbd2"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java",
+      "pre": {
+       "sha256": "66447d84e061d2a0304f51f9e06fa45032db3f2a1e5ac035689cb4522fd0f735",
+       "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
+      },
+      "post": {
+       "sha256": "eef0edf1c1a943b6a88e34c4146684b4dfe6b59e50cdb4ac982e2ea04a88d525",
+       "gitBlob": "8b6802619b08ef1f38e104e12635094e613c8b17"
+      },
+      "chain": [
+       {
+        "patch": "background-control-frameworks-base.patch",
+        "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
+        "after": "a35500ee45acc5622d8ce066285da4ccf213e166",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "a35500ee45acc5622d8ce066285da4ccf213e166",
+        "after": "c250385b9263eb3c6d465137d82c02efa13800b9",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "background-control-resource-import-fix.patch",
+        "before": "c250385b9263eb3c6d465137d82c02efa13800b9",
+        "after": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "locked-control-frameworks-base.patch",
+        "before": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+        "after": "8b6802619b08ef1f38e104e12635094e613c8b17",
+        "index": [
+         "0a88d97",
+         "5f4a32d"
+        ],
+        "base": "different"
+       }
+      ]
+     },
+     {
+      "path": "services/accessibility/java/com/android/server/accessibility/ProxyManager.java",
+      "pre": {
+       "sha256": "63b5b2746d67999c563a3a2a0a36641c5679e94c4a7ad3cd2ab91aca093b61a1",
+       "gitBlob": "f107647b5576d6e517e2ef5e2e28d5c23764492e"
+      },
+      "post": {
+       "sha256": "c31128b341a948644a3d1cf501f72d2a3ab3b9bb511ecb312a1f0afdef1ee6a8",
+       "gitBlob": "69185fe5413df2e5d0b88183e29f0a4b79137c86"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "f107647b5576d6e517e2ef5e2e28d5c23764492e",
+        "after": "69185fe5413df2e5d0b88183e29f0a4b79137c86",
+        "index": [
+         "f107647b5",
+         "69185fe54"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/IVirtualDeviceManager.aidl",
+      "pre": {
+       "sha256": "bfc6efe50adc8900def427769de91d9e6cc61116a65656d4b69e50bb570a9581",
+       "gitBlob": "ce355150b61754429ab9724969e2209dc80dec0f"
+      },
+      "post": {
+       "sha256": "4bdf68920df927579e10c9f1a8ec5fb18ebc19401bfbaccb2064203b6d53d16b",
+       "gitBlob": "cb620f7dec5c68ee85f1792963c0a1d473b537f4"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "ce355150b61754429ab9724969e2209dc80dec0f",
+        "after": "cb620f7dec5c68ee85f1792963c0a1d473b537f4",
+        "index": [
+         "ce355150",
+         "cb620f7d"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/VirtualDeviceManager.java",
+      "pre": {
+       "sha256": "71fcaaea4eb03c53c6f89b4803c56014fe31218acef5a3d396ffc143e7185e1f",
+       "gitBlob": "5a035b2ae7fceb7a43738f3de1720ae332a05326"
+      },
+      "post": {
+       "sha256": "cdea6b8243e8d98a37bd6b53a5a1858e8864beac78386fea87d1987ab51586b0",
+       "gitBlob": "714a3c2cec59e7ca0121f7eb64a37d92bf2d8f4d"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "5a035b2ae7fceb7a43738f3de1720ae332a05326",
+        "after": "714a3c2cec59e7ca0121f7eb64a37d92bf2d8f4d",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/computercontrol/AutomatedApps.aidl",
+      "pre": null,
+      "post": {
+       "sha256": "2deb4c6614e621fc25aa5809b9d7f3bf49a482cbc2f1f8d1fb20100badfd56f6",
+       "gitBlob": "4b0bc5312a27c479947304b1af5674fe539ba800"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": null,
+        "after": "4b0bc5312a27c479947304b1af5674fe539ba800",
+        "index": [
+         "00000000",
+         "4b0bc531"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/computercontrol/AutomatedApps.java",
+      "pre": null,
+      "post": {
+       "sha256": "f4dd864dbb8db0f1ddf254476a39591572bb99025aa5209471ca4766d7501918",
+       "gitBlob": "c5d54a55a453f4a1562ae341dec1aa0b75deee1c"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": null,
+        "after": "c5d54a55a453f4a1562ae341dec1aa0b75deee1c",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/computercontrol/AutomatedPackageListener.java",
+      "pre": {
+       "sha256": "e39e3f93a046664ae045473c2bebd3a7c856cc58ff22a7019bd722ac2f3b0fe3",
+       "gitBlob": "36d2ef0e12cb45fa5cf5a9f64f1259cb50d03fe6"
+      },
+      "post": {
+       "sha256": "dc8624ad3d8f35648616096394b8cbf33437f92ad35e3e8f44b069a1accedef8",
+       "gitBlob": "3e21c0a2f763b1c51af3ffb9986c0fae8f8c73a3"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "36d2ef0e12cb45fa5cf5a9f64f1259cb50d03fe6",
+        "after": "3e21c0a2f763b1c51af3ffb9986c0fae8f8c73a3",
+        "index": [
+         "36d2ef0e",
+         "3e21c0a2"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/computercontrol/ComputerControlSession.java",
+      "pre": {
+       "sha256": "3ab33c355e774bcd00a7f3ee9692438ee5a48a53df464f3da577cce7b601fb59",
+       "gitBlob": "e1abf841b0b7862415b3a42f3e526384f98ec735"
+      },
+      "post": {
+       "sha256": "52f46a34ba8e3186a07c5f45edff773b0d201ff0a46640f0b79cbcf9ce5f1496",
+       "gitBlob": "9a8b9b71d1240a798299da1effca5e2cca5c74cd"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "e1abf841b0b7862415b3a42f3e526384f98ec735",
+        "after": "9a8b9b71d1240a798299da1effca5e2cca5c74cd",
+        "index": [
+         "e1abf841",
+         "9a8b9b71"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/computercontrol/IAutomatedPackageListener.aidl",
+      "pre": {
+       "sha256": "f517dec31a738885227ffb7271be38f14f5acc904e3a164ca624e52ef153a5da",
+       "gitBlob": "72506eaa64a5bfe9669bd7eccd00166d4ccd56a8"
+      },
+      "post": {
+       "sha256": "2e8106a32ea89088f24f85b523dd997e7f3365cb7ead4bdc57eb1fdf190591fe",
+       "gitBlob": "fc5ca6f4e3ac79a9a432d7c923b5419683a18725"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "72506eaa64a5bfe9669bd7eccd00166d4ccd56a8",
+        "after": "fc5ca6f4e3ac79a9a432d7c923b5419683a18725",
+        "index": [
+         "72506eaa",
+         "fc5ca6f4"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "core/java/android/companion/virtual/computercontrol/IComputerControlSession.aidl",
+      "pre": {
+       "sha256": "83aea3fbe508f0b0a03f62f8907998bb0dba362bbbaf421b867e5f4207edeaa4",
+       "gitBlob": "baed11a11e1dcb36c798bf352a88c69dd99c8e28"
+      },
+      "post": {
+       "sha256": "e078c72405c096e6b0a203132d00b32b823d2c1ce6cf752603a61f8cc1d44520",
+       "gitBlob": "4346d7e5c7dc6f18bff6dc3fff29fe9ec04699ff"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "baed11a11e1dcb36c798bf352a88c69dd99c8e28",
+        "after": "4346d7e5c7dc6f18bff6dc3fff29fe9ec04699ff",
+        "index": [
+         "baed11a1",
+         "4346d7e5"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
+      "pre": {
+       "sha256": "fb5b292482f95b5922e0545d60852599499bb2a740fab0d3783e8b5a40f48780",
+       "gitBlob": "b756433b4db51ba09298bf15a7e575236f6d4ec4"
+      },
+      "post": {
+       "sha256": "5ff3c9493a047eb424ccffb08db916d9ef1567e6738db70052d5d1ffbccc6433",
+       "gitBlob": "15b8b5191a0a9fe4371b12c8481c5151d91aa291"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "b756433b4db51ba09298bf15a7e575236f6d4ec4",
+        "after": "15b8b5191a0a9fe4371b12c8481c5151d91aa291",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     },
+     {
+      "path": "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
+      "pre": {
+       "sha256": "8c61474247ec68de7f1e50a4f15d248627a5e38013846743fcd9a74c8b67939b",
+       "gitBlob": "9cbc59bc73c08f181c58471808f5a7c76d60ceea"
+      },
+      "post": {
+       "sha256": "4b38dc3c9d82b1f61864abbe4f223095616337c4c246b562b35d4fb4410a8191",
+       "gitBlob": "128651ce79fd4f0065b075cd025b14c00679cab8"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "9cbc59bc73c08f181c58471808f5a7c76d60ceea",
+        "after": "128651ce79fd4f0065b075cd025b14c00679cab8",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     },
+     {
+      "path": "services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java",
+      "pre": {
+       "sha256": "c7ad5bcd9dfda3735522c6bf0e737d0c8e7fd36cf3450f37a049962e8b6c40c8",
+       "gitBlob": "35217902eaaf3140dd64387efe353a8483f8b7e3"
+      },
+      "post": {
+       "sha256": "6bacccb12b77cadf6285fa9e9c124c033a8913f368fb7a40244ab3bd38f5c233",
+       "gitBlob": "ddb50757ce9bba67c34669a5af838c91947cd53d"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "35217902eaaf3140dd64387efe353a8483f8b7e3",
+        "after": "ddb50757ce9bba67c34669a5af838c91947cd53d",
+        "index": [
+         "35217902",
+         "ddb50757"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java",
+      "pre": {
+       "sha256": "2ce9b1b44835e5ed2ee3e66a1cfe49d5d976e9961f605787ba7bf116850afd2e",
+       "gitBlob": "81eb70ec725d496360d557040a03e62c12cc6e45"
+      },
+      "post": {
+       "sha256": "4f40c19911f5f36be6393cc66cf9f449d3df09e1e73a2d352a270c48eab05be2",
+       "gitBlob": "d655a8e44f69abf950bfed4eb5fd70856ac565d8"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "81eb70ec725d496360d557040a03e62c12cc6e45",
+        "after": "d655a8e44f69abf950bfed4eb5fd70856ac565d8",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     },
+     {
+      "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java",
+      "pre": {
+       "sha256": "f2b05ab0175a387a29ae9c4c3ba1781df1e9b4d7c013eeeab3460365bbdeecc0",
+       "gitBlob": "6cb9f11fbad153ef486254087497f6a2d3cefca3"
+      },
+      "post": {
+       "sha256": "0cd84d2b184f267992ab200b976380b4fb7d9e48e4c3e2a3f922dc9c8a1df537",
+       "gitBlob": "183cd0c0f858306d2f3f9ae1bb70d96480a88e93"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "6cb9f11fbad153ef486254087497f6a2d3cefca3",
+        "after": "183cd0c0f858306d2f3f9ae1bb70d96480a88e93",
+        "index": [
+         "6cb9f11f",
+         "183cd0c0"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java",
+      "pre": null,
+      "post": {
+       "sha256": "9e47e35b248c9663f73efbf0bf6331df968b585471fbe977a776c080a5a37e30",
+       "gitBlob": "e6ce4f93866eab3a6aab5e221d067e27d7d389d5"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": null,
+        "after": "e6ce4f93866eab3a6aab5e221d067e27d7d389d5",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     },
+     {
+      "path": "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java",
+      "pre": {
+       "sha256": "b0ace1a81f4c49dbcfb724d16951ac717684ab4a6ee97f6ea58ae7c850ebbf52",
+       "gitBlob": "82fe6749b3188b1ceea85faa77300ff281aafa2e"
+      },
+      "post": {
+       "sha256": "a1262dd25d3735e22ebfd983f1aaa82d7d33b7d730f782d108ed786545271a42",
+       "gitBlob": "3d2db43de86f7ca41ce3678816e43e281691b2c8"
+      },
+      "chain": [
+       {
+        "patch": "background-control-modern-frameworks-base.patch",
+        "before": "82fe6749b3188b1ceea85faa77300ff281aafa2e",
+        "after": "b7c5471412b58ed6ee616a20c11c44a522148ba5",
+        "index": null,
+        "base": "noIndex"
+       },
+       {
+        "patch": "locked-control-frameworks-base.patch",
+        "before": "b7c5471412b58ed6ee616a20c11c44a522148ba5",
+        "after": "3d2db43de86f7ca41ce3678816e43e281691b2c8",
+        "index": [
+         "82fe674",
+         "079a2e4"
+        ],
+        "base": "different"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+      "pre": null,
+      "post": {
+       "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+       "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "f8e557e537a395c27be11aff0fad847da02e44ec",
+        "index": [
+         "0000000",
+         "f8e557e"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+      "pre": {
+       "sha256": "62d968a9484b7cc64dcf599996be38125b0aba0ceddd60bf75efec3afbd744d9",
+       "gitBlob": "237f47124837e3f939172f25f18a2d3444423641"
+      },
+      "post": {
+       "sha256": "17767983aa31d6269f30eb992787e32a34c4600b8493b875273027562b91686a",
+       "gitBlob": "236bd8168e93d206cea91a0954f07ddacf971bf4"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": "237f47124837e3f939172f25f18a2d3444423641",
+        "after": "236bd8168e93d206cea91a0954f07ddacf971bf4",
+        "index": [
+         "237f471",
+         "236bd81"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+      "pre": null,
+      "post": {
+       "sha256": "4f2b67d421a4897956a20f38a29c8ad67d5ec10b9f748ce9a95aefb076da73ee",
+       "gitBlob": "5b3e5cd455ffc4af929e516feb4498347f4a2432"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "5b3e5cd455ffc4af929e516feb4498347f4a2432",
+        "index": [
+         "0000000",
+         "5b3e5cd"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+      "pre": null,
+      "post": {
+       "sha256": "29a37cf4f88f6bf3bd9729ee015f41b6eff3a51d8480f1e082b516faa322cfe5",
+       "gitBlob": "08838b143685050c414779876534b775f91c9640"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "08838b143685050c414779876534b775f91c9640",
+        "index": [
+         "0000000",
+         "08838b1"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+      "pre": null,
+      "post": {
+       "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+       "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "8fd02b96f9b059f72df3e112f27cd84e036196ad",
+        "index": [
+         "0000000",
+         "8fd02b9"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
+      "pre": null,
+      "post": {
+       "sha256": "a9cd77478dae0cccd0e9ecbdc37877369d1b1f81f55a758b6a1a4829dfae333e",
+       "gitBlob": "a4003dcc986bd33c78572f33f33e38697e34123e"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "a4003dcc986bd33c78572f33f33e38697e34123e",
+        "index": [
+         "0000000",
+         "a4003dc"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
+      "pre": {
+       "sha256": "9ba02efa08a38d9bf98831bca55eca82704b802d95a34415ece5420214c51f37",
+       "gitBlob": "9b2c98685f8c45272d39df42dafa7294486c6552"
+      },
+      "post": {
+       "sha256": "3132689774e6bb341a4b1e2d7235a4edbbd3b8475285f45fedef115e7a898731",
+       "gitBlob": "e7bb8771233a2af4df1e5a7a90ce0217246f9058"
+      },
+      "chain": [
+       {
+        "patch": "rose-shade-systemui.patch",
+        "before": "9b2c98685f8c45272d39df42dafa7294486c6552",
+        "after": "e7bb8771233a2af4df1e5a7a90ce0217246f9058",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     }
+    ],
+    "treePin": {
+     "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+     "rootTree": "ee02f0be7fb9f96722f897c64f642cb056c522e1",
+     "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+     "objectFormat": "sha1",
+     "listing": {
+      "path": "os/tests/fixtures/launcher3-compile-contract/trees/frameworks__base.ls-tree.txt.gz",
+      "sha256": "ea86d70867c9c82e52505c6efaaaf41e9bc4a53e5078c28f71c7c92ca16a2ee6",
+      "compressedSha256": "d743dde2eaa6793465f6a73c20ee1dd425100398a486a8024eb8885144d418f8",
+      "paths": 65227,
+      "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
+     },
+     "unlisted": {
+      "excludedPaths": [
+       "core/java/android/companion/virtual/IVirtualDeviceManager.aidl",
+       "core/java/android/companion/virtual/VirtualDeviceManager.java",
+       "core/java/android/companion/virtual/computercontrol/AutomatedApps.aidl",
+       "core/java/android/companion/virtual/computercontrol/AutomatedApps.java",
+       "core/java/android/companion/virtual/computercontrol/AutomatedPackageListener.java",
+       "core/java/android/companion/virtual/computercontrol/ComputerControlSession.java",
+       "core/java/android/companion/virtual/computercontrol/IAutomatedPackageListener.aidl",
+       "core/java/android/companion/virtual/computercontrol/IComputerControlSession.aidl",
+       "core/res/res/values/config.xml",
+       "core/res/res/values/symbols.xml",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
+       "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
+       "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
+       "packages/SystemUI/AndroidManifest.xml",
+       "packages/SystemUI/assets/fonts/Nunito.ttf",
+       "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+       "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
+       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+       "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
+       "packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt",
+       "services/accessibility/java/com/android/server/accessibility/ProxyManager.java",
+       "services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java",
+       "services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java",
+       "services/core/java/com/android/server/pm/PackageInstallerSession.java"
+      ],
+      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
+      "count": 65201,
+      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+      "order": "the raw bytes of path",
+      "digest": "ef00b628eca1f5aa2f7e76f38dcbe3eb56fd339ee93612aa746fac54f4ae34ab",
+      "digestOf": "the concatenated records, sha256"
+     },
+     "modes": [
+      "100644",
+      "100755",
+      "120000"
+     ],
+     "gitlinks": "none: generation refuses any mode 160000 entry",
+     "blobHash": {
+      "argv": [
+       "git",
+       "hash-object",
+       "-t",
+       "blob",
+       "--no-filters",
+       "--stdin"
+      ],
+      "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+      "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+      "never": [
+       "-w (no object writes)",
+       "--literally",
+       "--path (no attribute filters)",
+       "a plain SHA-1"
+      ],
+      "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+     },
+     "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
+     "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
+    }
+   },
+   {
+    "path": "packages/apps/Launcher3",
+    "repo": "GrapheneOS/platform_packages_apps_Launcher3",
+    "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+    "patches": [
+     {
+      "name": "rose-switcher-launcher3.patch",
+      "sha256": "654bb0cbc5db6c47bfe79e0bc4b6264ce26547617a9e8d8a4cffd91baea6fdbc"
+     },
+     {
+      "name": "rose-edge-launcher3.patch",
+      "sha256": "c240d8121235e48716d108ca2d43be56d142ee2e7a4d00ec6f1a58e253332e28"
+     },
+     {
+      "name": "rose-edge-resize-launcher3.patch",
+      "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
+     }
+    ],
+    "files": [
+     {
+      "path": "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+      "pre": null,
+      "post": {
+       "sha256": "6a64ea861ab855db9eacc0141bdb17288362fa3e090e2bdb69e06b8237497ccf",
+       "gitBlob": "3710dbc8098b21847933d8f8b546a07d5a006eea"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": null,
+        "after": "3710dbc8098b21847933d8f8b546a07d5a006eea",
+        "index": [
+         "0000000",
+         "3710dbc"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
+      "pre": null,
+      "post": {
+       "sha256": "0ef72937c09e367d74425b953b97ce5592459ff865aedb7f7bcfc950f9124cd9",
+       "gitBlob": "a7fef80ec8c22db64a0f468e3cc6fdb4e211767e"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": null,
+        "after": "a7fef80ec8c22db64a0f468e3cc6fdb4e211767e",
+        "index": [
+         "0000000",
+         "a7fef80"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
+      "pre": null,
+      "post": {
+       "sha256": "101b407fe881870d242af9edcd5ee203cb0bd247dc1f2f966a45a340e9fc3602",
+       "gitBlob": "0779a24da9544dcfc90b61bd49972c7ab80672ef"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": null,
+        "after": "0779a24da9544dcfc90b61bd49972c7ab80672ef",
+        "index": [
+         "0000000",
+         "0779a24"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/res/layout/fallback_recents_activity.xml",
+      "pre": {
+       "sha256": "8df1879fb83e2a9f5b11b657a498e6153504171cb702f859d136f37ab968a9f7",
+       "gitBlob": "65f606a4a4ffe3cb1be3e72e5ecd54a9399c7542"
+      },
+      "post": {
+       "sha256": "b52909e663a6b717541813a5dc77d3ca96edee00333b601ceab8869f6ca1a029",
+       "gitBlob": "e068d38a59798eaf01150f1afc319307863d3428"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": "65f606a4a4ffe3cb1be3e72e5ecd54a9399c7542",
+        "after": "e068d38a59798eaf01150f1afc319307863d3428",
+        "index": [
+         "65f606a",
+         "e068d38"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/res/layout/icon_app_chip_view.xml",
+      "pre": {
+       "sha256": "39f08f41ca50a248942ec9c756d474659ee31fe91c486788ae1cfd5bd6306071",
+       "gitBlob": "76f4cc9979734495bd8d976e1d201d8c013c448c"
+      },
+      "post": {
+       "sha256": "74123c696d39a7560321d674e9b6d8387a2f0e1eb9c5539f9833a6da5c4bd963",
+       "gitBlob": "317a281220b13bd12bff62eacdd03cb8525644e9"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": "76f4cc9979734495bd8d976e1d201d8c013c448c",
+        "after": "317a281220b13bd12bff62eacdd03cb8525644e9",
+        "index": [
+         "76f4cc9",
+         "317a281"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/res/layout/task.xml",
+      "pre": {
+       "sha256": "6fab27a7a95e9bda31d7fd4fb4a041ff49bf25c88e1744e30fff78dc50780b19",
+       "gitBlob": "fa1d9f039c19ff69f2f8fdc12ea0c7918646ecaf"
+      },
+      "post": {
+       "sha256": "7518558b2847fd55b5ceca032daff236b84ab58b65fb97f16fe67cead7b44ed6",
+       "gitBlob": "d09e58598921367d916382761eaf46f4f4247578"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": "fa1d9f039c19ff69f2f8fdc12ea0c7918646ecaf",
+        "after": "d09e58598921367d916382761eaf46f4f4247578",
+        "index": [
+         "fa1d9f0",
+         "d09e585"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/res/values/rose_agent_strip.xml",
+      "pre": null,
+      "post": {
+       "sha256": "770ba6b4a01853490994c6c4f4ac3e3932efa76abb5d3966e9489f071444ab05",
+       "gitBlob": "ace444be80360631c33b09e011c1db633de15614"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": null,
+        "after": "ace444be80360631c33b09e011c1db633de15614",
+        "index": [
+         "0000000",
+         "ace444b"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/BaseContainerInterface.java",
+      "pre": {
+       "sha256": "a416df4aaa95b3cc954cef5ada99bc3f1078ddbdb56ccb4365be861eda6cf829",
+       "gitBlob": "37eac47136d2815a7a9ca76aad7f6bcd40270e67"
+      },
+      "post": {
+       "sha256": "467d57fa88cf2c403bcfa541f0e5b40f1e75f7ab80ca23a11f79adf45df0cf55",
+       "gitBlob": "fbcab762f9b415676c1f6bf48d1837fca437d5e6"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": "37eac47136d2815a7a9ca76aad7f6bcd40270e67",
+        "after": "fbcab762f9b415676c1f6bf48d1837fca437d5e6",
+        "index": [
+         "37eac47",
+         "fbcab76"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
+      "pre": {
+       "sha256": "dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa",
+       "gitBlob": "d9f14ac530bc9f81910e305536f1e39a0ef6e564"
+      },
+      "post": {
+       "sha256": "9a09daae6ebf7f3838b1740b7229a4b398fd4a48c5ae1261e7c009fa110d698e",
+       "gitBlob": "3a8cda8859284e1a8c8bde5c990ae76f94c8e126"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": "d9f14ac530bc9f81910e305536f1e39a0ef6e564",
+        "after": "3a8cda8859284e1a8c8bde5c990ae76f94c8e126",
+        "index": [
+         "d9f14ac",
+         "3a8cda8"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/RecentsActivity.java",
+      "pre": {
+       "sha256": "b9bd0251eef6b4cd3159dea08657881cfad74fbe42034f03b773c2fda8d8b804",
+       "gitBlob": "34a3adbacb3337d5828a0831d0213712b0c707f3"
+      },
+      "post": {
+       "sha256": "c9d9bb4e7486108f32ce80db028508c34dadf74b5354bab70ebb52604aa46b0a",
+       "gitBlob": "7f3a26bdff0b7e2c325562923e6e445bf8e26346"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": "34a3adbacb3337d5828a0831d0213712b0c707f3",
+        "after": "7f3a26bdff0b7e2c325562923e6e445bf8e26346",
+        "index": [
+         "34a3adb",
+         "7f3a26b"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
+      "pre": {
+       "sha256": "7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f",
+       "gitBlob": "13c6ffe75886d1f462ed9e2bbd7f6d09552e4df7"
+      },
+      "post": {
+       "sha256": "810d74f3f105d89423b44de8f1ea2e419ef6a823a9bd87917cbe2c84889ccf37",
+       "gitBlob": "997f8c8d870db8740380d94df38e4d10353f25c3"
+      },
+      "chain": [
+       {
+        "patch": "rose-switcher-launcher3.patch",
+        "before": "13c6ffe75886d1f462ed9e2bbd7f6d09552e4df7",
+        "after": "997f8c8d870db8740380d94df38e4d10353f25c3",
+        "index": [
+         "13c6ffe",
+         "997f8c8"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java",
+      "pre": {
+       "sha256": "7bd5815f17eed4c5e59cfe323f8f61ad6d3c5bfbdedc2d95a83183984350e0df",
+       "gitBlob": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188"
+      },
+      "post": {
+       "sha256": "7e91f9fdfd773dfc7355532eb6bc73a659b159e34d09db06f599bd0763bc40b5",
+       "gitBlob": "940c58e6c52c02eb211a348ad16f50f9341a0a13"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-launcher3.patch",
+        "before": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188",
+        "after": "940c58e6c52c02eb211a348ad16f50f9341a0a13",
+        "index": [
+         "afa87a5",
+         "940c58e"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
+      "pre": {
+       "sha256": "194138f4ee572d6edef485087a08ae3377ad941b06bf8b5342d63b23e9805161",
+       "gitBlob": "8c46fbde20449710dbc23b306441f3c9758c80dc"
+      },
+      "post": {
+       "sha256": "a76f7267a8086001ced822a0befb678cf8a8a815e6dea1d24556ce3fbb769d78",
+       "gitBlob": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-launcher3.patch",
+        "before": "8c46fbde20449710dbc23b306441f3c9758c80dc",
+        "after": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2",
+        "index": [
+         "8c46fbd",
+         "9a13ec3"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java",
+      "pre": {
+       "sha256": "c080919fbc48e1871591d7da4ee42d154d60865d771d7a4331120d48a136a59c",
+       "gitBlob": "8148e084538ee9ef14a0795fb89be14521bdd180"
+      },
+      "post": {
+       "sha256": "6c65b9d6a96f53661383eb5dfcb9ec0bd682e05032b3b9b49b5b9e76858a09cf",
+       "gitBlob": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-launcher3.patch",
+        "before": "8148e084538ee9ef14a0795fb89be14521bdd180",
+        "after": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d",
+        "index": [
+         "8148e08",
+         "7dbbada"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+      "pre": {
+       "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
+       "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
+      },
+      "post": {
+       "sha256": "f3a894b1271d4afd2410c6337da3712b639bad564f19de1b2a702f68f40eaea3",
+       "gitBlob": "a881058aee94c322041b7ec2307baf022a48afab"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-resize-launcher3.patch",
+        "before": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9",
+        "after": "a881058aee94c322041b7ec2307baf022a48afab",
+        "index": [
+         "8f75b94",
+         "a881058"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
+      "pre": {
+       "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
+       "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
+      },
+      "post": {
+       "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
+       "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-resize-launcher3.patch",
+        "before": "256c991afb42d068a1d5f4520ea003f845a5c6f3",
+        "after": "e75c0302ed42eb5d12c3cf356097dfff88477106",
+        "index": [
+         "256c991",
+         "e75c030"
+        ],
+        "base": "exact"
+       }
+      ]
+     }
+    ],
+    "treePin": {
+     "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+     "rootTree": "31263ca2e7dfa16a8ce3fd06a5740517b43303ad",
+     "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+     "objectFormat": "sha1",
+     "listing": {
+      "path": "os/tests/fixtures/launcher3-compile-contract/trees/packages__apps__Launcher3.ls-tree.txt.gz",
+      "sha256": "b9ad6d98d76bdf191dfab53540ca45338f15e010805e26cb32e3a2a2aa2462c8",
+      "compressedSha256": "e1e3829c95f413b5169996367a7da8c19ef285408a0ed08c72af5b4ab06b2f7b",
+      "paths": 3450,
+      "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
+     },
+     "unlisted": {
+      "excludedPaths": [
+       "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+       "quickstep/res/drawable-nodpi/rose_glacier_field.png",
+       "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
+       "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
+       "quickstep/res/layout/fallback_recents_activity.xml",
+       "quickstep/res/layout/icon_app_chip_view.xml",
+       "quickstep/res/layout/task.xml",
+       "quickstep/res/values/rose_agent_strip.xml",
+       "quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java",
+       "quickstep/src/com/android/quickstep/BaseContainerInterface.java",
+       "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
+       "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
+       "quickstep/src/com/android/quickstep/RecentsActivity.java",
+       "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+       "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
+       "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+       "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
+       "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
+      ],
+      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
+      "count": 3438,
+      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+      "order": "the raw bytes of path",
+      "digest": "08f7beeabd9fa919be2a4f616913e1d82f5c1848f87d0984c9063cfe7e87ae16",
+      "digestOf": "the concatenated records, sha256"
+     },
+     "modes": [
+      "100644",
+      "100755",
+      "120000"
+     ],
+     "gitlinks": "none: generation refuses any mode 160000 entry",
+     "blobHash": {
+      "argv": [
+       "git",
+       "hash-object",
+       "-t",
+       "blob",
+       "--no-filters",
+       "--stdin"
+      ],
+      "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+      "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+      "never": [
+       "-w (no object writes)",
+       "--literally",
+       "--path (no attribute filters)",
+       "a plain SHA-1"
+      ],
+      "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+     },
+     "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
+     "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
+    }
+   },
+   {
+    "path": "build/release",
+    "repo": "GrapheneOS/platform_build_release",
+    "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22",
+    "patches": [
+     {
+      "name": "background-control-build-release.patch",
+      "sha256": "ef76fa1ef3565bfd2e5fc0527217253cde2cba5d98fe6f3ade50e37bd98e052d"
+     }
+    ],
+    "files": [
+     {
+      "path": "release_configs/cur.textproto",
+      "pre": {
+       "sha256": "c2fdf302ccfe836de3b339b4c3d21c157103c12c3be725df0d0bb66b5acccb0d",
+       "gitBlob": "b354177a9691e23ff973ec51e4cec7fbeeda2541"
+      },
+      "post": {
+       "sha256": "5765031c9edf804e15a01c5565711ad3237d27d3f0d882425b654a5fcf18e2c8",
+       "gitBlob": "a5615af453d501e034515712ce56cd275db0f774"
+      },
+      "chain": [
+       {
+        "patch": "background-control-build-release.patch",
+        "before": "b354177a9691e23ff973ec51e4cec7fbeeda2541",
+        "after": "a5615af453d501e034515712ce56cd275db0f774",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
+     }
+    ],
+    "treePin": {
+     "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22",
+     "rootTree": "8db73ecd6007deb2a277847d73add8b0dffbc458",
+     "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+     "objectFormat": "sha1",
+     "listing": {
+      "path": "os/tests/fixtures/launcher3-compile-contract/trees/build__release.ls-tree.txt.gz",
+      "sha256": "7ad32dc8b842d12175871386ee8c698abf9e319c3ee70ab7a1bc9b32432fd04a",
+      "compressedSha256": "92917f7791d5c8cac880828c78b250201e25a805130aa7393e28c255da18e5b3",
+      "paths": 18290,
+      "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
+     },
+     "unlisted": {
+      "excludedPaths": [
+       "aconfig/pixel_background_control/Android.bp",
+       "aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+       "aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+       "release_configs/cur.textproto",
+       "release_configs/pixel_background_control.textproto"
+      ],
+      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
+      "count": 18289,
+      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+      "order": "the raw bytes of path",
+      "digest": "e713cc1a3b190b8525b7d7c3543d60c1d854848c1132bcbc2735873c74a249f7",
+      "digestOf": "the concatenated records, sha256"
+     },
+     "modes": [
+      "100644"
+     ],
+     "gitlinks": "none: generation refuses any mode 160000 entry",
+     "blobHash": {
+      "argv": [
+       "git",
+       "hash-object",
+       "-t",
+       "blob",
+       "--no-filters",
+       "--stdin"
+      ],
+      "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+      "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+      "never": [
+       "-w (no object writes)",
+       "--literally",
+       "--path (no attribute filters)",
+       "a plain SHA-1"
+      ],
+      "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+     },
+     "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
+     "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
+    }
+   }
+  ],
+  "overlays": [
+   {
+    "target": "build/release/aconfig/pixel_background_control/Android.bp",
+    "sha256": "31d30004cdd2e4420b25397a0df0c1ed2ebb6809585127348f38565f4e97f1a7",
+    "role": "required"
+   },
+   {
+    "target": "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+    "sha256": "5b75a5813cc4bbd6339be9a828e6c18f66b96a869513209d9db31a39371324fd",
+    "role": "required"
+   },
+   {
+    "target": "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+    "sha256": "c1852a5dba09d97ffc4b4a854822e5560252bc949f38572be800e67307c56b7f",
+    "role": "required"
+   },
+   {
+    "target": "build/release/release_configs/pixel_background_control.textproto",
+    "sha256": "bdaff12f1cd200b3793dabd32633de7489033e890be7c9fc6a055b1d6bf1811a",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
+    "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+    "sha256": "21db4354e7b31c9bf23a2c79a622b9f8f530720d64332ff8869b9443e809b7ea",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+    "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+    "sha256": "8b8ea1575815ff6cc4f1dca736584c57fb524e5c0e94a81b91d20bc59f9a0ef4",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+    "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+    "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+    "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+    "sha256": "ff38ddd9d8a66aa24c3b6745fded164402631aa449183fc70c4906adf483879a",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+    "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+    "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+    "sha256": "ba6cce960eb7668386b34ed762dc0db022e7cef733e86b8109dba0493875896a",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+    "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+    "sha256": "5a1c3bb9c27e46397ed4ca3d4370403cb2278916815e3d754ae11c19fe648d95",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+    "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392",
+    "role": "required"
+   }
+  ],
+  "registration": {
+   "applyArgs": [
+    "--background-policy",
+    "{policy}",
+    "--background-agent",
+    "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+    "--agent-tray",
+    "--updater-url",
+    "https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/",
+    "--preinstall-apk",
+    "{signed_apps}/dev.pixel.voice.apk",
+    "--preinstall-apk",
+    "{signed_apps}/dev.pixel.calculator.agent.apk",
+    "--installed-identities",
+    "{installed_identities}"
+   ],
+   "applyArgsSource": {
+    "path": "os/release-pipeline/frankel.json",
+    "key": "host.integrate.reconcile.applyArgs"
+   },
+   "patcher": {
+    "patcher": "trusted",
+    "sha256": {
+     "apply-os-changes.py": "6b7b11c32f4c533483dfa70b367cbe56aa7ab1db0ba36dcd10592ca4ea42cc6d",
+     "background_apks.py": "af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb",
+     "integration_copy.py": "440574cbd3144571f647fc13f17c6c1188b1c61d12ef92a7028fba7eb2a24a05"
+    }
+   },
+   "order": [
+    {
+     "project": "frameworks/base",
+     "name": "frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-agent-self-update-frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-modern-frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-resource-import-fix.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "locked-control-frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-edge-wmshell.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-shade-systemui.patch"
+    },
+    {
+     "project": "build/release",
+     "name": "background-control-build-release.patch"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-switcher-launcher3.patch"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-launcher3.patch"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-resize-launcher3.patch"
+    }
+   ],
+   "derivation": "executed: scripts/apply-os-changes.py's own argument parser with applyArgs (each placeholder an empty file), then its statements from `projects = {...}` through `projects.update(rose_home_projects(preinstalls))`, with validate_policy and preinstall_plan replaced because they check data and never registration; the result is filtered to this contract's projects. rose_home_projects adds only packages/modules/Permission",
+   "contractDerived": "the bundle report's only contract-derived input: names and order, used only once the receipt's patcher sha256 and the run's applyArgs equal these"
+  },
+  "bundleReport": {
+   "kind": "rose-integration-bundle-report",
+   "schemaVersion": 1,
+   "fields": {
+    "producer": [
+     "path",
+     "sha256",
+     "roseRevision"
+    ],
+    "run": [
+     "runId",
+     "runAttempt",
+     "headSha",
+     "label",
+     "createdAt",
+     "updatedAt",
+     "bindingSha256"
+    ],
+    "receipt": [
+     "path",
+     "receiptSha256",
+     "receiptType",
+     "label",
+     "at",
+     {
+      "patcher": [
+       "patcher",
+       {
+        "sha256": [
+         "apply-os-changes.py",
+         "background_apks.py",
+         "integration_copy.py"
+        ]
+       }
+      ]
+     }
+    ],
+    "candidate": [
+     "commit",
+     "onMain",
+     "frankelConfigSha256",
+     "applyArgs",
+     "patcherKind"
+    ],
+    "registration": [
+     "source",
+     "patcherMatchesPin",
+     "applyArgsMatchPin"
+    ],
+    "observed": [
+     {
+      "patches": [
+       "project",
+       "name",
+       "sha256"
+      ]
+     },
+     {
+      "overlays": [
+       "target",
+       "sha256"
+      ]
+     },
+     "notAnInputOverlays",
+     "unclassified"
+    ]
+   },
+   "producer": "Release's producer script at a reviewed commit; never the adapter, the observer or this checker",
+   "association": [
+    "run is entered by review from GitHub run metadata (no live API, no actions:read), with the recipe lines at headSha that make the run commit both the candidate and the trusted checkout; headSha is reachable from main",
+    "exactly one *-<label>.json with receiptType reconcile and the same label, its at within [createdAt, updatedAt]",
+    "receipt.patcher.patcher is trusted and its three sha256 equal both the files at headSha and base.registration.patcher: a consistency check, not association (many commits share those bytes)",
+    "the run's applyArgs (headSha:os/release-pipeline/frankel.json) equal base.registration.applyArgs"
+   ],
+   "observed": {
+    "patches": "base.registration.order, each with the sha256 of headSha:os/patches/<name>",
+    "overlays": "every headSha:os/overlays file whose target is under a required prefix",
+    "notAnInputOverlays": "the present targets on the exact notAnInput allowlist",
+    "unclassified": "anything else under the three projects; must be empty"
+   },
+   "rules": [
+    "only observed minus unclassified is compared with base.bundleContent, and unclassified must be empty",
+    "observed is computed from history before bundleContent is read; tampering bundleContent leaves it unchanged",
+    "a report missing any section, or a bare bundleContent, is refused",
+    "receipt changed/entries are association only, never observed",
+    "the report never stands in for base-exact on the copy"
+   ]
+  }
+ },
+ "candidateDelta": {
+  "pr": 440,
+  "commit": "2f57a5f28e3c3cc97177bf3f9294ea807d514469",
+  "patches": [],
+  "application": {
+   "where": "only in the isolated copy, never in the source tree",
+   "steps": [
+    "git -C <copy>/<project> apply --check -p<strip> <bundlePath>",
+    "git -C <copy>/<project> apply -p<strip> <bundlePath>"
+   ],
+   "forbidden": [
+    "--3way",
+    "--reject",
+    "--recount",
+    "--unidiff-zero",
+    "-C<n> (reduced context)",
+    "--ignore-whitespace",
+    "--ignore-space-change",
+    "--whitespace=fix"
+   ],
+   "note": "whitespace is left unchanged; any failure of --check refuses before anything is applied"
+  },
+  "files": [],
+  "overlays": [],
+  "bundle": [],
+  "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"
+ },
+ "flagEvidence": {
+  "flags": [
+   {
+    "flag": "android.security.content_uri_permission_apis",
+    "expectedLine": "android.security.content_uri_permission_apis:READ_ONLY=true",
+    "module": "android.security.flags-aconfig",
+    "package": "android.security",
+    "container": "system",
+    "expectedOutputDir": "out/soong/.intermediates/frameworks/base/android.security.flags-aconfig",
+    "readBy": "android.security.flags-aconfig-java (framework), which ActivityThread and ActivityRecord read",
+    "definedIn": {
+     "project": "frameworks/base",
+     "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+     "path": "AconfigFlags.bp",
+     "sha256": "02f02f7de0500680d9e90ac662c652b71f096df22dc785e914798897eea5c7b6"
+    },
+    "declaredIn": {
+     "project": "frameworks/base",
+     "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+     "path": "core/java/android/security/responsible_apis_flags.aconfig",
+     "sha256": "bf4905edb8fa385f085dca6e9fe0afe9edeff4b4104087bd7767da7b4d1afc69"
+    },
+    "outputs": [
+     "aconfig-cache.pb",
+     "aconfig-flags.txt"
+    ],
+    "produce": "build out/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt as an explicit goal with Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree's host aconfig using the identical dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'",
+    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: result incomplete (identity flag unresolved); not a refusal of the inputs"
+   },
+   {
+    "flag": "com.android.launcher3.enable_fallback_overview_in_window",
+    "expectedLine": "com.android.launcher3.enable_fallback_overview_in_window:READ_ONLY=false",
+    "module": "com_android_launcher3_flags",
+    "package": "com.android.launcher3",
+    "container": "system_ext",
+    "expectedOutputDir": "out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags",
+    "readBy": "com_android_launcher3_flags_lib (Launcher3QuickStepLib), which OverviewComponentObserver reads",
+    "definedIn": {
+     "project": "packages/apps/Launcher3",
+     "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+     "path": "aconfig/Android.bp",
+     "sha256": "e7957cd25698f57a8408bf607551cbbae528e0793817bc1327b1a1f8473fb8f6"
+    },
+    "declaredIn": {
+     "project": "packages/apps/Launcher3",
+     "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+     "path": "aconfig/launcher.aconfig",
+     "sha256": "fe8589b40503942bd02a53ffd8b185d66ffee22f40e6ac05a866464f9ef00be2"
+    },
+    "outputs": [
+     "aconfig-cache.pb",
+     "aconfig-flags.txt"
+    ],
+    "produce": "build out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt as an explicit goal with Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree's host aconfig using the identical dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'",
+    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: result incomplete (identity flag unresolved); not a refusal of the inputs"
+   }
+  ],
+  "producingRules": [
+   {
+    "project": "build/soong",
+    "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+    "path": "aconfig/init.go",
+    "sha256": "5965bbaa5180555035c05542e181910a2012bbda33e153406232bb9412887c34"
+   },
+   {
+    "project": "build/soong",
+    "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+    "path": "aconfig/aconfig_declarations.go",
+    "sha256": "aecefd9fe939cc7819320b32de0ddfaf8864f8a1b617cb3dbeef25c20464086b"
+   }
+  ],
+  "role": "output: never a precondition of any branch"
+ },
+ "overlayRoles": {
+  "required": {
+   "targets": [
+    "build/release/aconfig/pixel_background_control/Android.bp",
+    "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+    "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+    "build/release/release_configs/pixel_background_control.textproto",
+    "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java"
+   ],
+   "rule": "present with exactly its sha256 in overlays"
+  },
+  "notAnInput": {
+   "targets": [
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+    "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+    "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java"
+   ],
+   "rule": "exact target only: present with any bytes, or absent; excluded from its project's treePin by exact path (treePin.unlisted.excludedPaths); never a source of Launcher3QuickStepLib, a compileGoals entry or a flagEvidence input. Adding or removing one changes the contract"
+  },
+  "compileGoals": [
+   "Launcher3QuickStepLib",
+   "out/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt",
+   "out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt"
+  ]
+ },
+ "identitySharing": {
+  "sites": [
+   "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java startHomeIntent",
+   "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java (inactive here)"
+  ],
+  "change": "ActivityOptions.makeCustomAnimation(mContext, 0, 0).setShareIdentityEnabled(true)",
+  "appliesWithEdgeOff": true,
+  "consumer": "Home (workspace/rose-agent, #442): MainActivity.gestureContract replies to gesture_nav_contract_v1 only after GestureContract.caller accepts getCurrentCaller() as the config_recentsComponentName package with a shared uid, on SDK 35+, RectF only; no dedicated exported entry",
+  "consumerImplemented": true
+ },
+ "lunchInputs": {
+  "path": "os/compile-contracts/frankel-lunch-inputs.json",
+  "sha256": "03b58acffac8b7c7d1e4b67daaf64d545307b804825f6360d86f3175c5a1dd2c"
+ }
+}

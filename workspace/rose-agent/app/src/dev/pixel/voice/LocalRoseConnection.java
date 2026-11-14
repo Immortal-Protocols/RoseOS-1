@@ -1,14 +1,10 @@
 package dev.pixel.voice;
 
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.os.Build;
-import android.provider.Settings;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -40,23 +36,17 @@ import javax.net.ssl.X509TrustManager;
  * Paired (QR code from the Mac, LocalRosePairActivity): TLS to the Mac's remote port on each
  * address from the QR (the one that worked last first), trusting only the certificate whose
  * SHA-256 is the pin, then a websocket upgrade signed by this phone's Keystore key. Works over
- * Wi-Fi or Tailscale (the VPN is just another network). A 401/403 that says the Mac removed
+ * Tailscale; LAN and loopback endpoints are never used. A 401/403 that says the Mac removed
  * this phone (LocalRoseAuth.refusal) reports "unpaired" and slows the loops to one check a
  * minute until the user pairs again or unpairs; a refusal because of the clock reports
  * "offline" with reason "clock", and a replayed nonce or busy Mac is an ordinary retry.
  *
- * Not paired: the USB developer path, plain ws://127.0.0.1:8091 over adb reverse, and only
- * while USB debugging is on with a debugging host attached ({@link #usbAllowed}): any app can
- * listen on a loopback port, and without adb reverse that listener would get the mic and phone
- * control. Once paired (or with a saved pairing that can't be read) that unauthenticated
- * loopback is never used.
+ * Not paired: wait for the owner to pair over Tailscale. No implicit USB connection.
  *
  * Loops retry with {@link Retry}; a default-network change wakes them at once.
  */
 final class LocalRoseConnection {
     static final String PREFS = "local-rose";
-    static final String USB_HOST = "127.0.0.1";
-    static final int USB_PORT = 8091;
     private static final String TAG = "LocalRose";
     private static final int CONNECT_TIMEOUT_MS = 2500;
     private static final int HANDSHAKE_TIMEOUT_MS = 8000;
@@ -81,24 +71,21 @@ final class LocalRoseConnection {
 
         /** lastHost first, then the rest in QR order. */
         List<String> order() {
-            List<String> out = new ArrayList<>();
-            if (lastHost != null && hosts.contains(lastHost)) out.add(lastHost);
-            for (String h : hosts) if (!out.contains(h)) out.add(h);
-            return out;
+            return LocalRoseAuth.tailscaleHosts(hosts, lastHost);
         }
     }
 
     /** The Mac no longer accepts this phone (or the saved pairing can't be read). */
     static final class Unpaired extends IOException {
         Unpaired() {
-            super("pairing not accepted by the Mac");
+            super("pairing not accepted by the backend");
         }
     }
 
     /** The Mac refused the signature because this phone's clock and the Mac's disagree. */
     static final class ClockOff extends IOException {
         ClockOff() {
-            super("the phone's and the Mac's clocks disagree");
+            super("the phone's and the backend's clocks disagree");
         }
     }
 
@@ -121,11 +108,11 @@ final class LocalRoseConnection {
         List<String> hosts = new ArrayList<>();
         try {
             JSONArray a = new JSONArray(p.getString("hosts", "[]"));
-            for (int i = 0; i < a.length(); i++) if (LocalRoseAuth.validHost(a.optString(i))) hosts.add(a.optString(i));
+            for (int i = 0; i < a.length(); i++) if (LocalRoseAuth.tailscaleHost(a.optString(i))) hosts.add(a.optString(i));
         } catch (JSONException ignored) {
         }
         if (!pin.matches("[0-9a-f]{64}") || port < 1 || port > 65535 || hosts.isEmpty()) return null;
-        return new Paired(p.getString("serverName", "your Mac"), p.getString("serverId", pin.substring(0, 16)), hosts, port,
+        return new Paired(p.getString("serverName", "your backend"), p.getString("serverId", pin.substring(0, 16)), hosts, port,
                 pin, p.getString("deviceId", ""), p.getString("lastHost", null));
     }
 
@@ -137,7 +124,7 @@ final class LocalRoseConnection {
         reconnectNow();
     }
 
-    /** Forgets the Mac (the device key stays for pairing again); the USB path applies again. */
+    /** Forgets the Mac (the device key stays for pairing again); a new Tailscale pairing is required. */
     static void unpair(Context c) {
         prefs(c).edit().putBoolean("paired", false).remove("serverName").remove("serverId").remove("hosts")
                 .remove("port").remove("pin").remove("deviceId").remove("lastHost").commit();
@@ -150,7 +137,7 @@ final class LocalRoseConnection {
     private static final List<Live> live = new ArrayList<>();
     private static volatile boolean everFailed;
     private static volatile long lastOkAt;
-    /** Why the Mac last refused this phone: "" (it didn't), "revoked", "clock" or "damaged" (unreadable config). */
+    /** Why the backend last refused this phone: "" (it didn't), "revoked", "clock" or "damaged" (unreadable config). */
     private static volatile String refused = "";
     private static volatile String lastRoute = "";
 
@@ -172,14 +159,8 @@ final class LocalRoseConnection {
     static LocalRoseSocket open(Context c, String path) throws IOException {
         Paired p = paired(c);
         if (p == null) {
-            if (pairedFlag(c)) {
-                // Never fall back to the unauthenticated loopback for a phone that was paired.
-                refused = "damaged";
-                throw new Unpaired();
-            }
-            if (!usbAllowed(c)) throw new IOException("not paired, and no USB debugging host");
-            LocalRoseSocket ws = LocalRoseSocket.connect(USB_HOST, USB_PORT, path);
-            return track(ws, "USB");
+            refused = pairedFlag(c) ? "damaged" : "";
+            throw new Unpaired();
         }
         LocalRoseKey key;
         try {
@@ -209,13 +190,13 @@ final class LocalRoseConnection {
                 String kind = LocalRoseAuth.refusal(e.status, e.header("X-Rose-Error"), e.header("Date"),
                         System.currentTimeMillis());
                 if (kind.equals(LocalRoseAuth.REFUSED_REVOKED)) {
-                    Log.w(TAG, "Mac refused this phone (" + e.status + "); pair again");
+                    Log.w(TAG, "backend refused this phone (" + e.status + "); pair again");
                     refused = kind;
                     throw new Unpaired();
                 }
                 if (kind.equals(LocalRoseAuth.REFUSED_CLOCK)) {
                     // The phone's clock is the same for every address: no point trying the others.
-                    Log.w(TAG, "Mac refused this phone's time; check the date and time settings");
+                    Log.w(TAG, "backend refused this phone's time; check the date and time settings");
                     refused = kind;
                     everFailed = true;
                     throw new ClockOff();
@@ -226,14 +207,22 @@ final class LocalRoseConnection {
             }
         }
         everFailed = true;
-        throw last != null ? last : new IOException("no address for the Mac");
+        throw last != null ? last : new IOException("no address for the backend");
     }
 
     /** TCP on raw (2.5 s connect timeout) then TLS over it that accepts only the pinned certificate. */
     static SSLSocket tls(Socket raw, String host, int port, String pin) throws IOException {
         try {
             raw.setTcpNoDelay(true);
-            raw.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+            InetSocketAddress address = null;
+            for (java.net.InetAddress candidate : java.net.InetAddress.getAllByName(host)) {
+                if (LocalRoseAuth.tailscaleHost(candidate.getHostAddress())) {
+                    address = new InetSocketAddress(candidate, port);
+                    break;
+                }
+            }
+            if (address == null) throw new IOException("No Tailscale address for the backend. Connect Tailscale on both devices.");
+            raw.connect(address, CONNECT_TIMEOUT_MS);
             raw.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
             SSLSocket s = (SSLSocket) pinned(pin).createSocket(raw, host, port, true);
             s.setEnabledProtocols(modern(s.getSupportedProtocols()));
@@ -261,7 +250,7 @@ final class LocalRoseConnection {
             @Override
             public void checkServerTrusted(X509Certificate[] chain, String auth) throws CertificateException {
                 if (chain == null || chain.length == 0 || !LocalRoseAuth.pinMatches(chain[0].getEncoded(), pin)) {
-                    throw new CertificateException("not the paired Mac");
+                    throw new CertificateException("not the paired backend");
                 }
             }
 
@@ -292,15 +281,13 @@ final class LocalRoseConnection {
             live.add(new Live(ws, route));
         }
         lastRoute = route;
-        if (!route.equals("USB")) {
-            everFailed = false;
-            refused = "";
-            lastOkAt = System.currentTimeMillis();
-        }
+        everFailed = false;
+        refused = "";
+        lastOkAt = System.currentTimeMillis();
         return ws;
     }
 
-    /** "Tailscale", "Wi-Fi" or "USB" for an open socket from {@link #open}. */
+    /** "Tailscale" for an open socket from {@link #open}. */
     static String routeOf(LocalRoseSocket ws) {
         synchronized (live) {
             for (Live l : live) if (l.socket == ws) return l.route;
@@ -315,22 +302,22 @@ final class LocalRoseConnection {
         }
     }
 
-    /** Pairing changed: drop every open connection (USB ones too) and retry now with the new config. */
+    /** Pairing changed: drop every open connection and retry now with the new config. */
     static void reconnectNow() {
         refused = "";
         everFailed = false;
         lastOkAt = 0;
-        closeAll(true);
+        closeAll();
         wake();
     }
 
-    private static void closeAll(boolean usbToo) {
+    private static void closeAll() {
         lastOkAt = 0;
         List<Live> copy;
         synchronized (live) {
             copy = new ArrayList<>(live);
         }
-        for (Live l : copy) if (usbToo || !l.route.equals("USB")) l.socket.close();
+        for (Live l : copy) l.socket.close();
     }
 
     /**
@@ -346,14 +333,8 @@ final class LocalRoseConnection {
         }
         String why = refused;
         if (p == null) {
-            if (pairedFlag(c)) {
-                state = "unpaired";
-                reason = "damaged";
-            } else {
-                up = up && lastRoute.equals("USB") || LocalRoseLink.reachable(c);
-                state = up ? "connected" : "unpaired";
-                if (up) route = "USB";
-            }
+            state = "unpaired";
+            reason = pairedFlag(c) ? "pairing_update_required" : "";
         } else if (why.equals(LocalRoseAuth.REFUSED_REVOKED)) {
             state = "unpaired";
             reason = why;
@@ -372,24 +353,6 @@ final class LocalRoseConnection {
                     .put("serverName", p == null ? "" : p.serverName).put("reason", reason).toString();
         } catch (JSONException e) {
             return "{}";
-        }
-    }
-
-    /**
-     * The unauthenticated USB path is allowed only while USB debugging is on and a debugging host
-     * is attached (USB connected, or wireless debugging on): adb reverse needs both, and without
-     * them a listener on 127.0.0.1:8091 can only be another app on this phone.
-     */
-    static boolean usbAllowed(Context c) {
-        try {
-            if (Settings.Global.getInt(c.getContentResolver(), Settings.Global.ADB_ENABLED, 0) != 1) return false;
-            if (Settings.Global.getInt(c.getContentResolver(), "adb_wifi_enabled", 0) == 1) return true;
-            IntentFilter usb = new IntentFilter("android.hardware.usb.action.USB_STATE");  // sticky, system only
-            Intent state = Build.VERSION.SDK_INT >= 33 ? c.registerReceiver(null, usb, Context.RECEIVER_EXPORTED)
-                    : c.registerReceiver(null, usb);
-            return state == null || state.getBooleanExtra("connected", false);
-        } catch (RuntimeException e) {
-            return false;
         }
     }
 
@@ -482,13 +445,13 @@ final class LocalRoseConnection {
                     defaultNetwork = network;
                 }
                 // A different default network: sockets on the old one may never error out.
-                if (before != null && !before.equals(network)) closeAll(false);
+                if (before != null && !before.equals(network)) closeAll();
                 wake();
             }
 
             @Override
             public void onLost(Network network) {
-                closeAll(false);
+                closeAll();
                 wake();
             }
 

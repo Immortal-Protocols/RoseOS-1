@@ -1,0 +1,50 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42611455205",
+  "runNumber": 32,
+  "runAttempt": 1,
+  "source": "9e025faffdd844410144c3836e56ab944341eaf3",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129141191798,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "selected-pinned-blob-or-mode-differs-blob",
+  "failurePath": "external/angle/scripts/trigger.bat",
+  "exceptionType": "Refused",
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T11:49:53Z",
+  "sourceCopyStarted": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129142876588,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T11:53:56.780513+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T03:51:01.907-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 33,
+  "basis": "Completed native diagnostic identified the exact pinned batch-file blob mismatch. The pinned ANGLE root attributes explicitly declare text=auto and *.bat eol=crlf, along with other CRLF paths. Exact native line endings were not separately read or claimed. The correction derives only the declared checkout representation from independently hash-verified raw Git blobs under the exact authenticated ANGLE attribute identity, with no filter execution. The next native comparison must establish whether this explains the actual mismatch. All scope/mode/unknown-byte/copy/namespace and resource checks remain; no source rewrite, journal reset or denied read retry."
+}

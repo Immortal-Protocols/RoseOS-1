@@ -46,9 +46,36 @@ final class CurrentApps {
   /** The controller session this app is bound to ("" when unbound or lingering), and the Stop handle for that session
    * (both ids, from its binding; null when Home may not stop it). Neither ever decides membership. */
   final String sessionId;final Preview stop;
-  App(String entryId,String packageName,String state,Preview preview){this(entryId,packageName,state,preview,"",null);}
-  App(String entryId,String packageName,String state,Preview preview,String sessionId,Preview stop){
-   this.entryId=nz(entryId);this.packageName=nz(packageName);this.state=nz(state);this.preview=preview;this.sessionId=nz(sessionId);this.stop=stop;}
+  /** The controller session's own status as App Core reported it for this app ("" when unbound, lingering or not
+   * reported). It decides only whether the app is authoritatively running and its state word, never membership. */
+  final String sessionStatus;
+  App(String entryId,String packageName,String state,Preview preview){this(entryId,packageName,state,preview,"",null,"");}
+  App(String entryId,String packageName,String state,Preview preview,String sessionId,Preview stop){this(entryId,packageName,state,preview,sessionId,stop,"");}
+  App(String entryId,String packageName,String state,Preview preview,String sessionId,Preview stop,String sessionStatus){
+   this.entryId=nz(entryId);this.packageName=nz(packageName);this.state=nz(state);this.preview=preview;this.sessionId=nz(sessionId);this.stop=stop;this.sessionStatus=nz(sessionStatus);}
+  /** Authoritatively running (#410 runningEdge "authoritatively running only"; rose.workButton.working): the app's
+   * controller session is reported exactly "ready". Every other status (launching, starting, scheduled, blocked,
+   * consent_required, cleanup_failed, anything unknown) and every unbound or lingering app is not, even though an
+   * owned_devices report still lists it as under control (STATE_RUNNING membership). */
+  boolean authoritativelyRunning(){return STATE_RUNNING.equals(state)&&SESSION_READY.equals(sessionStatus);}
+ }
+ /** The one controller session status that means running (App Core's ready). */
+ static final String SESSION_READY="ready";
+ static boolean sessionRunning(String sessionStatus){return SESSION_READY.equals(sessionStatus);}
+ /** A card's state word (#410 manager.stateChip, hidden only while authoritatively running): the truthful transition
+  * or hold state for everything else, never "Running" for an app whose session isn't ready. Fixed words only. */
+ static String cardState(App a){
+  if(a.authoritativelyRunning())return "Running";
+  if(STATE_WAITING.equals(a.state))return "Waiting";
+  if(STATE_STARTING.equals(a.state))return "Starting";
+  switch(a.sessionStatus){
+   case "launching":case "starting":case "scheduled":return "Starting";
+   case "blocked":case "consent_required":return "Waiting";
+   // A failed close: the session is still held and its apps may still be open (App Core: session_unreleased).
+   case "cleanup_failed":return "Still open";
+   // Unbound, lingering or an unknown status: attested under Rose's control, but no running session to show.
+   default:return "Open";
+  }
  }
  /** One complete report. */
  static final class Snapshot {
@@ -60,23 +87,49 @@ final class CurrentApps {
  enum State { AVAILABLE, EMPTY, UNAVAILABLE }
 
  /** Applies snapshots by the rules above; what the overview shows. One per overview owner (the panel). */
+ /** The source has no current report: nothing read yet since the overview opened or the screen resumed, or the newest
+  * read is older than MAX_AGE_MS. The Tracker shows the explicit checking state (no cards, so no running edge) and
+  * keeps the registration and generation it had: a still-valid controller registration is never retired by it, and
+  * that controller's next fresh report (same or newer generation) is shown again. Compared by identity. */
+ static final Snapshot EXPIRED=Snapshot.unavailable("expired",Long.MIN_VALUE,NOT_REPORTED);
+ /** The registration of a state Rose's own reader produced (no provider, an unreadable reply, a failed call): it says
+  * why nothing can be shown, but it is not a report from any controller, so like EXPIRED it never replaces or retires
+  * the controller's registration, and that controller's next report (same or newer generation) is shown again. */
+ static final String READER_LOCAL="\u0000reader";
+ static Snapshot readerFailure(String reason){return Snapshot.unavailable(READER_LOCAL,Long.MIN_VALUE,reason);}
+ /** The longest a current_apps read stays current: reads start about once a second while the overview is open. */
+ static final long MAX_AGE_MS=3000;
+ /** Whether a read started at readAt (uptime ms; negative when unknown) is current at now for a screen last resumed at
+  * resumedAt: begun since that resume, and no older than MAX_AGE_MS. */
+ static boolean current(long readAt,long resumedAt,long now){return readAt>=0&&readAt>=resumedAt&&now-readAt<=MAX_AGE_MS;}
  static final class Tracker {
   private String registration="";private long generation=Long.MIN_VALUE;private boolean received;
+  /** The last report was expired (EXPIRED): the same registration's next report at the same generation is accepted. */
+  private boolean expired;
   private List<App> apps=Collections.emptyList();private String reason=NOT_REPORTED;
   /** Registrations replaced by a newer one: their late reports are ignored, so nothing they listed comes back. */
   private final java.util.LinkedHashSet<String> retired=new java.util.LinkedHashSet<>();
   /** Nothing is known: teardown, or the overview's source was replaced. */
-  synchronized void reset(){if(!registration.isEmpty())retire(registration);registration="";generation=Long.MIN_VALUE;received=false;apps=Collections.emptyList();reason=NOT_REPORTED;}
+  synchronized void reset(){if(!registration.isEmpty())retire(registration);registration="";generation=Long.MIN_VALUE;received=false;expired=false;apps=Collections.emptyList();reason=NOT_REPORTED;}
   /** true when what is shown changed. */
   synchronized boolean apply(Snapshot s){
    if(s==null)return false;
    String before=key();
+   if(s==EXPIRED||READER_LOCAL.equals(s.registration)){
+    // Hide what is no longer current, or say why the reader has nothing, without forgetting whose it was: no
+    // retirement, no new registration.
+    received=false;apps=Collections.emptyList();reason=s.reason.isEmpty()?NOT_REPORTED:s.reason;expired=!registration.isEmpty();
+    return !key().equals(before);
+   }
    if(retired.contains(s.registration))return false;
    if(!s.registration.equals(registration)){
     // A new source connection: forget everything from the old one before looking at the new report.
     if(!registration.isEmpty())retire(registration);
     registration=s.registration;generation=Long.MIN_VALUE;received=false;apps=Collections.emptyList();reason=NOT_REPORTED;
    }else if(received&&s.generation<=generation)return false;
+   // After an expiry the same registration's current report is shown again, never an older one.
+   else if(expired&&s.generation<generation)return false;
+   expired=false;
    generation=s.generation;
    String bad=s.registration.isEmpty()?MALFORMED:validate(s);
    if(bad!=null){received=false;apps=Collections.emptyList();reason=bad;return !key().equals(before);}
@@ -93,7 +146,7 @@ final class CurrentApps {
   synchronized String reason(){return state()==State.UNAVAILABLE?(received?reason:reason.isEmpty()?NOT_REPORTED:reason):"";}
   synchronized String key(){StringBuilder b=new StringBuilder(registration).append('|').append(received).append('|').append(reason);
    for(App a:apps)b.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state).append(':').append(a.preview==null?"-":a.preview.sessionId+"/"+a.preview.controllerTaskId)
-    .append(':').append(a.sessionId).append(':').append(a.stop==null?"-":a.stop.sessionId+"/"+a.stop.controllerTaskId);
+    .append(':').append(a.sessionId).append(':').append(a.stop==null?"-":a.stop.sessionId+"/"+a.stop.controllerTaskId).append(':').append(a.sessionStatus);
    return b.toString();}
  }
 
@@ -207,7 +260,7 @@ final class CurrentApps {
    if(a==null)return Snapshot.unavailable(reg,gen,MALFORMED);
    Preview p=null;
    if(a.front&&!previewed&&previewable){p=new Preview(sessionId,taskId);previewed=true;}
-   out.add(new App(owner+"/"+nz(a.packageName),a.packageName,state,p));
+   out.add(new App(owner+"/"+nz(a.packageName),a.packageName,state,p,"",null,owner.equals("owned")?"":nz(sessionStatus)));
   }
   for(App a:out)if(a.packageName.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
   return new Snapshot(reg,gen,true,"",out);
@@ -256,7 +309,7 @@ final class CurrentApps {
     if(ids)stop=new Preview(b.sessionId,b.taskId);
     if(ids&&a.front&&b.frontKnown&&"ready".equals(b.sessionStatus)&&fronts.get(b.sessionId)==1)preview=new Preview(b.sessionId,b.taskId);
    }
-   out.add(new App((b==null?"owned":b.sessionId)+"/"+a.packageName,a.packageName,state,preview,b==null?"":b.sessionId,stop));
+   out.add(new App((b==null?"owned":b.sessionId)+"/"+a.packageName,a.packageName,state,preview,b==null?"":b.sessionId,stop,b==null?"":b.sessionStatus));
   }
   return new Snapshot(reg,gen,true,"",out);
  }

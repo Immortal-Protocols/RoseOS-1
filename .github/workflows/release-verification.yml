@@ -11,14 +11,64 @@ on:
       - 'scripts/release-chain.py'
       - 'scripts/rango-factory-observe.py'
       - 'scripts/tests/test_rango_factory_observe_workflow.py'
+      - 'scripts/tests/os_release_shape.py'
       - 'scripts/blazer-prep-wiring.py'
       - 'scripts/blazer-build-only.py'
       - 'os/build-only/**'
       - 'scripts/tests/test_blazer_prep_workflow.py'
+      - 'scripts/blazer_integration.py'
+      - 'scripts/tests/test_blazer_integration.py'
+      - 'scripts/blazer-candidate-bundle.py'
+      - 'scripts/tests/test_blazer_candidate_bundle.py'
+      - 'scripts/blazer-reconcile-seed.py'
+      - 'scripts/tests/test_blazer_reconcile_seed.py'
+      - 'scripts/blazer-integrate-wiring.py'
+      - 'scripts/tests/test_blazer_integrate_wiring.py'
+      - 'scripts/blazer-allocate.py'
+      - 'scripts/tests/test_blazer_allocate.py'
+      - 'scripts/blazer-binding-observe.py'
+      - 'scripts/tests/test_blazer_binding_observe.py'
+      - 'scripts/ssh-keygen-observe.py'
+      - 'scripts/tests/test_ssh_keygen_observe.py'
+      - 'os/build-only/blazer-integrate-host.json'
+      - 'scripts/tests/test_blazer_compile_workflow.py'
+      - 'scripts/blazer-compile-wiring.py'
+      - 'os/build-only/blazer-compile-host.json'
       - 'scripts/rango-factory-package-wiring.py'
       - 'scripts/host-factory-package.py'
+      - 'scripts/factory_targets.py'
+      - 'scripts/tests/test_factory_targets.py'
+      - 'scripts/factory-delivery.py'
+      - 'scripts/tests/test_factory_delivery.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/factory_package_route.py'
+      - 'scripts/frankel-factory-package-wiring.py'
+      - 'os/factory-package/**'
+      - 'scripts/tests/test_frankel_factory_package_workflow.py'
+      - 'scripts/mustang-ota-chain.py'
+      - 'scripts/mustang-delivery.py'
+      - 'scripts/mustang_ota.py'
+      - 'scripts/tests/test_mustang_ota_chain_workflow.py'
+      - 'scripts/rango-factory-inspect-wiring.py'
+      - 'scripts/rango-firmware-observe.py'
+      - 'scripts/tests/test_rango_factory_inspect_workflow.py'
+      - 'scripts/launcher3-compile.py'
+      - 'scripts/launcher3-compile-contract.py'
+      - 'os/compile-contracts/**'
+      - 'os/build-only/launcher3-compile-host.json'
+      - 'scripts/tests/test_launcher3_compile.py'
+      - 'scripts/tests/test_launcher3_compile_workflow.py'
+      - '.github/workflows/launcher3-compile.yml'
+      - 'scripts/launcher3-routing.py'
+      - 'scripts/launcher3_controller.py'
+      - 'scripts/launcher3_lane.py'
+      - 'os/build-only/launcher3-compile-lane.json'
+      - 'scripts/launcher3-bundle-report.py'
+      - 'scripts/tests/test_launcher3_bundle_report.py'
+      - 'os/build-only/launcher3-bundle-run.json'
+      - 'os/overlays/**'
+      - 'os/patches/**'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -38,7 +88,13 @@ on:
       - 'scripts/sign_trace.py'
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
+      - 'scripts/host-app-reuse.py'
+      - 'scripts/host-app-inputs-export.py'
+      - 'scripts/app-inputs-verify.py'
+      - 'os/app-inputs/**'
+      - 'scripts/tests/test_app_inputs_export.py'
       - 'scripts/app_release_publisher.py'
+      - 'scripts/app_reservation.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
       - 'scripts/alpha_image.py'
@@ -49,6 +105,16 @@ on:
       - 'workspace/rose-agent/delivery/catalog.test.mjs'
       - 'workspace/rose-agent/server/delivery.mjs'
       - 'scripts/host-reconcile.py'
+      - 'scripts/builder-reclaim.py'
+      - 'scripts/daily-release.py'
+      - 'scripts/tests/test_daily_release.py'
+      - 'scripts/tests/test_lane_capacity.py'
+      - 'os/ota/yogi.json'
+      - 'scripts/yogi_ota.py'
+      - '.github/workflows/yogi-ota.yml'
+      - '.github/workflows/daily-release.yml'
+      - 'scripts/mustang-allocate.py'
+      - 'scripts/tests/test_builder_reclaim.py'
       - 'scripts/host-sdk-layout.py'
       - 'scripts/host-decrypt-keys.py'
       - 'scripts/check-public-assets.mjs'
@@ -58,6 +124,15 @@ on:
       - 'os/release-pipeline/**'
       - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
+      - '.github/workflows/frankel-draft-recovery.yml'
+      - '.github/workflows/frankel-draft-promotion.yml'
+      - 'scripts/frankel-draft-promotion.py'
+      - 'scripts/tests/test_frankel_draft_promotion.py'
+      - '.github/workflows/frankel-allocation-recovery.yml'
+      - 'scripts/frankel-allocation-recovery.py'
+      - 'scripts/tests/test_frankel_allocation_recovery.py'
+      - 'scripts/frankel-draft-recovery.py'
+      - 'scripts/tests/test_frankel_draft_recovery.py'
       - 'scripts/tests/test_release_*.py'
       - 'scripts/tests/test_github_publisher.py'
       - 'scripts/tests/test_host_adapters.py'
@@ -65,10 +140,17 @@ on:
       - 'scripts/tests/test_actions_gcp_login.py'
       - 'scripts/tests/test_app_release.py'
       - 'scripts/tests/test_app_release_publisher.py'
+      - 'scripts/tests/test_hosted_app_signing_reuse.py'
+      - 'scripts/tests/test_agent_hosted_release.py'
+      - 'workspace/rose-agent/portable-build.py'
+      - 'workspace/rose-agent/tests/test_portable_build.py'
       - 'scripts/tests/test_emulator_alpha.py'
       - 'scripts/tests/test_alpha_source.py'
       - 'scripts/tests/test_permission_apex.py'
       - 'scripts/tests/apex_fixture.py'
+      - 'scripts/edge_artifact.py'
+      - 'scripts/tests/test_edge_artifact.py'
+      - 'scripts/tests/dex_fixture.py'
       - 'scripts/tests/java/**'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java'
@@ -97,14 +179,7 @@ on:
       - 'scripts/tests/test_rango_retained.py'
       - 'scripts/fold_tool_proof.py'
       - 'scripts/tests/test_fold_tool_proof.py'
-      - 'scripts/tests/test_models_signing_bootstrap.py'
-      - 'scripts/host-models-sign.py'
-      - 'scripts/models-input-ingress.py'
-      - 'scripts/tests/test_models_apk_signing.py'
-      - 'scripts/models-publication.py'
-      - 'scripts/tests/test_models_publication.py'
-      - '.github/workflows/models-publish.yml'
-      - 'os/models-signing/**'
+      - 'scripts/tests/test_models_app_not_bundled.py'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
@@ -130,14 +205,64 @@ on:
       - 'scripts/release-chain.py'
       - 'scripts/rango-factory-observe.py'
       - 'scripts/tests/test_rango_factory_observe_workflow.py'
+      - 'scripts/tests/os_release_shape.py'
       - 'scripts/blazer-prep-wiring.py'
       - 'scripts/blazer-build-only.py'
       - 'os/build-only/**'
       - 'scripts/tests/test_blazer_prep_workflow.py'
+      - 'scripts/blazer_integration.py'
+      - 'scripts/tests/test_blazer_integration.py'
+      - 'scripts/blazer-candidate-bundle.py'
+      - 'scripts/tests/test_blazer_candidate_bundle.py'
+      - 'scripts/blazer-reconcile-seed.py'
+      - 'scripts/tests/test_blazer_reconcile_seed.py'
+      - 'scripts/blazer-integrate-wiring.py'
+      - 'scripts/tests/test_blazer_integrate_wiring.py'
+      - 'scripts/blazer-allocate.py'
+      - 'scripts/tests/test_blazer_allocate.py'
+      - 'scripts/blazer-binding-observe.py'
+      - 'scripts/tests/test_blazer_binding_observe.py'
+      - 'scripts/ssh-keygen-observe.py'
+      - 'scripts/tests/test_ssh_keygen_observe.py'
+      - 'os/build-only/blazer-integrate-host.json'
+      - 'scripts/tests/test_blazer_compile_workflow.py'
+      - 'scripts/blazer-compile-wiring.py'
+      - 'os/build-only/blazer-compile-host.json'
       - 'scripts/rango-factory-package-wiring.py'
       - 'scripts/host-factory-package.py'
+      - 'scripts/factory_targets.py'
+      - 'scripts/tests/test_factory_targets.py'
+      - 'scripts/factory-delivery.py'
+      - 'scripts/tests/test_factory_delivery.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/factory_package_route.py'
+      - 'scripts/frankel-factory-package-wiring.py'
+      - 'os/factory-package/**'
+      - 'scripts/tests/test_frankel_factory_package_workflow.py'
+      - 'scripts/mustang-ota-chain.py'
+      - 'scripts/mustang-delivery.py'
+      - 'scripts/mustang_ota.py'
+      - 'scripts/tests/test_mustang_ota_chain_workflow.py'
+      - 'scripts/rango-factory-inspect-wiring.py'
+      - 'scripts/rango-firmware-observe.py'
+      - 'scripts/tests/test_rango_factory_inspect_workflow.py'
+      - 'scripts/launcher3-compile.py'
+      - 'scripts/launcher3-compile-contract.py'
+      - 'os/compile-contracts/**'
+      - 'os/build-only/launcher3-compile-host.json'
+      - 'scripts/tests/test_launcher3_compile.py'
+      - 'scripts/tests/test_launcher3_compile_workflow.py'
+      - '.github/workflows/launcher3-compile.yml'
+      - 'scripts/launcher3-routing.py'
+      - 'scripts/launcher3_controller.py'
+      - 'scripts/launcher3_lane.py'
+      - 'os/build-only/launcher3-compile-lane.json'
+      - 'scripts/launcher3-bundle-report.py'
+      - 'scripts/tests/test_launcher3_bundle_report.py'
+      - 'os/build-only/launcher3-bundle-run.json'
+      - 'os/overlays/**'
+      - 'os/patches/**'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -157,7 +282,13 @@ on:
       - 'scripts/sign_trace.py'
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
+      - 'scripts/host-app-reuse.py'
+      - 'scripts/host-app-inputs-export.py'
+      - 'scripts/app-inputs-verify.py'
+      - 'os/app-inputs/**'
+      - 'scripts/tests/test_app_inputs_export.py'
       - 'scripts/app_release_publisher.py'
+      - 'scripts/app_reservation.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
       - 'scripts/alpha_image.py'
@@ -168,6 +299,16 @@ on:
       - 'workspace/rose-agent/delivery/catalog.test.mjs'
       - 'workspace/rose-agent/server/delivery.mjs'
       - 'scripts/host-reconcile.py'
+      - 'scripts/builder-reclaim.py'
+      - 'scripts/daily-release.py'
+      - 'scripts/tests/test_daily_release.py'
+      - 'scripts/tests/test_lane_capacity.py'
+      - 'os/ota/yogi.json'
+      - 'scripts/yogi_ota.py'
+      - '.github/workflows/yogi-ota.yml'
+      - '.github/workflows/daily-release.yml'
+      - 'scripts/mustang-allocate.py'
+      - 'scripts/tests/test_builder_reclaim.py'
       - 'scripts/host-sdk-layout.py'
       - 'scripts/host-decrypt-keys.py'
       - 'scripts/check-public-assets.mjs'
@@ -177,6 +318,15 @@ on:
       - 'os/release-pipeline/**'
       - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
+      - '.github/workflows/frankel-draft-recovery.yml'
+      - '.github/workflows/frankel-draft-promotion.yml'
+      - 'scripts/frankel-draft-promotion.py'
+      - 'scripts/tests/test_frankel_draft_promotion.py'
+      - '.github/workflows/frankel-allocation-recovery.yml'
+      - 'scripts/frankel-allocation-recovery.py'
+      - 'scripts/tests/test_frankel_allocation_recovery.py'
+      - 'scripts/frankel-draft-recovery.py'
+      - 'scripts/tests/test_frankel_draft_recovery.py'
       - 'scripts/tests/test_release_*.py'
       - 'scripts/tests/test_github_publisher.py'
       - 'scripts/tests/test_host_adapters.py'
@@ -184,10 +334,17 @@ on:
       - 'scripts/tests/test_actions_gcp_login.py'
       - 'scripts/tests/test_app_release.py'
       - 'scripts/tests/test_app_release_publisher.py'
+      - 'scripts/tests/test_hosted_app_signing_reuse.py'
+      - 'scripts/tests/test_agent_hosted_release.py'
+      - 'workspace/rose-agent/portable-build.py'
+      - 'workspace/rose-agent/tests/test_portable_build.py'
       - 'scripts/tests/test_emulator_alpha.py'
       - 'scripts/tests/test_alpha_source.py'
       - 'scripts/tests/test_permission_apex.py'
       - 'scripts/tests/apex_fixture.py'
+      - 'scripts/edge_artifact.py'
+      - 'scripts/tests/test_edge_artifact.py'
+      - 'scripts/tests/dex_fixture.py'
       - 'scripts/tests/java/**'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java'
@@ -216,14 +373,7 @@ on:
       - 'scripts/tests/test_rango_retained.py'
       - 'scripts/fold_tool_proof.py'
       - 'scripts/tests/test_fold_tool_proof.py'
-      - 'scripts/tests/test_models_signing_bootstrap.py'
-      - 'scripts/host-models-sign.py'
-      - 'scripts/models-input-ingress.py'
-      - 'scripts/tests/test_models_apk_signing.py'
-      - 'scripts/models-publication.py'
-      - 'scripts/tests/test_models_publication.py'
-      - '.github/workflows/models-publish.yml'
-      - 'os/models-signing/**'
+      - 'scripts/tests/test_models_app_not_bundled.py'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
@@ -268,13 +418,30 @@ jobs:
           python3 scripts/tests/test_release_manifest.py
           python3 scripts/tests/test_release_stage.py
           python3 scripts/tests/test_release_pipeline.py
+          python3 scripts/tests/test_edge_artifact.py
           python3 scripts/tests/test_permission_apex.py
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
+          python3 scripts/tests/test_frankel_draft_recovery.py
+          python3 scripts/tests/test_frankel_draft_promotion.py
+          python3 scripts/tests/test_frankel_allocation_recovery.py
           python3 scripts/tests/test_release_chain.py
+          python3 scripts/tests/test_mustang_ota_chain_workflow.py
           python3 scripts/tests/test_rango_factory_observe_workflow.py
           python3 scripts/tests/test_blazer_prep_workflow.py
           python3 scripts/tests/test_rango_factory_package_workflow.py
+          python3 scripts/tests/test_frankel_factory_package_workflow.py
+          python3 scripts/tests/test_rango_factory_inspect_workflow.py
+          python3 scripts/tests/test_launcher3_compile.py
+          python3 scripts/tests/test_launcher3_bundle_report.py
+          python3 scripts/tests/test_blazer_allocate.py
+          python3 scripts/tests/test_blazer_binding_observe.py
+          python3 scripts/tests/test_blazer_candidate_bundle.py
+          python3 scripts/tests/test_blazer_compile_workflow.py
+          python3 scripts/tests/test_blazer_integrate_wiring.py
+          python3 scripts/tests/test_blazer_reconcile_seed.py
+          python3 scripts/tests/test_launcher3_compile_workflow.py
+          python3 scripts/tests/test_ssh_keygen_observe.py
           python3 scripts/tests/test_agent_beta_auto.py
           python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py
@@ -284,11 +451,20 @@ jobs:
           python3 scripts/tests/test_rango_retained.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py
+          python3 scripts/tests/test_factory_targets.py
+          python3 scripts/tests/test_factory_delivery.py
           python3 os/tests/test_apply_os_changes.py
           python3 scripts/tests/test_host_build_reconcile.py
+          python3 scripts/tests/test_builder_reclaim.py
+          python3 scripts/tests/test_app_inputs_export.py
+          python3 scripts/tests/test_daily_release.py
+          python3 scripts/tests/test_lane_capacity.py
           python3 scripts/tests/test_actions_gcp_login.py
           python3 scripts/tests/test_app_release.py
           python3 scripts/tests/test_app_release_publisher.py
+          python3 scripts/tests/test_hosted_app_signing_reuse.py
+          python3 scripts/tests/test_agent_hosted_release.py
+          python3 workspace/rose-agent/tests/test_portable_build.py
           python3 scripts/tests/test_emulator_alpha.py
           python3 scripts/tests/test_alpha_source.py
           python3 os/tests/test_cuttlefish_alpha_product.py
@@ -299,9 +475,7 @@ jobs:
           python3 scripts/tests/test_signing_bootstrap.py
           python3 scripts/tests/test_fold_bootstrap_proof.py
           python3 scripts/tests/test_fold_tool_proof.py
-          python3 scripts/tests/test_models_signing_bootstrap.py
-          python3 scripts/tests/test_models_apk_signing.py
-          python3 scripts/tests/test_models_publication.py
+          python3 scripts/tests/test_models_app_not_bundled.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs
           python3 -c "import sys; sys.path.insert(0, 'scripts'); import importlib.util as u; s = u.spec_from_file_location('m', 'scripts/release-manifest.py'); m = u.module_from_spec(s); s.loader.exec_module(m); [m.load_manifest(p) for p in sys.argv[1:]]" os/release-evidence/*/manifest.json
       - name: Factory package verifier (signature cases must run, so ssh-keygen is required)

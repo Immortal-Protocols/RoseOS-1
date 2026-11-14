@@ -8,7 +8,7 @@ FastAPI on 127.0.0.1 carries the dashboard, the browser's audio socket and
 the event stream; the MLX runtime thread runs every model; the conductor
 thread decides who speaks. A second listener in the same event loop (TLS on
 0.0.0.0:8443, rose/remote.py) lets a paired phone reach the same websockets
-over Wi-Fi or Tailscale; it serves nothing else (see REMOTE.md). The server comes up first and the models load
+over Tailscale; it serves nothing else (see REMOTE.md). The server comes up first and the models load
 behind it, reporting progress as ``status`` events, so the page is never dead.
 
 Spoken input without a microphone (``POST /api/say``) goes through macOS
@@ -801,14 +801,26 @@ class Server:
         self.args = args
         self.mode = "ui-only" if args.ui_only else "live"
         self.bus = Bus()
+        self.transcripts = None
+        if getattr(args, 'brain', 'local') == 'codex':
+            from .transcripts import Transcripts
+            self.transcripts = Transcripts(getattr(args, 'transcript_dir', None))
         # --phone real: the user's Android phone through Rose Agent (rose/realphone.py), not the fake one.
         self.phone = RealPhone(bus=self.bus) if getattr(args, "phone", "fake") == "real" else Phone(bus=self.bus)
+        if getattr(args, "vision_control", False):
+            self.phone.vision_control = True  # parse_args allows it only with --brain codex --phone real
         self.mic = MicFeed(self.bus)
-        self.voice = args.voice
+        # Nov 9 plan 1D: with Codex, the owner's chosen name and voice persist in the config directory; an explicit
+        # --voice still wins for this run.
+        self.identity = None
+        if getattr(args, 'brain', 'local') == 'codex':
+            from .voice_identity import IdentityStore, VoiceIdentity
+            self.identity = VoiceIdentity(IdentityStore())
+        self.voice = self.identity.startup_voice(args.voice) if self.identity else (args.voice or "zoey")
         self.ready = False
         self.state: dict = {"state": "loading", "detail": "Starting"}
         self.load_s: dict[str, float] = {}
-        self.runtime = self.brain = self.listener = self.speaker = self.tasks = None
+        self.runtime = self.brain = self.task_brain = self.listener = self.speaker = self.tasks = None
         self.conductor: Any = None
         self.keepalive: GpuKeepalive | None = None
         self.transport: Any = None
@@ -834,6 +846,8 @@ class Server:
             threading.Thread(target=self._load, name="loader", daemon=True).start()
 
     def shutdown(self) -> None:
+        if self._stopping.is_set():
+            return
         self._stopping.set()
         for obj, method in ((self.listener, "stop"), (self.conductor, "stop"),
                             (self.keepalive, "stop"), (self.transport, "stop"), (self.runtime, "stop")):
@@ -872,10 +886,26 @@ class Server:
         print(f"[rose] {name}: {self.load_s[name]:.1f} s", flush=True)
         return result
 
+    def _load_voice(self) -> None:
+        """Load the speaker with this run's voice; a saved voice that no longer loads falls back to the default."""
+        try:
+            self.speaker.load(self.voice)
+        except (ValueError, RuntimeError) as exc:
+            if not self.identity or self.args.voice or self.voice == "zoey":
+                raise
+            print(f"[rose] saved voice {self.voice} could not be loaded ({type(exc).__name__}); using zoey", flush=True)
+            self.voice = "zoey"
+            self.speaker.load(self.voice)
+
     def _load(self) -> None:
         t0 = time.monotonic()
         try:
-            from .brain import Brain
+            codex = getattr(self.args, 'brain', 'local') == 'codex'
+            cloud = getattr(self.args, 'cloud_audio', None)
+            if cloud:
+                from .cloud_audio import prepare
+                prepare()
+            from .brain import REPO as BRAIN_REPO, Brain
             from .conductor import Conductor
             from .listener import Listener
             from .runtime import Runtime
@@ -884,24 +914,56 @@ class Server:
 
             self.transport = self._make_transport()
             self.runtime = rt = Runtime()
-            self.brain = self._step("brain", "Loading the brain (Qwen3.6-35B-A3B)",
-                                    lambda: rt.run(Brain, name="brain-load", timeout=900))
+            if not codex:
+                brain_repo = BRAIN_REPO if self.args.brain in (None, "local") else self.args.brain
+                task_repo = self.args.task_brain or os.environ.get("ROSE_TASK_BRAIN") or brain_repo
+                self.brain = self._step("brain", f"Loading the brain ({brain_repo.split('/')[-1]})",
+                                        lambda: rt.run(lambda: Brain(brain_repo), name="brain-load", timeout=900))
+                self.task_brain = self.brain
+                if task_repo != brain_repo:  # a second model for the phone agent and thinker
+                    self.task_brain = self._step(
+                        "task-brain", f"Loading the task brain ({task_repo.split('/')[-1]})",
+                        lambda: rt.run(lambda: Brain(task_repo), name="task-brain-load", timeout=900))
             self.listener = Listener(rt, self.bus, on_event=self._on_listen)
-            self._step("listener", "Loading ears (VAD, streaming ASR, Parakeet, smart-turn)",
-                       self.listener.load)
+            if not cloud:
+                self._step("listener", "Loading ears (VAD, streaming ASR, Parakeet, smart-turn)",
+                           self.listener.load)
             self.speaker = Speaker(rt, self.bus, self.transport)
             self.speaker.on_audible = self.listener.set_rose_audible  # echo guard
-            self._step("speaker", f"Loading the voice ({self.voice})", lambda: self.speaker.load(self.voice))
-            self.tasks = TaskManager(rt, self.brain, self.phone, self.bus, on_done=self._on_task_done)
-            self._step("tasks", "Preparing the phone agent and thinker", self.tasks.prepare)
-            self.conductor = Conductor(rt, self.brain, self.listener, self.speaker, self.tasks,
-                                       self.phone, self.bus)
+            if cloud:
+                from .cloud_audio import load, voices as cloud_voices
+                if self.identity and self.voice not in cloud_voices(cloud) and not self.args.voice:
+                    print(f"[rose] saved voice {self.voice} is not configured on this backend; using zoey", flush=True)
+                    self.voice = "zoey"
+                self._step("voice", "Loading Linux voice providers", lambda: load(cloud, rt, self.listener, self.speaker, self.voice))
+            else:
+                self._step("speaker", f"Loading the voice ({self.voice})", self._load_voice)
+            if self.identity:
+                self.identity.loaded(getattr(self.speaker, 'voice', None) or self.voice)
+            if codex:
+                from .codex_conductor import CodexConductor
+                from .life_world import WorldStore, WorldLife
+                from .remote import config_dir
+                try:
+                    life = WorldLife(WorldStore(config_dir() / "rosie-life"))
+                except Exception:
+                    # A damaged/unwritable diary cannot take down conversation.
+                    life = None
+                    self.bus.emit('error', message="Character memory is unavailable; background life is disabled.")
+                self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts,
+                                                identity=self.identity, life=life)
+                self.tasks = self.conductor
+            else:
+                self.tasks = TaskManager(rt, self.task_brain, self.phone, self.bus, on_done=self._on_task_done)
+                self._step("tasks", "Preparing the phone agent and thinker", self.tasks.prepare)
+                self.conductor = Conductor(rt, self.brain, self.listener, self.speaker, self.tasks,
+                                           self.phone, self.bus)
             self._step("conductor", "Preparing Rose's conversation", self.conductor.start)
             self.listener.start()
             self.mic.sink = self.listener.push
             if isinstance(self.transport, LocalTransport):
                 self.transport.start()
-            if self.args.keepalive:
+            if self.args.keepalive and not cloud:
                 self.keepalive = GpuKeepalive(rt)
                 self.keepalive.start()
             self.ready = True
@@ -909,8 +971,9 @@ class Server:
             print(f"[rose] ready in {seconds} s", flush=True)
             self.bus.emit("ready", seconds=seconds, load_s=dict(self.load_s))
         except Exception as exc:
-            traceback.print_exc()
-            self.bus.emit("error", message=f"startup failed: {type(exc).__name__}: {exc}")
+            if getattr(self.args, 'brain', 'local') != 'codex':
+                traceback.print_exc()
+            self.bus.emit("error", message=f"startup failed: {type(exc).__name__}; check Codex ChatGPT login and Terra Fast availability" if codex else f"startup failed: {type(exc).__name__}: {exc}")
             self.bus.emit("status", state="loading",
                           detail=f"Startup failed ({type(exc).__name__}); see the server log")
 
@@ -981,7 +1044,8 @@ class Server:
         items = getattr(tasks, "tasks", None)
         items = list(items.values()) if isinstance(items, dict) else tasks.running()
         items = [t for t in items if t.id > self._floors[1]]  # TaskManager keeps pre-reset tasks
-        return [t.to_dict() for t in sorted(items, key=lambda t: t.id)[-20:]]
+        snapshot = getattr(tasks, 'task_snapshot', lambda task: task.to_dict())
+        return [snapshot(t) for t in sorted(items, key=lambda t: t.id)[-20:]]
 
     def audio_stats(self) -> dict:
         t = self.transport
@@ -1012,10 +1076,13 @@ class Server:
     def snapshot(self) -> dict:
         return {"mode": self.mode, "ready": self.ready, "status": self.state,
                 "voice": self.current_voice(), "voices": self.voices(),
+                "assistant_name": self.identity.name if self.identity else "Rose",
                 "phone": self.phone.snapshot(), "ui_tree": self.phone.ui_tree(),
                 "tasks": self.task_list(), "load_s": self.load_s,
                 "metrics": list(getattr(self.conductor, "turn_metrics", []))[-50:],
-                "stats": self.stats()}
+                "stats": self.stats(),
+                "conversation_id": getattr(self.conductor, 'conversation', None),
+                "model": getattr(self.conductor, 'model', None)}
 
     # ------------------------------------------------------------- actions
     async def say(self, text: str, typed: bool = False) -> tuple[dict, int]:
@@ -1024,7 +1091,7 @@ class Server:
             return {"ok": True, "mode": "scripted"}, 200
         if not self.ready:
             return {"ok": False, "error": "Rose is still loading"}, 503
-        if typed:
+        if typed or getattr(self.args, 'cloud_audio', None):
             self.conductor.inject_text_turn(text)
             return {"ok": True, "mode": "typed"}, 200
         try:
@@ -1047,6 +1114,7 @@ class Server:
     def set_voice(self, voice: str) -> tuple[dict, int]:
         if voice not in self.voices():
             return {"ok": False, "error": f"unknown voice; choose from {', '.join(self.voices())}"}, 400
+        before = getattr(self.speaker, "voice", None)
         if self.speaker is not None:
             try:
                 self.speaker.set_voice(voice)  # loads the voice prompt on the runtime thread
@@ -1054,6 +1122,9 @@ class Server:
                 return {"ok": False, "error": f"voice change failed: {type(exc).__name__}"}, 500
         self.voice = voice
         self.bus.emit("voice", voice=voice)
+        if self.identity is not None and self.speaker is not None:
+            # The owner's pick here is the saved choice too (Nov 9 plan 1D), so revert and the next start follow it.
+            return {"ok": True, "voice": voice, "saved": self.identity.adopt(before, voice)}, 200
         return {"ok": True, "voice": voice}, 200
 
     # ----------------------------------------------------------- websockets
@@ -1110,15 +1181,36 @@ class Server:
         try:
             history = [m for m in list(self.bus.history) if not self._stale(m)]
             seen = {id(m) for m in history}
+            state = self.snapshot()
             await ws.send_text(dumps({"kind": "hello", "t": time.time(), "history": len(history),
-                                      "state": self.snapshot()}))
+                                      "state": state}))
             for m in history:
                 await ws.send_text(dumps({**m, "replay": True}))
             await ws.send_text(dumps({"kind": "replay_done", "t": time.time()}))
-            while True:
-                m = await q.get()
-                if id(m) not in seen and not self._stale(m):
-                    await ws.send_text(dumps(m))
+            # Phone clients intentionally skip historical replay. Restore the
+            # current task collection as live snapshots, using the same scoped
+            # identity/binding as subsequent updates; never replay user actions.
+            for task in state.get('tasks', []):
+                await ws.send_text(dumps({'kind': 'task', 't': time.time(), 'task': task}))
+            incoming = asyncio.create_task(ws.receive())
+            outgoing = asyncio.create_task(q.get())
+            try:
+                while True:
+                    ready, _ = await asyncio.wait((incoming, outgoing), return_when=asyncio.FIRST_COMPLETED)
+                    if incoming in ready:
+                        frame = incoming.result()
+                        if frame['type'] == 'websocket.disconnect':
+                            break
+                        incoming = asyncio.create_task(ws.receive())
+                    if outgoing in ready:
+                        m = outgoing.result()
+                        outgoing = asyncio.create_task(q.get())
+                        if id(m) not in seen and not self._stale(m):
+                            await ws.send_text(dumps(m))
+            finally:
+                incoming.cancel()
+                outgoing.cancel()
+                await asyncio.gather(incoming, outgoing, return_exceptions=True)
         except Exception:
             pass  # client went away
         finally:
@@ -1144,7 +1236,7 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
         yield
         if seen is not None:
             seen.cancel()
-        server.shutdown()
+        await asyncio.to_thread(server.shutdown)
 
     app = FastAPI(title="Rose", lifespan=lifespan)
     # No login on the dashboard: loopback Host and Origin only, so a web page cannot use it.
@@ -1175,6 +1267,36 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
     def state() -> Response:
         return _json(server.snapshot())
 
+    @app.get("/api/transcripts")
+    def transcripts() -> Response:
+        return _json(server.transcripts.conversations() if server.transcripts else [])
+
+    @app.get("/api/transcripts/{conversation}")
+    def transcript(conversation: str) -> Response:
+        if not server.transcripts:
+            return _json({"error": "transcripts unavailable"}, 404)
+        return _json(server.transcripts.export(conversation))
+
+    @app.post("/api/tasks/{task_id}/stop")
+    def stop_task(task_id: int, body: dict) -> Response:
+        # A stale browser from another server lifetime cannot stop a reused id.
+        if body.get('conversation_id') != getattr(server.conductor, 'conversation', None):
+            return _json({"ok": False, "error": "stale conversation"}, 409)
+        return _json({"ok": bool(server.tasks and server.tasks.cancel(task_id))})
+
+    @app.get('/api/tasks/{task_id}/frame')
+    def task_frame(task_id: int, conversation_id: str = '') -> Response:
+        """Read an existing worker's cached pixels; never capture or drive another screen."""
+        if conversation_id!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        session=next((s for s in getattr(server.conductor,'sessions',{}).values()
+                      if getattr(s,'task',None) and s.task.id==task_id),None)
+        image=getattr(getattr(session,'view',None),'image',None)
+        if image is None:return _json({'ok':False,'reason':'no_cached_frame'},404)
+        import io
+        out=io.BytesIO();image.copy().save(out,format='PNG')
+        return Response(out.getvalue(),media_type='image/png',headers=NO_STORE)
+
     @app.post("/api/say")
     async def say(body: dict) -> Response:
         text = " ".join(str(body.get("text", "")).split())[:400]
@@ -1182,6 +1304,36 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
             return _json({"ok": False, "error": "no text"}, 400)
         payload, status = await server.say(text, typed=bool(body.get("typed")))
         return _json(payload, status)
+
+    @app.get('/api/life')
+    def life_state() -> Response:
+        life=getattr(server.conductor,'life',None)
+        return _json(life.status() if life else {'available':False})
+
+    @app.post('/api/life/wake')
+    def life_wake(body: dict) -> Response:
+        # Existing loopback Host/Origin boundary applies. Internal events never
+        # enter the user transcript, voice stream or phone's chat history.
+        life=getattr(server.conductor,'life',None)
+        if not life or not hasattr(life,'context'):return _json({'ok':False,'reason':'life_unavailable'},503)
+        if body.get('conversation_id')!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        event_id=body.get('event_id')
+        if not isinstance(event_id,str) or not 0<len(event_id)<=80 or not all(c.isalnum() or c in '-_' for c in event_id):
+            return _json({'ok':False,'reason':'bounded_event_id_required'},400)
+        with life._lock:
+            accepted=life.tick(manual=event_id)
+            return _json({'ok':accepted,'wake_id':life._last_wake_id if accepted else None})
+
+    @app.post('/api/life/control')
+    def life_control(body: dict) -> Response:
+        life=getattr(server.conductor,'life',None)
+        if not life:return _json({'ok':False,'reason':'life_unavailable'},503)
+        if body.get('conversation_id')!=getattr(server.conductor,'conversation',None):
+            return _json({'ok':False,'reason':'stale_conversation'},409)
+        if body.get('action') not in ('pause','resume','stop','schedule'):
+            return _json({'ok':False,'reason':'unknown_control'},400)
+        return _json(life.call(body))
 
     @app.post("/api/notify")
     def notify(body: dict) -> Response:
@@ -1229,12 +1381,10 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
 
     @app.websocket("/ws/phone")
     async def ws_phone(ws: WebSocket) -> None:
-        # The unauthenticated USB path. A paired phone never uses it (it signs in on the remote
-        # port), so while one is paired and the listener is up this path stays shut.
-        if remote is not None and remote.listening and remote.devices.has_active():
+        # Phone control always uses the signed Tailscale endpoint when remote mode is on.
+        if remote is not None:
             await ws.accept()
-            await ws.close(code=PAIRED_ONLY, reason="a phone is paired: it connects over Wi-Fi or Tailscale "
-                                                    "(remove it under Pair phone to use USB)")
+            await ws.close(code=PAIRED_ONLY, reason="Pair Rose Agent over Tailscale; unsigned USB phone control is unavailable")
             return
         await server.serve_phone(ws)
 
@@ -1247,7 +1397,7 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
 
 # SIGHUP too: closing the terminal should stop Rose cleanly (main's finally saves lastSeen).
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-PAIRED_ONLY = 4009  # /ws/phone close code on the dashboard while a phone is paired
+PAIRED_ONLY = 4009  # Phone control uses the signed Tailscale listener, never implicit USB.
 
 
 class _Uvicorn(uvicorn.Server):
@@ -1282,30 +1432,42 @@ def build_servers(server: Server, args: argparse.Namespace,
     return servers
 
 
-async def serve_all(servers: list[tuple[uvicorn.Server, list | None]]) -> None:
+async def serve_all(servers: list[tuple[uvicorn.Server, list | None]],
+                    shutdown: Callable[[], None] | None = None) -> None:
     """Run the servers on this loop until a signal (or one of them stops), then stop them all."""
 
     loop = asyncio.get_running_loop()
+    stopping = asyncio.Event()
 
     def on_signal() -> None:
-        for s, _ in servers:
-            if s.should_exit:
+        if stopping.is_set():
+            for s, _ in servers:
                 s.force_exit = True
-            s.should_exit = True
+                s.should_exit = True
+        stopping.set()
 
     for sig in STOP_SIGNALS:
         with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):  # not the main thread
             loop.add_signal_handler(sig, on_signal)
     tasks = [asyncio.create_task(s.serve(sockets=socks)) for s, socks in servers]
+    signalled = asyncio.create_task(stopping.wait())
     try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait([*tasks, signalled], return_when=asyncio.FIRST_COMPLETED)
     finally:
-        for s, _ in servers:
-            s.should_exit = True
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for sig in STOP_SIGNALS:
-            with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):
-                loop.remove_signal_handler(sig)
+        try:
+            # Targeted workspace stops need the phone websocket and its event
+            # loop alive. Uvicorn closes connections before lifespan teardown.
+            if shutdown:
+                await asyncio.to_thread(shutdown)
+        finally:
+            signalled.cancel()
+            await asyncio.gather(signalled, return_exceptions=True)
+            for s, _ in servers:
+                s.should_exit = True
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for sig in STOP_SIGNALS:
+                with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):
+                    loop.remove_signal_handler(sig)
     for r in results:
         if isinstance(r, BaseException) and not isinstance(r, asyncio.CancelledError):
             raise r
@@ -1313,8 +1475,16 @@ async def serve_all(servers: list[tuple[uvicorn.Server, list | None]]) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python -m rose.app", description="Rose v3 voice assistant server.")
+    p.add_argument("--brain", default="local",
+                   help="local (default: $ROSE_BRAIN or brain.REPO), an MLX model for Rose's conversation, "
+                        "or codex: GPT 6.1 Terra Fast via Sign in with ChatGPT")
+    p.add_argument("--transcript-dir", help="durable private transcript directory (Codex mode)")
+    p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
+    p.add_argument("--pair-host", action="append", default=[], help="Tailscale MagicDNS/IPv4 host for the shared QR; repeatable")
     p.add_argument("--port", type=int, default=8091)
-    p.add_argument("--voice", default="zoey", help="Phonon voice name (see /api/state voices)")
+    p.add_argument("--voice", default=None,
+                   help="Phonon voice name (see /api/state voices); default zoey, or with --brain codex the voice the "
+                        "owner chose in conversation")
     p.add_argument("--no-browser-audio", dest="browser_audio", action="store_false",
                    help="do not use the browser for audio; Rose's speech plays silently in real time")
     p.add_argument("--local-audio", action="store_true",
@@ -1326,18 +1496,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--ui-only", action="store_true", help="no models: replay a scripted demo session")
     p.add_argument("--phone", choices=("fake", "real"), default="fake",
                    help="real: control the Android phone running Rose Agent (USB: adb reverse tcp:8091 tcp:8091)")
+    p.add_argument("--vision-control", action="store_true",
+                   help="Codex app threads control apps from screenshots and coordinates only (needs --brain codex "
+                        "--phone real; typing needs a controller with vision text input)")
     p.add_argument("--remote-port", type=int, default=DEFAULT_REMOTE_PORT,
                    help="TLS listener on 0.0.0.0 for phones paired by QR code (Wi-Fi/Tailscale)")
     p.add_argument("--no-remote", dest="remote", action="store_false",
                    help="no remote listener: the phone can only use USB (adb reverse)")
+    p.add_argument("--task-brain", default=None,
+                   help="MLX model for the phone agent and thinker (default $ROSE_TASK_BRAIN, else --brain)")
     p.add_argument("--log-level", default="warning")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.cloud_audio and args.brain != 'codex':
+        p.error('--cloud-audio requires --brain codex')
+    if args.vision_control and (args.brain != 'codex' or args.phone != 'real'):
+        p.error('--vision-control requires --brain codex --phone real')
+    from .remote import configured_hosts
+    try:
+        args.pair_host = configured_hosts(args.pair_host)
+    except ValueError as exc:
+        p.error(str(exc))
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     server = Server(args)
-    remote = Remote(port=args.remote_port) if args.remote else None
+    remote = (Remote(port=args.remote_port, **({'hosts': lambda: args.pair_host} if args.pair_host else {}))
+              if args.remote else None)
     servers = build_servers(server, args, remote)
     print(f"[rose] dashboard: http://127.0.0.1:{args.port}  (mode: {server.mode})", flush=True)
     if remote is not None and remote.listening:
@@ -1345,7 +1531,7 @@ def main(argv: list[str] | None = None) -> None:
               f"(server id {remote.identity.server_id}; pair with the dashboard's Pair phone button "
               "or python -m rose.pair)", flush=True)
     try:
-        asyncio.run(serve_all(servers))
+        asyncio.run(serve_all(servers, shutdown=server.shutdown))
     except KeyboardInterrupt:
         pass
     finally:

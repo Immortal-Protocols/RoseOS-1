@@ -8,8 +8,12 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
@@ -42,7 +46,7 @@ class Guard(unittest.TestCase):
     BASE = {'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '', 'APPS': '', 'PROMOTE': 'false',
             'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '', 'RESUME_UNSIGNED_SHA256': '', 'RESUME_SIGNED_SHA256': '',
             'CAMPAIGN': '', 'APP_PUBLISH': 'false', 'ROSE_RANGO_PUBLISH': 'false', 'ROSE_FIRST_USE_ENROLL': 'false',
-            'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '', 'REUSE_BINDING': '',
+            'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'REUSE_BINDING': '',
             'ALPHA_RECOVER': 'false', 'ROSE_DEVICE': 'frankel'}
 
     def branch(self):
@@ -62,18 +66,18 @@ class Guard(unittest.TestCase):
                        {'RESUME_SOURCE_RUN': '1'}, {'RESUME_UNSIGNED_SHA256': 'a' * 64}, {'RESUME_SIGNED_SHA256': 'a' * 64},
                        {'CAMPAIGN': 'start'}, {'APP_PUBLISH': 'true'}, {'ROSE_RANGO_PUBLISH': 'true'},
                        {'ROSE_FIRST_USE_ENROLL': 'true'}, {'ROSE_RECOVER_RUN': '41000000000'},
-                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'MODELS_BOOTSTRAP_RUN': '1'}, {'REUSE_BINDING': '{}'},
+                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'REUSE_BINDING': '{}'},
                        {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'blazer'}, {'ROSE_DEVICE': 'rango'}):
             with self.subTest(change=change):
                 self.assertNotEqual(self.run_branch(**change), 0)
 
     def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
-        self.assertIn(f', emulator-alpha-export, {MODE}]\n', WORKFLOW)
+        self.assertIn(MODE, shape.modes())
         self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]), ['workflow_dispatch'])
         guard = jobs()['guard']
         check = step(guard, 'Rango factory observation check')
         self.assertIn(f"        if: inputs.mode == '{MODE}'\n        run: python3 scripts/rango-factory-observe.py check\n", check)
-        self.assertIn(f'"$MODE" == rango-factory-observe ]] || git merge-base --is-ancestor', guard)
+        self.assertIn(MODE, shape.main_check_exempt_modes())  # a bare dispatch: no candidate to check against main
         self.assertEqual(re.search(r'(?m)^    needs: (.+)$', jobs()['controller'])[1], 'guard')
 
 

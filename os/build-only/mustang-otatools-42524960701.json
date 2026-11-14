@@ -1,0 +1,120 @@
+{
+  "schema": "roseos.mustang-otatools-evidence.v1",
+  "runId": "42524960701",
+  "runAttempt": "1",
+  "source": "6a532d4ff5cc6c55c338da36344b172c4fcb3cf1",
+  "workflowConclusion": "failure",
+  "cleanupConclusion": "success",
+  "receiptSha256": "853d64f90c93d0f57b330cd1c503a5c5a3b2894c6b7d8c6a655ad3610c5177ab",
+  "receipt": {
+    "allocated": false,
+    "boundEnforcement": "sampled-process-group-stop",
+    "buildScript": {
+      "mode": 384,
+      "sha256": "788cdd06ffe5974ff3de3a7bdce016191f62004f1d3c0ec78ec6505db3cfef3f",
+      "sizeBytes": 755
+    },
+    "commands": [
+      {
+        "argv": [
+          "/bin/bash",
+          "/mnt/disks/mustang-data/roseos/rose-actions/mustang-otatools-42524960701-1/build-otatools.sh",
+          "out_mustang_otatools_proof",
+          "/mnt/disks/mustang-data/roseos/rose-actions/mustang-otatools-42524960701-1/lunch-identity.json"
+        ],
+        "exitCode": 1,
+        "processStarted": true
+      }
+    ],
+    "detachedDescendantsContained": false,
+    "elapsedSeconds": 91.301,
+    "failureCode": "Mustang otatools Make failed",
+    "failureType": "ValueError",
+    "goals": [
+      "otatools-package"
+    ],
+    "hostDependencies": {
+      "adevtoolRevision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "distributionEntries": 485,
+      "distributionRehashed": true,
+      "otaAdmitted": false,
+      "receiptSha256": "1324d6d8d4bd6c54ec93792f08695e597ca77986b79f023754944b6424a14977",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42512135815",
+        "source": "78d5ebdfd4f3fc1dd99d8cb98bbf44316b9eb54f",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42524960701",
+        "source": "6a532d4ff5cc6c55c338da36344b172c4fcb3cf1",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "jobs": 24,
+    "makeStarted": null,
+    "otaAdmitted": false,
+    "outDir": "/mnt/disks/mustang-data/roseos/source/out_mustang_otatools_proof",
+    "partialsPreserved": true,
+    "phase": "mustang-otatools-make",
+    "product": "mustang-cur-user",
+    "reserveBytes": 322122547200,
+    "schema": "roseos.mustang-otatools-preparation-run.v1",
+    "signerPinsAdmitted": false,
+    "signingStarted": false,
+    "source": {
+      "check": "project-heads-and-git-status",
+      "ignoredContentUnchecked": true,
+      "pristineRuntimeAttestation": false,
+      "projectCount": 1057
+    },
+    "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+    "spaceObservations": {
+      "minimumAvailableBytes": 1247931944960,
+      "peakWatchedBytes": 195246836,
+      "samples": 8
+    },
+    "success": false,
+    "timeoutSeconds": 9000,
+    "vendorInput": {
+      "generatedTreesRehashed": true,
+      "otaAdmitted": false,
+      "receiptSha256": "53397baa8dcb211da3413c100b916521a8078b77ff7ce0d8b5bb7161e827eb95",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42522784617",
+        "source": "55c085ade9d0ef8fa792df1e824720130997b29b",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "sourceLoaderRehashed": true
+    },
+    "workBytes": 137438953472
+  },
+  "artifact": {
+    "id": 13635460551,
+    "name": "mustang-otatools-receipt-42524960701-1",
+    "sizeBytes": 1383,
+    "sha256": "c177dd1193b0f3453e0f0fc44ec1053a5288303dc1eef21baeea120b9aa5f221"
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T13:24:03.510-08:00",
+    "lastStopTimestamp": "2026-11-08T13:27:26.566-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "toolPackageProduced": false,
+  "independentHostedReadback": "skipped; no successful native package",
+  "diagnosis": "All pinned-project, vendor-tree and host-distribution checks passed; wrapper exited 1. Make start and exact failing substage are unknown in this receipt. Preserve partials and observe before correction or another build."
+}

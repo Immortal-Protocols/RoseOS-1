@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "kind": "rose-blazer-prep-host",
-  "basis": "BLAZER-PREP workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-prep passes to scripts/blazer-build-only.py run. The host is the existing original builder (Infra reconciliation of a709ab3: protocols-465723/us-west2-a/immortal-os-builder, runner selectors [self-hosted, roseos-frankel-builder]); the lock is os/release-pipeline/frankel.json host.lockPath. sourceRoot (the isolated work tree), downloadDir and node are host facts not yet supplied: while any is null the hosted guard refuses before the controller starts. The receipt directory is a fresh per-attempt directory under the runner's temp directory. Nothing here was run on any host.",
+  "basis": "BLAZER-PREP workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-prep passes to scripts/blazer-build-only.py run. The host is the existing original builder (Infra reconciliation of a709ab3: protocols-465723/us-west2-a/immortal-os-builder, runner selectors [self-hosted, roseos-frankel-builder]); the lock is os/release-pipeline/frankel.json host.lockPath. sourceRoot (the isolated work tree, fixed across the source, vendor and lunch dispatches), downloadDir and node are the historical facts of the metadata-only inspect receipt of run 41473133543 attempt 1 (Infra proposal 01a19e54, 2026-11-02): both directories were absent, their parent existed, and /usr/local/bin/node was a regular executable file whose version was never run. They are not current host proof: on every run the helper re-checks absence, isolation from the production tree, symlinks, collisions, space, the lock and (vendor) the node identity, and refuses otherwise. The source stage needs only sourceRoot. A completed source copy is a production working-tree byte snapshot with project revisions and the pinned manifest unverified (PR395); nothing here claims a manifest-verified tree. The receipt directory is a fresh per-attempt directory under the runner's temp directory. Nothing here was run on any host.",
   "host": "immortal-os-builder",
   "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
-  "sourceRoot": null,
-  "downloadDir": null,
-  "node": null,
+  "sourceRoot": "/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source",
+  "downloadDir": "/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/downloads",
+  "node": "/usr/local/bin/node",
   "inspectCandidates": {
     "rootTemplate": "/home/pixelbuild/rose-actions/blazer-prep-{run_id}-{attempt}",
     "verified": false,
     "binding": false,
-    "basis": "Proposed inspection candidate only (Chief/Infra 2026-11-02): blazer-build-only.py inspect --candidate-root derives source, downloads and receipts under it and reports metadata; not known to exist, not approved and never a preparation binding. sourceRoot, downloadDir and node above stay null until verified."
+    "basis": "Proposed inspection candidate only (Chief/Infra 2026-11-02): blazer-build-only.py inspect --candidate-root derives source, downloads and receipts under it and reports metadata; not known to exist, not approved and never a preparation binding (the bindings above come from receipt 41473133543, not from these candidates)."
   }
 }

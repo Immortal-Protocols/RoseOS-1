@@ -1,0 +1,130 @@
+{
+  "schema": "roseos.mustang-hostdeps-evidence.v1",
+  "runId": "42508459503",
+  "runAttempt": "1",
+  "source": "efa46b7ebf8c3cafa35053c66f3a4fab37e026f4",
+  "workflowConclusion": "failure",
+  "cleanupConclusion": "success",
+  "artifact": {
+    "id": 13628911158,
+    "name": "mustang-hostdeps-42508459503-1",
+    "sizeBytes": 1811,
+    "sha256": "ec1d42f6bb950293579740ffd2bf5ad2d89d5e1647893b99868c880e9a2f1a6d"
+  },
+  "receiptSha256": "808cd762af25093b283257eaf2bc2749d2fd388d9c0538df8242639eeb233397",
+  "receipt": {
+    "argv": [
+      "/bin/bash",
+      "vendor/adevtool/scripts/run-build.sh",
+      "sdk_phone64_x86_64",
+      "out_adevtool_deps",
+      "-j24",
+      "aapt2",
+      "apksigner",
+      "aprotoc",
+      "arsclib",
+      "debugfs",
+      "dispol",
+      "fsck.erofs",
+      "lpdump",
+      "lpunpack",
+      "lz4",
+      "ota_extractor",
+      "simg2img",
+      "sqlite3",
+      "toybox"
+    ],
+    "authenticatedStop": false,
+    "boundEnforcement": "sampled-process-group-stop",
+    "detachedDescendantsContained": false,
+    "elapsedSeconds": 332.46,
+    "failure": "hostdeps special output refused",
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42508459503",
+        "source": "efa46b7ebf8c3cafa35053c66f3a4fab37e026f4",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "manifestSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+    "otaAuthorized": false,
+    "outDir": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps",
+    "publishAuthorized": false,
+    "recipe": {
+      "adevtoolRevision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "boundsKind": "proposal-ceilings-not-measurements",
+      "jobs": 24,
+      "logBytes": 16777216,
+      "otaAuthorized": false,
+      "outDir": "out_adevtool_deps",
+      "product": "sdk_phone64_x86_64",
+      "publishAuthorized": false,
+      "reserveBytes": 322122547200,
+      "schema": "roseos.mustang-hostdeps-recipe.v1",
+      "scope": "adevtool-host-dependencies-only",
+      "signAuthorized": false,
+      "timeoutSeconds": 9000,
+      "tools": [
+        "aapt2",
+        "apksigner",
+        "aprotoc",
+        "arsclib",
+        "debugfs",
+        "dispol",
+        "fsck.erofs",
+        "lpdump",
+        "lpunpack",
+        "lz4",
+        "ota_extractor",
+        "simg2img",
+        "sqlite3",
+        "toybox"
+      ],
+      "workBytes": 137438953472
+    },
+    "schema": "roseos.mustang-hostdeps-run.v1",
+    "scope": "adevtool-host-dependencies-only",
+    "signAuthorized": false,
+    "source": {
+      "check": "project-heads-and-git-status",
+      "ignoredContentUnchecked": true,
+      "pristineRuntimeAttestation": false,
+      "projectCount": 1057
+    },
+    "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+    "spaceObservations": {
+      "filesystemAvailableDropBytes": 160931840,
+      "firstAvailableBytes": 1288261312512,
+      "lastAvailableBytes": 1288100380672,
+      "minimumAvailableBytes": 1288100380672,
+      "minimumAvailableInodes": 94441175,
+      "peakWatchedBytes": 105632693,
+      "samples": 5
+    },
+    "success": false,
+    "wrapper": {
+      "mode": 448,
+      "sha256": "02183ec2528b0305007e9a2f0d6dacc5312e72d483b18ccd7653cab47e06c785",
+      "sizeBytes": 125
+    }
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T10:08:55.108-08:00",
+    "lastStopTimestamp": "2026-11-08T10:16:41.894-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "outputPreserved": true,
+  "specialEntryTypeAndPath": "not-yet-observed",
+  "retryDispatched": false
+}

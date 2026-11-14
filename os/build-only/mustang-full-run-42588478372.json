@@ -1,0 +1,60 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42588478372",
+  "runNumber": 26,
+  "runAttempt": 1,
+  "source": "7eac541e63c990cdda9a517d18b0f33c9296920f",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "guardConclusion": "success",
+  "controllerConclusion": "success",
+  "enrollConclusion": "success",
+  "builderJobId": 129064416333,
+  "builderGroupId": 5,
+  "builderRunner": "mustang-42588478372",
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "failedStep": "Prepare, allocate, integrate and compile once on Mustang disk",
+  "error": "full-run bootstrap source observation refused (source: unsupported-git-tree-mode); no source copy, allocation or Make",
+  "errorObservedAt": "2026-11-09T08:48:39Z",
+  "collectorStage": "source",
+  "collectorFailureCode": "unsupported-git-tree-mode",
+  "collectorReceiptWritten": true,
+  "collectorReceiptPayloadObserved": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129064532600,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T08:58:01.658892+00:00",
+    "instance": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T00:49:51.971-08:00"
+    }
+  },
+  "receiptArtifact": {
+    "id": 13660501230,
+    "sha256": "4c62c94f524bb2ca5f46b499bb8223e0a05957cf1000d1349d605f18db5f8646",
+    "sizeBytes": 1945,
+    "payloadByteVerified": false
+  },
+  "nextInitializationRunNumber": 27,
+  "basis": "Permitted job logs expose source-stage unsupported-git-tree-mode and receiptWritten true; host/baseline/app admission passed. No specific native tree mode/path was logged, so no per-project diagnosis is invented. Git standard defines160000 gitlinks, which this parser rejected unconditionally. The source fix authenticates them while requiring manifest-matched populated children or empty selected boundaries, without fetching code or loosening unknown-byte checks. Source copy/allocation/Make were not reached. Completed cleanup and direct exact VM TERMINATED observation are independent of artifact payloads. No journal reset or on-disk absence claim."
+}

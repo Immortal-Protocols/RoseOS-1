@@ -1,0 +1,17 @@
+            final String targetIncremental = metadata[0];
+            final long targetBuildDate = Long.parseLong(metadata[1]);
+            final long sourceBuildDate = SystemProperties.getLong("ro.build.date.utc", 0);
+            if (targetBuildDate <= sourceBuildDate) {
+                notificationHandler.showUpdatedNotification(channel);
+                Log.d(TAG, "targetBuildDate: " + targetBuildDate + " not higher than sourceBuildDate: " + sourceBuildDate);
+                mUpdating = false;
+                return;
+            }
+            final String targetDevice = metadata[2];
+            if (!targetDevice.equals(DEVICE)) {
+                throw new GeneralSecurityException("targetDevice: " + targetDevice + " does not match device: " + DEVICE);
+            }
+            final String targetChannel = metadata[3];
+            if (!targetChannel.equals(channel)) {
+                throw new GeneralSecurityException("targetChannel: " + targetChannel + " does not match channel: " + channel);
+            }

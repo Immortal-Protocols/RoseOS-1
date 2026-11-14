@@ -21,6 +21,7 @@ behaviour explicit and testable.
 | Live ASR | `mlx-community/nemotron-3.5-asr-streaming-0.6b` (cache-aware, 160 ms lookahead) | ~1 ms/step, final text 30-40 ms after audio ends, WER 4.8 % on test set |
 | Final ASR | `mlx-community/parakeet-tdt-0.6b-v3` | 24-64 ms per utterance, WER 4.4 % (number formatting only) |
 | Brain | `mlx-community/Qwen3.6-35B-A3B-4bit` (hybrid DeltaNet/attention MoE, 3B active) | decode 82-91 tok/s; prefill ~1,500-1,900 tok/s; 33-token prompt TTFT 66 ms; 22 GB |
+| Task brain (opt.) | `mlx-community/Qwen3.8-27B-4bit` (hybrid, dense) | decode 25-27 tok/s; prefill ~220 tok/s; turn TTFT 150-280 ms; screenshot 1.4 s; 15 GB |
 | TTS | `mlx-community/pocket-tts` (24 kHz, streaming) | first audio ~20 ms, RTF 0.05 |
 | TTS (alt) | `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit` | first audio 70-140 ms, RTF 0.21 |
 
@@ -73,7 +74,9 @@ uvicorn on 127.0.0.1:8091). The dashboard is served at `/`.
 
 ### Brain (`rose/brain.py`)
 
-- Loads Qwen3.6-35B-A3B via `mlx_vlm.load` and drives its language model
+- Loads Qwen3.6-35B-A3B (or `--brain`/`--task-brain`, e.g. Qwen3.8-27B: same
+  hybrid DeltaNet/attention design, 64 layers, no deepstack) via `mlx_vlm.load`
+  and drives its language model
   directly. Images go in with `Sequence.append_image`: the vision tower runs in
   groups of blocks and the merged embeddings prefill in 32-token chunks, each
   unit under ~60 ms. Qwen's M-RoPE gives image patches 3-D positions, so a
@@ -233,6 +236,18 @@ ordinary `app_command` over the existing link (no phone-side change):
   controller's own deadline, and a session Android closed or failed, close the
   workspace (`workspace_closed`: "open_app opens the app there again"); a reused
   session is renewed at open_app before it nears 200 operations / 600 s.
+- Two slots (controller schema 4, `capabilities` says `multiSession` and
+  `maxSessions`): `Workspaces` keeps one `Workspace` per slot. Each unit starts
+  with `mode "alongside"`, names its own session on get_state and stop (an
+  unnamed stop would be slot 0's, maybe the other unit's), and finds its
+  session in the `sessions` summary by its taskId nonce. A task view uses one
+  unit at a time. `open_app` picks the unit already showing the app, then a
+  free one, then the least recently used one no running task holds, and last
+  the view's own unit. An app another running task holds is refused
+  (`app_in_other_session`). Rose's sessions from before a restart (`rose-ws-`
+  with another nonce) are stopped only when a start finds no free slot. Rose
+  Agent's own sessions are never stopped. With one slot, a single shared unit
+  behaves as before.
 - The probe decides only on a definite answer: a controller state (workspace)
   or "unavailable" (visible screen). A timeout or an error is "don't know":
   the task stays off the user's screen and the next read probes again.

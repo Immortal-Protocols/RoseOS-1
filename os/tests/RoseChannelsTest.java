@@ -36,6 +36,26 @@ public final class RoseChannelsTest {
         expect(!RoseChannels.shouldFetch(null, "prod", published), "A missing override is not an override");
         expect(RoseChannels.shouldFetch("", "prod", new HashSet<>(java.util.Arrays.asList("stable", "prod"))),
                 "Prod is fetched once its feed is declared published");
+
+        expect(!RoseChannels.securityPreviewAtSetup(-1, "stable", published),
+                "Setup cannot opt an unset Beta phone into an unpublished preview feed");
+        Set<String> withBetaPreview = new HashSet<>(java.util.Arrays.asList("stable", "stable-security-preview"));
+        expect(RoseChannels.securityPreviewAtSetup(-1, "stable", withBetaPreview),
+                "Setup can default to a preview only when that base channel's preview is published");
+        expect(!RoseChannels.securityPreviewAtSetup(-1, "prod", withBetaPreview),
+                "A Beta preview feed cannot opt a Prod-default phone into Prod preview");
+        expect(RoseChannels.securityPreviewAtSetup(1, "stable", published),
+                "An existing explicit preview choice is preserved, including an unavailable one");
+        expect(!RoseChannels.securityPreviewAtSetup(0, "stable", withBetaPreview),
+                "An explicit preview opt-out survives later preview publication");
+        expect("stable".equals(RoseChannels.publishedBaseOfPreview("stable-security-preview", published)),
+                "Unavailable Beta preview can explain the user's explicit return to published Beta");
+        expect(RoseChannels.publishedBaseOfPreview("prod-security-preview", published) == null,
+                "The hint never recommends unpublished Prod as a recovery feed");
+        expect(RoseChannels.publishedBaseOfPreview("stable", published) == null,
+                "A normal Beta channel is not diagnosed as a preview variant");
+        expect(RoseChannels.publishedBaseOfPreview(null, published) == null,
+                "An unknown channel has no inferred preview recovery feed");
         System.out.println("RoseChannelsTest: " + checks + " checks passed");
     }
 }

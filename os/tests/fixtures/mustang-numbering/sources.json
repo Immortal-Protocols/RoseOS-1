@@ -1,0 +1,365 @@
+{
+  "kind": "source-only-numbering-compatibility-audit",
+  "runtimeProof": false,
+  "sources": [
+    {
+      "key": "soongConfig",
+      "name": "platform_build_soong",
+      "path": "ui/build/config.go",
+      "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+      "gitBlob": "d2431f34a485ed3bcc440fb1112dd6f71438920e",
+      "sourceSha256": "b2719ca6a5335ac78af0f37e8a5f966c52932cd9673796929c230bb5c9bb99d5",
+      "url": "https://github.com/GrapheneOS/platform_build_soong/blob/250710f7f87acfbb8e3c517d90abde8b4a08fe1e/ui/build/config.go",
+      "excerpts": [
+        {
+          "file": "soongConfig-641-667.excerpt",
+          "firstLine": 641,
+          "lastLine": 667,
+          "sha256": "af9ad6184e2f5bdcb025965297bdcbd4a041892dda5695775b6062253d6413df"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "soongConfig"
+    },
+    {
+      "key": "soongBuild",
+      "name": "platform_build_soong",
+      "path": "ui/build/build.go",
+      "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+      "gitBlob": "bf1c93b3162056dd001e19113f9225a21b92da33",
+      "sourceSha256": "a2ecd6622094af64a788d61c53414587eb195292d3af21e66c9f5fed61c4ac49",
+      "url": "https://github.com/GrapheneOS/platform_build_soong/blob/250710f7f87acfbb8e3c517d90abde8b4a08fe1e/ui/build/build.go",
+      "excerpts": [
+        {
+          "file": "soongBuild-41-58.excerpt",
+          "firstLine": 41,
+          "lastLine": 58,
+          "sha256": "e5a78b5c3e2ca0a1dbd5f43c74ad9cf81a73ccc1d1e11ad11d18a99ee217a846"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "soongBuild"
+    },
+    {
+      "key": "buildSysprop",
+      "name": "platform_build",
+      "path": "core/sysprop.mk",
+      "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+      "gitBlob": "c316cc3095eea02d251aa1289fda25b45b7b4e4c",
+      "sourceSha256": "c4d77d2e32e5e4d06947dbf5843db02c56e981f186c27aa5b40270106c95cf0a",
+      "url": "https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/core/sysprop.mk",
+      "excerpts": [
+        {
+          "file": "buildSysprop-65-82.excerpt",
+          "firstLine": 65,
+          "lastLine": 82,
+          "sha256": "850df3b49ed5d528556ec8911e35e2c8865853ea470a5f257795a2d55aa50095"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "buildSysprop"
+    },
+    {
+      "key": "buildVersion",
+      "name": "platform_build",
+      "path": "core/version_util.mk",
+      "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+      "gitBlob": "ea80c8c9c2aa4965e9fcb294f8db117d717b0a95",
+      "sourceSha256": "686f63e320415d1f8ae61fe795b4a0012331b27d362fa096618b5b8bfeb06948",
+      "url": "https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/core/version_util.mk",
+      "excerpts": [
+        {
+          "file": "buildVersion-236-254.excerpt",
+          "firstLine": 236,
+          "lastLine": 254,
+          "sha256": "96c947c1c3a97e0a1b90e4af2a1f870db0078500c7c0a8e8c64f9834bcfcb36f"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "buildVersion"
+    },
+    {
+      "key": "buildMakefile",
+      "name": "platform_build",
+      "path": "core/Makefile",
+      "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+      "gitBlob": "d87a77603246fc4f9704777853cab70d1b1a09c7",
+      "sourceSha256": "971143e4a723f5fabce92cf945070dbd394adf7937b247450d1f6f85a00d2ab1",
+      "url": "https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/core/Makefile",
+      "excerpts": [
+        {
+          "file": "buildMakefile-1471-1475.excerpt",
+          "firstLine": 1471,
+          "lastLine": 1475,
+          "sha256": "bd764c8e4b89a60649a45f7c3adc80cd96ec5618c154e01511054b107344cc5e"
+        },
+        {
+          "file": "buildMakefile-4815-4819.excerpt",
+          "firstLine": 4815,
+          "lastLine": 4819,
+          "sha256": "0c1ecd031efbe9cb633716b4df3f1d411e849b958414121693589bee4ccc74e2"
+        },
+        {
+          "file": "buildMakefile-5166-5178.excerpt",
+          "firstLine": 5166,
+          "lastLine": 5178,
+          "sha256": "ae0b42f319af3338a0f192d6d80c990e1b5eb7b472d2875ea1b68881bdcfe1a4"
+        }
+      ]
+    },
+    {
+      "key": "otaTools",
+      "name": "platform_build",
+      "path": "tools/releasetools/ota_utils.py",
+      "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+      "gitBlob": "847a2a519a3f72f66acfb57593d2e22b11d73197",
+      "sourceSha256": "6b4e21573899ec6e82228a313def3574ed7cd3a0e018ed8cf212865a447c7312",
+      "url": "https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/tools/releasetools/ota_utils.py",
+      "excerpts": [
+        {
+          "file": "otaTools-313-354.excerpt",
+          "firstLine": 313,
+          "lastLine": 354,
+          "sha256": "69e9cb36551bf4c411b825d962878081125f8c68c7085f5786fb06a6d054d079"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "otaTools"
+    },
+    {
+      "key": "otaCommon",
+      "name": "platform_build",
+      "path": "tools/releasetools/common.py",
+      "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+      "gitBlob": "24c4db6ff39efba0200582d2034902cbddaa80e7",
+      "sourceSha256": "2cb306baa8f44c7ea55a590e905e6b10a906c3fa40cf5c71420f51f23e9d2c8d",
+      "url": "https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/tools/releasetools/common.py",
+      "excerpts": [
+        {
+          "file": "otaCommon-690-720.excerpt",
+          "firstLine": 690,
+          "lastLine": 720,
+          "sha256": "334f51aa6fb81c6e27ed9b918a27ac188b864203e20cb05c686179d64e9040bc"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "otaCommon"
+    },
+    {
+      "key": "recoveryInstall",
+      "name": "platform_bootable_recovery",
+      "path": "install/install.cpp",
+      "revision": "420124283bb1ecfca9e5ca5eac0e0ca28ebec427",
+      "gitBlob": "721b4ba4412fc11394d279d5e74066790edd8be8",
+      "sourceSha256": "a54532d367083436f791203e30a7ff08beafe3a3b63bf02d1d0795f15ffe2679",
+      "url": "https://github.com/GrapheneOS/platform_bootable_recovery/blob/420124283bb1ecfca9e5ca5eac0e0ca28ebec427/install/install.cpp",
+      "excerpts": [
+        {
+          "file": "recoveryInstall-130-204.excerpt",
+          "firstLine": 130,
+          "lastLine": 204,
+          "sha256": "e2ac8a0077c7fd21d85c2c21fc8b44a03225880cdff07ec09171e59ed211e95c"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "recoveryInstall"
+    },
+    {
+      "key": "updaterService",
+      "name": "platform_packages_apps_Updater",
+      "path": "src/app/seamlessupdate/client/Service.java",
+      "revision": "52c34a55bd26f7856f9141d7e4237397084d6936",
+      "gitBlob": "c54c036fc0d79968ef8111254b93a888b8d3a1ae",
+      "sourceSha256": "4a75d4b4d4a02201ff58bb3fb0148d5bbc04f0cc050796570dac8d9bee6af2e1",
+      "url": "https://github.com/GrapheneOS/platform_packages_apps_Updater/blob/52c34a55bd26f7856f9141d7e4237397084d6936/src/app/seamlessupdate/client/Service.java",
+      "excerpts": [
+        {
+          "file": "updaterService-301-317.excerpt",
+          "firstLine": 301,
+          "lastLine": 317,
+          "sha256": "7283ebb6c3ff4b4618396201359c949d93ac4ded63757d76434b1539726c8cb0"
+        }
+      ]
+    },
+    {
+      "key": "hardwareAndroid",
+      "name": "platform_system_update_engine",
+      "path": "aosp/hardware_android.cc",
+      "revision": "79f478a4f89e701e85fa15dec340bf445342abbd",
+      "gitBlob": "edf5c74e9d49e880c10be5b4a0fa3fdb6d5efe6a",
+      "sourceSha256": "a87f44505833de87c312b854171d29b1fbfbaca802d50df31c4c74f559cdfc37",
+      "url": "https://github.com/GrapheneOS/platform_system_update_engine/blob/79f478a4f89e701e85fa15dec340bf445342abbd/aosp/hardware_android.cc",
+      "excerpts": [
+        {
+          "file": "hardwareAndroid-261-263.excerpt",
+          "firstLine": 261,
+          "lastLine": 263,
+          "sha256": "8ee64aeff285c061384531bf03355e6a73db50b6869d2975bd26d1f61057eba9"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "hardwareAndroid"
+    },
+    {
+      "key": "engineInterface",
+      "name": "platform_system_update_engine",
+      "path": "common/hardware_interface.h",
+      "revision": "79f478a4f89e701e85fa15dec340bf445342abbd",
+      "gitBlob": "de45325ee1df82e7deaa36b753a51d90aa1533b9",
+      "sourceSha256": "7cd7e55ed6fa408a47cdec2170dd6fcac7b2d37f644a7864b62707d473f8a0c6",
+      "url": "https://github.com/GrapheneOS/platform_system_update_engine/blob/79f478a4f89e701e85fa15dec340bf445342abbd/common/hardware_interface.h",
+      "excerpts": [
+        {
+          "file": "engineInterface-113-119.excerpt",
+          "firstLine": 113,
+          "lastLine": 119,
+          "sha256": "4fdccad3113b50ae7923b35fdd475c25efc68efb9e522d20a234aeac503319be"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "engineInterface"
+    },
+    {
+      "key": "deltaPerformer",
+      "name": "platform_system_update_engine",
+      "path": "payload_consumer/delta_performer.cc",
+      "revision": "79f478a4f89e701e85fa15dec340bf445342abbd",
+      "gitBlob": "dab6b5da6ffe99f6524e2122792173d7e9250503",
+      "sourceSha256": "32f51ec2ad8f1e2b337b0485f8f3e2f2da897ab54ad987a48f3a72e0bef12f01",
+      "url": "https://github.com/GrapheneOS/platform_system_update_engine/blob/79f478a4f89e701e85fa15dec340bf445342abbd/payload_consumer/delta_performer.cc",
+      "excerpts": [
+        {
+          "file": "deltaPerformer-1288-1308.excerpt",
+          "firstLine": 1288,
+          "lastLine": 1308,
+          "sha256": "8d3d8b34af94b03021417058c48088e234eaa9e4e1224917615c36b960e56f05"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "deltaPerformer"
+    },
+    {
+      "key": "frameworkBuild",
+      "name": "platform_frameworks_base",
+      "path": "core/java/android/os/Build.java",
+      "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+      "gitBlob": "05dbe1d6e9bdfcd2be3f55537998b2b72e3739b8",
+      "sourceSha256": "aa8fdebfdb385fd6f9629a8da2556a508a9d681b8f4da5cafe396c7834889323",
+      "url": "https://github.com/GrapheneOS/platform_frameworks_base/blob/84183aff99be5e156dc0446a6fa2d4a7150f4bc3/core/java/android/os/Build.java",
+      "excerpts": [
+        {
+          "file": "frameworkBuild-378-383.excerpt",
+          "firstLine": 378,
+          "lastLine": 383,
+          "sha256": "2a11c3e6cecba40b9a1482552f8258ca56b346847a35394bb1ffc778cb5e854a"
+        },
+        {
+          "file": "frameworkBuild-1898-1901.excerpt",
+          "firstLine": 1898,
+          "lastLine": 1901,
+          "sha256": "a83f028452f2344d95e4910d029d37a097a056f131429fec4cd1d876ad606ca1"
+        }
+      ],
+      "notice": "UPSTREAM-NOTICES.txt",
+      "noticeSection": "frameworkBuild"
+    },
+    {
+      "key": "generateMetadata",
+      "name": "script",
+      "path": "generate-metadata",
+      "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+      "gitBlob": "91ace9e165ceb84f1db69ae139655b9b0a2324d9",
+      "sourceSha256": "061e28fc4f65300b8c24bba7056d09a7dc9eced4fdaecf0a5c1e09866b833f20",
+      "url": "https://github.com/GrapheneOS/script/blob/09d651841b55e42b9cee7392f0ce29ebda8c8fb5/generate-metadata",
+      "excerpts": [
+        {
+          "file": "generateMetadata-1-18.excerpt",
+          "firstLine": 1,
+          "lastLine": 18,
+          "sha256": "061e28fc4f65300b8c24bba7056d09a7dc9eced4fdaecf0a5c1e09866b833f20"
+        }
+      ]
+    },
+    {
+      "key": "generateRelease",
+      "name": "script",
+      "path": "generate-release.sh",
+      "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+      "gitBlob": "5e0ab45dce8ce81b36ddc38860bdfd1a5a25dc47",
+      "sourceSha256": "01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311",
+      "url": "https://github.com/GrapheneOS/script/blob/09d651841b55e42b9cee7392f0ce29ebda8c8fb5/generate-release.sh",
+      "excerpts": [
+        {
+          "file": "generateRelease-10-15.excerpt",
+          "firstLine": 10,
+          "lastLine": 15,
+          "sha256": "e7d1a17394b9b35f10784d28247cce838d188b4415af9ca7b5404a17bfb1ad0b"
+        },
+        {
+          "file": "generateRelease-45-67.excerpt",
+          "firstLine": 45,
+          "lastLine": 67,
+          "sha256": "873e5ffa2f4b43793efd3ecbe35943d4042f65860db8ebcc3656af3bf707e7b0"
+        }
+      ]
+    }
+  ],
+  "failedRunSource": {
+    "runId": "41884368820",
+    "runAttempt": 1,
+    "revision": "6be302942f348b58f8a0ce2406c7202f2dd676bf",
+    "files": {
+      ".github/workflows/os-release.yml": {
+        "gitBlob": "4c639ff9991adf0356992408e713122fbd639845",
+        "sha256": "cf56c307ea3633d6c323d0af1f7bc3f28e0ba51524171a9159d41897f796e1c8"
+      },
+      "scripts/mustang-pipeline.py": {
+        "gitBlob": "cb344bb9a4e9345ff6acccc93ad582b2e08d2e9c",
+        "sha256": "45fb3c773233aed342725d72a6a607c26a4c4873da7c6e75c8ce20ebececbee0"
+      },
+      "scripts/mustang-allocate.py": {
+        "gitBlob": "3da3e332a54d1ca075944f4703ac53d558bc4c8a",
+        "sha256": "e0b3b1545a48853598d62f7771e89216b3380a2244c068557cb0f06c12b4e0d7"
+      },
+      "scripts/release-allocate.py": {
+        "gitBlob": "a1889e45017dff8eb4ed97cc333de722fdedf2c8",
+        "sha256": "993e041eb917632842dd5bb1b0a48aa70cfff7f5512d44365dd94abce6329dae"
+      }
+    },
+    "allocationKnown": false,
+    "reservationMayPrecedeAttemptReceipt": true,
+    "runtimeExecutionAttested": false,
+    "generator": {
+      "file": "legacy-next-build.excerpt",
+      "firstLine": 208,
+      "lastLine": 216,
+      "sha256": "9de67b88324e4aede16dfa6f984b1ffdf31fc4f45d0e3ff186530f49f50c14d5",
+      "dailyLimit": 99,
+      "maxPythonYear": 9999,
+      "maximum": "9999123199"
+    },
+    "excerpts": [
+      {
+        "path": "scripts/mustang-allocate.py",
+        "file": "legacy-reserve.excerpt",
+        "firstLine": 104,
+        "lastLine": 129,
+        "sha256": "17be1407c880f24075f864405b85df03e4e17423aba570bf9f164fefdbd12d00"
+      },
+      {
+        "path": "scripts/mustang-allocate.py",
+        "file": "legacy-daily-limit.excerpt",
+        "firstLine": 43,
+        "lastLine": 43,
+        "sha256": "fefac13277f36e584ab6880c6320a8eefc0ef13728a43e75c00904fa5a57812a"
+      },
+      {
+        "path": "scripts/mustang-pipeline.py",
+        "file": "legacy-pipeline-allocate.excerpt",
+        "firstLine": 170,
+        "lastLine": 174,
+        "sha256": "99f368ca8cfa8db0eacf15aba2280dbfcd121b1fb1967ddda3af07d3cabacc39"
+      }
+    ]
+  }
+}

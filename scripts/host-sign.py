@@ -8,8 +8,12 @@ ROSE_CANDIDATE_SHA, BUILD_NUMBER, BUILD_DATETIME, OUT_DIR and ROSE_RELEASE_DIR s
 2. derive the release script from the source tree's script/generate-release.sh: truncate before
    img_from_target_files (OTA only; with the opt-in host.sign.factory, keep the factory tail instead: see
    derive_release_script), source the absolute script/common.sh, point PERSISTENT_KEY_DIR at the
-   discovered key directory and replace script/decrypt-keys with host-decrypt-keys.py (file passphrase). Each
-   anchor must occur exactly once; original and derived hashes are recorded;
+   discovered key directory and replace script/decrypt-keys with host-decrypt-keys.py (file passphrase).
+   The upstream script cds into the unpacked otatools tree before sourcing
+   device/common/clear-factory-images-variables.sh and invoking script/generate-metadata, so those two
+   references are rewritten to the same checkout as common.sh. generate-metadata is run with the trusted
+   Python interpreter because the reviewed file is not executable. Each anchor must occur exactly once;
+   original and derived hashes are recorded;
 3. read the pinned PIXEL_OS_SIGNING_* versions with the job's short-lived signer identity into owner-only RAM,
    validate the archive and discover the unique pinned key directory;
 4. run the derived script and map its outputs: signed target-files, the OTA, the public certificate and AVB key
@@ -149,7 +153,7 @@ def write_key_path_wrappers(wrapper_dir, release_keys, trace=None):
         path.chmod(0o700)
 
 def derive_release_script(original, common_sh, key_dir, passfile, release_keys, wrapper_dir, trace=None, python=sys.executable,
-                          helper=str(ROOT/'scripts/host-decrypt-keys.py'), factory=None):
+                          helper=str(ROOT/'scripts/host-decrypt-keys.py'), factory=None, transient_root=None):
     """Exact-once edits of the upstream script; any drift in its shape stops the run instead of signing.
 
     release_keys is the absolute path of the `keys` link the script creates in its release directory (to the RAM key
@@ -164,7 +168,8 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
     factory (factory_inputs) keeps the tail after img_from_target_files instead of cutting it: the factory images
     source line and the optimize-factory-image call must each occur once, the otatools bin/fastboot is checked against
     the pinned sha256 immediately before that call, and the id_ed25519 ssh-keygen signing block (exactly once) is
-    removed, so no archive signature is made with an unbound key."""
+    removed, so no archive signature is made with an unbound key. Optional transient_root nests the upstream
+    decrypted directory inside the existing managed RAM workspace so its cleanup also reaches that copy."""
     def once(pattern, text, flags=0):
         found = list(re.finditer(pattern, text, flags))
         if len(found) != 1:
@@ -187,9 +192,17 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
     text = text[:source.start()] + 'source ' + shlex.quote(str(common_sh)) + text[source.end():]
     keys = once(r'^PERSISTENT_KEY_DIR=keys/\$DEVICE$', text, re.M)
     text = text[:keys.start()] + 'PERSISTENT_KEY_DIR=' + shlex.quote(str(key_dir)) + text[keys.end():]
+    if transient_root is not None:
+        transient_root = Path(transient_root)
+        if transient_root.parent != Path('/dev/shm') or transient_root.is_symlink() or not transient_root.is_dir():
+            raise AdapterFailed('managed decrypted keys require the private RAM workspace')
+        temporary = once(r'^KEY_DIR=\$\(mktemp -d /dev/shm/generate-release\.XXXXXXXXXX\)$', text, re.M)
+        text = text[:temporary.start()] + 'KEY_DIR=$(mktemp -d ' + \
+            shlex.quote(str(transient_root/'generate-release.XXXXXXXXXX')) + ')' + text[temporary.end():]
     decrypt = once(r'script/decrypt-keys\s+(\S+)', text)
     text = text[:decrypt.start()] + ' '.join(map(shlex.quote, (python, helper))) + ' ' + decrypt.group(1) + ' ' + \
         shlex.quote(str(passfile)) + text[decrypt.end():]
+    text = bind_checkout_helpers(text, common_sh, python)
     once(r'^KEY_DIR=keys$', text, re.M)
     for path in (release_keys, wrapper_dir):
         if not re.fullmatch(r'/[\w./-]+', str(path)):
@@ -215,6 +228,51 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
             lines.insert(i, 'rose_trace_exit_trap() { printf \'{"event":"exit-trap","wall":%s,"pid":%d}\\n\' '
                 f'"$EPOCHREALTIME" $$ >> {shlex.quote(str(trace))} 2>/dev/null || true; }}\n')
     return ''.join(lines)
+
+def bind_checkout_helpers(text, common_sh, python):
+    """Bind the helpers that run after cd into the otatools tree to common.sh's checkout.
+
+    A missing anchor means this is not the upstream release script. A repeated anchor is drift.
+    """
+    variables = list(re.finditer(r'^source device/common/clear-factory-images-variables\.sh$', text, re.M))
+    metadata = list(re.finditer(r'^script/generate-metadata(?:\s+(\S+))?$', text, re.M))
+    if not variables and not metadata:
+        return text
+    if len(variables) != 1 or len(metadata) != 1:
+        raise AdapterFailed('release script helper anchor is not unique')
+    common = Path(common_sh)
+    if common.name != 'common.sh' or common.parent.name != 'script':
+        raise AdapterFailed('release helper is not a plain checkout file')
+    checkout = common.parent.parent
+    variable_path = checkout_helper(checkout, 'device/common/clear-factory-images-variables.sh')
+    metadata_path = checkout_helper(checkout, 'script/generate-metadata')
+    interpreter = Path(python)
+    resolved_interpreter = interpreter.resolve()
+    if not interpreter.is_absolute() or not re.fullmatch(r'/[\w./-]+', str(interpreter)) \
+            or not resolved_interpreter.is_file() or resolved_interpreter.is_symlink():
+        raise AdapterFailed('release helper interpreter is not an absolute file')
+    text = text[:variables[0].start()] + 'source ' + shlex.quote(str(variable_path)) + text[variables[0].end():]
+    metadata = list(re.finditer(r'^script/generate-metadata(?:\s+(\S+))?$', text, re.M))
+    if len(metadata) != 1:
+        raise AdapterFailed('release script helper anchor is not unique')
+    argument = metadata[0].group(1) or ''
+    replacement = shlex.quote(str(interpreter)) + ' ' + shlex.quote(str(metadata_path))
+    if argument:
+        replacement += ' ' + argument
+    text = text[:metadata[0].start()] + replacement + text[metadata[0].end():]
+    if re.search(r'^source device/common/clear-factory-images-variables\.sh$', text, re.M) \
+            or re.search(r'^script/generate-metadata\b', text, re.M):
+        raise AdapterFailed('release script helper stayed relative to the working directory')
+    return text
+
+def checkout_helper(checkout, relative):
+    path = Path(checkout) / relative
+    if not re.fullmatch(r'/[\w./-]+', str(path)) or path.is_symlink() or not path.is_file():
+        raise AdapterFailed('release helper is not a plain checkout file')
+    resolved = path.resolve()
+    if Path(checkout).resolve() not in resolved.parents:
+        raise AdapterFailed('release helper left the checkout')
+    return path
 
 FACTORY_VARIABLES = r'^source device/common/clear-factory-images-variables\.sh$'
 FACTORY_SIGN_START = r'^sign_target_files_apks '
@@ -357,7 +415,8 @@ def retained_inputs(env, retained=None):
     except retained.Refused as error:
         raise AdapterFailed(str(error)) from None
 
-def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud'):
+def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', discover_keys=None,
+         managed_decrypted_keys=False):
     retained = retained_inputs(env) if env.get('ROSE_RETAINED_INPUT') else None
     config = retained[0] if retained else json.loads(Path(config_path).read_text())
     missing = missing_inputs(config)
@@ -378,6 +437,8 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     public = release_dir/'public'
     public.mkdir()
     with host_secrets.private_directory('rose-os-signing-') as private:
+        if managed_decrypted_keys and private.parent != Path('/dev/shm'):
+            raise AdapterFailed('managed decrypted keys require an available private RAM workspace')
         archive = host_secrets.fetch_secret(sign['project'], sign['keysSecret'], sign['secretVersion'], private/'keys.tar.gz', gcloud)
         passphrase = host_secrets.fetch_secret(sign['project'], sign['passphraseSecret'],
             sign.get('passphraseSecretVersion') or sign['secretVersion'], private/'passphrase', gcloud)
@@ -387,13 +448,19 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
             # Retained Rango with an explicitly selected first-use policy only (OCT30-INFRA-S017-FIX001): keys are validated
             # and the public identity derived and durably recorded here, inside this transient workspace, before use.
             config['identities'] = config['deriveIdentities'](extracted, passphrase)
-        key_dir = host_secrets.discover_key_directory(extracted, config['identities'])
+        # The separately scoped Mustang sprint adapter may supply structural key
+        # discovery when its intended-public-identity comparison is explicitly omitted.
+        # Every existing caller retains the normal public-pin verification.
+        key_dir = (discover_keys or host_secrets.discover_key_directory)(extracted, config['identities'])
         release_keys = releases/f'release-{device}-{build}'/'keys'
         # The wrappers hold no secret, only paths; they live on the task-owned release disk (RAM may be noexec).
         wrappers, trace_path = release_dir/'key-path-tools', release_dir/'sign-trace.jsonl'
         write_key_path_wrappers(wrappers, release_keys, trace_path)
+        derive_options = {'factory': factory}
+        if managed_decrypted_keys:
+            derive_options['transient_root'] = private
         derived = derive_release_script(original.decode(), source_root/'script/common.sh', key_dir, passphrase,
-            release_keys, wrappers, trace_path, factory=factory)
+            release_keys, wrappers, trace_path, **derive_options)
         script = private/'generate-release-derived.sh'
         script.write_text(derived)
         java = Path(sign['javaHome'])

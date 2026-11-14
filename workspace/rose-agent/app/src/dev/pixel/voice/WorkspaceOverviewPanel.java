@@ -10,8 +10,8 @@ import android.widget.FrameLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-/** Rose's apps as an in-screen panel over its host: exactly the apps currently running under Rose's control
- * (#225/#156, CurrentApps), in the selected HiFi's cards and tray. Its data, the Watch launch and the live preview come
+/** Rose's apps (Background Work) as an in-screen panel over its host: exactly the apps currently running under Rose's
+ * control (#225/#156, CurrentApps), in the Oxblood cards with the pearl and Back to Rose at the top (#410). Its data, the Watch launch and the live preview come
  * only through the narrow interfaces below; this class reads no bridge, provider or network itself. Closing it (Back)
  * or leaving (Home, lock) never touches the work or the human's foreground app; reopening starts from the source's
  * current report, never from what was shown before. Missing data stays missing: no report means unavailable, no
@@ -23,6 +23,8 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   boolean connected();
   /** The latest complete report of the apps running under Rose's control (CurrentApps.Snapshot). */
   CurrentApps.Snapshot currentApps();
+  /** Rose's own call is live with its microphone muted (the header pearl turns silver); never an OS-wide claim. */
+  default boolean muted(){return false;}
  }
  /** What the host can do. */
  interface Actions {
@@ -60,34 +62,34 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   * and resumed, each for its own session's front app. */
  final java.util.Map<String,WorkspaceOverviewPreview> gates=new java.util.LinkedHashMap<>();private boolean resumed=true;
  private long lastStopCheck;private View sheet;
- private final View endWell;private final WorkspaceOverviewView.Glyph endGlyph,roseGlyph;
+ private final RosePearl pearl;
 
  WorkspaceOverviewPanel(Context c){this(c,null,0);}
- /** background: the host's ivory surface (HiFi .ivory-bg), or null for its plain gradient; topInset: the status bar. */
+ /** background: the host's Oxblood Rose field (null: a new one); topInset: the status bar. */
  WorkspaceOverviewPanel(Context c,Drawable background,int topInset){
   super(c);
-  setBackground(background!=null?background:new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xfff7f9fc,0xffeef3f9}));
+  setBackground(background!=null?background:new OxbloodField(OxbloodField.ROSE));
   setClickable(true);
-  // .surface.agents-surface: 64px top, var(--margin) 24px sides, 150px bottom (clears the tray); no visible heading.
+  setForeground(new GlassSheen(GlassSheen.BACKGROUND_WORK)); // the display's glass sheen (#410), drawn, never touched
+  float density=getResources().getDisplayMetrics().density;
+  // #410 (oxblood.css:418-422): no visible heading; the grid starts 60dp under the header row, 24dp in, 40dp clear at
+  // the bottom, and scrolls under the fixed header.
+  int headTop=Math.max(dp(40),topInset+dp(4));
   ScrollView scroll=new ScrollView(c);scroll.setVerticalScrollBarEnabled(false);scroll.setClipToPadding(false);view=new WorkspaceOverviewView(c);
-  view.setPadding(dp(ConversationPresentation.MARGIN),topInset+dp(64),dp(ConversationPresentation.MARGIN),dp(150));view.setClipToPadding(false);
+  view.setPadding(dp(ConversationPresentation.MARGIN),headTop+dp(60),dp(ConversationPresentation.MARGIN),dp(40));view.setClipToPadding(false);
   scroll.addView(view);addView(scroll,new LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.MATCH_PARENT));
   setContentDescription(WorkspaceOverview.TITLE);
-  // .tray (Rose's apps controls): Back, End call (Rose when not connected), and this screen's own selected grid well.
-  LinearLayout tray=new LinearLayout(c);tray.setGravity(Gravity.CENTER);
-  float density=getResources().getDisplayMetrics().density;
-  tray.setPadding(dp(ConversationPresentation.TRAY_PAD-TrayMaterial.POCKET_DP),0,dp(ConversationPresentation.TRAY_PAD-TrayMaterial.POCKET_DP),0);
-  tray.setBackground(new TrayMaterial.Tray(density));tray.setElevation(dp(12));tray.setContentDescription("Rose’s apps controls");
-  View back=well(new WorkspaceOverviewView.Glyph(c,WorkspaceOverviewView.Glyph.BACK,0xff26303f),false);back.setContentDescription("Back");back.setOnClickListener(v->close());
-  endGlyph=new WorkspaceOverviewView.Glyph(c,WorkspaceOverviewView.Glyph.END,WorkspaceOverviewView.STOP);
-  roseGlyph=new WorkspaceOverviewView.Glyph(c,WorkspaceOverviewView.Glyph.ROSE,WorkspaceOverviewView.ROSE);
-  FrameLayout mid=new FrameLayout(c);mid.addView(endGlyph,new LayoutParams(-1,-1));mid.addView(roseGlyph,new LayoutParams(-1,-1));
-  endWell=well(mid,false);
-  endWell.setOnClickListener(v->{if(source!=null&&source.connected()&&actions!=null)actions.endCall();else close();});
-  View self=well(new WorkspaceOverviewView.Glyph(c,WorkspaceOverviewView.Glyph.GRID,0xff26303f),true);self.setContentDescription("Rose’s apps, current screen");
-  for(View w:new View[]{back,endWell,self})tray.addView(w,new LinearLayout.LayoutParams(0,-2,1f));
-  LayoutParams tp=new LayoutParams(-1,dp(ConversationPresentation.TRAY_HEIGHT),Gravity.BOTTOM);
-  tp.leftMargin=tp.rightMargin=dp(ConversationPresentation.MARGIN);tp.bottomMargin=dp(ConversationPresentation.TRAY_BOTTOM);addView(tray,tp);
+  // Header (oxblood.css:418-420,509-512): the 18dp pearl, then Back to Rose: a 44dp target, 40dp plate radius 10.
+  LinearLayout head=new LinearLayout(c);head.setGravity(Gravity.CENTER_VERTICAL);
+  pearl=new RosePearl(density,18);View pv=new View(c);pv.setBackground(pearl);pv.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+  head.addView(pv,new LinearLayout.LayoutParams(dp(30),dp(30)));
+  FrameLayout back=new FrameLayout(c);
+  GradientDrawable plate=new GradientDrawable();plate.setColor(RoseThemeNow.c(0x40140a0c));plate.setCornerRadius(dp(10));plate.setStroke(Math.max(1,Math.round(1.25f*density)),RoseThemeNow.c(0xd9beb4ae));
+  android.graphics.drawable.InsetDrawable inset=new android.graphics.drawable.InsetDrawable(plate,dp(2));back.setBackground(inset);
+  back.addView(new WorkspaceOverviewView.Glyph(c,WorkspaceOverviewView.Glyph.BACK,WorkspaceOverviewView.OX_INK),new LayoutParams(-1,-1));
+  back.setClickable(true);back.setFocusable(true);back.setContentDescription("Back to Rose");back.setOnClickListener(v->close());back.setForeground(HomeAppTile.focusRing(density,10));
+  LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(dp(44),dp(44));bp.leftMargin=dp(10);head.addView(back,bp);
+  LayoutParams hp=new LayoutParams(-2,dp(44),Gravity.TOP|Gravity.START);hp.topMargin=headTop;hp.leftMargin=dp(18);addView(head,hp);
   view.setListener(new WorkspaceOverviewView.Listener(){
    public void app(String entryId){
     CurrentApps.App a=find(entryId);if(a==null)return;
@@ -107,20 +109,6 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   // wait for App Core's per-session viewer, so they have no Watch handle yet (never a guessed second-session view).
   if(a==null||a.preview==null||!a.preview.complete()||!a.sessionId.isEmpty())return null;
   return new WorkspaceOverview.Binding(a.preview.controllerTaskId,a.preview.sessionId,a.packageName,new WorkspaceOverview.Scope("current-apps",apps.registration()));
- }
- /** One HiFi .well (TrayMaterial.Well, shared with Home and the conversation tray) around a glyph; the selected well
-  * gets the HiFi .well.selected blue ring. */
- private View well(View glyph,boolean selected){
-  float density=getResources().getDisplayMetrics().density;
-  FrameLayout cell=new FrameLayout(getContext());cell.setClickable(!selected);cell.setFocusable(!selected);
-  FrameLayout lens=new FrameLayout(getContext());lens.setBackground(new TrayMaterial.Well(density));lens.setDuplicateParentStateEnabled(true);
-  int w=ConversationPresentation.wellWidth(getResources().getConfiguration().screenWidthDp,TrayMaterial.POCKET_DP);
-  lens.addView(glyph,new LayoutParams(-1,-1));
-  if(selected){View ring=new View(getContext());GradientDrawable g=new GradientDrawable();g.setCornerRadius(dp(36));g.setStroke(Math.max(1,dp(1.5f)),0xb3508cff);
-   ring.setBackground(g);LayoutParams rp=new LayoutParams(-1,-1);rp.setMargins(dp(TrayMaterial.POCKET_DP),dp(TrayMaterial.POCKET_DP),dp(TrayMaterial.POCKET_DP),dp(TrayMaterial.POCKET_DP));lens.addView(ring,rp);}
-  cell.addView(lens,new LayoutParams(dp(w+2*TrayMaterial.POCKET_DP),dp(ConversationPresentation.WELL_HEIGHT+2*TrayMaterial.POCKET_DP),Gravity.CENTER));
-  cell.setMinimumHeight(dp(ConversationPresentation.WELL_HEIGHT+2*TrayMaterial.POCKET_DP));
-  return cell;
  }
  void bind(Source source,Actions actions){this.source=source;this.actions=actions;}
  boolean isOpen(){return getVisibility()==VISIBLE;}
@@ -146,9 +134,7 @@ final class WorkspaceOverviewPanel extends FrameLayout {
  void refresh(){
   if(!isOpen())return;
   apps.apply(source==null?null:source.currentApps());
-  boolean live=source!=null&&source.connected();
-  endGlyph.setVisibility(live?VISIBLE:GONE);roseGlyph.setVisibility(live?GONE:VISIBLE);
-  endWell.setContentDescription(live?"End call":"Open Rose");
+  pearl.set(source!=null&&source.muted(),false,-1);
   // #225: each bound session's front app (its own handle) is previewed through its own gate; nothing else ever is.
   long now=System.currentTimeMillis();
   java.util.Map<String,CurrentApps.App> targets=new java.util.LinkedHashMap<>();
@@ -191,12 +177,12 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   for(CurrentApps.App o:apps.apps())if(sid.equals(o.sessionId)){if(names.length()>0)names.append(", ");names.append(label(o.packageName));}
   closeSheet();
   FrameLayout host=new FrameLayout(getContext());host.setTag("stop-sheet");
-  View scrim=new View(getContext());scrim.setBackgroundColor(0x471e2d47);scrim.setOnClickListener(v->{closeSheet();});
+  View scrim=new View(getContext());scrim.setBackgroundColor(RoseThemeNow.c(0x80080203));scrim.setOnClickListener(v->{closeSheet();});
   host.addView(scrim,new LayoutParams(-1,-1));
   LinearLayout box=new LinearLayout(getContext());box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(22),dp(26),dp(22),dp(20));
-  GradientDrawable bg=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xffffffff,0xfff4f7fb});bg.setCornerRadius(dp(32));box.setBackground(bg);box.setElevation(dp(16));
-  TextView title=new TextView(getContext());title.setText(STOP_SHEET_TITLE);title.setTextSize(19);title.setTextColor(WorkspaceOverviewView.INK);box.addView(title);
-  TextView desc=new TextView(getContext());desc.setText("Rose stops its session for "+names+". Its apps may stay listed until Android closes them.");desc.setTextSize(14);desc.setTextColor(WorkspaceOverviewView.INK2);desc.setPadding(0,dp(8),0,dp(18));box.addView(desc);
+  GradientDrawable bg=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,RoseThemeNow.c(new int[]{0xff3a1219,0xff24090e}));bg.setCornerRadius(dp(32));box.setBackground(bg);box.setElevation(dp(16));
+  TextView title=new TextView(getContext());title.setText(STOP_SHEET_TITLE);title.setTextSize(22);title.setLetterSpacing(-.02f);title.setTextColor(RoseThemeNow.c(WorkspaceOverviewView.OX_INK));title.setAccessibilityHeading(true);box.addView(title);
+  TextView desc=new TextView(getContext());desc.setText("Rose stops its session for "+names+". Its apps may stay listed until Android closes them.");desc.setTextSize(15);desc.setLineSpacing(0,1.45f);desc.setTextColor(RoseThemeNow.c(WorkspaceOverviewView.OX_INK2));desc.setPadding(0,dp(8),0,dp(20));box.addView(desc);
   LinearLayout row=new LinearLayout(getContext());
   TextView keep=sheetButton("Keep working",false),stop=sheetButton("Stop",true);
   keep.setOnClickListener(v->closeSheet());
@@ -210,8 +196,8 @@ final class WorkspaceOverviewPanel extends FrameLayout {
  }
  private TextView sheetButton(String text,boolean danger){
   TextView b=new TextView(getContext());b.setText(text);b.setGravity(Gravity.CENTER);b.setTextSize(15);b.setClickable(true);b.setFocusable(true);
-  GradientDrawable g=new GradientDrawable();g.setCornerRadius(dp(26));g.setColor(danger?WorkspaceOverviewView.STOP:0xffeef2f7);b.setBackground(g);
-  b.setTextColor(danger?0xffffffff:WorkspaceOverviewView.INK);b.setTag(danger?"sheet-stop":"sheet-keep");return b;
+  GradientDrawable g=new GradientDrawable();g.setCornerRadius(dp(26));g.setColor(danger?RoseThemeNow.w(0xffc42a3a):RoseThemeNow.c(0x47000000));if(!danger)g.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x47ecd5c6));b.setBackground(g);
+  b.setTextColor(danger?0xffffffff:RoseThemeNow.c(WorkspaceOverviewView.OX_INK));b.setForeground(HomeAppTile.focusRing(getResources().getDisplayMetrics().density,26));b.setTag(danger?"sheet-stop":"sheet-keep");return b;
  }
  void closeSheet(){if(sheet!=null){removeView(sheet);sheet=null;}}
  private WorkspaceOverviewView.Labels labels;

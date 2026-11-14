@@ -1,0 +1,48 @@
+name: Mustang OTA checks
+on:
+  pull_request:
+    paths: ['os/**', 'scripts/mustang*', 'scripts/blazer-build-only.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/release-allocate.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/app-inputs-verify.py', 'scripts/tests/test_app_inputs_export.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'scripts/tests/test_mustang_edge_gate.py', 'scripts/tests/test_mustang_hosttools.py', 'scripts/tests/test_mustang_hostdeps.py', 'scripts/tests/test_mustang_prepare_lock.py', 'scripts/tests/test_mustang_lock_admin.py', 'scripts/tests/test_mustang_factory_input.py', 'scripts/tests/test_mustang_preparation_inputs.py', 'scripts/tests/test_mustang_vendor_consumer.py', 'scripts/tests/test_mustang_tool_closure.py', 'scripts/tests/test_mustang_otatools_qualification.py', 'scripts/tests/test_mustang_bootstrap_proof.py', 'scripts/tests/test_mustang_bootstrap_collector.py', 'scripts/tests/test_mustang_full_delivery.py', 'scripts/tests/test_mustang_artifact_delivery.py', 'scripts/tests/test_mustang_signed_delivery.py', 'scripts/tests/test_mustang_clock.py', 'scripts/tests/test_mustang_hosted_sign.py', 'scripts/tests/test_mustang_otatools_observation.py', 'scripts/tests/test_mustang_existing_lock.py', 'scripts/tests/test_mustang_otatools_prep.py', 'scripts/tests/test_mustang_vendor_prep.py', 'scripts/tests/test_mustang_yarn.py', 'scripts/edge_artifact.py', 'scripts/signing-bootstrap.py', 'scripts/tests/test_edge_artifact.py', 'scripts/tests/dex_fixture.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
+  push:
+    branches: [main]
+    paths: ['os/**', 'scripts/mustang*', 'scripts/blazer-build-only.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/release-allocate.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/app-inputs-verify.py', 'scripts/tests/test_app_inputs_export.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'scripts/tests/test_mustang_edge_gate.py', 'scripts/tests/test_mustang_hosttools.py', 'scripts/tests/test_mustang_hostdeps.py', 'scripts/tests/test_mustang_prepare_lock.py', 'scripts/tests/test_mustang_lock_admin.py', 'scripts/tests/test_mustang_factory_input.py', 'scripts/tests/test_mustang_preparation_inputs.py', 'scripts/tests/test_mustang_vendor_consumer.py', 'scripts/tests/test_mustang_tool_closure.py', 'scripts/tests/test_mustang_otatools_qualification.py', 'scripts/tests/test_mustang_bootstrap_proof.py', 'scripts/tests/test_mustang_bootstrap_collector.py', 'scripts/tests/test_mustang_full_delivery.py', 'scripts/tests/test_mustang_artifact_delivery.py', 'scripts/tests/test_mustang_signed_delivery.py', 'scripts/tests/test_mustang_clock.py', 'scripts/tests/test_mustang_hosted_sign.py', 'scripts/tests/test_mustang_otatools_observation.py', 'scripts/tests/test_mustang_existing_lock.py', 'scripts/tests/test_mustang_otatools_prep.py', 'scripts/tests/test_mustang_vendor_prep.py', 'scripts/tests/test_mustang_yarn.py', 'scripts/edge_artifact.py', 'scripts/signing-bootstrap.py', 'scripts/tests/test_edge_artifact.py', 'scripts/tests/dex_fixture.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # app-source freshness diffs the accepted export producer commit locally; a missing object is not unchanged
+      - run: python3 scripts/tests/test_mustang_ota.py
+      - run: python3 scripts/tests/test_mustang_edge_gate.py
+      - run: python3 scripts/tests/test_mustang_hosttools.py
+      - run: python3 scripts/tests/test_mustang_hostdeps.py
+      - run: python3 scripts/tests/test_mustang_prepare_lock.py
+      - run: python3 scripts/tests/test_mustang_lock_admin.py
+      - run: python3 scripts/tests/test_mustang_factory_input.py
+      - run: python3 scripts/tests/test_mustang_preparation_inputs.py
+      - run: python3 scripts/tests/test_mustang_vendor_consumer.py
+      - run: python3 scripts/tests/test_mustang_tool_closure.py
+      - run: python3 scripts/tests/test_mustang_otatools_qualification.py
+      - run: python3 scripts/tests/test_mustang_bootstrap_proof.py
+      - run: python3 scripts/tests/test_mustang_bootstrap_collector.py
+      - run: python3 scripts/tests/test_mustang_full_delivery.py
+      - run: python3 scripts/tests/test_mustang_artifact_delivery.py
+      - run: python3 scripts/tests/test_mustang_signed_delivery.py
+      - run: python3 scripts/tests/test_mustang_clock.py
+      - run: python3 scripts/tests/test_mustang_hosted_sign.py
+      - run: python3 scripts/tests/test_mustang_otatools_observation.py
+      - run: python3 scripts/tests/test_mustang_existing_lock.py
+      - run: python3 scripts/tests/test_mustang_otatools_prep.py
+      - run: python3 scripts/tests/test_mustang_vendor_prep.py
+      - run: python3 scripts/tests/test_mustang_yarn.py
+      - run: python3 os/tests/test_updater_channels.py && python3 os/tests/test_updater_releases.py
+      - run: |
+          mkdir -p "$RUNNER_TEMP/updater-tests"
+          java -m jdk.compiler/com.sun.tools.javac.Main -d "$RUNNER_TEMP/updater-tests" os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java os/tests/RoseChannelsTest.java os/tests/RoseReleasesTest.java os/tests/MustangReleasesTest.java
+          java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.RoseChannelsTest
+          java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.RoseReleasesTest
+          java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.MustangReleasesTest

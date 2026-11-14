@@ -28,6 +28,7 @@ import time
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
+import edge_artifact  # noqa: E402
 import github_release_publisher  # noqa: E402
 import permission_apex  # noqa: E402
 import systemui_identity  # noqa: E402
@@ -153,6 +154,7 @@ def preflight(job, config, env, adapter):
         missing += updater_missing(config)
         missing += permission_apex.missing(config.get('permissionApex'))
         missing += [f'systemUiTray.{key}' for key in SYSTEMUI_TRAY_REQUIRED if not (config.get('systemUiTray') or {}).get(key)]
+        missing += edge_artifact.missing(config.get('roseEdge'))
     if job == 'builder':
         if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
@@ -177,29 +179,57 @@ def publisher_inputs(env):
 
 # ---------------------------------------------------------------- adapters
 
+_DEFAULT_BUILDER = object()
+
+def explicit_builder(builder):
+    """Validate a caller-owned target; never fill missing fields from Frankel."""
+    patterns = {'project': r'[a-z][a-z0-9-]{4,28}[a-z0-9]',
+                'zone': r'[a-z][a-z0-9-]{0,62}',
+                'instance': r'[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?',
+                'instanceId': r'[1-9][0-9]{0,19}'}
+    if not isinstance(builder, dict) or set(builder) != set(patterns) or any(
+            not isinstance(builder[k], str) or not re.fullmatch(pattern, builder[k])
+            for k, pattern in patterns.items()):
+        raise InvalidInput('explicit builder requires exact project, zone, instance and numeric instanceId')
+    return dict(builder)
+
 class Production:
     simulated = False
 
     def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic,
-            claim=None):
+            claim=None, *, builder=_DEFAULT_BUILDER):
         """Submit start/stop with --async and poll only `instances describe` (the controller holds get/start/stop on
         this one instance, no operations read), within the 10-minute job limit. Never resubmits: a failed or uncertain request is reconciled against
         the observed state. RUNNING is the VM state, not runner readiness. `claim`, when given, is told before any
-        request is sent whether this call is the one submitting it (see record_ownership)."""
+        request is sent whether this call is the one submitting it (see record_ownership).
+        An explicit builder is never defaulted and its numeric ID/name are checked on every describe.
+        Its caller owns admission, separate-flavor bindings and the durable ownership record."""
         target, source, passing = BUILDER_STATES[action]
-        where = [f'--project={BUILDER["project"]}', f'--zone={BUILDER["zone"]}']
+        default_target = builder is _DEFAULT_BUILDER
+        selected = dict(BUILDER) if default_target else explicit_builder(builder)
+        where = [f'--project={selected["project"]}', f'--zone={selected["zone"]}']
 
         def describe():
-            result = subprocess.run([gcloud, 'compute', 'instances', 'describe', BUILDER['instance'], *where,
-                '--format=value(status)'], capture_output=True, text=True)
+            result = subprocess.run([gcloud, 'compute', 'instances', 'describe', selected['instance'], *where,
+                '--format=value(status)' if default_target else '--format=json(id,name,status)'],
+                capture_output=True, text=True)
             if result.returncode:
                 raise CheckFailed(f'builder describe failed (exit {result.returncode})')
-            return result.stdout.strip()
+            if default_target:
+                return result.stdout.strip()
+            try:
+                observed = json.loads(result.stdout)
+                if (observed['id'], observed['name']) != (selected['instanceId'], selected['instance']) \
+                        or not isinstance(observed['status'], str):
+                    raise ValueError
+                return observed['status']
+            except (KeyError, TypeError, ValueError):
+                raise CheckFailed('explicit builder identity mismatch or malformed describe; no fallback') from None
         state = describe()
         if claim:
             claim(state == source)
         if state == source:
-            result = subprocess.run([gcloud, 'compute', 'instances', action, BUILDER['instance'], *where, '--async', '--quiet'],
+            result = subprocess.run([gcloud, 'compute', 'instances', action, selected['instance'], *where, '--async', '--quiet'],
                 capture_output=True, text=True)
             if result.returncode:
                 state = describe()
@@ -862,6 +892,26 @@ def check_systemui_tray(path, config, identity=None):
         return [f'SystemUI dex lacks {absent}; the Agent tray lifecycle (AgentTrayLink, OS #85) is not compiled in'], receipt
     return [], receipt
 
+def check_rose_edge(path, config):
+    """(failures, receipt): OS Product's raised-edge artifact check (scripts/edge_artifact.py; #410 1C/2A item 4) on
+    these target-files: both build switches, #548's staged gesture in Launcher3QuickStep, and the Shell resize and the
+    chin's microphone slot in SystemUI. Every admitted device's config must carry roseEdge. Another route's config (the
+    retained Rango build, which predates the edge) carries none; there the receipt records that nothing was checked."""
+    spec = config.get('roseEdge')
+    if spec is None and config['target']['device'] not in SUPPORTED_DEVICES:
+        return [], {'configured': False}
+    absent = edge_artifact.missing(spec)
+    if absent:
+        raise SetupMissing(absent)
+    try:
+        failures, receipt = edge_artifact.check(path, spec)
+    except edge_artifact.SpecError as error:
+        raise InvalidInput(str(error))
+    return failures, {'configured': True, **receipt}
+
+def rose_edge_label(edge):
+    return ['Rose raised edge: switches, Launcher3 gesture with the #548 marker and SystemUI resize/mic slot in dex'] if edge.get('configured') else []
+
 def systemui_identity_capture(data, apk_path, artifact, config, cand, used):
     """Supplemental identity of the signed SystemUI APK (OS-COMPONENT-ID-002/003): xmltree and apksigner run on one
     extracted copy whose sha256 is taken after each tool, so an output for other bytes is rejected by
@@ -941,13 +991,15 @@ def verify_build(a, config, cand, adapter):
     failures += apex_failures
     tray_failures, tray = check_systemui_tray(target_files, config)
     failures += tray_failures
+    edge_failures, edge = check_rose_edge(target_files, config)
+    failures += edge_failures
     if failures:
         raise CheckFailed('; '.join(failures))
     return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy',
         updater_check_label(config, signed=False),
         'Permission APEX from source: name/version/source payload key/payload signature/RoleService markers',
-        'SystemUI Agent tray lifecycle code in dex'],
-        'permissionApex': apex, 'apexTools': apex_tools, 'systemUiTray': tray, 'updater': updater_record(config)}
+        'SystemUI Agent tray lifecycle code in dex', *rose_edge_label(edge)],
+        'permissionApex': apex, 'apexTools': apex_tools, 'systemUiTray': tray, 'roseEdge': edge, 'updater': updater_record(config)}
 
 def updater_check_label(config, signed):
     if updater_mode(config) == 'rose':
@@ -1148,7 +1200,7 @@ def verify_signed(a, config, cand, adapter):
     expected = set(public_assets(device, build)) - {'verification.json', 'SHA256SUMS'}
     present = {p.name for p in public.iterdir()}
     failures = [f'public directory has {sorted(present ^ expected)} outside the allowlist'] if present != expected else []
-    image_tools, verifier_tools, identity_tools = {}, {}, {}
+    image_tools, verifier_tools, identity_tools, edge = {}, {}, {}, None
     signed_sha256 = sha256_file(signed) if signed.is_file() else None
     artifact = {'kind': 'target-files', 'name': signed.name, 'sha256': signed_sha256}
     if not failures:
@@ -1160,6 +1212,8 @@ def verify_signed(a, config, cand, adapter):
         tray_failures, tray = check_systemui_tray(signed, config, lambda data, apk_path:
             systemui_identity_capture(data, apk_path, artifact, config, cand, identity_tools))
         failures += tray_failures
+        edge_failures, edge = check_rose_edge(signed, config)
+        failures += edge_failures
         failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
         failures += check_payload(public/f'{device}-ota_update-{build}.zip')
@@ -1174,9 +1228,9 @@ def verify_signed(a, config, cand, adapter):
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
             updater_check_label(config, signed=True),
             'Permission APEX name/version/payload key and signature/RoleService markers/container signer',
-            'SystemUI Agent tray lifecycle code in dex', 'image-embedded app/framework/Permission APEX/SystemUI bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
+            'SystemUI Agent tray lifecycle code in dex', *rose_edge_label(edge), 'image-embedded app/framework/Permission APEX/SystemUI bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
             'vbmeta signature and AVB key', 'public pins', 'feed line'],
-        'permissionApex': apex, 'systemUiTray': tray, 'imageTools': image_tools, 'verifierTools': verifier_tools,
+        'permissionApex': apex, 'systemUiTray': tray, 'roseEdge': edge, 'imageTools': image_tools, 'verifierTools': verifier_tools,
         'updater': updater_record(config)}
     release_receipts.write_once(public/'verification.json', receipt)
     write_checksums(public)
@@ -1223,6 +1277,8 @@ def stage_artifact(a, config, cand, adapter):
     return {'stage': 'transfer', 'assets': len(os.listdir(assets)), 'simulated': adapter.simulated}
 
 def publish(a, config, cand, adapter):
+    if getattr(a, 'draft_only', False) and (a.promote or not a.allocation or cand['device'] != 'frankel' or cand['channel'] != 'beta'):
+        raise CheckFailed('--draft-only requires an allocated Frankel Beta without --promote')
     artifact = Path(a.artifact_dir)
     receipt = json.loads((artifact/'pipeline-receipt.json').read_text())
     if receipt.get('simulated') and not adapter.simulated:
@@ -1264,7 +1320,7 @@ def publish(a, config, cand, adapter):
 
 def latest_notes(a, cand, artifact):
     """The normal button's allocation, independently re-derived here: the candidate must be exactly the dispatch source plus
-    the allocated version delta, the image must carry exactly the allocated apps, and only a promoted Beta is allowed."""
+    the allocated version delta and the image must carry exactly the allocated apps. Drafts require an explicit opt-in."""
     spec = importlib.util.spec_from_file_location('release_allocate', Path(__file__).resolve().parent/'release-allocate.py')
     allocate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(allocate)
@@ -1278,7 +1334,9 @@ def latest_notes(a, cand, artifact):
         expected = json.loads((artifact/'expected-identities.json').read_text())
         if [[row['packageName'], row['versionCode']] for row in expected['apps']] != allocation['apps']:
             raise CheckFailed('the verified image apps are not the allocated apps')
-        if not a.promote:
+        if getattr(a, 'draft_only', False) and (a.promote or cand['device'] != 'frankel' or cand['channel'] != 'beta'):
+            raise CheckFailed('--draft-only requires an allocated Frankel Beta without --promote')
+        if not a.promote and not getattr(a, 'draft_only', False):
             raise CheckFailed('the normal button publishes the verified Beta as Latest; --promote is required')
         return allocate.notes(allocation, ROOT)
     except allocate.Refused as error:
@@ -1303,6 +1361,7 @@ def main(argv=None):
     p.add_argument('--artifact-dir')
     p.add_argument('--apps', default='[]', help='JSON list of [package, versionCode] expected in this candidate')
     p.add_argument('--promote', action='store_true')
+    p.add_argument('--draft-only', action='store_true', help='explicit allocated Frankel Beta draft; never promote')
     p.add_argument('--allocation', help='normal button only: the reserved allocation record of this candidate')
     p.add_argument('--ownership-record', help='start-builder/builder-ownership: this operation\'s builder ownership record')
     p.add_argument('--only-if-started', help='stop-builder: the controller\'s ownership output; stops only on "true"')

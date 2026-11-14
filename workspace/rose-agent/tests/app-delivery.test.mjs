@@ -88,11 +88,19 @@ test('APP-GITHUB-002: self-update discovery and download use public GitHub only,
  assert.match(self,/params\.setSize\(size\+signatureSize\);/,'the session accounts for both files');
  assert.match(self,/try\(PackageInstaller\.Session session=pi\.openSession\(sessionId\)\)\{stage\(session,file,"base\.apk"\);stage\(session,signature,"base\.apk\.idsig"\);\}/,'exactly base.apk and base.apk.idsig, in one session');
  assert.ok(at('stage(session,signature,"base.apk.idsig")')<at('session.commit('),'staged before commit');
- assert.match(self,/finally\{file\.delete\(\);signature\.delete\(\);\}/,'both owned temp files are deleted on every path');
+ assert.match(self,/finally\{file\.delete\(\);signature\.delete\(\);new File\(file\.getPath\(\)\+"\.idsig"\)\.delete\(\);\}/,'both owned temp files, and any old .idsig sibling, are deleted on every path');
  assert.match(self,/new File\(a\.getCacheDir\(\),UpdateRecovery\.DOWNLOAD\),signature=new File\(a\.getCacheDir\(\),UpdateRecovery\.DOWNLOAD_SIGNATURE\)/,'the temp files are the names recovery owns');
  const attempts=src('UpdateAttempts.java');
- assert.match(attempts,/new File\(c\.getCacheDir\(\), UpdateRecovery\.DOWNLOAD\)\.delete\(\);\s*new File\(c\.getCacheDir\(\), UpdateRecovery\.DOWNLOAD_SIGNATURE\)\.delete\(\);/,'recovery deletes both owned temp files');
- assert.match(src('UpdateRecovery.java'),/DOWNLOAD = "self-update\.apk", DOWNLOAD_SIGNATURE = "self-update\.apk\.idsig"/);
+ assert.match(attempts,/new File\(c\.getCacheDir\(\), UpdateRecovery\.DOWNLOAD\)\.delete\(\);\s*new File\(c\.getCacheDir\(\), UpdateRecovery\.DOWNLOAD_SIGNATURE\)\.delete\(\);\s*new File\(c\.getCacheDir\(\), UpdateRecovery\.LEGACY_SIGNATURE\)\.delete\(\);/,'recovery deletes every owned temp file, including the old sibling name');
+ // #407: the platform's v4 verifier (ApkSignatureSchemeV4Verifier.extractSignature at the pinned frameworks/base) reads
+ // <apk>.idsig beside the APK being parsed and then requires fs-verity on that APK, which a cache file never has, so
+ // getPackageArchiveInfo fails (null) for a valid update. The downloaded signature is never that sibling, and any old
+ // sibling is removed before the archive is parsed; the session still stages exactly base.apk and base.apk.idsig.
+ const names=src('UpdateRecovery.java');
+ assert.match(names,/DOWNLOAD = "self-update\.apk", DOWNLOAD_SIGNATURE = "self-update\.v4sig", LEGACY_SIGNATURE = "self-update\.apk\.idsig"/);
+ assert.ok(!names.includes('DOWNLOAD_SIGNATURE = "self-update.apk.idsig"'),'the signature temp file is never the APK\'s .idsig sibling');
+ assert.ok(at('File sibling=new File(file.getPath()+".idsig");if(sibling.exists()&&!sibling.delete())throw new IOException(')<at('getPackageArchiveInfo('),
+  'no .idsig sibling exists when Android parses the downloaded archive; one that cannot be removed stops the update');
  assert.ok(at('PublicApkDownload.fetch(http,offer.apkUrl,out,offer.sha256,offer.size,')<at('SelfUpdate.verify('),'bytes from the offer, bound to its hash and size, then verified');
  assert.match(self,/offer\.signerSha256\.equals\(signerSha256\(archive\)\)/,'the archive signer must equal the receipt signer');
  assert.ok(at('DirectUpdate.incompatibility(offer,localDevice(a))')<at('session.commit('),'compatibility is rechecked right before commit');

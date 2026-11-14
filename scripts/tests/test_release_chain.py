@@ -211,8 +211,16 @@ class Workflow(unittest.TestCase):
 
     def test_run_name_matches_the_successor_lookup(self):
         # AGENT-BETA-AUTO: an apps=auto app-only run is named for its tested SHA (the dispatcher's duplicate check).
-        self.assertIn("\nrun-name: ${{ inputs.campaign && format('%s - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && "
-            "inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || '%s' }}\n" % (rc.TITLE, rc.TITLE), WORKFLOW)
+        # Mustang build/delivery duplicate checks also use their exact run names.
+        # Keep the whole expression pinned, including branch order. 1E: only latest-beta keeps the normal button's
+        # title (the daily dispatcher's Frankel lane); every other mode is titled 'os-release <mode> <run id>'.
+        self.assertIn("\nrun-name: ${{ inputs.mode == 'mustang-build' && inputs.candidate_sha != '' && "
+            "format('mustang-build auto-{0}', inputs.candidate_sha) || inputs.mode == 'mustang-delivery' && "
+            "inputs.mustang_publish_ota && format('mustang-delivery ota-{0}', inputs.mustang_compile_run) || "
+            "startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id) || "
+            "inputs.campaign && format('%s - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && "
+            "inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || inputs.mode == 'latest-beta' && "
+            "'%s' || format('os-release {0} {1}', inputs.mode, github.run_id) }}\n" % (rc.TITLE, rc.TITLE), WORKFLOW)
         self.assertEqual(rc.run_name('7.1793380000.2'), f'{rc.TITLE} - campaign 7.1793380000.2')
 
     def test_guard_checks_the_campaign_before_any_host(self):
@@ -224,7 +232,7 @@ class Workflow(unittest.TestCase):
 
 class Concurrency(unittest.TestCase):
     """One run at a time in os-release-frankel, and every waiting run keeps its place: with the default single pending
-    slot a campaign successor queued behind a running gen cancels an unrelated pending run (e.g. models-sign)."""
+    slot a campaign successor queued behind a running gen cancels an unrelated pending run (e.g. signing-bootstrap)."""
 
     def test_the_shared_group_queues_every_pending_run_and_never_cancels_one_in_progress(self):
         block = re.search(r'(?m)^concurrency:\n((?:  .*\n)+)', WORKFLOW)[1]
@@ -233,11 +241,16 @@ class Concurrency(unittest.TestCase):
         self.assertEqual(re.findall(r'(?m)^ +concurrency:', WORKFLOW), [])  # no job overrides the workflow group
 
     def test_actionlint_ignores_only_the_unknown_queue_key_in_this_workflow(self):
+        # os-release.yml and the harness's own launcher3-compile.yml are the two workflows with queue: max; each ignores
+        # exactly that one diagnostic and nothing else.
         config = (ROOT/'.github/actionlint.yaml').read_text()
         paths = config[config.index('\npaths:\n'):]
-        self.assertEqual(re.findall(r"(?m)^  (\S+):$", paths), ['.github/workflows/os-release.yml'])
+        workflows = ['.github/workflows/os-release.yml', '.github/workflows/launcher3-compile.yml']
+        self.assertEqual(re.findall(r"(?m)^  (\S+):$", paths), workflows)
         self.assertEqual(re.findall(r"(?m)^      - '(.*)'$", paths),
-            ['unexpected key "queue" for "concurrency" section\\. expected one of "cancel-in-progress", "group"'])
+            ['unexpected key "queue" for "concurrency" section\\. expected one of "cancel-in-progress", "group"'] * 2)
+        for workflow in workflows:
+            self.assertIn('\n  queue: max\n', (ROOT/workflow).read_text().split('\njobs:\n', 1)[0])  # never a dead ignore
 
 
 class RunnerLabels(unittest.TestCase):

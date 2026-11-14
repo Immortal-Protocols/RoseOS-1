@@ -13,7 +13,8 @@ Python port of the old Node backend's ``BackgroundPhone``
   phone passes it through untouched. Operations: ``get_state``, ``start {packageName, taskId}``,
   ``command {sessionId, action, ...}``, ``stop``.
 - A session is scoped to ONE target package. Another app means a new session (``start`` replaces
-  the old one); ``home`` means ``stop``.
+  the old one); ``home`` means ``stop``. On a two-slot controller (schema 4) ``Workspaces`` runs
+  one ``Workspace`` per slot, each confined to its own session (see that class).
 - Every command except screenshot/inspect_ui/app_context/home needs the ``snapshotId`` of the
   controller's LATEST observation (< 30 s old), and both ``screenshot`` and every accepted action
   clear the node map. So before each node action the target is refreshed: the screen is inspected
@@ -54,7 +55,10 @@ from typing import Any, Callable
 
 CONTROLLER = "dev.pixel.backgroundcontrol"
 START_POLL_S = 0.15     # get_state interval while the workspace starts (BackgroundPhone: 150 ms)
-START_WAIT_S = 12.0     # how long a start may stay starting/launching/scheduled
+# How long a start may stay starting/launching/scheduled. The controller waits up to 15 s for the target's first
+# allowed frame after Android creates the session (Controller.java launch), so a shorter wait here gave up while a
+# slow takeover was still landing and left it running unseen. Outlast it, and stop what is left when it expires.
+START_WAIT_S = 20.0
 WORKSPACE_IDLE_S = 180.0  # an unused workspace is closed after this long
 MAX_OBSERVATIONS = 16   # remembered observations (for refreshing a node by its identity)
 # A session has 200 operations and 600 s (Controller.java). The workspace is kept across tasks,
@@ -75,7 +79,12 @@ CONTROLLER_STATES = {"idle", "starting", "launching", "scheduled", "ready", "blo
 NODE_ACTIONS = {"tap", "long_press", "touch_point", "set_text", "ime_enter", "scroll", "swipe", "drag"}
 LABEL_ACTIONS = {"tap_label", "touch_label"}
 UI_ACTIONS = NODE_ACTIONS | LABEL_ACTIONS | {"screenshot", "inspect_ui", "app_context", "screen_gesture",
-                                             "back", "home"}
+                                             "screen_text", "screen_search", "back", "home"}
+# Two-slot controllers (provider schema 4, MultiSession.java): a start in a free slot "alongside"
+# the other session, and its refusals, which open and stop nothing.
+ALONGSIDE = "alongside"
+MAX_SLOTS = 2
+SLOT_REFUSALS = {"session_limit", "app_in_other_session", "multi_session_unavailable", "invalid_mode"}
 
 
 def stop_kind(state: dict | None, session: dict | None) -> str | None:
@@ -203,6 +212,12 @@ class Workspace:
         self.session: dict | None = None     # {"sessionId", "targetPackage"} of our live workspace
         self.task_id: str | None = None      # this workspace generation's id, sent as taskId
         self._generation = 0
+        # Set by ``Workspaces`` on a two-slot controller: starts ask for a slot "alongside" the
+        # other one, and get_state/stop name this unit's session (an unnamed one is slot 0's,
+        # which may be the other unit's). ``_own`` is the last session id seen for this unit.
+        self.multi = False
+        self.visual_only = False  # Screenshot observations; no accessibility reads or node refresh.
+        self._own: str | None = None
         # New per process: a schema 3 controller remembers the last 32 owner-stopped task ids
         # across Rose restarts, so "rose-ws-1-<pkg>" from an earlier run must never come back.
         self._nonce = uuid.uuid4().hex[:8]
@@ -335,12 +350,62 @@ class Workspace:
         # workspace generation instead of driving whatever it holds now.
         if self.task_id and operation in ("start", "command", "stop"):
             params["taskId"] = self.task_id
+        if self.multi:
+            return self._call_slot(operation, params)
+        return self._send(operation, params)
+
+    def _send(self, operation: str, params: dict) -> dict:
         t0 = time.monotonic()
         r = self.send(operation, params)
         r = r if isinstance(r, dict) else {"status": "error", "error": "no answer"}
         # Every call's timing (operation, action and status only): slow or lost answers show up here.
         self.record({"stage": "background_call", "operation": operation, "action": params.get("action"),
                      "ms": round((time.monotonic() - t0) * 1000), "status": r.get("status")})
+        return r
+
+    @property
+    def prefix(self) -> str:
+        """The start of every taskId this unit sends (its sessions, found in a ``sessions`` summary)."""
+
+        return f"rose-ws-{self._nonce}-"
+
+    def _call_slot(self, operation: str, params: dict) -> dict:
+        """A call on a two-slot controller, confined to this unit's own session.
+
+        start asks for the "alongside" slot; get_state and stop name our session. Without a known
+        session, get_state finds ours in the ``sessions`` summary by taskId (else answers "idle")
+        and stop sends nothing: an unnamed stop would end slot 0's session, maybe another unit's."""
+
+        if operation == "start":
+            params.setdefault("mode", ALONGSIDE)
+            self._own = None  # a lost reply: the new session is found by its taskId
+            r = self._send(operation, params)
+            if r.get("sessionId") and r.get("taskId") == params.get("taskId"):
+                self._own = r["sessionId"]
+            return r
+        if operation not in ("get_state", "stop") or params.get("sessionId"):
+            return self._send(operation, params)
+        held = self.session or self._forgotten
+        sid = held["sessionId"] if held else self._own
+        if sid is None and operation == "get_state":
+            r = self._send(operation, params)
+            ours = [x for x in r.get("sessions") or [] if isinstance(x, dict) and x.get("sessionId")
+                    and str(x.get("taskId") or "").startswith(self.prefix)]
+            # This generation's session first, then a live one of ours, then an ended one.
+            ours.sort(key=lambda x: (x.get("taskId") != self.task_id, x.get("status") in ENDED_STATES))
+            mine = ours[0] if ours else None
+            if mine is None:
+                if r.get("status") not in CONTROLLER_STATES:
+                    return r  # no answer (offline, a timeout): say so
+                return {"status": "idle", "sessionId": None, "targetPackage": None, "sessions": r.get("sessions")}
+            sid = self._own = mine["sessionId"]
+        if sid is None:
+            return {"status": "stopped", "sessionId": None, "stopReason": "agent", "actionExecuted": False}
+        r = self._send(operation, {**params, "sessionId": sid})
+        if r.get("status") == "stale_session":
+            # The slot holds another session now: ours has ended (nothing to stop).
+            self._own = None
+            return {"status": "closed", "sessionId": sid, "targetPackage": None, "sessions": r.get("sessions")}
         return r
 
     # ----- internals (lock held) ----------------------------------------------------
@@ -477,10 +542,25 @@ class Workspace:
             return {**out, "reason": "The existing background app is blocked by Android. Resolve its pending "
                                      "operation before continuing; the workspace has been retained."}
         if state.get("status") != "ready" or state.get("targetPackage") != package:
+            if state.get("sessionId") and state.get("status") not in ENDED_STATES:
+                # Another app's session is live: the controller refuses a second start ("Session
+                # name must be unique", live 2026-11-01), so close it first.
+                self.record({"stage": "background_switch", "packageName": package})
+                self.call("stop")
+                self.session = None
+                self._observations.clear()
             # A new workspace generation: its own id, so commands meant for the old one are refused.
             self._generation += 1
             previous, self.task_id = self.task_id, f"rose-ws-{self._nonce}-{self._generation}-{package}"[:128]
             state = self.call("start", {"packageName": package})
+            if state.get("status") in SLOT_REFUSALS:
+                # Two-slot controller: no free slot, or the app is open in the other session.
+                # Nothing was opened or stopped (Workspaces decides what to do about it).
+                self.task_id = previous
+                self.record({"stage": "background_slot_refused", "packageName": package,
+                             "status": state.get("status")})
+                return {"status": state["status"], "actionExecuted": False, "packageName": package,
+                        "backgroundExecution": True}
             if state.get("status") == "user_stopped":
                 # Schema 3: the owner already stopped this task; nothing was opened.
                 rejected = state.get("rejectedTaskId") or state.get("stoppedTaskId") or self.task_id
@@ -501,6 +581,13 @@ class Workspace:
             while state.get("status") in STARTING and self.now() < deadline:
                 self.sleep(START_POLL_S)
                 state = self.call("get_state")
+            if state.get("status") in STARTING and state.get("sessionId"):
+                # Still not ready: stop exactly that session, so a start that lands later is not left holding the
+                # app (with F06 the platform returns an owner's taken-over app to the main display on close).
+                stopped = self.call("stop", {"sessionId": state["sessionId"]})
+                self.record({"stage": "background_start_abandoned", "packageName": package,
+                             "status": state.get("status"), "stopStatus": stopped.get("status")})
+                state = {**state, "startAbandoned": True, "stopStatus": stopped.get("status")}
         if state.get("status") != "ready" or not state.get("sessionId") or state.get("targetPackage") != package:
             had = self.session is not None
             self.session = None
@@ -517,12 +604,15 @@ class Workspace:
                         "backgroundExecution": True, "anyAppControl": state.get("anyAppControl") is True,
                         "reason": "This phone's OS does not let Rose use this app in its background workspace. "
                                   "Nothing was opened.", "details": state}
+            # Why it did not open (codes only, never screen text): "failed" alone says nothing.
+            self.record({"stage": "background_start_failed", "packageName": package, "status": state.get("status"),
+                         "stopReason": state.get("stopReason"), "error": str(state.get("error") or "")[:120]})
             return {"status": "background_consent_required" if state.get("status") == "consent_required"
                     else "background_unavailable", "actionExecuted": False, "packageName": package,
                     "backgroundExecution": True, "details": state}
         opened = self.session is None or self.session.get("sessionId") != state["sessionId"]
         self._adopt(state)
-        observation = self.call("command", {**self.session, "action": "inspect_ui"})
+        observation = self.call("command", {**self.session, "action": "screenshot" if self.visual_only else "inspect_ui"})
         if opened:
             self.closed_reason = ""
             self._changed()
@@ -727,13 +817,15 @@ class Workspace:
             return
         left = self.idle_s - (self.now() - self._used)
         if left > 0 or self.in_use():
+            if left <= 0:
+                self.record({"stage": "background_idle_kept", "reason": "in_use"})
             if self.timers:
                 self._arm(left if left > 0 else self.idle_s)
             return
         try:
             self.close_if_idle()
-        except Exception:
-            pass  # the phone may be gone; the next start reconciles with get_state
+        except Exception as exc:  # the phone may be gone; the next start reconciles with get_state
+            self.record({"stage": "background_idle_error", "error": type(exc).__name__})
 
     def _changed(self) -> None:
         if self.on_change is not None:
@@ -741,3 +833,168 @@ class Workspace:
                 self.on_change()
             except Exception:
                 pass
+
+
+class Workspaces:
+    """Rose's workspaces on a two-slot controller: one ``Workspace`` per controller session.
+
+    The controller (MultiSession.java, provider schema 4) runs up to ``maxSessions`` sessions side
+    by side, one app each, when the platform allows it (``capabilities``: ``multiSession``). Each
+    unit here drives one of them, confined to its own session (``Workspace.multi``). A task view
+    (RealSession) uses one unit at a time:
+
+    - ``start(view, pkg)``: the unit already showing ``pkg`` (a follow-up continues there); else a
+      free unit; else the least recently used one no running task holds (it switches apps); else
+      the view's own unit switches. So one task can keep two apps open and flip between them, and
+      two tasks work in two apps at once. An app open for another running task is refused, never
+      taken from it. Sessions Rose opened before a restart that still hold a slot are stopped
+      when a start finds no free slot.
+    - ``for_view(view)``: the view's unit (an unbound view takes the most recently used unit no
+      task holds, so a follow-up sees the app the last task left).
+
+    With one slot (older controllers or platforms) there is one unit, shared exactly as before.
+    Choices are made under a short lock; phone calls run under each unit's own lock."""
+
+    def __init__(self, first: Workspace, make: Callable[[], Workspace],
+                 others: Callable[[], list[Workspace]] = list):
+        self.units = [first]
+        self._make = make
+        self._others = others  # this process's workspaces outside the pool: never strays
+        self._first_in_use = first.in_use
+        self.max = 1
+        self._owner: dict[int, str] = {}  # unit index -> the view using it now
+        self._lock = threading.Lock()
+        self._spare: Workspace | None = None  # for a view with no unit to use: holds nothing
+
+    @property
+    def multi(self) -> bool:
+        return self.max > 1
+
+    def configure(self, capabilities: dict | None) -> None:
+        """Use as many units as the controller's ``capabilities`` allow (kept while any is open)."""
+
+        caps = capabilities if isinstance(capabilities, dict) else {}
+        try:
+            n = int(caps.get("maxSessions") or 1) if caps.get("multiSession") is True else 1
+        except (TypeError, ValueError):
+            n = 1
+        n = max(1, min(MAX_SLOTS, n))
+        with self._lock:
+            if n == self.max or any(u.session is not None for u in self.units):
+                return
+            if n > 1:
+                while len(self.units) < n:
+                    self.units.append(self._make())
+            else:
+                del self.units[1:]
+                self._owner.clear()
+            for i, u in enumerate(self.units):
+                u.multi = n > 1
+                u.in_use = (lambda i=i: i in self._owner) if n > 1 else self._first_in_use
+            self.max = n
+        self.units[0].record({"stage": "background_slots", "slots": n})
+
+    def for_view(self, view: str) -> Workspace:
+        if not self.multi:
+            return self.units[0]
+        with self._lock:
+            i = self._bound(view)
+            if i is None:
+                held = [j for j in range(len(self.units)) if j not in self._owner]
+                # The app the last task left first (a follow-up continues there), then a free unit.
+                held.sort(key=lambda j: (self.units[j].session is None, -self.units[j]._used))
+                if not held:
+                    return self._spare_unit()
+                i = held[0]
+                self._owner[i] = view
+            return self.units[i]
+
+    def start(self, view: str, package: str) -> dict:
+        if not self.multi:
+            return self.units[0].start(package)
+        with self._lock:
+            i = self._choose(view, package)
+            if isinstance(i, dict):
+                return i
+            self._release(view)
+            self._owner[i] = view
+            unit = self.units[i]
+        r = unit.start(package)
+        if r.get("status") == "session_limit" and self.stop_strays():
+            r = unit.start(package)
+        return r
+
+    def release(self, view: str) -> None:
+        """The view's task is over: its unit stays open for a follow-up; idle time starts now."""
+
+        with self._lock:
+            i = self._release(view)
+        if i is not None:
+            self.units[i].touch()
+        elif not self.multi:
+            self.units[0].touch()
+
+    def begin_task(self) -> None:
+        for i, u in enumerate(self.units):
+            if not self.multi or i not in self._owner:
+                u.begin_task()
+
+    def open_units(self) -> list[Workspace]:
+        """Units with an app open, most recently used first."""
+
+        return sorted((u for u in self.units if u.session is not None), key=lambda u: -u._used)
+
+    def stop_strays(self) -> bool:
+        """Stop Rose's own sessions from before a restart that still hold a slot (taskId
+        ``rose-ws-`` with another process's nonce). Rose Agent's own sessions are left alone."""
+
+        r = self.units[0]._send("get_state", {})
+        ours = tuple(u.prefix for u in [*self.units, *self._others()])
+        stopped = False
+        for x in r.get("sessions") or []:
+            task = str((x or {}).get("taskId") or "")
+            if x.get("sessionId") and x.get("status") not in ENDED_STATES and task.startswith("rose-ws-") \
+                    and not task.startswith(ours):
+                self.units[0].record({"stage": "background_stray_stopped", "slot": x.get("slot")})
+                self.units[0]._send("stop", {"sessionId": x["sessionId"], "taskId": task})
+                stopped = True
+        return stopped
+
+    # ----- internals (self._lock held) --------------------------------------------------
+    def _bound(self, view: str) -> int | None:
+        return next((i for i, v in self._owner.items() if v == view), None)
+
+    def _release(self, view: str) -> int | None:
+        i = self._bound(view)
+        if i is not None:
+            del self._owner[i]
+        return i
+
+    def _choose(self, view: str, package: str) -> int | dict:
+        units, mine = self.units, self._bound(view)
+        free = lambda i: self._owner.get(i) in (None, view)
+        showing = next((i for i, u in enumerate(units) if u.session and u.session.get("targetPackage") == package),
+                       None)
+        if showing is not None:
+            if free(showing):
+                return showing
+            return {"status": "app_in_other_session", "actionExecuted": False, "packageName": package,
+                    "backgroundExecution": True}
+        empty = [i for i, u in enumerate(units) if u.session is None and free(i)]
+        if mine in empty:
+            return mine
+        if empty:
+            return empty[0]
+        idle = sorted((i for i in range(len(units)) if i not in self._owner), key=lambda i: units[i]._used)
+        if idle:
+            return idle[0]
+        if mine is not None:
+            return mine
+        return {"status": "session_limit", "actionExecuted": False, "packageName": package,
+                "backgroundExecution": True}
+
+    def _spare_unit(self) -> Workspace:
+        if self._spare is None:
+            self._spare = self._make()
+            self._spare.multi = True
+        return self._spare

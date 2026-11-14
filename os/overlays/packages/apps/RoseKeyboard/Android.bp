@@ -1,0 +1,13 @@
+// RoseOS (1M, F10): the Rose keyboard, an input method built from source by the normal OS build. Platform APIs
+// only (sdk_version "current"); no static libraries, no network, no permission beyond the input-method binding.
+package { default_applicable_licenses: ["Android-Apache-2.0"] }
+
+android_app {
+    name: "RoseKeyboard",
+    srcs: ["src/**/*.java"],
+    resource_dirs: ["res"],
+    manifest: "AndroidManifest.xml",
+    sdk_version: "current",
+    product_specific: true,
+    dex_preopt: { enabled: false },
+}

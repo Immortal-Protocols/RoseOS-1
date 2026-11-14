@@ -1,0 +1,5 @@
+        current = 'allocate'
+        alloc = module('mustang_allocate', 'mustang-allocate.py')
+        allocation = alloc.reserve(str(home), run_id, attempt, source)
+        release_receipts.write_once(run_root/'allocation.json', allocation)
+        report['allocation'] = allocation

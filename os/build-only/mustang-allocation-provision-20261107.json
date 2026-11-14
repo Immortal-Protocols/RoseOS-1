@@ -1,0 +1,66 @@
+{
+  "schema": "roseos.mustang-allocation-provision.v1",
+  "backendEstablished": false,
+  "networkAdmitted": false,
+  "issueAdmitted": false,
+  "bucketCreated": false,
+  "identityCreated": false,
+  "bindingCreated": false,
+  "objectsWritten": false,
+  "issued": false,
+  "projectNumber": "1072799993443",
+  "projectId": "protocols-465723",
+  "bucket": "roseos-mustang-allocation-1072799993443",
+  "location": "us-west2",
+  "storageClass": "STANDARD",
+  "uniformBucketLevelAccess": true,
+  "publicAccessPrevention": "enforced",
+  "versioning": false,
+  "numberPrefix": "epoch-202613/numbers/",
+  "issuePrefix": "epoch-202613/issues/",
+  "serviceAccount": "mustang-allocator@protocols-465723.iam.gserviceaccount.com",
+  "separateFrom": [
+    "mustang-controller@protocols-465723.iam.gserviceaccount.com"
+  ],
+  "attachedTo": "bucket",
+  "projectIamPolicy": false,
+  "resource": "projects/_/buckets/roseos-mustang-allocation-1072799993443",
+  "bindings": [
+    {
+      "role": "projects/protocols-465723/roles/mustangAllocationLister",
+      "permissions": ["storage.objects.list"],
+      "condition": {
+        "title": "dedicated-bucket-list",
+        "expression": "resource.type == 'storage.googleapis.com/Bucket' && resource.name == 'projects/_/buckets/roseos-mustang-allocation-1072799993443'"
+      }
+    },
+    {
+      "role": "projects/protocols-465723/roles/mustangAllocationObjectWriter",
+      "permissions": ["storage.objects.create", "storage.objects.get"],
+      "condition": {
+        "title": "epoch-object-prefix",
+        "expression": "resource.type == 'storage.googleapis.com/Object' && resource.name.startsWith('projects/_/buckets/roseos-mustang-allocation-1072799993443/objects/epoch-202613/')"
+      }
+    }
+  ],
+  "notGranted": [
+    "storage.objects.delete",
+    "storage.objects.update",
+    "storage.buckets.setIamPolicy",
+    "roles/storage.admin",
+    "roles/storage.objectAdmin",
+    "roles/owner",
+    "a project-wide storage grant"
+  ],
+  "atomicCreate": "POST https://storage.googleapis.com/upload/storage/v1/b/roseos-mustang-allocation-1072799993443/o?uploadType=media&name=OBJECT&ifGenerationMatch=0",
+  "metadataRead": "GET https://storage.googleapis.com/storage/v1/b/roseos-mustang-allocation-1072799993443/o/OBJECT",
+  "mediaRead": "GET https://storage.googleapis.com/storage/v1/b/roseos-mustang-allocation-1072799993443/o/OBJECT?alt=media&ifGenerationMatch=GENERATION",
+  "list": "GET https://storage.googleapis.com/storage/v1/b/roseos-mustang-allocation-1072799993443/o?prefix=PREFIX&pageToken=TOKEN",
+  "initialization": [
+    "Create only this bucket in us-west2 with uniform bucket-level access and public access prevention enforced.",
+    "Create mustang-allocator. Do not attach it to the VM and do not reuse the controller account.",
+    "Create the lister role with storage.objects.list only, and the writer role with storage.objects.create and storage.objects.get only.",
+    "Bind both roles on this bucket, not on the project. The list condition is the bucket resource. The writer condition is the epoch-202613/ object prefix. List is not granted by the object-prefix condition.",
+    "Do not write an object. backendEstablished, networkAdmitted, and issueAdmitted stay false in this file."
+  ]
+}

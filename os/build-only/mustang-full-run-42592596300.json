@@ -1,0 +1,60 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42592596300",
+  "runNumber": 27,
+  "runAttempt": 1,
+  "source": "8377725ded58883c568f34e374efbe0d4f95dfaf",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129078060665,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "git-tree-entry-bound",
+  "failurePath": "toolchain/pgo-profiles",
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T09:22:03Z",
+  "originalEntryCeiling": 2000000,
+  "proposedEntryCeiling": 4000000,
+  "exactObservedEntryCountKnown": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "sourceCopyStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129078486321,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T09:25:23.145236+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T01:23:11.689-08:00"
+    }
+  },
+  "configuredMachineObservation": {
+    "observedAt": "2026-11-09T09:25:23.324525+00:00",
+    "value": {
+      "name": "n2-highmem-32",
+      "guestCpus": 32,
+      "memoryMb": 262144
+    }
+  },
+  "nextInitializationRunNumber": 28,
+  "basis": "Exact native job log reports source-stage git-tree-entry-bound at toolchain/pgo-profiles with receiptWritten true, before source copy/allocation/Make. The old error lacks actual/remaining counts, so no exact total is invented. Source change raises only the bounded entry ceiling to4M on the existing configured32CPU/256GiB VM. Data/Git-output/deadline limits and byte/tree/pin checks remain. Successful cleanup and exact stopped-VM metadata are independent of artifact payloads. No journal is reset and its on-disk absence is not asserted."
+}

@@ -1,0 +1,1 @@
+package android.view; public final class SurfaceControl { public static class Transaction { public void apply() {} public Transaction setAlpha(SurfaceControl sc, float alpha) { return this; } public Transaction setPosition(SurfaceControl sc, float x, float y) { return this; } public Transaction setLayer(SurfaceControl sc, int z) { return this; } } }

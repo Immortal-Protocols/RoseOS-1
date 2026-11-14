@@ -28,6 +28,8 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 FIXTURES = ROOT/'os/tests/fixtures/adevtool-17df3b79'
 CONTRACT = json.loads((ROOT/'os/devices/pixel10.json').read_text())
@@ -108,7 +110,7 @@ class WorkflowTest(unittest.TestCase):
             'readiness job with an id token': WORKFLOW.replace(READINESS_JOB, READINESS_JOB.replace('      contents: read\n',
                 '      contents: read\n      id-token: write\n')),
             'readiness job with more time': WORKFLOW.replace(READINESS_JOB, READINESS_JOB.replace('timeout-minutes: 20', 'timeout-minutes: 720')),
-            'builder in readiness mode': WORKFLOW.replace("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", "    if: inputs.mode == 'os-release' || inputs.mode == 'device-readiness'\n"),
+            'builder in readiness mode': WORKFLOW.replace("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", "    if: inputs.mode == 'os-release' || inputs.mode == 'device-readiness'\n"),
             'unbound candidate': WORKFLOW.replace('[[ "$MODE" != device-readiness || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]', 'true'),
             'secret in the readiness job': WORKFLOW.replace("      - name: Inspect the retained tree", "      - env:\n          K: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}\n        name: Inspect the retained tree"),
         }
@@ -121,13 +123,15 @@ class WorkflowTest(unittest.TestCase):
         return '\n'.join(line for line in script.splitlines() if 'git merge-base' not in line)
 
     def test_the_guard_binds_readiness_to_the_recipe_and_frankel_and_admits_no_extras(self):
-        base = dict(os.environ, MODE='device-readiness', ROSE_DEVICE='frankel', CANDIDATE_SHA='a' * 40, GITHUB_SHA='a' * 40,
-            BUILD_NUMBER='2026102901', BUILD_TIMESTAMP='1793300000', APPS='[["dev.pixel.voice", 309]]', RESUME_STAGE='none',
-            RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='', RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false',
-            APP_PUBLISH='false', ALPHA_RECOVER='false')
+        # The bare dispatch's workflow env (every input at its declared default), then this test's values.
+        base = {**os.environ, **shape.dispatch_env(), **dict(MODE='device-readiness', ROSE_DEVICE='frankel',
+            CANDIDATE_SHA='a' * 40, GITHUB_SHA='a' * 40, BUILD_NUMBER='2026102901', BUILD_TIMESTAMP='1793300000',
+            APPS='[["dev.pixel.voice", 309]]', RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='',
+            RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false')}
         cases = [({}, True), ({'GITHUB_SHA': 'b' * 40}, False), ({'ROSE_DEVICE': 'blazer'}, False), ({'ROSE_DEVICE': 'rango'}, False),
             ({'PROMOTE': 'true'}, False), ({'APP_PUBLISH': 'true'}, False), ({'ALPHA_RECOVER': 'true'}, False),
             ({'RESUME_STAGE': 'sign', 'RESUME_UNSIGNED_SHA256': 'c' * 64}, False), ({'REUSE_BINDING': '{}'}, False),
+            ({'MUSTANG_PUBLISH_OTA': 'true'}, False), ({'MUSTANG_COMPILE_RUN': '1'}, False), ({'MUSTANG_BOOTSTRAP_RUN': '1'}, False),
             ({'MODE': 'os-release', 'GITHUB_SHA': 'b' * 40}, True)]
         for change, ok in cases:
             result = subprocess.run(['bash', '-euo', 'pipefail', '-c', self.guard()], cwd=ROOT, env={**base, **change},
@@ -137,6 +141,7 @@ class WorkflowTest(unittest.TestCase):
     def test_release_admission_stays_frankel_only(self):
         self.assertEqual((pipeline.SUPPORTED_DEVICES, pipeline.LATEST_DEVICES), (('frankel',), ('frankel',)))
         self.assertEqual(readiness.READINESS_DEVICES, ('frankel', 'blazer', 'rango'))
+        self.assertEqual(readiness.UNINSPECTED_DEVICES, ('mustang',))
         self.assertEqual(sorted(p.name for p in (ROOT/'os/release-pipeline').glob('*.json')),
             ['alpha-runtime.json', 'cuttlefish-alpha.json', 'frankel.json'])
 
@@ -475,7 +480,11 @@ class ProbeTest(unittest.TestCase):
         bad = {
             'adevtool pin': lambda c: c['source']['projects'].update({'vendor/adevtool': '0' * 40}),
             'state pin': lambda c: c['source']['projects'].pop('vendor/state'),
-            'extra device': lambda c: c['devices'].update({'mustang': c['devices']['frankel']}),
+            'extra device': lambda c: c['devices'].update({'yogi': c['devices']['frankel']}),
+            'uninspected device dropped': lambda c: c['devices'].pop('mustang'),
+            'inspected device dropped': lambda c: c['devices'].pop('blazer'),
+            'device order': lambda c: c.update({'devices': dict(reversed(list(c['devices'].items())))}),
+            'uninspected device first': lambda c: c.update({'devices': {'mustang': c['devices'].pop('mustang'), **c['devices']}}),
             'lunch combo': lambda c: c['devices']['blazer']['lunch'].update({'expected': 'blazer-cur-userdebug'}),
             'path escape': lambda c: c['shared'].update({'include': '../../../../etc/shadow'}),
             'unsafe config': lambda c: c['devices']['rango'].update({'adevtoolConfig': 'config/device/$(id).yml'}),
@@ -484,6 +493,18 @@ class ProbeTest(unittest.TestCase):
         for name, edit in bad.items():
             with self.assertRaises(readiness.CheckFailed, msg=name):
                 readiness.contract_targets(changed(edit))
+
+    def test_an_uninspected_contract_device_is_never_inspected_planned_or_admitted(self):
+        # mustang is in the contract (6aa5d2c) but outside this inspection: named only so other changes still refuse.
+        self.assertEqual(list(CONTRACT['devices']), list(readiness.READINESS_DEVICES + readiness.UNINSPECTED_DEVICES))
+        self.assertFalse(set(readiness.READINESS_DEVICES) & set(readiness.UNINSPECTED_DEVICES))
+        self.assertNotIn('mustang', readiness.contract_targets(CONTRACT))
+        self.assertEqual(readiness.check()['devices'], ['frankel', 'blazer', 'rango'])
+        # Even a mustang entry with no usable product, lunch or factory pin is never read, so it cannot become a target.
+        contract = json.loads(json.dumps(CONTRACT))
+        contract['devices']['mustang'] = {}
+        self.assertEqual(sorted(readiness.contract_targets(contract)), ['blazer', 'frankel', 'rango'])
+        self.assertNotIn('mustang', pipeline.SUPPORTED_DEVICES)
 
     def test_unsafe_tree_scripts_never_run_even_when_the_chain_bytes_match(self):
         with fixture(chain_matches=True) as f:

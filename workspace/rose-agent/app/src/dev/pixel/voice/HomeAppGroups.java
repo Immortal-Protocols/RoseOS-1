@@ -9,7 +9,8 @@ package dev.pixel.voice;
  * <li>SUITE: Rose's own suite (AppLabels.SUITE_PACKAGES, with the preferred camera), first on the app pages.</li>
  * <li>SYSTEM: an OS app (FLAG_SYSTEM or an updated system app) that is not one of ours, plus the known duplicates of a
  * suite app that AppLabels already names: the test Mail and Calendar builds, the alternate Weather, and every camera
- * app other than the one the suite uses. These go in the folder, still launchable from it.</li>
+ * app other than the one the suite uses, and retired apps (RETIRED, F02). These go in the folder, still launchable
+ * from it.</li>
  * <li>MAIN: everything else (Play Store and other installs, and our other builds), on the app pages as before.</li>
  * </ul>
  * Regular installed Claude, ChatGPT and Amazon are always MAIN, even if a build ever preinstalled them. The grouping is
@@ -22,6 +23,10 @@ final class HomeAppGroups {
 
  /** Apps that always stay on the app pages, outside the folder. */
  static final String[] KEEP_OUT = {"com.anthropic.claude", "com.openai.chatgpt", "com.amazon.mShop.android.shopping"};
+ /** F02/1I: retired standalone apps, by exact package. Rose Models (dev.pixel.models) is retired and no longer shipped;
+  * a copy already installed is never removed by Rose. It sits in the System folder, where its owner can still open it,
+  * and Home offers its uninstall through Android's own confirmation (AppRemoval.retired, RetiredAppNotice). */
+ static final String[] RETIRED = {"dev.pixel.models"};
  /** Second copies of a suite app (AppLabels.label names each one as such). */
  static final String[] DUPLICATES = {"dev.pixel.mail.debug", "org.fossify.calendar.pixel.debug", "dev.pixel.weather.opus"};
  /** Camera apps; the one AppLabels.preferredCamera picks is the suite's Camera, the others are duplicates. */
@@ -34,12 +39,30 @@ final class HomeAppGroups {
   */
  static int group(String packageName, boolean suite, boolean ours, boolean preinstalled, String cameraPackage) {
   if (has(KEEP_OUT, packageName)) return MAIN;
+  if (has(RETIRED, packageName)) return SYSTEM;
   if (suite) return SUITE;
   if (has(DUPLICATES, packageName)) return SYSTEM;
   if (has(CAMERAS, packageName) && !packageName.equals(cameraPackage)) return SYSTEM;
   if (preinstalled && !ours) return SYSTEM;
   return MAIN;
  }
+
+ /** GrapheneOS's own SMS app, by package, never by label: the pinned external/Messaging (GrapheneOS
+  * platform_external_Messaging 041f08b) ships sysconfig whitelist_com.android.messaging.xml granting
+  * com.android.messaging, the pinned framework's default_sms_application. */
+ static final String OS_MESSAGING = "com.android.messaging";
+ /** Rose's Messages (BlueBubbles), the messaging app Home keeps. */
+ static final String MESSAGES = "com.bluebubbles.messaging";
+
+ /** The package Home places for a default-role holder (F04): the OS messaging app's place goes to Rose's Messages, so
+  * main Home never shows GrapheneOS Messaging; it stays installed and launchable from the System folder, and no
+  * message, role or default is touched. Every other package is placed as it is. */
+ static String homeRole(String packageName) {
+  return OS_MESSAGING.equals(packageName) ? MESSAGES : packageName;
+ }
+
+ /** Rose's own apps that follow the default roles on Home (the reference's Mail, Calendar and Notes), where installed. */
+ static final String[] HOME_SUITE = {"dev.pixel.mail", "org.fossify.calendar.pixel", "dev.pixel.notes.agent"};
 
  /** The folder's accessible name; its visible label is FOLDER_LABEL. */
  static String folderDescription(int count) {

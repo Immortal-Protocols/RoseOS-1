@@ -1,0 +1,1769 @@
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
+new file mode 100644
+index 0000000..f8e557e
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
+@@ -0,0 +1,413 @@
++/*
++ * Copyright 2026
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.wm.shell;
++
++import android.app.ActivityManager;
++import android.app.KeyguardManager;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.ServiceConnection;
++import android.content.pm.PackageManager;
++import android.graphics.BlurMaskFilter;
++import android.graphics.Canvas;
++import android.graphics.LinearGradient;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.PixelFormat;
++import android.graphics.Rect;
++import android.graphics.RectF;
++import android.graphics.Shader;
++import android.os.Bundle;
++import android.os.Handler;
++import android.os.IBinder;
++import android.os.Looper;
++import android.os.Message;
++import android.os.Messenger;
++import android.os.PowerManager;
++import android.os.RemoteException;
++import android.os.SystemClock;
++import android.os.SystemProperties;
++import android.os.UserHandle;
++import android.util.Log;
++import android.view.Gravity;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.view.WindowManager;
++
++import com.android.wm.shell.roseedge.RoseEdgePolicy;
++
++/**
++ * RoseOS (#410, option a): Rose's microphone-input control in the raised edge's slot, drawn by SystemUI.
++ *
++ * <p>Launcher3 leaves a transparent, untouchable hole in its edge window and reports it with
++ * IRoseEdge#setMicSlot. This window covers exactly that hole while the edge is raised. It speaks Rose Agent's existing
++ * tray protocol from SystemUI's existing trusted identity: REGISTER for STATE, then MUTE or UNMUTE on a tap. It never
++ * sends START or END, never starts voice and never touches output, the call or background work. Launcher3 never
++ * reaches the microphone state, and AgentTrayService and its caller check are unchanged: this is one more short-lived
++ * client of the same protocol from the same SystemUI process, through the same AgentTrayLink lifecycle as the tray.
++ * Shown only with the Rose tray enabled, for user 0, unlocked and with the screen on; hidden on every lower.
++ */
++public final class RoseEdgeMicSlot {
++    private static final String TAG = "RoseEdgeMic";
++    private static final String TRAY_PROPERTY = "persist.wm.debug.pixel_agent_tray";
++    private static final String VOICE_PACKAGE = "dev.pixel.voice";
++    private static final int STATE = 100;
++    /** Home's edge (oxblood-contract homeEdge): 92dp tall, its plate a vertical gradient in dp from the edge top. */
++    private static final float EDGE_HEIGHT_DP = 92;
++    private static final float[] PLATE_STOPS_DP = {0, 34, 46, 92};
++    private static final int[] PLATE_COLORS = {0xFF4A141A, 0xFF4A141A, 0xFF3C0E13, 0xFF330C10};
++
++    private final Context mWindowContext;
++    private final WindowManager mWindows;
++    /** Everything runs on the thread that created this (the shell's main thread), including binder callbacks. */
++    private final Handler mHandler = new Handler(Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper());
++    private final RoseEdgePolicy.MicTap mTap = new RoseEdgePolicy.MicTap();
++    private final Runnable mRetryBind;
++    private final AgentTrayLink mLink;
++    private final Messenger mReply;
++    private final ServiceConnection mConnection;
++    private Messenger mVoice;
++    private Control mView;
++    private boolean mKnown;
++    private boolean mMuted;
++    private long mLastCommandAt;
++    /** Where the edge plate starts, in the control's own coordinates (the edge top minus the slot top). */
++    private float mPlateTop;
++
++    public RoseEdgeMicSlot(Context context) {
++        mWindowContext = context.createWindowContext(WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL, null);
++        mWindows = mWindowContext.getSystemService(WindowManager.class);
++        mConnection = new ServiceConnection() {
++            // Delivered on the process's main thread: moved to this control's thread.
++            @Override public void onServiceConnected(ComponentName name, IBinder binder) {
++                mHandler.post(() -> {
++                    mVoice = new Messenger(binder);
++                    mLink.connected();
++                });
++            }
++            @Override public void onServiceDisconnected(ComponentName name) { mHandler.post(mLink::disconnected); }
++            @Override public void onBindingDied(ComponentName name) { mHandler.post(mLink::bindingDied); }
++            @Override public void onNullBinding(ComponentName name) { mHandler.post(mLink::bindingDied); }
++        };
++        mLink = new AgentTrayLink(new AgentTrayLink.Port() {
++            @Override public boolean bind(int user) {
++                try {
++                    return mWindowContext.bindServiceAsUser(new Intent().setComponent(new ComponentName(
++                            VOICE_PACKAGE, "dev.pixel.voice.AgentTrayService")), mConnection,
++                            Context.BIND_AUTO_CREATE, UserHandle.of(user));
++                } catch (RuntimeException e) {
++                    Log.w(TAG, "Voice binding unavailable", e);
++                    return false;
++                }
++            }
++            @Override public void unbind() {
++                try {
++                    mWindowContext.unbindService(mConnection);
++                } catch (IllegalArgumentException e) {
++                    Log.w(TAG, "Voice binding already released", e);
++                }
++            }
++            @Override public boolean send(int what) { return RoseEdgeMicSlot.this.send(what); }
++            @Override public void scheduleRetry() {
++                mHandler.removeCallbacks(mRetryBind);
++                mHandler.postDelayed(mRetryBind, 3000);
++            }
++            @Override public void cancelRetry() { mHandler.removeCallbacks(mRetryBind); }
++            @Override public void resetState() {
++                mKnown = false;
++                mMuted = false;
++                if (mView != null) mView.refresh();
++            }
++            @Override public void forgetService() { mVoice = null; }
++        });
++        mRetryBind = () -> mLink.retry(ActivityManager.getCurrentUser());
++        mReply = new Messenger(new Handler(mHandler.getLooper(), message -> {
++            // Only a fresh v1 STATE from Rose Agent itself, while subscribed, is shown.
++            if (message.what != STATE || !mLink.subscribed() || !trusted(message.sendingUid)) return true;
++            final Bundle data = message.getData();
++            if (data.getInt("protocolVersion") != 1) return true;
++            mKnown = true;
++            mMuted = data.getBoolean("muted");
++            if (mView != null) mView.refresh();
++            return true;
++        }));
++    }
++
++    /**
++     * Covers the slot (screen coordinates) on a display displayHeight tall; hides instead when the tray's gates do
++     * not hold. Launcher3 leaves the slot transparent, so the whole rect is painted with the edge plate behind it.
++     */
++    public void show(Rect slot, int displayHeight) {
++        mPlateTop = displayHeight - dp(EDGE_HEIGHT_DP) - slot.top;
++        if (!allowed()) {
++            hide();
++            return;
++        }
++        final WindowManager.LayoutParams params = new WindowManager.LayoutParams(slot.width(), slot.height(),
++                WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
++                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
++                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
++                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
++                PixelFormat.TRANSLUCENT);
++        params.gravity = Gravity.TOP | Gravity.LEFT;
++        params.x = slot.left;
++        params.y = slot.top;
++        params.setFitInsetsTypes(0);
++        params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
++        params.setTitle("Rose edge microphone input");
++        if (mView != null) mView.invalidate();
++        if (mView == null) {
++            mView = new Control();
++            mWindows.addView(mView, params);
++        } else {
++            mWindows.updateViewLayout(mView, params);
++        }
++        mLink.screenOn(ActivityManager.getCurrentUser());
++    }
++
++    /** Removes the control and stops its updates; the binding is kept for a quick resume, as the tray does. */
++    public void hide() {
++        mTap.cancel();
++        if (mView != null) {
++            mWindows.removeViewImmediate(mView);
++            mView = null;
++        }
++        mLink.screenOff();
++    }
++
++    private boolean allowed() {
++        final KeyguardManager keyguard = mWindowContext.getSystemService(KeyguardManager.class);
++        final PowerManager power = mWindowContext.getSystemService(PowerManager.class);
++        return SystemProperties.getBoolean(TRAY_PROPERTY, false) && ActivityManager.getCurrentUser() == 0
++                && keyguard != null && !keyguard.isKeyguardLocked() && power != null && power.isInteractive();
++    }
++
++    private boolean trusted(int uid) {
++        try {
++            return mVoice != null && uid == mWindowContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE,
++                    mLink.user());
++        } catch (PackageManager.NameNotFoundException e) {
++            return false;
++        }
++    }
++
++    private boolean send(int what) {
++        if (mVoice == null) return false;
++        final Message message = Message.obtain(null, what);
++        // F08: Rose Agent tells this chin from the SystemUI tray (same component and uid) by REGISTER's arg1.
++        if (what == AgentTrayLink.REGISTER) message.arg1 = RoseEdgePolicy.MIC_CLIENT_CHIN;
++        message.replyTo = mReply;
++        try {
++            mVoice.send(message);
++            return true;
++        } catch (RemoteException e) {
++            return false;
++        }
++    }
++
++    /** A tap mutes or unmutes; nothing happens before the first STATE says which. */
++    private void toggle() {
++        final long now = SystemClock.elapsedRealtime();
++        if (!mKnown || !allowed() || !RoseEdgePolicy.micCommandAllowed(now, mLastCommandAt)) return;
++        mLastCommandAt = now;
++        if (!send(RoseEdgePolicy.micCommand(mMuted))) mLink.disconnected();
++    }
++
++    private int dp(float value) {
++        return Math.round(value * mWindowContext.getResources().getDisplayMetrics().density);
++    }
++
++    /**
++     * The slot's control, drawn exactly as Home's edge draws its microphone well (Rose Agent OxbloodEdge.Well.mic and
++     * OxbloodEdge.MicGlyph; oxblood-contract homeEdge.controls.microphone): over the opaque edge plate, a 32x32dp
++     * plate radius 9 centred in the 44dp slot, and the HiFi microphone on a 24-unit grid at 20dp. Muted: ruby ink,
++     * body at .55, the slash knocked out then drawn, and a 1.4dp ruby ring with a soft glow on the plate. Until the
++     * first STATE the well and glyph are dimmed (a remote state is never guessed); the edge plate stays opaque.
++     */
++    private final class Control extends View {
++        // OxbloodEdge.Well.
++        static final int MIC_PLATE_DP = 32;
++        static final int MIC_RADIUS_DP = 9;
++        static final int FILL_TOP = 0x47140407;
++        static final int FILL_BOTTOM = 0x1f46121c;
++        static final int RING = 0x66eccdbe;
++        static final int TOP_SHADOW = 0x66000000;
++        // OxbloodEdge.MicGlyph.
++        static final int GLYPH_DP = 20;
++        static final int INK = 0xffe6d4c3;
++        static final int MUTED_INK = 0xffff8c9a;
++        static final int MUTED_RING = 0xbfff5a6e;
++        static final int MUTED_GLOW = 0x4dff465f;
++        static final int KNOCKOUT = 0xff1c0609;
++        static final int UNKNOWN_ALPHA = 110;
++
++        /** Plan 1E: the theme this draw uses (RoseThemeMirror); muted keeps its warm meaning (RoseTheme.warm). */
++        private String mTheme = RoseTheme.DEFAULT;
++        // RoseThemeMirror notifies on SystemUI's main thread; this view lives on the shell's, so post the redraw.
++        private final Runnable mThemeChanged = this::postInvalidate;
++        private final Paint mPlate = new Paint();
++        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final RectF mWell = new RectF();
++
++        Control() {
++            super(mWindowContext);
++            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
++            setClickable(true);
++            refresh();
++        }
++
++        @Override
++        protected void onAttachedToWindow() {
++            super.onAttachedToWindow();
++            RoseThemeMirror.listen(mThemeChanged);
++        }
++
++        @Override
++        protected void onDetachedFromWindow() {
++            RoseThemeMirror.unlisten(mThemeChanged);
++            super.onDetachedFromWindow();
++        }
++
++        /** Home's spoken names (HomeTray, RoseConversationActivity): the action a tap takes. */
++        void refresh() {
++            setContentDescription(!mKnown ? "Rose’s microphone, status unavailable"
++                    : mMuted ? "Rose’s microphone is muted. Unmute" : "Mute Rose’s microphone");
++            invalidate();
++        }
++
++        @Override
++        protected void onDraw(Canvas canvas) {
++            final float d = mWindowContext.getResources().getDisplayMetrics().density;
++            mTheme = RoseThemeMirror.current();
++            // Opaque edge plate over the whole slot, continuous with Launcher3's edge around it.
++            final float[] positions = new float[PLATE_STOPS_DP.length];
++            for (int i = 0; i < positions.length; i++) positions[i] = PLATE_STOPS_DP[i] / EDGE_HEIGHT_DP;
++            mPlate.setShader(new LinearGradient(0, mPlateTop, 0, mPlateTop + dp(EDGE_HEIGHT_DP),
++                    RoseTheme.map(mTheme, PLATE_COLORS),
++                    positions, Shader.TileMode.CLAMP));
++            canvas.drawRect(0, 0, getWidth(), getHeight(), mPlate);
++            final int layer = mKnown ? -1 : canvas.saveLayerAlpha(0, 0, getWidth(), getHeight(), UNKNOWN_ALPHA);
++            drawWell(canvas, d);
++            drawGlyph(canvas, d, mKnown && mMuted);
++            if (layer >= 0) canvas.restoreToCount(layer);
++        }
++
++        /** OxbloodEdge.Well.draw for Well.mic. */
++        private void drawWell(Canvas c, float d) {
++            final float cx = getWidth() / 2f;
++            final float cy = getHeight() / 2f;
++            final float h = MIC_PLATE_DP * d;
++            final float r = MIC_RADIUS_DP * d;
++            mWell.set(cx - h / 2, cy - h / 2, cx + h / 2, cy + h / 2);
++            mPaint.reset();
++            mPaint.setAntiAlias(true);
++            mPaint.setShader(new LinearGradient(0, mWell.top, 0, mWell.bottom, RoseTheme.map(mTheme, FILL_TOP),
++                    RoseTheme.map(mTheme, FILL_BOTTOM), Shader.TileMode.CLAMP));
++            c.drawRoundRect(mWell, r, r, mPaint);
++            mPaint.setShader(null);
++            // inset 0 1px 2px rgba(0,0,0,.4): a soft dark band just inside the top edge.
++            final int save = c.save();
++            final Path clip = new Path();
++            clip.addRoundRect(mWell, r, r, Path.Direction.CW);
++            c.clipPath(clip);
++            mPaint.setStyle(Paint.Style.STROKE);
++            mPaint.setStrokeWidth(2 * d);
++            mPaint.setColor(TOP_SHADOW);
++            mPaint.setMaskFilter(new BlurMaskFilter(Math.max(.1f, (1 * d - .5f) / .57735f),
++                    BlurMaskFilter.Blur.NORMAL));
++            c.drawRoundRect(mWell.left - d, mWell.top - d + d, mWell.right + d, mWell.bottom + 3 * d, r, r, mPaint);
++            mPaint.setMaskFilter(null);
++            c.restoreToCount(save);
++            // inset 0 0 0 1px: the warm ring just inside the edge.
++            final float s = Math.max(1f, d);
++            final float half = s / 2;
++            mPaint.setStrokeWidth(s);
++            mPaint.setColor(RoseTheme.map(mTheme, RING));
++            c.drawRoundRect(mWell.left + half, mWell.top + half, mWell.right - half, mWell.bottom - half, r - half,
++                    r - half, mPaint);
++        }
++
++        /** OxbloodEdge.MicGlyph.draw. */
++        private void drawGlyph(Canvas c, float d, boolean muted) {
++            final float cx = getWidth() / 2f;
++            final float cy = getHeight() / 2f;
++            if (muted) {
++                final float h = MIC_PLATE_DP * d;
++                final float r = MIC_RADIUS_DP * d;
++                final float w = 1.4f * d;
++                final RectF plate = new RectF(cx - h / 2 + w / 2, cy - h / 2 + w / 2, cx + h / 2 - w / 2,
++                        cy + h / 2 - w / 2);
++                mPaint.reset();
++                mPaint.setAntiAlias(true);
++                mPaint.setStyle(Paint.Style.STROKE);
++                mPaint.setStrokeWidth(4 * d);
++                mPaint.setColor(RoseTheme.warm(mTheme, MUTED_GLOW));
++                mPaint.setMaskFilter(new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL));
++                c.drawRoundRect(plate, r, r, mPaint);
++                mPaint.setMaskFilter(null);
++                mPaint.setStrokeWidth(w);
++                mPaint.setColor(RoseTheme.warm(mTheme, MUTED_RING));
++                c.drawRoundRect(plate, r - w / 2, r - w / 2, mPaint);
++            }
++            final int save = c.save();
++            final float s = GLYPH_DP * d / 24f;
++            c.translate(cx - 12 * s, cy - 12 * s);
++            c.scale(s, s);
++            final int ink = muted ? RoseTheme.warm(mTheme, MUTED_INK) : RoseTheme.map(mTheme, INK);
++            final int body = muted ? (ink & 0x00ffffff) | (Math.round(.55f * 255) << 24) : ink;
++            mPaint.reset();
++            mPaint.setAntiAlias(true);
++            mPaint.setColor(body);
++            c.drawRoundRect(new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f, mPaint);
++            mPaint.setStyle(Paint.Style.STROKE);
++            mPaint.setStrokeWidth(1.9f);
++            mPaint.setStrokeCap(Paint.Cap.ROUND);
++            c.drawArc(new RectF(5.6f, 4.4f, 18.4f, 17.2f), 0, 180, false, mPaint);
++            c.drawLine(12, 17.4f, 12, 20.6f, mPaint);
++            c.drawLine(8.8f, 20.8f, 15.2f, 20.8f, mPaint);
++            if (muted) {
++                // The slash, knocked out of the well (the well's own dark) and then drawn.
++                mPaint.setStrokeWidth(3.4f);
++                mPaint.setColor(RoseTheme.map(mTheme, KNOCKOUT));
++                c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, mPaint);
++                mPaint.setStrokeWidth(1.9f);
++                mPaint.setColor(ink);
++                c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, mPaint);
++            }
++            c.restoreToCount(save);
++        }
++
++        @Override
++        public boolean onTouchEvent(MotionEvent event) {
++            final float slop = ViewConfiguration.get(mWindowContext).getScaledTouchSlop();
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_DOWN:
++                    mTap.down(event.getX(), event.getY(), event.getEventTime());
++                    return true;
++                case MotionEvent.ACTION_MOVE:
++                    mTap.move(event.getX(), event.getY(), slop);
++                    return true;
++                case MotionEvent.ACTION_UP:
++                    final boolean inside = event.getX() >= 0 && event.getY() >= 0 && event.getX() <= getWidth()
++                            && event.getY() <= getHeight();
++                    if (mTap.up(event.getX(), event.getY(), event.getEventTime(), slop, inside)) performClick();
++                    return true;
++                default:
++                    mTap.cancel();
++                    return true;
++            }
++        }
++
++        @Override
++        public boolean performClick() {
++            super.performClick();
++            toggle();
++            return true;
++        }
++    }
++}
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java b/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
+index 237f471..236bd81 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
+@@ -192,6 +192,7 @@ import com.android.wm.shell.pip2.phone.PipTransitionState;
+ import com.android.wm.shell.recents.PerDisplayRecentsTransitionStateListener;
+ import com.android.wm.shell.recents.RecentTasksController;
+ import com.android.wm.shell.recents.RecentsTransitionHandler;
++import com.android.wm.shell.roseedge.RoseEdgeController;
+ import com.android.wm.shell.scrolltotop.ScrollToTopController;
+ import com.android.wm.shell.shared.TransactionPool;
+ import com.android.wm.shell.shared.annotations.ShellAnimationThread;
+@@ -2273,6 +2274,19 @@ public abstract class WMShellModule {
+     // Misc
+     //
+ 
++    // RoseOS (#410): the Rose raised edge, default off (persist.wm.debug.rose_edge); exported to Launcher3 only.
++    @WMSingleton
++    @Provides
++    static RoseEdgeController provideRoseEdgeController(Context context, ShellInit shellInit,
++            ShellController shellController, ShellTaskOrganizer shellTaskOrganizer,
++            RootTaskDisplayAreaOrganizer rootTaskDisplayAreaOrganizer, DisplayController displayController,
++            DisplayImeController displayImeController, Transitions transitions,
++            @ShellMainThread ShellExecutor mainExecutor) {
++        return new RoseEdgeController(context, shellInit, shellController, shellTaskOrganizer,
++                rootTaskDisplayAreaOrganizer, displayController, displayImeController, transitions,
++                mainExecutor);
++    }
++
+     // TODO: Temporarily move dependencies to this instead of ShellInit since that is needed to add
+     // the callback. We will be moving to a different explicit startup mechanism in a follow- up CL.
+     @WMSingleton
+@@ -2297,7 +2311,8 @@ public abstract class WMShellModule {
+             BubbleRootTask bubbleRootTask,
+             DesktopModeAidlProvider desktopModeAidlProvider,
+             DesktopTasksTransitionHandler desktopTasksTransitionHandler,
+-            DesktopModeShellCommandHandler desktopModeShellCommandHandler) {
++            DesktopModeShellCommandHandler desktopModeShellCommandHandler,
++            RoseEdgeController roseEdgeController) {
+         return new Object();
+     }
+ 
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl
+new file mode 100644
+index 0000000..5b3e5cd
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl
+@@ -0,0 +1,33 @@
++/*
++ * Copyright 2026
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.wm.shell.roseedge;
++
++import android.graphics.Rect;
++import com.android.wm.shell.roseedge.IRoseEdgeListener;
++
++/**
++ * RoseOS (#410): the Rose raised edge, exported by the shell to the bound recents component (Launcher3) through
++ * ShellController's external interfaces. Every call requires MANAGE_ACTIVITY_TASKS. Contract agreed on #410.
++ */
++interface IRoseEdge {
++
++    /**
++     * Shrinks the default task display area so the focused fullscreen app taskId on displayId gets the bounds
++     * (0, 0, W, H - liftPx): width unchanged, nothing scaled. Answers on listener with onRaised or onRefused.
++     */
++    oneway void raise(int displayId, int taskId, int liftPx, IRoseEdgeListener listener) = 1;
++
++    /** Restores full height. Answers onLowered(displayId, 0) on the raising listener when something was raised. */
++    oneway void lower(int displayId) = 2;
++
++    /**
++     * The microphone-input slot in Launcher3's raised edge, in screen coordinates; an empty Rect clears it.
++     * SystemUI then covers it with Rose's existing tray control (mute or unmute only). Ignored unless displayId is
++     * raised and the slot lies in the bottom band (0, H - min(H/4, 160dp), W, H), 32-64dp on each side. A slot
++     * belongs to the current raise and is dropped on any lower, so Launcher3 sends it again after each onRaised.
++     */
++    oneway void setMicSlot(int displayId, in Rect slotBounds) = 3;
++}
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl
+new file mode 100644
+index 0000000..08838b1
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl
+@@ -0,0 +1,24 @@
++/*
++ * Copyright 2026
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.wm.shell.roseedge;
++
++import android.graphics.Rect;
++
++/**
++ * RoseOS (#410): answers from the shell's Rose raised edge, implemented by Launcher3. Reason values are
++ * RoseEdgePolicy's REFUSED_* and LOWERED_* constants.
++ */
++oneway interface IRoseEdgeListener {
++
++    /** The edge is raised over taskId; appBounds are the task's actual bounds. */
++    void onRaised(int displayId, int taskId, in Rect appBounds) = 1;
++
++    /** The raise was refused and nothing changed. */
++    void onRefused(int displayId, int taskId, int reason) = 2;
++
++    /** The edge came down and the app has full height again. */
++    void onLowered(int displayId, int reason) = 3;
++}
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
+new file mode 100644
+index 0000000..8fd02b9
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
+@@ -0,0 +1,738 @@
++/*
++ * Copyright 2026
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.wm.shell.roseedge;
++
++import static android.app.WindowConfiguration.ACTIVITY_TYPE_HOME;
++import static android.app.WindowConfiguration.ACTIVITY_TYPE_RECENTS;
++import static android.app.WindowConfiguration.ACTIVITY_TYPE_STANDARD;
++import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
++import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
++import static android.view.WindowManager.TRANSIT_CHANGE;
++import static android.view.WindowManager.TRANSIT_CLOSE;
++import static android.view.WindowManager.TRANSIT_OPEN;
++import static android.view.WindowManager.TRANSIT_TO_BACK;
++import static android.view.WindowManager.TRANSIT_TO_FRONT;
++
++import android.animation.Animator;
++import android.animation.AnimatorListenerAdapter;
++import android.animation.ValueAnimator;
++import android.annotation.NonNull;
++import android.annotation.Nullable;
++import android.app.ActivityManager;
++import android.app.ActivityManager.RunningTaskInfo;
++import android.app.KeyguardManager;
++import android.content.BroadcastReceiver;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.pm.PackageManager;
++import android.content.res.Configuration;
++import android.graphics.Point;
++import android.graphics.Rect;
++import android.os.IBinder;
++import android.os.RemoteException;
++import android.os.SystemProperties;
++import android.util.ArrayMap;
++import android.util.Slog;
++import android.view.Display;
++import android.view.SurfaceControl;
++import android.view.animation.PathInterpolator;
++import android.window.DisplayAreaInfo;
++import android.window.TransitionInfo;
++import android.window.TransitionRequestInfo;
++import android.window.WindowContainerTransaction;
++
++import com.android.wm.shell.AgentTrayLink;
++import com.android.wm.shell.RootTaskDisplayAreaOrganizer;
++import com.android.wm.shell.RoseEdgeMicSlot;
++import com.android.wm.shell.ShellTaskOrganizer;
++import com.android.wm.shell.common.DisplayController;
++import com.android.wm.shell.common.DisplayImeController;
++import com.android.wm.shell.common.DisplayLayout;
++import com.android.wm.shell.common.ExternalInterfaceBinder;
++import com.android.wm.shell.common.RemoteCallable;
++import com.android.wm.shell.common.ShellExecutor;
++import com.android.wm.shell.sysui.KeyguardChangeListener;
++import com.android.wm.shell.sysui.ShellController;
++import com.android.wm.shell.sysui.ShellInit;
++import com.android.wm.shell.sysui.UserChangeListener;
++import com.android.wm.shell.transition.Transitions;
++
++import java.security.SecureRandom;
++
++/**
++ * RoseOS (#410): the shell side of the Rose raised edge (resize on release).
++ *
++ * <p>Launcher3 owns the gesture and the edge window. When a short swipe is released over an app it calls
++ * {@link IRoseEdge#raise}; the shell shrinks the default task display area (which only the shell organizes) to
++ * {@code (0, 0, W, H - liftPx)} in one TRANSIT_CHANGE transition. The fullscreen app fills its parent, so it gets real
++ * smaller bounds with its width unchanged, a configuration change and a full relayout: its own bottom bar or composer
++ * moves up. Nothing is scaled, cropped into a preview or padded. {@link IRoseEdge#lower} clears the bounds.
++ *
++ * <p>Every rule is in {@link RoseEdgePolicy}. Default off ({@value #ENABLED_PROPERTY}). The interface reaches only
++ * the bound recents component and requires MANAGE_ACTIVITY_TASKS, which the shell checks on every call; no permission
++ * or caller trust is added. The edge is owned by the listener that raised it and comes down on its own when that task
++ * leaves the front, Home or recents opens, the keyguard shows, the display changes, the IME shows, the user switches or
++ * the owner dies.
++ *
++ * <p>1C (agreed with App Core and Home/App): the exact-task return. From its own focus changes the shell records the
++ * app the owner left when Rose came forward ({@link RoseEdgePolicy.Return}) and publishes it, as an opaque token, to
++ * Rose Agent over the status-bar tray's existing authenticated link ({@link AgentTrayLink.Return}). A return quoting
++ * the current token reorders exactly that live task to the front, in this controller's own TRANSIT_TO_FRONT
++ * transition, and answers RETURNED only once focus is on it. Nothing is started or launched, and Rose's task stays
++ * alive behind it. No permission, interface or caller trust is added: the task organizer and transitions are the
++ * shell's own.
++ */
++public class RoseEdgeController implements RemoteCallable<RoseEdgeController>, Transitions.TransitionHandler,
++        ShellTaskOrganizer.FocusListener, ShellTaskOrganizer.TaskInfoChangedListener,
++        ShellTaskOrganizer.TaskVanishedListener, KeyguardChangeListener, UserChangeListener,
++        DisplayController.OnDisplaysChangedListener, DisplayImeController.ImePositionProcessor,
++        RootTaskDisplayAreaOrganizer.RootTaskDisplayAreaListener {
++    private static final String TAG = "RoseEdge";
++    static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";
++
++    private final Context mContext;
++    private final ShellController mShellController;
++    private final ShellTaskOrganizer mTaskOrganizer;
++    private final RootTaskDisplayAreaOrganizer mRootTdaOrganizer;
++    private final DisplayController mDisplayController;
++    private final DisplayImeController mImeController;
++    private final Transitions mTransitions;
++    private final ShellExecutor mMainExecutor;
++
++    private final RoseEdgePolicy.State mState = new RoseEdgePolicy.State();
++    /** This controller's own transitions, and what to report when each one has been applied. */
++    private final ArrayMap<IBinder, Applied> mOwnTransitions = new ArrayMap<>();
++    @Nullable private IRoseEdgeListener mListener;
++    @Nullable private IBinder.DeathRecipient mListenerDeath;
++    @Nullable private RunningTaskInfo mFocused;
++    /** SystemUI's mute control over Launcher3's slot (#410 option a), created on first use. */
++    @Nullable private RoseEdgeMicSlot mMicSlot;
++    private boolean mKeyguardVisible;
++    private boolean mImeVisible;
++
++    // 1C: the exact-task return.
++    /** The longest a return may take to answer, and the grace for focus once its transition finished. */
++    static final long RETURN_DEADLINE_MS = 1500, RETURN_SETTLE_MS = 300;
++    /** V3's departure (Home/App): Rose fades and drops 8dp over 200 ms; the source app stays still. */
++    static final long DEPART_MS = 200;
++    static final float DEPART_DP = 8;
++    private final RoseEdgePolicy.Return mReturn = new RoseEdgePolicy.Return(new SecureRandom()::nextLong);
++    /** The one return in flight: answered exactly once (RETURNED, or REFUSED at its deadline). */
++    @Nullable private PendingReturn mPendingReturn;
++    /**
++     * Return transitions this controller started, until it plays or is told they were consumed. Kept apart from the
++     * answer: focus can reach the task (RETURNED) before the transition is handed over, and its departure still plays.
++     */
++    private final ArrayMap<IBinder, PendingReturn> mReturnTransitions = new ArrayMap<>();
++
++    /** One return: the attempt Rose Agent numbered, the exact task it brings back and where its answer goes. */
++    private static final class PendingReturn {
++        final int mAttempt;
++        @NonNull final RoseEdgePolicy.Return.Task mTask;
++        @NonNull final AgentTrayLink.Return.Answer mAnswer;
++
++        PendingReturn(int attempt, @NonNull RoseEdgePolicy.Return.Task task,
++                @NonNull AgentTrayLink.Return.Answer answer) {
++            mAttempt = attempt;
++            mTask = task;
++            mAnswer = answer;
++        }
++    }
++
++    /** What one of this controller's transitions does. */
++    private static final class Applied {
++        final boolean mRaise;
++        final int mDisplayId;
++        final int mTaskId;
++        final int mReason;
++        @Nullable final IRoseEdgeListener mListener;
++        @Nullable final Rect mBounds;
++        @Nullable final WindowContainerTransaction mWct;
++
++        Applied(boolean raise, int displayId, int taskId, int reason, @Nullable IRoseEdgeListener listener,
++                @Nullable Rect bounds, @Nullable WindowContainerTransaction wct) {
++            mRaise = raise;
++            mDisplayId = displayId;
++            mTaskId = taskId;
++            mReason = reason;
++            mListener = listener;
++            mBounds = bounds;
++            mWct = wct;
++        }
++    }
++
++    public RoseEdgeController(@NonNull Context context, @NonNull ShellInit shellInit,
++            @NonNull ShellController shellController, @NonNull ShellTaskOrganizer taskOrganizer,
++            @NonNull RootTaskDisplayAreaOrganizer rootTdaOrganizer, @NonNull DisplayController displayController,
++            @NonNull DisplayImeController imeController, @NonNull Transitions transitions,
++            @NonNull ShellExecutor mainExecutor) {
++        mContext = context;
++        mShellController = shellController;
++        mTaskOrganizer = taskOrganizer;
++        mRootTdaOrganizer = rootTdaOrganizer;
++        mDisplayController = displayController;
++        mImeController = imeController;
++        mTransitions = transitions;
++        mMainExecutor = mainExecutor;
++        shellInit.addInitCallback(this::onInit, this);
++    }
++
++    private void onInit() {
++        mShellController.addExternalInterface(IRoseEdge.DESCRIPTOR, this::createExternalInterface, this);
++        mShellController.addKeyguardChangeListener(this);
++        mShellController.addUserChangeListener(this);
++        mTaskOrganizer.addFocusListener(this);
++        mTaskOrganizer.addTaskInfoChangedListener(this);
++        mTaskOrganizer.addTaskVanishedListener(this);
++        mDisplayController.addDisplayWindowListener(this);
++        mImeController.addPositionProcessor(this);
++        mTransitions.addHandler(this);
++        mRootTdaOrganizer.registerListener(Display.DEFAULT_DISPLAY, this);
++        // 1C: the tray carries returns to this controller's main thread; it publishes nothing until Rose comes forward.
++        AgentTrayLink.Return.install((token, attempt, answer) ->
++                mMainExecutor.execute(() -> startReturn(token, attempt, answer)));
++        AgentTrayLink.Return.publish(AgentTrayLink.Return.Target.NONE);
++        // Lowered reason 3 is "keyguard or screen off": without a secure lock the keyguard may never show.
++        mContext.registerReceiver(new BroadcastReceiver() {
++            @Override
++            public void onReceive(Context context, Intent intent) {
++                if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
++                    mMainExecutor.execute(() -> lowerIfNeeded(mState.onKeyguard(true)));
++                }
++            }
++        }, new IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_EXPORTED);
++    }
++
++    private static boolean enabled() {
++        return SystemProperties.getBoolean(ENABLED_PROPERTY, false);
++    }
++
++    // Remote calls, on the main executor after the MANAGE_ACTIVITY_TASKS check.
++
++    private void raise(int displayId, int taskId, int liftPx, @Nullable IRoseEdgeListener listener) {
++        if (listener == null) return;
++        final IBinder owner = listener.asBinder();
++        final DisplayLayout layout = mDisplayController.getDisplayLayout(displayId);
++        final DisplayAreaInfo tda = mRootTdaOrganizer.getDisplayAreaInfo(displayId);
++        final int reason = layout == null || tda == null ? RoseEdgePolicy.REFUSED_DISPLAY
++                : RoseEdgePolicy.refusal(displayId, taskId, liftPx, conditions(displayId, layout),
++                        taskState(mFocused), mState.busyFor(owner));
++        if (reason != 0) {
++            refused(listener, displayId, taskId, reason);
++            return;
++        }
++        if (!linkOwner(listener)) return;
++        mState.raise(owner, displayId, taskId, liftPx);
++        final int[] b = RoseEdgePolicy.raisedBounds(layout.width(), layout.height(), liftPx);
++        final Rect bounds = new Rect(b[0], b[1], b[2], b[3]);
++        final WindowContainerTransaction wct = new WindowContainerTransaction();
++        wct.setBounds(tda.token, bounds);
++        start(wct, new Applied(true, displayId, taskId, 0, listener, bounds, null));
++    }
++
++    private void setMicSlot(int displayId, @Nullable Rect slot) {
++        if (!mState.acceptsMicSlot(displayId)) return;  // a slot belongs to the current raise only
++        final DisplayLayout layout = mDisplayController.getDisplayLayout(displayId);
++        if (slot == null || slot.isEmpty() || layout == null
++                || !RoseEdgePolicy.validMicSlot(slot.left, slot.top, slot.right, slot.bottom, layout.width(),
++                        layout.height(), layout.density())) {
++            if (slot != null && !slot.isEmpty()) Slog.w(TAG, "Microphone slot outside the edge band: ignored");
++            mState.setMicSlot(null);
++            if (mMicSlot != null) mMicSlot.hide();
++            return;
++        }
++        mState.setMicSlot(new int[] {slot.left, slot.top, slot.right, slot.bottom});
++        if (mMicSlot == null) mMicSlot = new RoseEdgeMicSlot(mContext);
++        mMicSlot.show(new Rect(slot), layout.height());
++    }
++
++    private void requestLower(int displayId) {
++        lowerIfNeeded(mState.onLowerRequested(displayId));
++    }
++
++    private void onInterfaceInvalidated() {
++        // Launcher3's connection was reset (its binder interfaces were re-created): the edge it raised comes down.
++        if (mState.raised()) lowerNow(RoseEdgePolicy.LOWERED_CALLER_DIED);
++    }
++
++    // Raising and lowering.
++
++    private void lowerIfNeeded(int reason) {
++        if (reason != RoseEdgePolicy.KEEP) lowerNow(reason);
++    }
++
++    private void lowerNow(int reason) {
++        if (!mState.raised()) return;
++        final int displayId = mState.displayId();
++        final IRoseEdgeListener listener = mListener;
++        mState.clear();  // drops the microphone slot with the raise
++        if (mMicSlot != null) mMicSlot.hide();
++        unlinkOwner();
++        final DisplayAreaInfo tda = mRootTdaOrganizer.getDisplayAreaInfo(displayId);
++        if (tda == null) {
++            // The display area is gone with its display; nothing is left to restore.
++            lowered(listener, displayId, reason);
++            return;
++        }
++        final WindowContainerTransaction wct = new WindowContainerTransaction();
++        wct.setBounds(tda.token, new Rect());  // empty: fill the display again
++        start(wct, new Applied(false, displayId, -1, reason, listener, null, wct));
++    }
++
++    private void start(@NonNull WindowContainerTransaction wct, @NonNull Applied applied) {
++        mState.setInFlight(true);
++        mOwnTransitions.put(mTransitions.startTransition(TRANSIT_CHANGE, wct, this), applied);
++    }
++
++    /** One of this controller's transitions was applied (played or merged). */
++    private void onApplied(@NonNull Applied applied, @Nullable TransitionInfo info) {
++        mState.setInFlight(!mOwnTransitions.isEmpty());
++        if (!applied.mRaise) {
++            lowered(applied.mListener, applied.mDisplayId, applied.mReason);
++            return;
++        }
++        // Lowered (or replaced) before the raise played: its own lower reports.
++        if (!mState.raised() || mState.owner() != ownerOf(applied.mListener)
++                || mState.taskId() != applied.mTaskId) {
++            return;
++        }
++        final Rect appBounds = new Rect(applied.mBounds);
++        if (info != null) {
++            for (TransitionInfo.Change change : info.getChanges()) {
++                final RunningTaskInfo task = change.getTaskInfo();
++                if (task != null && task.taskId == applied.mTaskId) {
++                    appBounds.set(change.getEndAbsBounds());
++                }
++            }
++        }
++        try {
++            applied.mListener.onRaised(applied.mDisplayId, applied.mTaskId, appBounds);
++        } catch (RemoteException e) {
++            Slog.w(TAG, "onRaised not delivered", e);
++        }
++    }
++
++    /** One of this controller's transitions was aborted: none of its changes were applied. */
++    private void onAborted(@NonNull Applied applied) {
++        mState.setInFlight(!mOwnTransitions.isEmpty());
++        if (applied.mRaise) {
++            if (mState.raised() && mState.owner() == ownerOf(applied.mListener)
++                    && mState.taskId() == applied.mTaskId) {
++                mState.clear();
++                unlinkOwner();
++            }
++            refused(applied.mListener, applied.mDisplayId, applied.mTaskId, RoseEdgePolicy.REFUSED_BUSY);
++            return;
++        }
++        // A lower must never be lost, or the app would stay short: apply it directly.
++        mRootTdaOrganizer.applyTransaction(applied.mWct);
++        lowered(applied.mListener, applied.mDisplayId, applied.mReason);
++    }
++
++    // Transitions.TransitionHandler: only this controller's own transitions. A raise or lower plays without animation;
++    // a return plays V3's departure.
++
++    @Override
++    public boolean startAnimation(@NonNull IBinder transition, @NonNull TransitionInfo info,
++            @NonNull SurfaceControl.Transaction startTransaction,
++            @NonNull SurfaceControl.Transaction finishTransaction,
++            @NonNull Transitions.TransitionFinishCallback finishCallback) {
++        final PendingReturn pending = mReturnTransitions.remove(transition);
++        if (pending != null) {
++            depart(pending, info, startTransaction, finishTransaction, finishCallback);
++            return true;
++        }
++        final Applied applied = mOwnTransitions.remove(transition);
++        if (applied == null) return false;
++        // No scale and no screenshot: the app appears at its new size once it has drawn at that size.
++        startTransaction.apply();
++        finishCallback.onTransitionFinished(null);
++        onApplied(applied, info);
++        return true;
++    }
++
++    @Nullable
++    @Override
++    public Transitions.RequestResult handleRequestOnly(@NonNull IBinder transition,
++            @NonNull TransitionRequestInfo request) {
++        return null;
++    }
++
++    @Override
++    public void onTransitionConsumed(@NonNull IBinder transition, boolean aborted,
++            @Nullable SurfaceControl.Transaction finishTransaction) {
++        final PendingReturn pending = mReturnTransitions.remove(transition);
++        if (pending != null) {
++            // Aborted: nothing moved. Merged into another transition: the reorder was applied, so focus decides.
++            if (aborted) {
++                answerReturn(pending, RoseEdgePolicy.Return.REFUSED);
++            } else {
++                settleReturn(pending);
++            }
++            return;
++        }
++        final Applied applied = mOwnTransitions.remove(transition);
++        if (applied == null) return;
++        if (aborted) {
++            onAborted(applied);
++        } else {
++            onApplied(applied, null);  // merged into another transition: its changes were applied
++        }
++    }
++
++    // Events that lower the edge. ShellTaskOrganizer calls its listeners holding its own lock, so their work is
++    // posted: no transition is ever started inside that lock.
++
++    @Override
++    public void onFocusTaskChanged(RunningTaskInfo taskInfo) {
++        mMainExecutor.execute(() -> {
++            mFocused = taskInfo;
++            final int type = taskInfo == null ? -1 : taskInfo.getActivityType();
++            lowerIfNeeded(mState.onFocusChanged(taskState(taskInfo),
++                    type == ACTIVITY_TYPE_HOME || type == ACTIVITY_TYPE_RECENTS));
++            // 1C: a return is answered only when focus has reached its exact task.
++            final RoseEdgePolicy.Return.Task focused = returnTask(taskInfo);
++            final PendingReturn pending = mPendingReturn;
++            if (pending != null && RoseEdgePolicy.Return.same(pending.mTask, focused)) {
++                answerReturn(pending, RoseEdgePolicy.Return.RETURNED);
++            }
++            if (mReturn.onFocusChanged(focused, ActivityManager.getCurrentUser())) publishReturnTarget();
++        });
++    }
++
++    @Override
++    public void onTaskInfoChanged(RunningTaskInfo taskInfo) {
++        mMainExecutor.execute(() -> {
++            if (mFocused != null && taskInfo.taskId == mFocused.taskId) mFocused = taskInfo;
++            lowerIfNeeded(mState.onTaskInfoChanged(taskState(taskInfo)));
++            if (mReturn.onTaskInfoChanged(returnTask(taskInfo))) publishReturnTarget();
++        });
++    }
++
++    @Override
++    public void onTaskVanished(RunningTaskInfo taskInfo) {
++        mMainExecutor.execute(() -> {
++            if (mFocused != null && taskInfo.taskId == mFocused.taskId) mFocused = null;
++            lowerIfNeeded(mState.onTaskVanished(taskInfo.taskId));
++            if (mReturn.onTaskVanished(taskInfo.taskId)) publishReturnTarget();
++        });
++    }
++
++    @Override
++    public void onKeyguardVisibilityChanged(boolean visible, boolean occluded, boolean animatingDismiss) {
++        mKeyguardVisible = visible;
++        lowerIfNeeded(mState.onKeyguard(visible));
++    }
++
++    @Override
++    public void onUserChanged(int newUserId, @NonNull Context userContext) {
++        lowerIfNeeded(mState.onUserChanged());
++        if (mReturn.onUserChanged()) publishReturnTarget();
++    }
++
++    @Override
++    public void onDisplayConfigurationChanged(int displayId, Configuration newConfig,
++            @Nullable DisplayLayout oldLayout) {
++        // Only a change of the display's geometry (rotation, size or density) invalidates the raised bounds.
++        final DisplayLayout layout = mDisplayController.getDisplayLayout(displayId);
++        if (oldLayout != null && layout != null && oldLayout.width() == layout.width()
++                && oldLayout.height() == layout.height() && oldLayout.rotation() == layout.rotation()
++                && oldLayout.densityDpi() == layout.densityDpi()) {
++            return;
++        }
++        lowerIfNeeded(mState.onDisplayChanged(displayId));
++    }
++
++    @Override
++    public void onDisplayRemoved(int displayId) {
++        lowerIfNeeded(mState.onDisplayChanged(displayId));
++    }
++
++    @Override
++    public void onImeVisibilityChanged(int displayId, boolean isShowing) {
++        if (displayId == Display.DEFAULT_DISPLAY) mImeVisible = isShowing;
++        lowerIfNeeded(mState.onImeVisibility(displayId, isShowing));
++    }
++
++    @Override
++    public void onDisplayAreaAppeared(DisplayAreaInfo displayAreaInfo) {
++        // The shell (re)started: a raise from a shell that died would otherwise keep the app short, because the
++        // server keeps a dead organizer's requested bounds. Clearing already-full bounds changes nothing.
++        if (mState.raised() || !enabled()) return;
++        final WindowContainerTransaction wct = new WindowContainerTransaction();
++        wct.setBounds(displayAreaInfo.token, new Rect());
++        mRootTdaOrganizer.applyTransaction(wct);
++    }
++
++    // 1C: the exact-task return, on the main executor.
++
++    /** A RETURN_TO from Rose Agent, through the tray's trusted link. Exactly one answer, at once or when it lands. */
++    private void startReturn(long token, int attempt, @NonNull AgentTrayLink.Return.Answer answer) {
++        final RoseEdgePolicy.Return.Task target = mReturn.target();
++        final RunningTaskInfo running = target == null ? null : mTaskOrganizer.getRunningTaskInfo(target.taskId);
++        int check = mReturn.check(token, mKeyguardVisible || keyguardLocked(), returnTask(mFocused),
++                returnTask(running), ActivityManager.getCurrentUser());
++        // One return at a time: Rose numbers its attempts and the control allows one.
++        if (check == RoseEdgePolicy.Return.GO && mPendingReturn != null) check = RoseEdgePolicy.Return.REFUSED;
++        if (check != RoseEdgePolicy.Return.GO) {
++            answer.answer(attempt, check);
++            return;
++        }
++        final PendingReturn pending = new PendingReturn(attempt, returnTask(running), answer);
++        mPendingReturn = pending;
++        // Exactly that task, in front; never a start, launch intent, NEW_TASK or moveTaskToFront.
++        final WindowContainerTransaction wct = new WindowContainerTransaction();
++        wct.reorder(running.token, true /* onTop */);
++        mReturnTransitions.put(mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this), pending);
++        mMainExecutor.executeDelayed(() -> answerReturn(pending, RoseEdgePolicy.Return.REFUSED),
++                RETURN_DEADLINE_MS);
++    }
++
++    /** Answers pending once; any later answer for it (focus, its deadline) is ignored. */
++    private void answerReturn(@NonNull PendingReturn pending, int result) {
++        if (mPendingReturn != pending) return;
++        mPendingReturn = null;
++        pending.mAnswer.answer(pending.mAttempt, result);
++    }
++
++    /** The reorder was applied: RETURNED when focus arrives, otherwise REFUSED after a short grace. */
++    private void settleReturn(@NonNull PendingReturn pending) {
++        if (mPendingReturn != pending) return;
++        if (RoseEdgePolicy.Return.same(pending.mTask, returnTask(mFocused))) {
++            answerReturn(pending, RoseEdgePolicy.Return.RETURNED);
++            return;
++        }
++        mMainExecutor.executeDelayed(() -> answerReturn(pending, RoseEdgePolicy.Return.REFUSED), RETURN_SETTLE_MS);
++    }
++
++    /**
++     * V3's departure: only Rose's leaving task moves, fading and dropping 8dp over 200 ms; the source app is shown in
++     * place at full opacity, unanimated. With animations off (reduced motion) the switch is immediate.
++     */
++    private void depart(@NonNull PendingReturn pending, @NonNull TransitionInfo info,
++            @NonNull SurfaceControl.Transaction startTransaction,
++            @NonNull SurfaceControl.Transaction finishTransaction,
++            @NonNull Transitions.TransitionFinishCallback finishCallback) {
++        SurfaceControl rose = null;
++        Point at = null;
++        for (TransitionInfo.Change change : info.getChanges()) {
++            final int mode = change.getMode();
++            final RoseEdgePolicy.Return.Task task = returnTask(change.getTaskInfo());
++            if ((mode == TRANSIT_TO_BACK || mode == TRANSIT_CLOSE) && task != null
++                    && RoseEdgePolicy.Return.ROSE_PACKAGE.equals(task.packageName)) {
++                rose = change.getLeash();
++                at = change.getEndRelOffset();
++            } else if (mode == TRANSIT_TO_FRONT || mode == TRANSIT_OPEN) {
++                // Transitions.setupStartState leaves an opening leash transparent for its handler to fade in: the
++                // source app is instead shown as it is.
++                startTransaction.setAlpha(change.getLeash(), 1f);
++            }
++        }
++        final boolean animate = rose != null && at != null && ValueAnimator.areAnimatorsEnabled();
++        if (animate) {
++            // Above the source for its 200 ms (setupAnimHierarchy puts the opening app on top); hidden at the end by
++            // setupStartState's finish transaction, and put back as it was for the next time Rose shows.
++            startTransaction.setLayer(rose, Integer.MAX_VALUE);
++            finishTransaction.setAlpha(rose, 1f);
++            finishTransaction.setPosition(rose, at.x, at.y);
++        }
++        startTransaction.apply();
++        final Runnable done = () -> {
++            finishCallback.onTransitionFinished(null);
++            settleReturn(pending);
++        };
++        if (!animate) {
++            done.run();
++            return;
++        }
++        final SurfaceControl leash = rose;
++        final float x = at.x, y = at.y;
++        final float drop = DEPART_DP * mContext.getResources().getDisplayMetrics().density;
++        final ValueAnimator departure = ValueAnimator.ofFloat(0f, 1f);
++        departure.setDuration(DEPART_MS);
++        departure.setInterpolator(new PathInterpolator(.2f, .7f, .3f, 1f));
++        departure.addUpdateListener(animation -> {
++            final float f = (float) animation.getAnimatedValue();
++            final SurfaceControl.Transaction t = new SurfaceControl.Transaction();
++            t.setAlpha(leash, 1f - f);
++            t.setPosition(leash, x, y + drop * f);
++            t.apply();
++        });
++        departure.addListener(new AnimatorListenerAdapter() {
++            @Override
++            public void onAnimationEnd(Animator animation) {
++                done.run();
++            }
++        });
++        departure.start();
++    }
++
++    /** Publishes the current target (or none) to the tray, which sends it to Rose Agent as RETURN_TARGET. */
++    private void publishReturnTarget() {
++        final RoseEdgePolicy.Return.Task target = mReturn.target();
++        if (target == null) {
++            AgentTrayLink.Return.publish(AgentTrayLink.Return.Target.NONE);
++            return;
++        }
++        AgentTrayLink.Return.publish(new AgentTrayLink.Return.Target(mReturn.token(), target.packageName,
++                target.userId, label(target.packageName, target.userId)));
++    }
++
++    /** The app's own label for its user, or its package name when it has none. */
++    @NonNull
++    private String label(@NonNull String packageName, int userId) {
++        try {
++            final PackageManager pm = mContext.getPackageManager();
++            final CharSequence label = pm.getApplicationLabel(pm.getApplicationInfoAsUser(packageName, 0, userId));
++            return label == null ? packageName : label.toString();
++        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
++            return packageName;
++        }
++    }
++
++    @Nullable
++    private static RoseEdgePolicy.Return.Task returnTask(@Nullable RunningTaskInfo task) {
++        if (task == null) return null;
++        final ComponentName root = task.baseActivity != null ? task.baseActivity
++                : task.baseIntent != null ? task.baseIntent.getComponent() : null;
++        return new RoseEdgePolicy.Return.Task(task.taskId, task.userId, task.displayId,
++                root == null ? null : root.getPackageName(), task.getActivityType() == ACTIVITY_TYPE_STANDARD,
++                task.getWindowingMode() == WINDOWING_MODE_FULLSCREEN, task.token);
++    }
++
++    // Helpers.
++
++    private RoseEdgePolicy.Conditions conditions(int displayId, @NonNull DisplayLayout layout) {
++        return new RoseEdgePolicy.Conditions(enabled(), layout.height(), layout.density(), layout.rotation(),
++                mKeyguardVisible || keyguardLocked(), mImeVisible, multiWindowVisible(displayId));
++    }
++
++    /** Read live as well, so a raise is refused while locked even before the shell's first keyguard callback. */
++    private boolean keyguardLocked() {
++        final KeyguardManager keyguard = mContext.getSystemService(KeyguardManager.class);
++        return keyguard == null || keyguard.isKeyguardLocked();
++    }
++
++    private boolean multiWindowVisible(int displayId) {
++        for (RunningTaskInfo task : mTaskOrganizer.getRunningTasks(displayId)) {
++            if (!task.isVisible) continue;
++            final int mode = task.getWindowingMode();
++            if (mode != WINDOWING_MODE_FULLSCREEN && mode != WINDOWING_MODE_UNDEFINED) return true;
++        }
++        return false;
++    }
++
++    @Nullable
++    private static RoseEdgePolicy.TaskState taskState(@Nullable RunningTaskInfo task) {
++        if (task == null) return null;
++        return new RoseEdgePolicy.TaskState(task.taskId, task.displayId, task.isVisible,
++                task.getWindowingMode() == WINDOWING_MODE_FULLSCREEN,
++                task.getActivityType() == ACTIVITY_TYPE_STANDARD, task.isResizeable,
++                task.appCompatTaskInfo != null && task.appCompatTaskInfo.isTopActivityInSizeCompat());
++    }
++
++    @Nullable
++    private static IBinder ownerOf(@Nullable IRoseEdgeListener listener) {
++        return listener == null ? null : listener.asBinder();
++    }
++
++    /** Ties the edge to the listener's process; false (and nothing raised) if it is already dead. */
++    private boolean linkOwner(@NonNull IRoseEdgeListener listener) {
++        final IBinder binder = listener.asBinder();
++        if (mListener != null && mListener.asBinder() == binder) return true;
++        unlinkOwner();
++        final IBinder.DeathRecipient death = () -> mMainExecutor.execute(
++                () -> lowerIfNeeded(mState.onOwnerGone(binder)));
++        try {
++            binder.linkToDeath(death, 0);
++        } catch (RemoteException e) {
++            return false;
++        }
++        mListener = listener;
++        mListenerDeath = death;
++        return true;
++    }
++
++    private void unlinkOwner() {
++        if (mListener != null && mListenerDeath != null) {
++            mListener.asBinder().unlinkToDeath(mListenerDeath, 0);
++        }
++        mListener = null;
++        mListenerDeath = null;
++    }
++
++    private static void refused(@Nullable IRoseEdgeListener listener, int displayId, int taskId, int reason) {
++        if (listener == null) return;
++        try {
++            listener.onRefused(displayId, taskId, reason);
++        } catch (RemoteException e) {
++            Slog.w(TAG, "onRefused not delivered", e);
++        }
++    }
++
++    private static void lowered(@Nullable IRoseEdgeListener listener, int displayId, int reason) {
++        if (listener == null) return;
++        try {
++            listener.onLowered(displayId, reason);
++        } catch (RemoteException e) {
++            Slog.w(TAG, "onLowered not delivered", e);
++        }
++    }
++
++    // RemoteCallable and the exported binder.
++
++    @Override
++    public Context getContext() {
++        return mContext;
++    }
++
++    @Override
++    public ShellExecutor getRemoteCallExecutor() {
++        return mMainExecutor;
++    }
++
++    private ExternalInterfaceBinder createExternalInterface() {
++        return new IRoseEdgeImpl(this);
++    }
++
++    /** The binder Launcher3 receives; every call checks MANAGE_ACTIVITY_TASKS on the caller's identity. */
++    private static class IRoseEdgeImpl extends IRoseEdge.Stub implements ExternalInterfaceBinder {
++        private RoseEdgeController mController;
++
++        IRoseEdgeImpl(RoseEdgeController controller) {
++            mController = controller;
++        }
++
++        @Override
++        public void invalidate() {
++            final RoseEdgeController controller = mController;
++            mController = null;
++            if (controller != null) {
++                controller.mMainExecutor.execute(controller::onInterfaceInvalidated);
++            }
++        }
++
++        @Override
++        public void raise(int displayId, int taskId, int liftPx, IRoseEdgeListener listener) {
++            executeRemoteCallWithTaskPermission(mController, "raise",
++                    (controller) -> controller.raise(displayId, taskId, liftPx, listener));
++        }
++
++        @Override
++        public void lower(int displayId) {
++            executeRemoteCallWithTaskPermission(mController, "lower",
++                    (controller) -> controller.requestLower(displayId));
++        }
++
++        @Override
++        public void setMicSlot(int displayId, Rect slotBounds) {
++            executeRemoteCallWithTaskPermission(mController, "setMicSlot",
++                    (controller) -> controller.setMicSlot(displayId, slotBounds));
++        }
++    }
++}
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
+new file mode 100644
+index 0000000..a4003dc
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
+@@ -0,0 +1,489 @@
++/*
++ * Copyright 2026
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.wm.shell.roseedge;
++
++/**
++ * RoseOS (#410): the rules of the Rose raised edge, free of Android state so that they can be tested on their own.
++ *
++ * <p>Launcher3 (the bound recents component) asks the shell to raise the edge over the foreground app. The shell then
++ * shrinks the default task display area to {@code (0, 0, W, H - liftPx)}: the fullscreen app gets real, smaller
++ * bounds with its width unchanged, and relayouts. Nothing is scaled. Lowering clears the bounds. This class decides
++ * whether a raise is allowed and when a raised edge must come down; {@link RoseEdgeController} applies it.
++ *
++ * <p>The reason values are the {@code IRoseEdgeListener} contract agreed with OS Product on #410.
++ */
++public final class RoseEdgePolicy {
++    // IRoseEdgeListener.onRefused reasons.
++    public static final int REFUSED_NOT_TOP_TASK = 1;
++    public static final int REFUSED_NOT_RESIZEABLE = 2;
++    public static final int REFUSED_LOCKED = 3;
++    public static final int REFUSED_ROTATION = 4;
++    public static final int REFUSED_MULTI_WINDOW = 5;
++    /** Another caller's edge is raised, or a raise or lower is still in flight (the IME no longer refuses). */
++    public static final int REFUSED_BUSY = 6;
++    public static final int REFUSED_LIFT = 7;
++    public static final int REFUSED_DISABLED = 8;
++    public static final int REFUSED_DISPLAY = 9;
++
++    // IRoseEdgeListener.onLowered reasons.
++    public static final int LOWERED_REQUESTED = 0;
++    public static final int LOWERED_TASK = 1;
++    public static final int LOWERED_HOME = 2;
++    public static final int LOWERED_KEYGUARD = 3;
++    public static final int LOWERED_DISPLAY = 4;
++    public static final int LOWERED_IME = 5; // Kept for the wire; never sent: the chin rides over the keyboard.
++    public static final int LOWERED_CALLER_DIED = 6;
++    public static final int LOWERED_USER = 7;
++
++    /** No lowering needed. */
++    public static final int KEEP = -1;
++
++    /** The largest lift, in dp, before the quarter-height cap. */
++    public static final int MAX_LIFT_DP = 160;
++    public static final int DEFAULT_DISPLAY = 0;
++    public static final int ROTATION_0 = 0;
++
++    /** What the shell knows about one task when it decides. */
++    public static final class TaskState {
++        public final int taskId;
++        public final int displayId;
++        public final boolean visible;
++        public final boolean fullscreen;
++        /** An ordinary app task, not Home, recents, assistant or dream. */
++        public final boolean standard;
++        public final boolean resizeable;
++        public final boolean sizeCompat;
++
++        public TaskState(int taskId, int displayId, boolean visible, boolean fullscreen, boolean standard,
++                boolean resizeable, boolean sizeCompat) {
++            this.taskId = taskId;
++            this.displayId = displayId;
++            this.visible = visible;
++            this.fullscreen = fullscreen;
++            this.standard = standard;
++            this.resizeable = resizeable;
++            this.sizeCompat = sizeCompat;
++        }
++    }
++
++    /** The display and shell conditions a raise is judged against. */
++    public static final class Conditions {
++        public final boolean enabled;
++        public final int displayHeight;
++        public final float density;
++        public final int rotation;
++        public final boolean keyguardVisible;
++        public final boolean imeVisible;
++        /** A split, PiP, freeform or other multi-window task is visible on the display. */
++        public final boolean multiWindowVisible;
++
++        public Conditions(boolean enabled, int displayHeight, float density, int rotation, boolean keyguardVisible,
++                boolean imeVisible, boolean multiWindowVisible) {
++            this.enabled = enabled;
++            this.displayHeight = displayHeight;
++            this.density = density;
++            this.rotation = rotation;
++            this.keyguardVisible = keyguardVisible;
++            this.imeVisible = imeVisible;
++            this.multiWindowVisible = multiWindowVisible;
++        }
++    }
++
++    private RoseEdgePolicy() {}
++
++    /** The largest lift allowed: a quarter of the display height, and never more than MAX_LIFT_DP. */
++    public static int maxLiftPx(int displayHeight, float density) {
++        return Math.min(displayHeight / 4, Math.round(MAX_LIFT_DP * density));
++    }
++
++    /**
++     * 0 when the edge may be raised over {@code taskId}, else the refusal reason. {@code top} is the focused task on
++     * the display, or null; {@code busy} means a raise or lower is in flight, or another caller's edge is raised.
++     */
++    public static int refusal(int displayId, int taskId, int liftPx, Conditions c, TaskState top, boolean busy) {
++        if (!c.enabled) return REFUSED_DISABLED;
++        if (displayId != DEFAULT_DISPLAY) return REFUSED_DISPLAY;
++        if (liftPx <= 0 || liftPx > maxLiftPx(c.displayHeight, c.density)) return REFUSED_LIFT;
++        if (c.keyguardVisible) return REFUSED_LOCKED;
++        if (busy) return REFUSED_BUSY; // The chin rises over an open keyboard (F10 rule 1).
++        if (c.rotation != ROTATION_0) return REFUSED_ROTATION;
++        if (c.multiWindowVisible) return REFUSED_MULTI_WINDOW;
++        if (top == null || top.taskId != taskId || top.displayId != displayId || !top.visible || !top.fullscreen
++                || !top.standard) {
++            return REFUSED_NOT_TOP_TASK;
++        }
++        if (!top.resizeable || top.sizeCompat) return REFUSED_NOT_RESIZEABLE;
++        return 0;
++    }
++
++    // The edge's microphone-input slot (#410 option a): SystemUI's existing trusted tray protocol, mute only.
++    /** AgentTrayService's MUTE and UNMUTE; the slot never sends START (3) or END (6). */
++    public static final int MIC_MUTE = 4;
++    public static final int MIC_UNMUTE = 5;
++    /**
++     * REGISTER's arg1 from the chin (F08, agreed with Home and OS Product): Rose Agent hides its own mute only while
++     * a trusted chin client is registered. The SystemUI tray sends 0, and an older Agent ignores arg1.
++     */
++    public static final int MIC_CLIENT_CHIN = 1;
++    public static final int MIC_SLOT_MIN_DP = 32;
++    public static final int MIC_SLOT_MAX_DP = 64;
++    public static final long MIC_TAP_MAX_MS = 400;
++    /** The tray's own spacing between commands. */
++    public static final long MIC_COMMAND_SPACING_MS = 600;
++
++    /**
++     * Whether Launcher3's slot may carry the trusted mute control: inside the raised display's bottom band
++     * (0, H - maxLiftPx, W, H), and 32-64dp on each side. Anything else is ignored, so the control can never be
++     * placed elsewhere on screen.
++     */
++    public static boolean validMicSlot(int left, int top, int right, int bottom, int displayWidth, int displayHeight,
++            float density) {
++        final int width = right - left;
++        final int height = bottom - top;
++        final int min = Math.round(MIC_SLOT_MIN_DP * density);
++        final int max = Math.round(MIC_SLOT_MAX_DP * density);
++        return left >= 0 && right <= displayWidth && bottom <= displayHeight
++                && top >= displayHeight - maxLiftPx(displayHeight, density)
++                && width >= min && width <= max && height >= min && height <= max;
++    }
++
++    /** The only command a tap sends: it mutes or unmutes Rose's microphone input, never starts or ends anything. */
++    public static int micCommand(boolean muted) {
++        return muted ? MIC_UNMUTE : MIC_MUTE;
++    }
++
++    /** Commands are spaced like the tray's; lastCommandAt 0 means none yet. */
++    public static boolean micCommandAllowed(long now, long lastCommandAt) {
++        return lastCommandAt == 0 || now - lastCommandAt >= MIC_COMMAND_SPACING_MS;
++    }
++
++    /** A single short tap that stays within slop and ends inside the control. */
++    public static final class MicTap {
++        private boolean mDown;
++        private float mX;
++        private float mY;
++        private long mAt;
++
++        public void down(float x, float y, long at) {
++            mDown = true;
++            mX = x;
++            mY = y;
++            mAt = at;
++        }
++
++        public void move(float x, float y, float slop) {
++            if (Math.abs(x - mX) > slop || Math.abs(y - mY) > slop) mDown = false;
++        }
++
++        public void cancel() {
++            mDown = false;
++        }
++
++        public boolean up(float x, float y, long at, float slop, boolean inside) {
++            final boolean tap = mDown && inside && Math.abs(x - mX) <= slop && Math.abs(y - mY) <= slop
++                    && at - mAt <= MIC_TAP_MAX_MS;
++            mDown = false;
++            return tap;
++        }
++    }
++
++    /** The task display area's bounds while raised: full width, the bottom moved up by liftPx. */
++    public static int[] raisedBounds(int displayWidth, int displayHeight, int liftPx) {
++        return new int[] {0, 0, displayWidth, displayHeight - liftPx};
++    }
++
++    /** The one raised edge, owned by the listener binder that raised it. */
++    public static final class State {
++        private Object mOwner;
++        private int mDisplayId = -1;
++        private int mTaskId = -1;
++        private int mLiftPx;
++        private boolean mInFlight;
++        private int[] mMicSlot;
++
++        public boolean raised() {
++            return mOwner != null;
++        }
++
++        public Object owner() {
++            return mOwner;
++        }
++
++        public int displayId() {
++            return mDisplayId;
++        }
++
++        public int taskId() {
++            return mTaskId;
++        }
++
++        public int liftPx() {
++            return mLiftPx;
++        }
++
++        /** A slot belongs to the current raise on its display; it is dropped by every lower (clear). */
++        public boolean acceptsMicSlot(int displayId) {
++            return raised() && displayId == mDisplayId;
++        }
++
++        /** The slot's {left, top, right, bottom}, or null to clear it. */
++        public void setMicSlot(int[] slot) {
++            mMicSlot = slot;
++        }
++
++        public int[] micSlot() {
++            return mMicSlot;
++        }
++
++        /** A raise or lower has been sent and its transition has not finished. */
++        public boolean inFlight() {
++            return mInFlight;
++        }
++
++        public void setInFlight(boolean inFlight) {
++            mInFlight = inFlight;
++        }
++
++        /** Whether a raise by {@code owner} must wait: anything in flight, or another owner's edge is raised. */
++        public boolean busyFor(Object owner) {
++            return mInFlight || (mOwner != null && mOwner != owner);
++        }
++
++        public void raise(Object owner, int displayId, int taskId, int liftPx) {
++            mOwner = owner;
++            mDisplayId = displayId;
++            mTaskId = taskId;
++            mLiftPx = liftPx;
++        }
++
++        /** Forgets the raise and returns its owner, or null if nothing was raised. */
++        public Object clear() {
++            final Object owner = mOwner;
++            mOwner = null;
++            mDisplayId = -1;
++            mTaskId = -1;
++            mLiftPx = 0;
++            mMicSlot = null;
++            return owner;
++        }
++
++        /** The focused task changed. Home or recents in front lowers with LOWERED_HOME, any other task with TASK. */
++        public int onFocusChanged(TaskState focused, boolean homeOrRecents) {
++            if (!raised() || focused == null || focused.displayId != mDisplayId) return KEEP;
++            if (homeOrRecents) return LOWERED_HOME;
++            return focused.taskId == mTaskId ? KEEP : LOWERED_TASK;
++        }
++
++        /** The raised task stopped being a visible, resizeable fullscreen app (its own new bounds change nothing). */
++        public int onTaskInfoChanged(TaskState task) {
++            if (!raised() || task == null || task.taskId != mTaskId) return KEEP;
++            return task.visible && task.fullscreen && task.standard && task.resizeable && !task.sizeCompat
++                    ? KEEP : LOWERED_TASK;
++        }
++
++        public int onTaskVanished(int taskId) {
++            return raised() && taskId == mTaskId ? LOWERED_TASK : KEEP;
++        }
++
++        /** Any keyguard, occluded or not, lowers. */
++        public int onKeyguard(boolean visible) {
++            return raised() && visible ? LOWERED_KEYGUARD : KEEP;
++        }
++
++        /** Any configuration change of the raised display (rotation, size, density) or its removal lowers. */
++        public int onDisplayChanged(int displayId) {
++            return raised() && displayId == mDisplayId ? LOWERED_DISPLAY : KEEP;
++        }
++
++        public int onImeVisibility(int displayId, boolean showing) {
++            return KEEP; // F10 rules 1-2: the keyboard shows or hides under a raised chin; only a swipe lowers.
++        }
++
++        public int onUserChanged() {
++            return raised() ? LOWERED_USER : KEEP;
++        }
++
++        /** The listener that raised the edge died, or its binder interface was invalidated. */
++        public int onOwnerGone(Object owner) {
++            return raised() && owner == mOwner ? LOWERED_CALLER_DIED : KEEP;
++        }
++
++        /** An explicit lower; lowering is always safe, so any permitted caller may ask. */
++        public int onLowerRequested(int displayId) {
++            return raised() && displayId == mDisplayId ? LOWERED_REQUESTED : KEEP;
++        }
++    }
++
++    /**
++     * 1C (agreed with App Core and Home/App): the app the owner left when Rose came forward, and whether a return to
++     * that exact live task may run. The shell records it from its own focus changes; Rose Agent only ever quotes the
++     * token of the current record, so it can never name a task. Anything ambiguous fails closed, and nothing here
++     * starts or launches anything: the controller only reorders the recorded task.
++     */
++    public static final class Return {
++        // RETURN_RESULT answers (the tray's arg2).
++        public static final int RETURNED = 0;
++        public static final int UNAVAILABLE = 1;
++        public static final int REFUSED = 2;
++        /** Not an answer: the return may run. */
++        public static final int GO = -1;
++        public static final String ROSE_PACKAGE = "dev.pixel.voice";
++
++        /** What the shell knows about one task. container is that task's own window container, never reused. */
++        public static final class Task {
++            public final int taskId;
++            public final int userId;
++            public final int displayId;
++            /** The package of the task's root activity, or null when unknown. */
++            public final String packageName;
++            /** An ordinary app task: not Home, recents, an assistant or a dream. */
++            public final boolean standard;
++            public final boolean fullscreen;
++            public final Object container;
++
++            public Task(int taskId, int userId, int displayId, String packageName, boolean standard,
++                    boolean fullscreen, Object container) {
++                this.taskId = taskId;
++                this.userId = userId;
++                this.displayId = displayId;
++                this.packageName = packageName;
++                this.standard = standard;
++                this.fullscreen = fullscreen;
++                this.container = container;
++            }
++        }
++
++        private final java.util.function.LongSupplier mTokens;
++        private Task mLast;
++        private Task mTarget;
++        private long mToken;
++        // The last task ever recorded and its token, so recording the same live task again keeps its token.
++        private Task mRecorded;
++        private long mRecordedToken;
++
++        /** tokens supplies fresh random values; 0 is never used as a token. */
++        public Return(java.util.function.LongSupplier tokens) {
++            mTokens = tokens;
++        }
++
++        /** The same live task: same id, user, display, root package and window container. */
++        public static boolean same(Task a, Task b) {
++            return a != null && b != null && a.taskId == b.taskId && a.userId == b.userId
++                    && a.displayId == b.displayId && java.util.Objects.equals(a.packageName, b.packageName)
++                    && a.container != null && a.container.equals(b.container);
++        }
++
++        /**
++         * Rose's own ordinary task coming forward, such as its conversation. Rose's HOME task is Home (Home/App, 1C:
++         * pressing Home leaves the app behind), so it clears the target like any other Home.
++         */
++        static boolean rose(Task t, int user) {
++            return t != null && t.standard && ROSE_PACKAGE.equals(t.packageName) && t.userId == user
++                    && t.displayId == DEFAULT_DISPLAY;
++        }
++
++        /** An app a return may bring back: ordinary, fullscreen, not Rose, the owner's, on the default display. */
++        static boolean app(Task t, int user) {
++            return t != null && t.standard && t.fullscreen && t.packageName != null
++                    && !ROSE_PACKAGE.equals(t.packageName) && t.userId == user && t.displayId == DEFAULT_DISPLAY
++                    && t.container != null;
++        }
++
++        /** The recorded task, or null. */
++        public Task target() {
++            return mTarget;
++        }
++
++        /** The current record's token; 0 when there is none. */
++        public long token() {
++            return mToken;
++        }
++
++        /**
++         * Focus moved to focused on behalf of currentUser. When it moves to Rose from something else, the task
++         * focused just before becomes the target if it is an app; Home (Rose's own HOME task included), recents, an
++         * assistant, a dream or nothing gives none, never an older app. Focus anywhere else clears it. Other displays
++         * (Rose's background workspace) and unknown focus change nothing. True when the target (its token) changed.
++         */
++        public boolean onFocusChanged(Task focused, int currentUser) {
++            if (focused == null || focused.displayId != DEFAULT_DISPLAY) return false;
++            final long before = mToken;
++            if (rose(focused, currentUser)) {
++                if (!rose(mLast, currentUser)) {
++                    if (app(mLast, currentUser)) {
++                        record(mLast);
++                    } else {
++                        clear();
++                    }
++                }
++            } else {
++                clear();
++            }
++            mLast = focused;
++            return mToken != before;
++        }
++
++        /** A task's info changed: the target is dropped if it is no longer the same live task. */
++        public boolean onTaskInfoChanged(Task task) {
++            if (task == null) return false;
++            if (mLast != null && mLast.taskId == task.taskId) mLast = task;
++            if (mTarget == null || mTarget.taskId != task.taskId || same(mTarget, task)) return false;
++            clear();
++            return true;
++        }
++
++        public boolean onTaskVanished(int taskId) {
++            if (mLast != null && mLast.taskId == taskId) mLast = null;
++            if (mRecorded != null && mRecorded.taskId == taskId) mRecorded = null;
++            if (mTarget == null || mTarget.taskId != taskId) return false;
++            clear();
++            return true;
++        }
++
++        public boolean onUserChanged() {
++            mLast = null;
++            mRecorded = null;
++            final boolean had = mTarget != null;
++            clear();
++            return had;
++        }
++
++        /**
++         * Whether a RETURN_TO quoting token may run now (GO), or the answer to give at once. focused is the task in
++         * front; running is the recorded task as the shell sees it now, or null when it is not running.
++         */
++        public int check(long token, boolean keyguardLocked, Task focused, Task running, int currentUser) {
++            if (mTarget == null) return UNAVAILABLE;
++            if (token == 0 || token != mToken) return REFUSED;
++            if (keyguardLocked || !rose(focused, currentUser)) return REFUSED;
++            if (!same(mTarget, running)) return UNAVAILABLE;
++            if (!app(running, currentUser)) return REFUSED;
++            return GO;
++        }
++
++        /**
++         * The same live task keeps its token (a return quoting it stays valid, and the control does not reset);
++         * any other task gets a fresh one.
++         */
++        private void record(Task task) {
++            if (!same(mRecorded, task)) {
++                long token;
++                do {
++                    token = mTokens.getAsLong();
++                } while (token == 0 || token == mRecordedToken);
++                mRecordedToken = token;
++            }
++            mRecorded = task;
++            mTarget = task;
++            mToken = mRecordedToken;
++        }
++
++        private void clear() {
++            mTarget = null;
++            mToken = 0;
++        }
++    }
++}

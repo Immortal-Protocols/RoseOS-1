@@ -2,6 +2,11 @@
 
 Target channel: **Pixel 10 / frankel**, public repository
 [Immortal-Protocols/pixel-ota](https://github.com/Immortal-Protocols/pixel-ota).
+For the separate Pixel 10 Pro XL (Mustang) route, see
+[Mustang source route](MUSTANG-SPRINT.md),
+[Mustang signing/private delivery](MUSTANG-DELIVERY.md), and the later
+[OTA implementation and inactive activation path](MUSTANG-OTA.md).
+
 Its README specifies `frankel-stable` metadata and the matching
 `frankel-ota_update-BUILD.zip`. Factory images and checksums may accompany it.
 Do not use the imported Mustang (Pixel 10 Pro XL) scripts as Frankel instructions.
@@ -97,6 +102,24 @@ latest-beta reservation on the builder (`scripts/host-app-release.py`).
 verification, publication, Latest promotion and cleanup with no
 intervention. Phone update acceptance is still open.
 
+### Fresh unpublished Frankel candidate
+
+Dispatch `os-release.yml` on reviewed main with `mode=latest-draft`,
+`device=frankel`, `channel=beta`; leave every other input at its default (empty pins and
+campaign, `promote=false`). The same locked allocator reserves fresh OS/app versions,
+binds the captured source and emits the allocation artifact. Build, signing, image
+verification, transfer and draft download verification are unchanged. The publisher
+leaves a **draft**: no public release, Latest/channel update, app publication or successor.
+The default `mode=latest-beta` preserves the normal public Beta button.
+
+The private mode explicitly skips policy reclaim: it never invokes builder-reclaim.py apply.
+Available space must support the build without deleting old attempts or emptying reclaim trash.
+Other modes retain their existing reclaim behavior. This mode does not fix federation or prove
+free space. Frankel uses 32 make jobs for its n2-highmem-32 host; job and STOP limits are unchanged.
+For Mustang's fresh app handoff, commit the actual allocation receipt after the run,
+then use `app-inputs-export` for that build and bind the immutable export receipt;
+never substitute the previous release's app bytes. No version is chosen in advance.
+
 ### Dedicated-signer route (RELEASE020 M2c, default-off)
 
 Set the repository variable `ROSE_SIGNING_TRANSPORT=dedicated` to sign latest-beta on the dedicated signer
@@ -147,6 +170,422 @@ Allocations are not written back to main; they live on the builder and in
 pixel-ota. Drafts made outside this workflow must stay recorded as retained
 baselines in `frankel.json`. The publisher's authenticated tag check is the
 final guard.
+
+## Mustang one-button OTA (`mustang-ota`, manual)
+
+**Status.** Source only: no run of this mode has happened. It builds, signs and publishes one newer Mustang (Pixel 10
+Pro XL) OTA in one dispatch, with the existing Mustang jobs. Previously that took two dispatches: `mustang-build`, then
+`mustang-delivery` with the producer's run id typed by hand.
+
+**Click sequence.** GitHub → Actions → **Build & publish latest Pixel 10** → **Run workflow**:
+1. branch `main`;
+2. mode `mustang-ota`;
+3. check **mustang_publish_ota**;
+4. leave every other field at its default;
+5. **Run workflow**.
+
+The guard refuses any candidate, build, app, resume, run or bootstrap pin, and any other publication input.
+
+**What one run does**, in order:
+1. **Guard.** It runs the existing activation and signing-window check (`scripts/mustang_ota.py guard`). This is window
+   check 1: the window must be approved and have at least 30 minutes left. The guard also runs the producer's hosted
+   source check.
+2. **Producer.** The existing `mustang-build` job: baseline observation, a fresh allocation, integration and compile,
+   and its receipts.
+3. **Binding** (`mustang-ota-bind`, hosted, read-only). It runs only after that producer job succeeded.
+   `scripts/mustang-ota-chain.py bind` makes window check 2, then requires all of the following:
+   - attempt 1 of this manual `mustang-ota` dispatch on main;
+   - exactly one successful `mustang-build` job;
+   - exactly one unexpired `mustang-receipts-<run>-1` artifact;
+   - the committed original bootstrap.
+   The signer's `EXPECTED_*` values then come from this run, not from a typed run id.
+4. **Signer.** The existing `mustang-signer` job collects the outputs and observes the baseline. It makes window check 3
+   right before signer login, then signs and stages the OTA.
+5. **Publisher.** The existing `mustang-ota-publisher` job. It is never Latest.
+6. **Cleanup.** It stops the builder only if this run's controller started it.
+
+**Properties:**
+- One run holds the `os-release-frankel` queue from start to finish.
+- No permission is added, and nothing is retried.
+- The automatic dispatcher (`MUSTANG_OTA_AUTO`, `automationEnabled`) is unchanged and does not react to `mustang-ota`
+  runs.
+
+**Before clicking:**
+- `os/ota/mustang.json` must be enabled for publication, with an approved signing read window. The window must have at
+  least 30 minutes left at each of the three checks, so it has to cover the compile and the delivery.
+- `os/build-only/mustang-host.json` must point at the signed apps and background policy intended for this release.
+  Today that is the Frankel attempt it names.
+
+**If a stage fails**, the run is finished. Nothing is retried.
+- Re-running the run, or any of its jobs, is refused. The guard, `mustang-build`, `mustang-ota-bind` and
+  `mustang-signer` each refuse an attempt other than 1.
+- Start a new `mustang-ota` dispatch instead. It makes a fresh allocation and compiles again.
+- The manual `mustang-delivery` mode cannot deliver a `mustang-ota` run: it pins only `mustang-build` producer runs.
+  So a chain run's compile is never reused by another run.
+- The recorded historical collection-fault recovery stays with the manual `mustang-delivery` path only.
+
+**Builder lifetime.** One controller start covers the compile, the binding and the signer. The builder's 12-hour
+automatic STOP is Infra's fallback, and it is configured outside this repository. The two-dispatch path started the
+builder again for delivery. Here, a compile that runs close to its 11-hour cap leaves the signer (190-minute cap)
+without time. If the STOP interrupts signing, nothing is published and the run fails. Start a new dispatch.
+
+## Builder storage: reclaiming regenerable build data (BUILDER-RECLAIM)
+
+The `builder`, `app-builder` and `mustang-build` jobs start with **Reclaim regenerable build data**
+(`scripts/builder-reclaim.py apply`) before they write. It removes only what
+`os/release-pipeline/storage/builder-reclaim.json` names, from the attempt storage `/home/pixelbuild/rose-actions`:
+
+- **`mustang-prep-<run>-<attempt>`, `blazer-prep-<run>-<attempt>`:** the copied `source/` and `downloads/`.
+  `source/releases`, which holds signed copies, always stays. The two newest Mustang preps and the newest Blazer
+  prep stay whole, so their own delivery can still read them.
+- **`launcher3-compile-<run>-<attempt>`:** `tree`, `out`, `home` and `tmp`, the same paths the harness's own
+  `finish` removes. This is the backstop for a run of the retired `os-release.yml` `launcher3-compile` mode whose
+  `finish` never ran. The dedicated harness workflow never runs here; any backstop on its own storage must be bound
+  to that storage separately.
+- **`app-`, `app-reuse-` and `cf-alpha*-<run>`, `device-readiness-<run>-<attempt>`:** per-run scratch, removed whole.
+  Its job removes it at the end; one left behind belongs to a killed job.
+- **`alpha-source/.staging-*`:** a killed preparation's partial copy.
+
+**Kept whole:** an entry any tracked file under `.github/workflows`, `os` or `scripts` names (a bound input, a
+recovery record, delivery evidence), the current run's entries, and each class's newest.
+
+**Never touched:**
+- the retained source tree with its `OUT_DIR` and `releases/`;
+- `frankel-<build>` attempts, whose names the allocator reads as used builds;
+- allocation ledgers and reconcile receipts;
+- Mustang sign, collect, package and OTA outputs, where the next OTA reads its baseline;
+- Rango and factory records, alpha preparations and operator-staged inputs.
+
+**How it runs:**
+- It holds the shared builder lock for the whole apply. If the lock is busy, it reclaims nothing.
+- Each path moves whole into `rose-actions/.reclaim-trash` and is removed there. A symlink is never followed,
+  moved or removed, and nothing on another filesystem is touched.
+- A killed apply leaves only the trash, and the next apply empties it first.
+- Receipts: `rose-actions/reclaim/NNNN-<label>.plan.json` before anything moves, and `NNNN-<label>.json` after,
+  with each item's outcome and the available bytes before and after.
+- Exit codes:
+  - **0:** it reclaimed, found nothing to do, or the lock was busy.
+  - **3:** refused. The storage root, trash or receipt directory is unsafe, and the job stops before it builds.
+  - **2:** invalid policy.
+
+**To preview without changing anything,** run this on the builder (read-only, no lock):
+`python3 scripts/builder-reclaim.py plan --measure`
+
+**To add a class,** it must be data a later run regenerates by itself. Name its producer and its readers in the
+policy. `scripts/tests/test_builder_reclaim.py` checks that no class matches a never-reclaimed store.
+
+## Signed app inputs for another builder (app-inputs-export, manual)
+
+`os-release.yml` mode `app-inputs-export`, with `build_number` set to one Frankel build, hands that build's three
+signed Rose apps and its background policy to another builder: Yogi, or Mustang on its own capacity. That builder then
+needs no new Frankel compile. The job `app-inputs-export` runs `scripts/host-app-inputs-export.py` on the original
+builder, under the nonblocking shared lock.
+
+**Producer:** the build must have exactly one committed Frankel allocation record (`roseos.latest-allocation.v1` in
+`os/latest-beta` or `os/ota`). That record names the candidate, run and app versions. For 2026110403 it is
+`os/ota/mustang-frankel-2026110403-allocation.json`.
+
+**Checks, without writing in the original attempt:**
+- the attempt's receipt chain is complete through transfer;
+- `release/signed-apps` holds exactly the nine files the app signing writes (APK, `.receipt.json` and v4 `.apk.idsig`
+  per app), each a regular file;
+- every receipt matches its bytes, signer and verification;
+- `aapt` and `apksigner`, run again here, read each allocated package, versionCode and exactly the app signer;
+- the policy pins exactly those bytes.
+The pins are the candidate-bundle contract (`os/build-only/mustang-reconcile.json` `candidateInputs`), and its signer
+must equal `frankel.json`'s app signer.
+
+**Output:** a private artifact `app-inputs-frankel-<build>-<run>-<attempt>`, kept 14 days. It holds `signed-apps/`
+(nine files), `background-policy.json`, the receipt `app-inputs-export.json` and `SHA256SUMS`. Any refusal uploads
+nothing. The job stops the builder afterwards only if its own controller started it.
+
+**One committed record:** after a run, Release commits the export as `os/app-inputs/frankel-<build>.json`
+(schema `roseos.app-inputs-record.v1`). The record is built only from the downloaded receipt and the run's actual
+metadata:
+
+`python3 scripts/app-inputs-verify.py record --receipt <dir>/app-inputs-export.json --run <id> --attempt <n> --artifact-name <name> --artifact-id <id> --artifact-digest sha256:<hex>`
+
+A consuming builder points its configuration at that record. While no record exists, the consumer stays unbound.
+
+**Consumer contract:**
+1. Download the record's exact artifact by run id and artifact id.
+2. Run `python3 scripts/app-inputs-verify.py verify --record os/app-inputs/frankel-<build>.json --dir <dir> --aapt <aapt> --apksigner <apksigner>`.
+   It checks:
+   - the record and its committed producer allocation;
+   - exactly the recorded files, with their sizes and digests;
+   - the receipt's digest and contents;
+   - `SHA256SUMS`;
+   - with your own tools, the exporter's inventory, receipt, identity and policy checks on the downloaded bytes.
+3. Use the set only after exit 0. The same nine-file inventory and policy rules apply on both sides.
+
+**Private archive (`roseos.app-inputs-private-record.v1`).** A set can also reach its consumer as one private
+archive instead of an Actions artifact, for example a Mac export copied to a dedicated builder. It gets its own
+record schema, so no Actions identity is ever invented for it. The Actions record, its creation and its download
+path are unchanged.
+- **The record** carries the receipt's own `producer`, `signerSha256`, `sdk`, `apps` and `files`. Its `export` has
+  only `receiptSha256` and `privateArchive`:
+  - `path`: the absolute path the consumer reads the archive from;
+  - `sha256` and `sizeBytes`: the archive's actual bytes;
+  - `provenance`: `{path, sha256}` of a committed JSON under `os/`.
+
+  The producer's run and attempt stay the original Frankel build's, from its committed allocation.
+- **The provenance** (`roseos.app-inputs-private-provenance.v1`) is written by whoever exported and transferred the
+  archive. It records what they actually did and saw:
+  - `producer` and `receiptSha256`, the same as the record's, and `archive` `{sha256, sizeBytes}`;
+  - `source`: `exporter: scripts/host-app-inputs-export.py`, the full `exporterSource` commit,
+    `originalAttemptChainVerified: true` and an `evidenceRef`;
+  - `transfer`: `approved: true`, `completed: true`, an `approvalRef`, the receiver's `evidenceRef`, `received`
+    (the archive's sha256 and size) and `destination` `{builder, dataFilesystemUuid, path}` at the record's path.
+
+  Committing it performs no transfer and grants no approval; its fields must be actual observations.
+- **Creating the record:**
+  `python3 scripts/app-inputs-verify.py record-private --receipt <app-inputs-export.json> --archive <export.tar> --provenance os/app-inputs/<name>.json`.
+  It hashes the archive's actual bytes and refuses unless the committed provenance already names exactly that
+  receipt, those bytes and the destination path.
+- **Admission:** `verify` takes either schema. For a private record it first checks the provenance: committed under
+  `os/` with the recorded digest, exactly the fields above, and matching the record. Then the consumer contract above
+  applies unchanged to the imported files: inventory, sizes and digests, receipt, `SHA256SUMS` and, with the
+  consumer's tools, signer, package, version and policy. Its verdict says `transport: private` (an Actions record
+  says `actions`).
+- **The consumer's own checks:** importing the archive (no extraction of its metadata, only the canonical files), and
+  that `destination.builder` and `dataFilesystemUuid` are its own bound VM and disk.
+
+## Daily release dispatcher (1E: 04:00 Pacific; Frankel on)
+
+`.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch` every day at 04:00
+America/Los_Angeles. For each enabled lane in `os/release-pipeline/lanes/daily.json`, it builds, signs, verifies and
+publishes that flavor through the flavor's own entry, builder and queue:
+
+| Lane | Entry and inputs | Queue | Delivered when | Last good release on failure |
+| --- | --- | --- | --- | --- |
+| frankel | `os-release.yml` `mode=latest-beta` | `os-release-frankel` | `publisher` succeeded | Beta Latest moves only after verification and the download check |
+| mustang | `mustang-ota-dedicated.yml` `publish=true` | `mustang-ota` | `publisher` succeeded | OTA before channel metadata, never Latest |
+| yogi | `yogi-ota.yml` `stage=ota`, `publish=true` | `yogi-ota` | `publisher` succeeded | OTA first, `yogi-stable` last, never Latest |
+
+**The schedule (DST-aware).** GitHub schedules are UTC, so the workflow lists both UTC times that can be 04:00
+Pacific: 11:00 UTC (PDT) and 12:00 UTC (PST). A scheduled run acts only when the cron that fired is 04:00 in
+America/Los_Angeles on that date, so each day runs exactly once, including across daylight-saving changes:
+
+- the check uses the cron that fired (`github.event.schedule`), not the start time, so a late start still runs;
+- the other cron's run skips every lane with no API call;
+- a test checks that the crons are exactly the window's UTC times, and that exactly one cron is in the window every
+  day from 2026 through 2028.
+
+A scheduled run is never a dry run. A manual run is a dry run unless `dry_run` is false, and it ignores the window.
+
+**Each lane is decided on its own,** so one lane's failure never stops another. A lane is skipped when:
+- it is disabled;
+- its entry workflow is absent;
+- a run of it is still queued or in progress;
+- its newest delivered run already built the current main commit, so an identical commit is never rebuilt.
+
+A lane's runs are its entry's runs on main titled exactly `runTitle`, or starting with `runTitlePrefix`. Only
+latest-beta is titled "Build & publish latest Pixel 10". Every other `os-release.yml` mode is titled
+`os-release <mode> <run id>`, so a latest-draft run (which leaves an unpublished draft) never counts as a Frankel
+delivery, and an advanced mode never holds the Frankel lane.
+
+Otherwise its entry is dispatched once, on main, with the committed inputs. A failed run is retried at the next daily
+run and reaches its owner through the run's own failure. The dispatcher never publishes, cancels, retries or changes a
+release. Manual dispatch of every entry is unchanged.
+
+**What is committed:** only Frankel is `enabled: true`, so each day's 04:00 Pacific run dispatches one
+`os-release.yml` latest-beta of main unless that commit is already delivered or a latest-beta run is still pending.
+Mustang and Yogi stay `enabled: false`. The job can only dispatch from main, with its own `actions: write` token and no
+secret.
+
+**Enabling a lane** is its own reviewed change to `daily.json`, approved by that lane's owner and Chief. The lane's
+first scheduled run then builds and publishes main at the next 04:00 Pacific. The Mustang and Yogi routes are manual
+only today: before their lanes are enabled, their owners must admit this automatic dispatch on their own routes
+(Mustang's publication authority requires `automatic: false`).
+
+**Isolation:** each lane has its own entry and queue. Frankel shares `os-release-frankel` with the other
+`os-release.yml` modes, which wait in order (`queue: max`) rather than cancel each other. Independent capacity per
+flavor comes from each route's own builder binding, not from this dispatcher.
+
+## Lane capacity map (1A, source only)
+
+`os/release-pipeline/lanes/capacity.json` is the committed map of where each release lane builds. It records the
+host each `os-release.yml` mode runs on today, and what each lane still needs to build on its own capacity.
+`scripts/tests/test_lane_capacity.py` derives the actual route and checks it against the map. It reads:
+
+- from `os-release.yml`: each self-hosted job's runner label and the modes its `if:` names, the workflow queue, and
+  the controller and cleanup identity;
+- from `release-pipeline.py`: `BUILDER`, the one VM the controller starts and stops;
+- the host lock in `frankel.json`, and the storage root of `storage/builder-reclaim.json`.
+
+**Today no two lanes can build at once** (`parallelToday` is empty). Frankel, Agent (`app-only`) and the other
+retained-tree work run on one host, `roseos-frankel-builder`, where Mustang's retired legacy jobs also sit. They share:
+
+- one VM, `immortal-os-builder`;
+- one disk, `/home/pixelbuild/rose-actions`;
+- one lock;
+- one queue, `os-release-frankel`;
+- one controller.
+
+**Yogi** has its own host in its committed route (#558): `yogi-ota.yml` and `os/ota/yogi.json`. The test checks every
+part of it against the map:
+
+- every self-hosted job of every stage on the replacement-specific `roseos-yogi-builder-20261105-b` label;
+- its own queue (`yogi-ota`) and controller identity (`YOGI_CONTROLLER_SERVICE_ACCOUNT`);
+- its own VM (`protocols-465723` / `us-west2-b` / `roseos-yogi-builder-20261105-b`, numeric ID
+  `2720796557371812468`), disk (`/srv/rose-yogi`) and lock. The original zone-a VM is retired from the route.
+
+None of these is shared with the Frankel host. A host builds only when it is in service. For Yogi that is when
+`yogi.json` says `builder.status` `ready`, the rule `scripts/yogi_ota.py` applies before any stage. It is
+`runner-unregistered` today, so `parallelToday` stays empty. `parallelByRoute` lists the pairs its separate route
+allows once its runner is ready. Any further Yogi stage stays inside `yogi-ota.yml`, on that runner and queue, so it
+needs no change here.
+
+**What Infra supplies to move a lane.** A host entry with verified readback, plus its evidence. The fields are listed
+as `unboundFields`:
+
+- a runner label only that machine carries;
+- the VM (project, zone, instance);
+- the storage root and lock path;
+- the queue;
+- the controller identity variable.
+
+No value is invented: the only host listed is the one the committed route already uses.
+
+**What Release changes in the same reviewed PR.** The test fails until all of these move with the lane:
+
+- the lane's `host` in the map;
+- every job of its modes, to the new `runs-on` label;
+- the workflow queue, keyed by host. One literal queue cannot serve lanes on several hosts.
+- the controller and cleanup, made lane-aware. Today they start and stop only `BUILDER`.
+- owned stops for every mode of a host whose lanes no longer share one queue. Today ordinary modes stop the
+  builder unconditionally, which is safe only because every mode shares the queue.
+
+Two lanes count as parallel only when their runner, VM and queue all differ. Storage and lock paths may be the same
+strings on two machines, because each VM has its own disk.
+
+**The shared app version ledger.** `latest-beta` and `app-only` both allocate `dev.pixel.voice` versionCodes
+(`scripts/release-allocate.py`). Each allocation reads pixel-ota releases (drafts included), this host's attempt
+directories and its `rose-actions` reservations, under the host lock. On two hosts that store would let both pick
+the same version. So Agent stays on the ledger's host until the ledger moves to a store every lane can update
+atomically. That is the one cross-lane serialization the plan allows, and the test refuses an Agent move before it.
+
+## Launcher3 compile harness (1E, dedicated workflow, source-bound)
+
+The standalone Launcher3 compile harness has its own manual workflow, `.github/workflows/launcher3-compile.yml`, and
+no longer runs on a release builder. The `os-release.yml` `launcher3-compile` mode is removed: its option, guard
+branch and outputs, hosted check, controller and cleanup conditions, and builder job. The harness owner's adapter
+also refuses any workflow but this one (`launcher3_lane.check_context`). Frankel's `builder-reclaim` class
+`launcher3-compile` keeps cleaning leftovers of the earlier Frankel runs; nothing new routes there.
+
+**Its routing** comes from one reviewed, Infra-evidenced binding, `os/build-only/launcher3-compile-lane.json`
+(schema 4, harness-owned). That binding is **source-bound** for `verifyIntegrated` on its own runner.
+It is not an OTA or release gate: no os-release or OTA workflow reads it, and the capacity-map
+harness lane stays `retired-shared-host` with no release mode. The workflow is still manual
+dispatch only:
+
+1. **`guard`** (hosted, `contents: read`, no login):
+   - `workflow_dispatch` from `main`, attempt 1 only;
+   - checkout of this run's commit (every job checks out `github.sha`);
+   - `launcher3-compile.py check`, which gives the contract, binding and bounds (exit 4 while unbound);
+   - `launcher3-routing.py guard` (Release). It runs `launcher3_controller.py check` and admits the binding only
+     when it names this workflow, its queue is this workflow's concurrency group `launcher3-compile`, and its
+     controller variables are `LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT` and
+     `LAUNCHER3_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER`. It outputs `runs_on` as `["self-hosted","<bound label>"]`.
+     No label is written in the workflow.
+2. **`controller`** (hosted):
+   - logs in with only the harness's own identity and provider variables;
+   - runs `launcher3_controller.py start --ownership-record`, which writes and syncs the record before the start
+     request (Infra's `control_builder('start', builder=…, claim=…)`);
+   - always uploads that record as `launcher3-ownership-<run>-<attempt>`, even when start fails or is uncertain.
+3. **`worker`**, on `${{ fromJSON(needs.guard.outputs.runs_on) }}` only, with `contents: read`. It is the earlier
+   job unchanged:
+   - the bounds recheck;
+   - one bounded `run` (exec'd timeout, 30 s kill-after);
+   - the always-run `finish` and its allowlisted reports, kept 7 days.
+
+   The adapter re-checks the exact workflow, commit, run, attempt and `RUNNER_NAME`.
+4. **`cleanup`** (hosted, always after a controller ran):
+   - downloads only this run's ownership artifact;
+   - runs `launcher3_controller.py stop --ownership-record`.
+
+   A missing, foreign, changed or malformed record refuses STOP, and a VM already running at start is left
+   running. It never uses the plain `stop-builder`.
+
+The queue `launcher3-compile` keeps waiting runs in order up to GitHub's limit of 100 pending runs (`queue: max`;
+a run past that limit can still be dropped), and `cancel-in-progress` is off. It is no release, Yogi or Agent
+queue. In the capacity map the `harness` lane names this workflow, no `os-release.yml` mode and its binding
+(`activeBinding`). Its `runtimeStatus: retired-shared-host` means it claims no capacity: the `host` field records
+only where its earlier runs ran. `test_launcher3_compile_workflow.py` and `test_lane_capacity.py` check all of this.
+
+**What remains before a compile runs:** a separate dispatch. This section does not authorize one, and the binding
+does not gate any OTA or release workflow. `lane.vm.instanceId` and `lane.disk` are the observed boot VM and boot
+disk; the controller still starts and stops only that VM.
+
+A guard refusal is a blocker, not a compile.
+
+## Hosted Agent route (source only, unbound)
+
+`scripts/host-app-release.py --hosted` is the off-builder Agent entry point (Signing's #608 handoff). It runs the
+same `release()` as the builder route: worktree at the candidate, Rose Agent built alone, the four pinned
+`PIXEL_APP_SIGNING_*` versions in owner-only RAM, `sign-apk.py`, independent `apksigner` verification of exactly the
+pinned signer, and the v4 sidecar. It runs none of the Frankel wrapper: no Frankel config, no host lock, no 300 GiB
+reserve, no `mustExceed`/`reserved` floor and no builder allocation floor.
+
+**Its version comes from one owned reservation** (`ROSE_APP_RESERVATION`, schema `roseos.app-version-reservation.v1`),
+admitted only when all of these hold:
+- the record has exactly its fields, and its `reservationSha256` holds;
+- its owner is this run: `GITHUB_WORKFLOW_REF`, `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`;
+- it is for exactly the `dev.pixel.voice` versionCode `APPS` names, and for this candidate, with its source and its
+  allocation digest;
+- it was recorded in the store the hosted config binds.
+
+A failed or another run's reservation stays consumed; it is never reused. The receipt records the reservation's
+digest, allocation, source and store instead of `mustExceed`. `main()`'s cleanup stays: the candidate worktree,
+`worktree prune`, `ROSE_RELEASE_DIR`, and any partial artifact on failure. The builder route is unchanged.
+
+**Its config, `os/release-pipeline/agent/hosted.json`,** keeps the committed signing values and pin unchanged: the
+project, secret version, four secret names and `appSignerSha256`. Everything else is null until its owner binds it:
+- App's portable SDK, JDK, public connection inputs and tools, as absolute paths on the hosted runner;
+- the reservation store.
+
+`--check --hosted` exits 4 and names each one.
+
+**App's portable inputs (`--portable-inputs PATH`, with `--hosted` only).** App's bind step writes one nonsecret
+runtime record on the runner; it is never committed. Schema `roseos.agent-portable-inputs.v1`, exactly these keys:
+- `schema`;
+- `appSdkRoot`, `javaHome` and `publicAssetsDir`: absolute normalized paths (no trailing slash, `.`, `..` or `//`);
+- `publicAssetDigests`: exactly the public connection inputs of `host-app-build.PUBLIC_ASSETS`, each mapped to
+  its lowercase sha256;
+- `aapt` and `apksigner`: absolute normalized paths to the independent verifier tools.
+
+The file must be a regular file of at most 64 KiB, with no repeated key and no non-finite number. It fills only those
+fields of the committed config, and never one the committed config already binds. Everything else comes from the
+committed config alone: the signing identity, secret names and version, `minimumTestedOs` and the reservation store.
+The reservation and ownership checks and the cleanup are unchanged, and the builder route refuses the option.
+`host-app-build.build()` still checks the SDK layout (`platforms/android-35`, `build-tools/android-15`) and the JDK.
+Its `restore()` checks the inputs against `public-assets-receipt.json` and these pins. The receipt records
+`portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` names only the
+reservation store.
+
+**Its publication (`scripts/app_release_publisher.py --hosted --reservation PATH`, 1F).** The publisher admits a
+hosted artifact only under the same owned reservation the build used. The check is one shared implementation,
+`scripts/app_reservation.py`, so the build and the publisher cannot drift:
+- the reservation passes the same checks as above: its digest, this run as owner, `APPS` and the candidate, and the
+  store `hosted.json` binds. A re-run attempt is a new owner and needs a new reservation;
+- its version is above every committed Frankel floor: `mustExceed` and every `reserved` row. The store never reissues
+  a consumed version;
+- the receipt records exactly that reservation (digest, allocation, source and store).
+
+Every other check is the app-only route's, unchanged: artifact inventory and digests, signer, v4 sidecar,
+compatibility, a separate prerelease and OTA Latest unchanged. `publication.json` also records the reservation; the
+public receipt does not. Frankel's app-only and reuse routes refuse a hosted receipt. While the store is unbound,
+`--hosted` exits 4 before any check or API call. Neither the build nor the publisher reads the store yet: confirming
+that a reservation is recorded there comes with the store itself (decision D1).
+
+Nothing in `os-release.yml` routes to it yet. The hosted job, its queue and the shared reservation store wait on the
+decisions in the Agent design checkpoint:
+- the reservation store and its write credential;
+- Frankel reserving in the same store;
+- Infra's check of provider admission for a hosted runner.
+
+`scripts/tests/test_agent_hosted_release.py` checks the route, and `PublisherHostedTest` in
+`scripts/tests/test_app_release_publisher.py` its publication, with fakes only.
 
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
@@ -1339,6 +1778,85 @@ The receipt (path, sha256, dex count, markers) is in the bytes-verify output and
 `verification.json` (`systemUiTray`). Like the APEX gate, it shows the code is
 compiled in, not that the tray stops at screen off.
 
+**Raised-edge gate** (#410 1C/2A, item 4 of OS Product's artifact checklist).
+It is `check_rose_edge` in `scripts/release-pipeline.py` running
+`scripts/edge_artifact.py` with the `roseEdge` section of `frankel.json`. It is
+OS Product's R8-literal checker, run by the release pipeline. Both verify stages
+run it on their own target-files: bytes-verify on the unsigned build, before
+any signer access, and ota-verify on the signed target-files that the OTA and
+public files come from. So a candidate without the raised edge is never signed
+or published. The gate requires:
+
+- **Both build switches.** `persist.wm.debug.rose_edge=true`
+  (`rose-edge-build-make.patch`) and `persist.wm.debug.pixel_agent_tray=1`
+  (`agent-tray-build-make.patch`) must be set in a listed `build.prop`, and no
+  listed file may give either another value. Both are
+  `PRODUCT_SYSTEM_PROPERTIES`, registered by `--agent-tray`, so they land in
+  `SYSTEM/build.prop`.
+- **The edge gesture in Launcher3QuickStep.** The classes `RoseEdgeGesture` and
+  `RoseEdgeSwipe`, with no method required. At the pinned Launcher3 `47accce`,
+  its R8 rules (`-keep,allowshrinking,allowoptimization` and
+  `-keepclasseswithmembernames` on `com.android.quickstep.**`, without
+  `allowobfuscation`) keep class names, but may inline and then remove a member
+  with one call site, such as `stage` or `onMove`. A method requirement could
+  therefore fail a good candidate (OS Product's review of #568).
+
+  Both classes predate #548: they arrived with E2a on 11-03. So the class
+  entries show the edge gesture is compiled in, not that #548 is.
+- **#548 itself, by a required literal.** `persist.wm.debug.rose_edge_diag`
+  must be a whole string of the Launcher3QuickStep dex. This is the `literals`
+  list, required in addition to the classes, not as a fallback. #548
+  (`6d2ee72`) added the string as `RoseEdgeSwipe.DIAG_PROPERTY`, a compile-time
+  constant. javac inlines it into the `SystemProperties.getBoolean` call in
+  `RoseEdgeSwipe`'s constructor. `FallbackSwipeHandler`'s constructor reaches
+  that constructor (`rose-edge-launcher3.patch`), so R8 cannot drop the string
+  while the gesture is linked. A build from before #548, such as 2026110403
+  (built from `4e85677`), has both classes. By source it lacks this string, so
+  it fails.
+- **The Shell resize and the chin's microphone slot in SystemUI.**
+  `com.android.wm.shell.roseedge.RoseEdgeController` and
+  `com.android.wm.shell.RoseEdgeMicSlot`.
+
+A class counts only when a `classes*.dex` of an APK whose whole target-files
+path matches the entry's pattern defines it. An entry may also name a method,
+which the class must then define; no Frankel entry names one today. SystemUI's R8 keeps `com.android.wm.shell.*` class names
+but not their subpackages, so three entries may instead pass on a whole string
+literal that only that code holds:
+
+- `persist.wm.debug.rose_edge_diag` for `RoseEdgeSwipe`;
+- the `IRoseEdge` binder descriptor for `RoseEdgeController`;
+- the log tag `RoseEdgeMic` for `RoseEdgeMicSlot`.
+
+A literal inside a longer string does not count. `RoseEdgeGesture` has no
+literal, so a renamed gesture class fails closed.
+
+The checker reads the dex itself, so the builder needs no `dexdump`; the
+builder's SDK layout (`scripts/host-sdk-layout.py`) has none. It reads the
+header, the string, type and method ids, `class_defs` and `class_data` of dex
+035 to 041, including 041 containers of several sections that share one string
+table. The reader's tests compare it with dexdump on real d8 output
+(`scripts/tests/fixtures/rose-edge-dex/`). A dex it cannot read counts as
+holding nothing, and the failure names it. A missing `roseEdge` section exits
+4 (it is also a guard preflight item).
+
+The retained Rango route builds its own pipeline config, which has no
+`roseEdge` section. Rango is not an admitted device, so its receipt records
+`{"configured": false}`; build 2026103001 predates the edge.
+
+The receipt is `roseEdge` in the bytes-verify output and in
+`verification.json`. It records:
+
+- each switch and the file that set it;
+- for each class, whether it passed, how (by class or by literal), and which
+  APK and dex it was found in;
+- for each required literal, whether it passed and where it was found;
+- any unreadable dex, and each candidate APK's sha256.
+
+The receipt shows the code is in the artifact. It does not show that the edge
+raises, resizes apps or mutes the microphone on a phone. It also does not show
+that the image-embedded Launcher3 copy equals the checked APK: the image-bytes
+gate covers SystemUI but not Launcher3.
+
 **What the gates do not count as image inclusion.** Candidate source
 directories are not image contents: `workspace/models/` (`rose-chat-core`,
 `serving`), `qa/` (`models/`, `first-update/`, `verification/`), `os/tests/`,
@@ -1539,6 +2057,14 @@ admitted. The admitted helper is Fold #191, the Product's minimal managed-host h
 refuse with `proof-helper-mismatch`. `localProof.spec` (`roseos.fold-tool-proof-spec.v2`) names each script's root in
 the original builder tree; the helper checks the bytes there against the pinned blobs.
 
+Every proof names the helper's subject, `fold-rango-v1`. Another profile may use it only when its tools and its whole
+`localProof` equal the subject's, with one exception: a dedicated builder may move the subject's source tree. Its spec
+keeps `schema`, `profile` and the three scripts, and each root is one common absolute prefix followed by that script's
+project path in the subject (`development`, `script`, `external/avb`); `specBasis` may differ. Any other difference is
+`proof-subject`. The helper, its admission, the pinned blobs and the host checks are unchanged, so the bytes at a moved
+root are still verified (`source_mismatch` otherwise). `yogi-v1` relies on this once a reviewed measurement of the Yogi
+builder sets its roots; until then its spec stays null.
+
 The OpenSSL trust basis is the managed host's own package manager identity and integrity (`managed-host-package`). It
 is not an independent signed-package attestation; the proof says so and names the inputs such an attestation would
 need.
@@ -1567,7 +2093,140 @@ Current state (OCT29-INFRA-S006): `fold-rango-v1` is resource-bound but blocked.
 - **Tool identities.** Each tool records its source identity separately from its installed path and sha256. The
   installed identity is a later builder preflight (`plan` lists it as `laterHostPreflight`). None is measured.
 
-`models-v0` is unbound until its own secret resources, signer access, algorithm and package identity are supplied.
+`models-v0` is retired with Rose Models (#651, `docs/MODELS-RETIREMENT.md`): it is no longer a `bootstrap_profile`
+choice, and `os-release.yml` has no `models-sign` mode. Its profile record, signer identity, key and secrets are kept;
+nothing deletes them, and no workflow signs or publishes `dev.pixel.models`.
 The collision check needs `secretmanager.secrets.get` and `secretmanager.versions.list` on both secrets. The add-only
 and accessor grants do not include them, so metadata stays unavailable and the run stops. `python3
 scripts/signing-bootstrap.py plan --profile fold-rango-v1` prints the exact operations. A merged workflow is not an admitted key operation.
+
+**Factory-archive profiles and live access (2026-11-03).** `fold-rango-factory-v1` (Rango) and `pro-blazer-factory-v1`
+(Blazer) each bootstrap one passphrase-encrypted Ed25519 factory-archive key with the builder's measured `ssh-keygen`
+(bound from `os/signing-bootstrap/ssh-keygen-evidence.json`). The Rango profile is resource-bound; the Blazer profile
+stays unbound until its approvals, containers and `secretAccessor` exist and its one bootstrap run is approved. These two
+profiles and `pro-blazer-v1` opt in with `access.liveCheck`: no expiry is recorded, and the run's first credentialed
+`secrets describe` and `versions list` calls on both secrets, after the signer login and before any key exists, check
+the access. A failure there (including a missing or occupied secret) stops the run with nothing used up. A live-check
+profile must also recheck both secrets just before the import (`recheckEmptyBeforeImport`; readiness refuses it
+otherwise), and a resource-bound profile lists nothing missing. `versions.add` cannot be tested without adding, so the
+bootstrap grant is one binding per secret holding `secretmanager.secrets.get`, `secretmanager.versions.list` and
+`secretmanager.versions.add` with one expiry of at most 4 h, made at action time, and the run is dispatched well inside
+that window. A failed recheck or a denied add after generation uses up the run (`failed-before-commit` or
+`recovery-needed`). Each profile's `access.policy` states the full rule; `plan --profile P` prints the operations and
+the grant.
+
+**Yogi OS-signing profile and `--lock` (2026-11-05, source only).** `yogi-v1` (Pixel 11 Pro Fold) is defined in
+`os/signing-bootstrap/yogi.json`. Like `os/signing-bootstrap/mustang.json`, that file is admitted only when it holds
+exactly its fixed profile name and that name is not also in `profiles.json`; anything else stops the loader. The
+profile reuses the reviewed `pro-mustang-v1` recipe, inventory and tools under its own pair of secrets
+(`PIXEL_OS_SIGNING_KEYS_YOGI_V1`, `PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1`), opts in to `access.liveCheck` with
+`recheckEmptyBeforeImport`, and stays `unbound`: no expiry, evidence, `localProof.spec` root or receipt is recorded,
+and `missing` names the identity approval, both containers, the time-boxed access, the measured Yogi-builder spec
+roots, a Yogi-builder job and the one approved run. `prove` and `run` take `--lock PATH` (absolute, no `..`); without
+it the lock is still `os/release-pipeline/frankel.json` `host.lockPath`, unchanged. A Yogi job passes
+`--lock /srv/rose-yogi/yogi-build.lock` on the dedicated Yogi runner and never runs on the Frankel builder. No such job
+exists yet, and this profile admits no key operation.
+
+## Common controller explicit target
+
+The common controller's Python API also accepts
+`Production.control_builder(action, builder={project, zone, instance, instanceId}, claim=callback)`.
+An explicit target must supply all four strings; its numeric instance ID and name
+are checked on every describe, including polling and uncertain-request reconciliation.
+Missing/malformed bindings never fall back to Frankel. The ownership callback runs
+before a start request; failure to persist ownership prevents the request. The
+calling lane remains responsible for separate-builder admission and validating its
+ownership record before STOP. Existing Frankel calls without `builder` retain their
+original target, command format and polling behavior. This is a source API, not
+provisioning or runtime authority. The existing polling deadline is preserved;
+it is not a new hard subprocess wall-time guarantee.
+
+## One retained private-draft recovery (2026110501)
+
+`frankel-draft-recovery.yml` is a manual, hosted-only, main-only one-off for original
+run `42063694943`, captured source `9a98e80f50b654af20f43dda41ad41f86e14b434`.
+It pins both Actions artifact IDs, exact ZIP sizes and SHA-256 digests in
+`scripts/frankel-draft-recovery.py`. It verifies the terminal producer and successful
+build/sign/verification/transfer/cleanup, safely extracts only the expected files,
+and re-derives the allocation candidate. An existing tag refuses; it never resumes
+or overwrites a partial draft. The existing publisher verifies the transferred
+bytes and creates/download-checks an **unpublished** draft with `--draft-only`.
+No controller, builder, signing, new allocation, public finalization or promotion
+runs. The existing installation token is job-scoped and revoked by its action.
+
+After exact execution authorization, the invocation is:
+`gh workflow run frankel-draft-recovery.yml --repo Immortal-Protocols/RoseOS-1 --ref main`.
+There are no caller-controlled producer inputs. One attempt only; uncertain effects
+or a refusal require inspection, never automatic retry. The job is bounded to
+90 minutes; extraction allows at most 32 members, 3 GiB OTA-expanded bytes and
+64 KiB allocation-expanded bytes. Nonsecret outcome/allocation receipts are kept
+for 14 days; hosted scratch is removed on cleanup. This workflow does not grant
+permission to retry previously denied local artifact or log reads.
+
+For Mustang's independent builder, the recovered allocation can subsequently be
+reviewed and committed under `os/latest-beta/`; `app-inputs-export` then rechecks
+and copies the retained signed apps/policy for build `2026110501`. Export does not
+require public publication, and its existing 30-minute/owned-start lifecycle is
+separate from this hosted recovery. Never substitute older app bytes.
+
+## Allocation receipt recovery: source only, execution approval pending
+
+`frankel-allocation-recovery.yml` prepares a manual hosted read of artifact
+`13438221694` from successful recovery run `42075447865`, exact size 1,968 bytes
+and SHA-256 `2c9195275b87136880d47f9daeed9d294e8180a2942220917dbdb8e86847cede`.
+It does not retry the denied local download. Execution requires the exact hosted
+read and review-branch write approval; registering this source is not execution.
+
+The helper admits only the three expected nonsecret JSON files (at most four ZIP
+entries including the directory, at most 64 KiB expanded total), validates the
+successful recovery/source, original producer and deterministic allocation, and
+creates only `codex/frankel-2026110501-allocation` with one added file:
+`os/latest-beta/frankel-2026110501-allocation.json`. Existing branch/file refuses.
+The branch is based on the captured checkout; main is never moved. The created
+ref and file bytes are read back. A partial/uncertain outcome is not retried.
+
+The job needs temporary `actions: read` and `contents: write` on RoseOS-1 through
+its existing GITHUB_TOKEN, no stored credential or IAM change. The nonsecret
+allocation becomes public source. It has a 15-minute hosted limit, 14-day result
+receipt, and hosted scratch cleanup. No PR merge, build, signing, publication,
+builder start, app export or artifact payload beyond the pinned receipt occurs.
+After approval and verified source, the exact invocation is:
+`gh workflow run frankel-allocation-recovery.yml --repo Immortal-Protocols/RoseOS-1 --ref main`.
+
+### One-shot existing Frankel 2026110501 promotion
+
+`frankel-draft-promotion.yml` is a manual, main-only, first-attempt hosted route
+for existing release 435513431. It requires explicit promotion authority; source
+merge does not authorize execution. No inputs, VM, build, signing or allocation.
+It reuses recovery's fixed producer 42063694943 and exact retained OTA/allocation
+artifact IDs, byte limits and SHA-256 pins. It derives candidate
+cc238285b3aaf379e89dc6724ff1f68e478f8920 and validates the transferred manifest,
+public identity pins and all seven assets using the existing publisher checks.
+The manifest is bound transitively by the pinned producer artifact digest.
+
+The existing draft must match its ID/tag, source/recovery description, asset set,
+sizes and digests. Every asset is downloaded and hashed before one promotion
+PATCH. No asset creation, repair, replacement or deletion is available. A changed
+draft refuses. The route verifies public release identity, Latest and anonymous
+`releases/latest/download/frankel-stable` bytes after promotion. Transport or
+readback failure after PATCH is uncertain, never an automatic retry or rollback.
+
+Uses the existing repository-scoped pixel-ota App token, revoked on completion;
+90-minute hosted job, Frankel FIFO, private JSON receipts for 14 days and hosted
+scratch removal. Re-reads the original two retained Actions artifacts plus draft
+assets and public Latest/channel; these reads belong in execution approval.
+After approval only: `gh workflow run frankel-draft-promotion.yml --repo
+Immortal-Protocols/RoseOS-1 --ref main`. Inspect existing runs and release before
+execution. Never rerun the earlier recovery or normal build to promote this draft.
+
+Promotion run 42115900771 published release 435513431 at 2026-11-05T21:48:54Z,
+then failed post-publication readback. Independent read-only checks confirmed
+Latest and the 37-byte channel SHA-256
+bf2b6bcea79e38b4f2187e6f1334ed6fbeb7eeabc71dfd10588fc78d043c1959.
+GitHub's Latest URL redirects first to the same repository's tagged download;
+the generic public downloader permits only a direct storage redirect. The
+promotion-specific reader now admits exactly that pinned tagged URL, anonymously,
+then uses the unchanged storage reader. Wrong tags, queries, schemes or hosts
+refuse. No retry or re-promotion is appropriate for the already public release.
+The original run logged only PublishError, so its exact HTTP response was not
+retained; the observed redirect reproduces the source failure independently.

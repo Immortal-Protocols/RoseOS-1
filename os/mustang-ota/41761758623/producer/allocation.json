@@ -1,0 +1,20 @@
+{
+  "build": "2026110401",
+  "device": "mustang",
+  "integrationDir": "/home/pixelbuild/rose-actions/mustang-reconcile-2026110401",
+  "observed": {
+    "consumedBuilds": [
+      "2026110301",
+      "2026110302"
+    ],
+    "mustangStorageEntries": 4,
+    "releasesListed": 98,
+    "reservations": 2
+  },
+  "reservedAt": "2026-11-04T01:22:27Z",
+  "runAttempt": "1",
+  "runId": "41750459835",
+  "schema": "roseos.mustang-allocation.v1",
+  "source": "434df146289981c93f1ff84db7ab01ce37136f38",
+  "workDir": "/home/pixelbuild/rose-actions/mustang-integrate-2026110401"
+}

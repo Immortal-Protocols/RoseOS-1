@@ -1,0 +1,37 @@
+{
+  "schema": "roseos.agent-hosted-release.v1",
+  "basis": "The off-builder (hosted) Agent route of scripts/host-app-release.py --hosted. Source only and unbound: it builds, signs or publishes nothing until every null below is bound by its owner and the route is separately authorized. The signing values and pin are the committed Frankel route's, unchanged (os/release-pipeline/frankel.json; Signing's #608 contract). App owns the portable SDK, JDK, public connection inputs and tools: absolute paths on the hosted runner, with no builder source root. The reservation store is the off-builder atomic app version ledger Frankel and Agent share; its location and write credential are pending a decision. No value here is a placeholder, and nothing is inferred from a field name.",
+  "identities": {
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+  },
+  "host": {
+    "integrate": {
+      "project": "protocols-465723",
+      "secretVersion": "1",
+      "appSecrets": {
+        "keystore": "PIXEL_APP_SIGNING_KEYSTORE",
+        "config": "PIXEL_APP_SIGNING_CONFIG",
+        "storePassword": "PIXEL_APP_SIGNING_STORE_PASSWORD",
+        "keyPassword": "PIXEL_APP_SIGNING_KEY_PASSWORD"
+      },
+      "appSdkRoot": null,
+      "javaHome": null,
+      "publicAssetsDir": null,
+      "publicAssetDigests": null
+    },
+    "tools": {
+      "aapt": null,
+      "apksigner": null
+    }
+  },
+  "appRelease": {
+    "packageName": "dev.pixel.voice",
+    "minimumTestedOs": {
+      "build": "2026102804",
+      "controller": 28
+    }
+  },
+  "reservation": {
+    "store": null
+  }
+}

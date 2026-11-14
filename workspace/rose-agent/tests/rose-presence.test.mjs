@@ -12,69 +12,77 @@ const activity=source('RoseConversationActivity.java'),view=source('RosePresence
 test('the presence is Core\'s RoseVisualState drawn from real, fresh VoiceService levels',()=>{
  const refresh=activity.slice(activity.indexOf('void refresh(){'),activity.indexOf('void renderTask('));
  assert.match(refresh,/RoseVisualState visual=RoseVisualState\.from\(state,/,'one call into Core\'s adapter; no mapping duplicated here');
- assert.match(refresh,/presence\.show\(visual\);caption\.setText\(RosePresenceModel\.caption\(visual\)\);/,'presence and caption draw the same state');
+ // #410: the header pearl and the caption draw the same state (OxbloodRose.caption; speaking only from fresh output).
+ assert.match(refresh,/showPearl\(visual\);\n  String cap=OxbloodRose\.caption\(state,visual\);/,'pearl and caption draw the same state');
  assert.match(refresh,/RoseVisualState\.fresh\(s\.trayInputLevel,seen,now\)/);assert.match(refresh,/RoseVisualState\.fresh\(s\.trayOutputLevel,seen,now\)/);
  assert.match(refresh,/seen=s==null\?0L:s\.trayAudioObservedAt/,'levels are dated by VoiceService\'s own observation time');
  assert.match(refresh,/s==null\?Float\.NaN:/,'no service, no levels: nothing is inferred');
  assert.match(refresh,/reducedMotion\(\),resumed\);/,'reduced motion and visibility come from the activity');
  for(const text of [view,model])assert.ok(!/ConversationState|\.muted\b|trayOutputLevel|trayInputLevel|SPEAKING_LEVEL/.test(text),
   'the renderer reads only RoseVisualState: no second state mapping');
+ const pearl=source('RosePearl.java');
+ assert.ok(!/VoiceService|ConversationState|send\(|Intent/.test(pearl),'the pearl draws only what it is given');
 });
-
 test('the old petal presence is gone, not kept as an alternative',()=>{
  assert.ok(!/class Presence\b|petal|translucent petals|ValueAnimator/.test(activity),'Presence class and its animation removed');
- assert.match(activity,/RosePresenceView presence;/);assert.match(activity,/presence=new RosePresenceView\(this\)/);
+ // #410: the conversation shows Rose as the header pearl (RosePearl); its only animation is the pearl's own breath.
+ assert.match(activity,/pearl=new RosePearl\(density,16\);/);
+ assert.match(activity,/boolean breathing=speaking&&v\.animate;\n  pearl\.breathe\(breathing\);/,'breath only while visible with animations on');
 });
-
 test('the renderer is visual only and suspends when not visible',()=>{
  assert.ok(!/send\(|startForegroundService|VoiceService\.|task\/stop|new Intent|evaluateJavascript|WebView|GLSurfaceView|EGL/.test(view),'no command, task, bridge or GL dependency');
  assert.match(view,/onDetachedFromWindow\(\)\{running=false;/);assert.match(view,/onWindowVisibilityChanged[^]*?running=false/);
  assert.match(view,/if\(model\.step\(dt\)\)postInvalidateOnAnimation\(\);else running=false;/,'frames only while changing');
  assert.match(view,/setContentDescription\(d\)/,'state is described for accessibility');
- assert.match(activity,/onPause\(\)\{resumed=false;[^}]*presence\.show\(RoseVisualState\.from\(state,Float\.NaN,Float\.NaN,true,false\)\)/,'leaving the screen stops the animation');
+ assert.match(activity,/onPause\(\)\{resumed=false;handler\.removeCallbacks\(tick\);stopBreath\(\);/,'leaving the screen stops the pearl\'s breath');
  // The study's state meaning, recorded once in the model.
  assert.match(model,/GAP_JOINED=\.012f,GAP_NARROW=\.10f,GAP_WIDE=\.38f/);assert.match(model,/RING_CLOSE=1\.075f,RING_BROAD=1\.55f,RING_ENERGY=\.12f/);
 });
-
 test('voice, results, Watch/Stop, notices and Update Rose Agent are unchanged',()=>{
- assert.match(activity,/ConversationPresentation\.Glyph glyph=ConversationPresentation\.primary\(state\);/);
- assert.match(activity,/primary\.show\(glyph,state\.muted\?"Unmute":"Mute",state\.muted\?"Microphone muted\. Unmute":"Microphone on\. Mute"\)/);
- assert.match(activity,/primary\.show\(glyph,"Speak","Start voice conversation"\)/);assert.match(activity,/primary\.show\(glyph,"Cancel","Cancel voice connection"\)/);assert.match(activity,/end\.available\(state\.canEnd\(\)\)/);
+ // #410: one Connect/Disconnect control: Connect is talk (after the microphone permission), Disconnect ends or cancels
+ // connecting (end); it never mutes. Rose's own call mute stays, named as Rose's, only while the call is live.
+ const tap=activity.slice(activity.indexOf(' void connectTapped(){'),activity.indexOf(' /** The header pearl'));
+ assert.match(tap,/if\(live\)\{send\("end"\);return;\}/);
+ assert.match(tap,/checkSelfPermission\("android\.permission\.RECORD_AUDIO"\)!=PackageManager\.PERMISSION_GRANTED/);
+ assert.match(tap,/send\("talk"\);/);assert.ok(!/mute/.test(tap),'Disconnect never mutes');
+ assert.match(activity,/mic\.setOnClickListener\(v->\{if\(state!=null&&state\.active\(\)\)send\(state\.muted\?"tray_unmute":"tray_mute"\);\}\);/);
+ assert.match(activity,/mic\.setContentDescription\(state\.muted\?agentName\+"’s microphone is muted\. Unmute":"Mute "\+agentName\+"’s microphone"\);/);
+ // F08: still only during a live call, and now only where the OS Rose chin is not reachable (RoseChin).
+ assert.match(activity,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\),navigationMode\(\)\)\?View\.VISIBLE:View\.GONE\);/);
  assert.match(activity,/setOnClickListener\(v->openWorkspace\(\)\)/);assert.match(activity,/setPositiveButton\("Stop task",\(d,w\)->sendStop\(id\)\)/);
  assert.match(activity,/add\("Update Rose Agent"\)\.setOnMenuItemClickListener\(i->\{checkForUpdate\(\);return true;\}\)/);
  assert.match(activity,/presentedScroll\.setVisibility\(t\.visible\?View\.VISIBLE:View\.GONE\)/,'results stay empty when absent');
  assert.ok(!/Interrupt|EditText|Listening…|Speaking…/.test(activity),'no composer, Interrupt or listening/speaking notice');
 });
-
-test('HiFi composition: header, caption, results type and the three-well tray with the real workspace route',()=>{
- assert.match(activity,/head\.setText\("Rose"\);head\.setAccessibilityHeading\(true\)/);
+test('Oxblood composition: header pearl and title, upper-right work entry, caption, results type and one Connect/Disconnect (#410)',()=>{
+ assert.match(activity,/title\.setText\(LocalAssistantIdentity.name\(this\)\);title\.setAccessibilityHeading\(true\)/);
  assert.match(activity,/caption\.setImportantForAccessibility\(View\.IMPORTANT_FOR_ACCESSIBILITY_NO\)/,'the caption is not a notice or a second announcement');
- assert.match(activity,/ConversationPresentation\.of\([^;]*,t\.visible,cfg\.fontScale\)/,'Rose is large without a result and compact beside its caption with one (ConversationPresentationTest)');
+ assert.match(activity,/ConversationPresentation\.of\([^;]*,t\.visible,cfg\.fontScale\)/,'type sizes from the tested layout (ConversationPresentationTest)');
  assert.match(activity,/taskTitle=presentedText\(ConversationPresentation\.TITLE_SP,ink\(\)/);assert.match(activity,/taskBody=presentedText\(ConversationPresentation\.BODY_SP,ink2\(\)/);
- assert.match(activity,/agents\.show\(ConversationPresentation\.Glyph\.APPS,"Rose's apps","Open Rose's apps"\);agents\.setOnClickListener\(v->openOverview\(\)\);/,
-  'Rose\'s apps opens the managed workspace overview (MANAGED-WORKSPACE-OVERVIEW-001)');
- // APP-WATCH-1031-C: never a silently disabled well; the overview states each reason itself.
- assert.ok(!/agents\.available\(/.test(activity),'Rose\'s apps is never disabled');
- assert.match(activity,/void dimmed\(boolean dim,String description\)\{setEnabled\(true\);setAlpha\(dim\?\.45f:1f\);setContentDescription\(description\);\}/);
+ assert.match(activity,/work\.setContentDescription\("Open Rose’s background work"\);work\.setOnClickListener\(v->openOverview\(\)\);/);
+ assert.ok(!/work\.setEnabled\(false\)/.test(activity),'the work entry is never disabled');
+ assert.match(activity,/workGlyph\.set\(ctl\.working\(resumedAt,SystemClock\.uptimeMillis\(\)\),reducedMotion\(\)\);/,'any authoritative session ready, from a current read only');
+ assert.doesNotMatch(activity,/workShown|WORK_HOLD/,'never a held last-shown state');
+ assert.match(activity,/resumed=true;resumedAt=SystemClock\.uptimeMillis\(\);ctlPolledAt=0;/,'a resume makes older reads stale and starts a fresh read at once');
+ assert.match(activity,/\}\)\.withSessions\(summarized\[0\]\?slots:null,startedAt\);/,'the same get_state reply\'s routed sessions summary');
+ assert.match(activity,/slots\.add\(new String\[\]\{jsonString\(x,"sessionId"\),jsonString\(x,"status"\)\}\)/,'only each slot\'s id and status are kept');
+ assert.doesNotMatch(activity,/workGlyph\.set\([^;]*"launching"/,'the work button never lights while a session is only launching');
+ assert.match(activity,/connect\.setBackground\(new OxbloodRose\.Pill\(density\)\);/);
+ assert.match(activity,/connect\.setContentDescription\(live\?\(state\.phase==ConversationState\.Phase\.CONNECTING\?"Cancel connecting to "\+agentName:"Disconnect from "\+agentName\):"Connect to "\+agentName\);/);
  assert.match(activity,/if\(!t\.visible\)\{shownTaskId="";shownTaskActive=false;return;\}/);
- assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctl\);boolean canWatch=ws\.canWatch;/,'the shown task\'s View workspace keeps the classified read');
- assert.ok(!/Interrupt|EditText/.test(activity),'no composer or Interrupt in the tray');
+ assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctl\);boolean canWatch=!localTask&&ws\.canWatch;/,'the Node task\'s View workspace keeps the classified read; local cards stay read-only');
+ assert.match(activity,/boolean canStop=!localTask&&running&&stopPendingFor==null&&!stopInFlight;/,'local task cards never call the unrelated Node task Stop route');
+ assert.ok(!/Interrupt|EditText/.test(activity),'no composer or Interrupt');
 });
-
-test('#159: ivory reading surface, shared layout decisions and legible drawn tray glyphs',()=>{
- const drawing=source('ConversationDrawing.java'),presentation=source('ConversationPresentation.java');
- assert.match(activity,/if\(ivory\)root\.setBackground\(new ConversationDrawing\.IvoryBackground\(this\)\);else root\.setBackgroundColor\(paper\(\)\);/,'HiFi ivory surface in light mode, dark unchanged');
- assert.match(drawing,/0xfff7f9fc,0xffeef3f9/,'HiFi .ivory-bg gradient');assert.match(drawing,/R\.drawable\.rose_home_wallpaper/,'existing wallpaper reused read-only, not duplicated');
- assert.match(activity,/ConversationPresentation lay=ConversationPresentation\.of\(/,'stage and type come from the tested layout');
- assert.match(activity,/int size=dp\(lay\.stage\)/);assert.match(activity,/taskTitle\.setTextSize\(lay\.titleSp\);taskBody\.setTextSize\(lay\.bodySp\);/);
- assert.match(activity,/cp\.bottomMargin=dp\(ConversationPresentation\.reservedBottom\(\)\)/,'results end above the tray');
- assert.match(activity,/end\.show\(ConversationPresentation\.Glyph\.END,"End call","End voice conversation"\)/);
- assert.ok(![...activity.matchAll(/(?:primary|end|agents)\.show\(([^,]+),/g)].some(m=>/"/.test(m[1])),'tray wells take a drawn glyph, never an emoji string');
- for(const g of ['MIC','MIC_OFF','END','CANCEL','APPS'])assert.match(drawing,new RegExp('case '+g+'[:,]'),g+' is drawn');
- assert.match(drawing,/setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\)/,'icons are decorative; wells keep their spoken names');
+test('#410: the Oxblood Rose field and the shared layout decisions',()=>{
+ const presentation=source('ConversationPresentation.java');
+ assert.match(activity,/root\.setBackground\(new OxbloodField\(OxbloodField\.ROSE\)\);/,'the Oxblood Rose field in either system theme');
+ assert.match(activity,/ConversationPresentation lay=ConversationPresentation\.of\(/,'type comes from the tested layout');
+ assert.match(activity,/taskTitle\.setTextSize\(lay\.titleSp\);taskBody\.setTextSize\(lay\.bodySp\);/);
+ assert.match(activity,/cp\.bottomMargin=dp\(110\);/,'results end above the Connect control');
  assert.match(presentation,/HEAD_SP=30,TITLE_SP=44,BODY_SP=21,CAPTION_SP=15/);
+ assert.ok(!/TrayMaterial|IvoryBackground/.test(activity),'no HiFi tray or ivory surface left');
 });
-
 test('APP-OS-VISUAL-1030: the shared Rose draws the HiFi renderer\'s rendered metal and camera geometry',()=>{
  // Tones come from the model for the eased microphone mix, never the raw #f27a87/#a6bacf base painted directly.
  // Each shell has its own run so the step to dark sits on the perspective seam (native render, M003).
@@ -98,9 +106,8 @@ test('APP-OS-VISUAL-1030: the shared Rose draws the HiFi renderer\'s rendered me
  assert.match(view,/String d=RosePresenceModel\.describe\(v\)/);
 });
 
-test('APP-OS-VISUAL-1030: the compact result Rose and caption sit at the HiFi positions',()=>{
- // .screen[data-result=true]: the 220 stage scaled .4 (88) ends where the caption starts (margin + 84); no extra inset.
- assert.match(activity,/stage\.setPadding\(0,0,0,0\);caption\.setGravity\(t\.visible\?Gravity\.START\|Gravity\.CENTER_VERTICAL:Gravity\.CENTER\);/);
- assert.ok(!/stage\.setPadding\(t\.visible\?dp\(12\)/.test(activity),'no 12dp inset before the compact Rose');
+test('#410: the caption and output sit at the Oxblood positions',()=>{
+ // oxblood.css:399-400: the caption 88dp under the header's top, the output from 121dp under it, both 30dp in.
+ assert.match(activity,/capp\.topMargin=headTop\+dp\(88\);capp\.leftMargin=dp\(30\);/);
+ assert.match(activity,/cp\.topMargin=headTop\+dp\(121\);/);
 });
-

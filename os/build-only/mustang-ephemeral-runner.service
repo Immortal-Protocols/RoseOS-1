@@ -1,0 +1,24 @@
+[Unit]
+Description=Mustang one-job Actions runner
+# A nofail fstab mount is not ordered before the local filesystem target, so
+# waiting on that target does not wait for the data disk. RequiresMountsFor
+# orders this unit after the mount that backs the path.
+# ConditionPathIsMountPoint still refuses to start when that path is not a mount.
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/mnt/disks/mustang-data
+ConditionPathIsMountPoint=/mnt/disks/mustang-data
+
+[Service]
+Type=simple
+User=mustang-runner
+Group=mustang-runner
+WorkingDirectory=/mnt/disks/mustang-data/roseos/runner
+ExecStart=/mnt/disks/mustang-data/roseos/runner/mustang-ephemeral-guest.sh
+TimeoutStartSec=30
+RuntimeMaxSec=14400
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

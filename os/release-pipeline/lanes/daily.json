@@ -1,0 +1,42 @@
+{
+  "schema": "roseos.daily-lanes.v1",
+  "basis": "1E (Rose daily work plan, 2026-11-07; first built as 1F on 2026-11-05): build, sign, verify and publish each flavor daily at 4 a.m. Pacific through its own entry point, builder and lifecycle, so one unavailable flavor never blocks another; manual dispatch stays. scripts/daily-release.py reads this file.",
+  "activation": "The schedule is in .github/workflows/daily-release.yml and does nothing while every lane is disabled. Enabling a lane is its own reviewed change here, approved by that lane's owner and Chief; the lane's first scheduled run then builds and publishes main at the next window.",
+  "window": {
+    "timeZone": "America/Los_Angeles",
+    "time": "04:00",
+    "note": "1E: 4 a.m. Pacific in America/Los_Angeles, so the local time survives daylight-saving changes. The workflow's crons are exactly the UTC times that can be this local time (11:00 and 12:00 UTC); the dispatcher acts only on the one that is 04:00 local on that date."
+  },
+  "lanes": [
+    {
+      "name": "frankel",
+      "enabled": true,
+      "workflow": "os-release.yml",
+      "inputs": {"mode": "latest-beta"},
+      "runTitle": "Build & publish latest Pixel 10",
+      "deliveryJob": "publisher",
+      "lastGood": "latest-beta promotes a new Beta Latest only after verification and the download check; a failed run publishes nothing new and older releases stay for rollback.",
+      "owner": "Release (Frankel route); capacity: Dev Infra"
+    },
+    {
+      "name": "mustang",
+      "enabled": false,
+      "workflow": "mustang-ota-dedicated.yml",
+      "inputs": {"publish": "true"},
+      "runTitlePrefix": "mustang-dedicated-ota ",
+      "deliveryJob": "publisher",
+      "lastGood": "mustang-ota-dedicated publishes the OTA before the channel metadata and never Latest; a failed run leaves mustang-stable on the last good build.",
+      "owner": "Mustang Grok owner (dedicated route and builder; the shared-host os-release mustang-ota route is retired). Before enabling, the route must admit this automatic dispatch: its publication authority today requires automatic false."
+    },
+    {
+      "name": "yogi",
+      "enabled": false,
+      "workflow": "yogi-ota.yml",
+      "inputs": {"stage": "ota", "publish": "true"},
+      "runTitlePrefix": "yogi-ota ota ",
+      "deliveryJob": "publisher",
+      "lastGood": "yogi-ota publishes the OTA first and yogi-stable last, never Latest; a failed run leaves the channel on the last good build.",
+      "owner": "Yogi Grok owner (route and its dedicated builder). Before enabling, the route must admit this automatic dispatch: yogi-ota.yml is manual only today."
+    }
+  ]
+}

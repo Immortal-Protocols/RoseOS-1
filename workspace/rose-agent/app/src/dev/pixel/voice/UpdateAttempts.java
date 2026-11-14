@@ -62,6 +62,7 @@ final class UpdateAttempts {
   if (UpdateRecovery.deleteDownload(a)) {
    new File(c.getCacheDir(), UpdateRecovery.DOWNLOAD).delete();
    new File(c.getCacheDir(), UpdateRecovery.DOWNLOAD_SIGNATURE).delete();
+   new File(c.getCacheDir(), UpdateRecovery.LEGACY_SIGNATURE).delete();
   }
   return a;
  }

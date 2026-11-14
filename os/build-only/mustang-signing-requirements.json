@@ -1,0 +1,29 @@
+{
+  "schema": "roseos.mustang-signing-requirements.v1",
+  "status": "one bootstrap complete; Mustang keys and passphrase committed at numeric version 1; delivery signing pending",
+  "profile": "pro-mustang-v1",
+  "device": "mustang",
+  "project": "protocols-465723",
+  "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+  "proposedSecrets": {
+    "keys": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+    "passphrase": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1"
+  },
+  "requirements": [
+    "Recheck the two created Mustang containers empty as the explicitly authorized signer; no other-device secret or grant",
+    "Bind the new OS profile to the existing approved key inventory, consumer and pinned tool-proof mechanism",
+    "Confirm the existing signer can describe containers, list versions, add versions, and later access exactly those Mustang secrets",
+    "If existing permissions do not suffice, stop and report; no IAM grant or credential change is authorized by the operator transfer",
+    "One journaled bootstrap only, with empty-container checks before generation and before import; unknown or partial outcome requires explicit recovery",
+    "Bind the bootstrap public receipt and numeric versions to Mustang signing; permanent identities must remain distinct from other devices"
+  ],
+  "compatibility": {
+    "upstreamGenerateRelease": "Pinned GrapheneOS/script generate-release.sh explicitly includes Mustang in the rango|mustang|blazer|frankel gen10 case",
+    "existingHostSign": "Mustang adapter now supplies an exact target config, numeric Mustang secret versions from its bootstrap receipt and scoped structural key discovery; other routes retain default public-identity comparison.",
+    "factoryPackaging": "Mustang adapter reuses existing factory script derivation, bounded execution and extraction guards, deliberately omitting the sprint-removed checks while retaining basic installer format and output hashes.",
+    "archiveSigning": "Separate archive signature status is omitted in this sprint; no Rango/Blazer archive-signing identity is selected"
+  },
+  "runtime": "Bootstrap 41719073037 completed once with no recovery needed and workspace removed. Both Mustang containers have committed version 1, pinned by its public receipt. Four conditional signer bindings expire 2026-11-04T00:50:06Z. No further bootstrap is authorized or required.",
+  "profileDefinition": "os/signing-bootstrap/mustang.json",
+  "bootstrapEvidence": "os/signing-bootstrap/mustang-bootstrap-receipt.json"
+}

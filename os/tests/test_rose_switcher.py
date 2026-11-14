@@ -21,13 +21,24 @@ PINNED = {'fallback_recents_activity.xml': '8df1879fb83e2a9f5b11b657a498e6153504
     'OverviewComponentObserver.java': 'a94703d973e14ba8e1f43ab07d7eacaa0e32f8b5668d16bff1c6843dd4877893',
     'BaseContainerInterface.java': 'a416df4aaa95b3cc954cef5ada99bc3f1078ddbdb56ccb4365be861eda6cf829',
     'FallbackActivityInterface.java': 'dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa',
-    'OverviewActionsView.java': '7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f'}
+    'OverviewActionsView.java': '7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f',
+    'RecentsActivity.java': 'b9bd0251eef6b4cd3159dea08657881cfad74fbe42034f03b773c2fda8d8b804',
+    'task.xml': '6fab27a7a95e9bda31d7fd4fb4a041ff49bf25c88e1744e30fff78dc50780b19',
+    'icon_app_chip_view.xml': '39f08f41ca50a248942ec9c756d474659ee31fe91c486788ae1cfd5bd6306071'}
 TARGETS = {'fallback_recents_activity.xml': LAYOUT, 'BaseContainerInterface.java': f'{QUICKSTEP}/BaseContainerInterface.java',
     'FallbackActivityInterface.java': f'{QUICKSTEP}/FallbackActivityInterface.java',
-    'OverviewActionsView.java': f'{QUICKSTEP}/views/OverviewActionsView.java'}
-# The stock lines the patch replaces, and nothing else: the fallback's claimed space below the cards, and the phone
-# actions bar's task-aligned bottom margin (now less the same space).
-REPLACED = ['-                    overviewActionsClaimedSpace,',
+    'OverviewActionsView.java': f'{QUICKSTEP}/views/OverviewActionsView.java',
+    'RecentsActivity.java': f'{QUICKSTEP}/RecentsActivity.java',
+    'task.xml': 'quickstep/res/layout/task.xml', 'icon_app_chip_view.xml': 'quickstep/res/layout/icon_app_chip_view.xml'}
+# The stock lines the patch replaces, and nothing else: #410's colour values of the human task cards' identity chip and
+# focus/hover borders (attribute values only), the fallback's claimed space below the cards, and the phone actions
+# bar's task-aligned bottom margin (now less the same space).
+REPLACED = ['-    android:foreground="@drawable/app_chip_fg"',
+    '-    android:background="@color/materialColorSurfaceBright"',
+    '-    launcher:focusBorderColor="@color/materialColorSecondary">',
+    '-        android:background="@drawable/icon_menu_arrow_background"',
+    '-    launcher:focusBorderColor="@color/materialColorOutline"',
+    '-                    overviewActionsClaimedSpace,',
     '-        // Align to bottom of task Rect.',
     '-                - mDp.getOverviewProfile().getActionsHeight();']
 
@@ -85,8 +96,8 @@ class RoseSwitcherTest(unittest.TestCase):
         self.assertLess(size.index('isLargeScreen()'), size.index('getOverviewClaimedSpaceBelow'), 'phone path only')
         fallback = (tree/f'{QUICKSTEP}/FallbackActivityInterface.java').read_text()
         override = fallback[fallback.index('protected int getOverviewClaimedSpaceBelow(Context context) {'):]
-        self.assertIn('R.dimen.rose_agent_strip_height', override[:override.index('}')])
-        self.assertIn('import com.android.launcher3.R;', fallback)
+        self.assertIn('return com.android.quickstep.fallback.RoseAgentStrip.rowHeight(context.getResources());',
+            override[:override.index('}')], '#410: the claim is the row\'s measured height (font scale)')
         actions = (tree/f'{QUICKSTEP}/views/OverviewActionsView.java').read_text()
         margin = actions[actions.index('private int getBottomMargin() {'):actions.index('public void updateDimension(')]
         phone = margin[margin.index('// Align to bottom of task Rect.'):]
@@ -97,7 +108,11 @@ class RoseSwitcherTest(unittest.TestCase):
         row = (OVERLAY/'RoseAgentStrip.java').read_text()
         reserved = row[row.index('public static int reservedBelow(Context context) {'):row.index('private final View.OnLayoutChangeListener')]
         self.assertIn('if (c instanceof RecentsActivity) {', reserved, 'only the fallback overview reserves it')
-        self.assertIn('R.dimen.rose_agent_strip_height', reserved)
+        self.assertIn('return rowHeight(c.getResources());', reserved)
+        height = row[row.index('public static int rowHeight(Resources resources) {'):row.index('public static int reservedBelow(')]
+        self.assertIn('resources.getDimensionPixelSize(R.dimen.rose_agent_strip_height));', height, 'the default is the minimum')
+        self.assertEqual(height.count('TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,'), 2,
+            'the platform\'s own sp conversion (nonlinear at large scales) for the count and the status')
         self.assertIn('return 0;', reserved)
         anchor = row[row.index('private void anchor() {'):row.index('void refresh() {')]
         self.assertIn('parent.findViewById(R.id.action_buttons)', anchor)
@@ -108,7 +123,7 @@ class RoseSwitcherTest(unittest.TestCase):
             self.assertEqual(row.count(moved), 1 if moved == 'setTranslationY' else 0, 'only the row itself moves')
         self.assertIn('parent.addOnLayoutChangeListener(relayout);', row)
         self.assertIn('parent.removeOnLayoutChangeListener(relayout);', row)
-        self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 18 + 96 + 18)
+        self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 22 + 146 + 18)
         layout_actions = layout.index('android:id="@+id/overview_actions_view"')
         self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'))
         self.assertLess(layout_actions, layout.index('RoseAgentStrip'), 'declared after the actions so it draws above them')
@@ -188,12 +203,25 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public abstract android.content.pm.PackageManager getPackageManager(); '
                 'public abstract <T> T getSystemService(Class<T> c); '
                 'public void startActivityAsUser(Intent i, android.os.UserHandle u) {} '
-                'public abstract android.content.res.Resources getResources(); }',
+                'public abstract android.content.res.Resources getResources(); '
+                'public abstract android.content.ContentResolver getContentResolver(); '
+                'public abstract String getPackageName(); }',
             'android/os/UserHandle.java': 'package android.os; public final class UserHandle { '
                 'public static UserHandle of(int u){return null;} public int getIdentifier(){return 0;} }',
             'com/android/launcher3/R.java': 'package com.android.launcher3; public final class R { '
                 'public static final class dimen { public static final int rose_agent_strip_height = 1; } '
-                'public static final class id { public static final int action_buttons = 2; } }',
+                'public static final class id { public static final int action_buttons = 2; '
+                'public static final int scrim_view = 3; } }',
+            # Launcher3 47accce src/com/android/launcher3/views/ScrimView.java: the members the field uses.
+            'com/android/launcher3/views/ScrimView.java': 'package com.android.launcher3.views; '
+                'public class ScrimView extends android.view.View { '
+                'public ScrimView(android.content.Context c, android.util.AttributeSet a) { super(c, a); } '
+                'public int getBackgroundColor() { return 0; } '
+                'public void setDrawingController(ScrimDrawingController d) {} '
+                'public interface ScrimDrawingController { '
+                'default void drawOnScrimWithScale(android.graphics.Canvas c, float s) {} '
+                'default void drawOnScrimWithBottomOffset(android.graphics.Canvas c, int b) {} '
+                'void drawOnScrimWithScaleAndBottomOffset(android.graphics.Canvas c, float s, int b); } }',
             'com/android/quickstep/RecentsActivity.java': 'package com.android.quickstep; '
                 'public class RecentsActivity extends android.app.Activity {}',
             'com/android/launcher3/util/Executors.java': 'package com.android.launcher3.util; public class Executors { '
@@ -206,7 +234,10 @@ class RoseSwitcherTest(unittest.TestCase):
             (tmp/'src'/relative).write_text(code)
         result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:-options', '-implicit:none',
             '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
-            str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java')], capture_output=True, text=True)
+            str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java'), str(OVERLAY/'RoseAgentFan.java'),
+            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java'), str(OVERLAY/'RoseEdgeGesture.java'),
+            str(OVERLAY/'RoseTheme.java'), str(OVERLAY/'RoseThemeSetting.java')],
+            capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_view_uses_only_existing_authority_and_opens_only_the_current_work(self):
@@ -241,7 +272,7 @@ class RoseSwitcherTest(unittest.TestCase):
     def test_apply_os_changes_registers_it_with_the_agent_controller_and_the_contract_declares_it(self):
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
         block = patcher[patcher.index('if a.background_policy:'):patcher.index('preinstalls = preinstall_plan(')]
-        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch']", block)
+        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch',", block)
         import json
         contract = json.loads((ROOT/'os/devices/pixel10.json').read_text())
         self.assertIn('packages/apps/Launcher3', contract['roseInclusion']['projects'])
@@ -258,10 +289,14 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         return self.STRIP[self.STRIP.index(signature):self.STRIP.index(end)]
 
     def test_the_agent_carousel_scrolls_on_its_own(self):
-        self.assertEqual(self.STRIP.count('new HorizontalScrollView(context)'), 1)
+        # #410: the row's own scroller is the Oxblood fan, still a HorizontalScrollView of its own.
+        self.assertEqual(self.STRIP.count('new RoseAgentFan(context)'), 1)
         self.assertIn('scroller.addView(cards);', self.STRIP)
-        for coupled in ('RecentsView', 'PagedView', 'overview_panel', 'setOnScrollChangeListener', 'scrollBy('):
-            self.assertNotIn(coupled, self.STRIP, f'{coupled}: the agent row never drives the human carousel')
+        fan = (OVERLAY/'RoseAgentFan.java').read_text()
+        self.assertIn('final class RoseAgentFan extends HorizontalScrollView {', fan)
+        for code in (self.STRIP, fan):
+            for coupled in ('RecentsView', 'PagedView', 'overview_panel', 'setOnScrollChangeListener', 'scrollBy('):
+                self.assertNotIn(coupled, code, f'{coupled}: the agent row never drives the human carousel')
         tree = patched_tree(self)
         layout = (tree/LAYOUT).read_text()
         self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'),
@@ -269,7 +304,8 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
 
     def test_every_entry_starts_fresh_and_leaving_stops_the_connector(self):
         visibility = self.body('protected void onWindowVisibilityChanged(int visibility)', 'private void setWorking(')
-        self.assertLess(visibility.index('scroller.scrollTo(0, 0);'), visibility.index('refresh();'))
+        self.assertLess(visibility.index('scroller.unplace();'), visibility.index('refresh();'),
+            'every entry places the carousel afresh (RoseFan.initial), before the read that fills it')
         self.assertIn('setWorking(false);', visibility.split('} else {')[1])
         refresh = self.body('void refresh() {', 'private static RoseAgentWork read(')
         self.assertIn('int token = ++generation;', refresh)
@@ -281,10 +317,14 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertIn('link.setText(next.linkLabel());', show)
         self.assertIn('setWorking(next.working() > 0 && getWindowVisibility() == VISIBLE);', show)
         working = self.body('private void setWorking(boolean working) {', 'void refresh() {')
-        self.assertIn('pulse.setRepeatCount(ValueAnimator.INFINITE);', working)
-        self.assertIn('if (pulse != null) pulse.cancel();', working.split('} else {')[1])
-        self.assertIn('connector.setAlpha(IDLE);', working)
-        self.assertIn('task.topOfDisplay ? 0x55FFFFFF : 0x33FFFFFF', show, 'the current card is marked')
+        # #410: the Oxblood switcher's pearl is static (lit or dim); nothing animates, so reduced motion has nothing to stop.
+        self.assertIn('connector.setAlpha(working ? 1f : IDLE);', working)
+        for animated in ('ObjectAnimator', 'setRepeatCount', 'ValueAnimator.INFINITE', 'pulse'):
+            self.assertNotIn(animated, self.STRIP, animated)
+        self.assertIn('if (task.topOfDisplay) edge.setStroke(Math.max(1, dp(1)), RoseTheme.map(theme, CURRENT_RING));', show,
+            'the current screen of Rose\'s display is marked')
+        self.assertIn('else edge.setStroke(Math.max(1, dp(1)), RoseTheme.map(theme, CARD_RING));', show)
+        self.assertNotIn('RUBY_EDGE', self.STRIP, 'no running edge: Launcher3 cannot see authoritative running state')
         self.assertIn('Rose is working in it now', show)
 
     def test_empty_and_error_states_invent_nothing(self):
@@ -307,11 +347,13 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertEqual(removed, REPLACED)
 
     def test_the_row_still_fits_its_claimed_height(self):
-        # padding 12 + link row ~18 + card 96 (live view 64 + label) + status ~18 dp, inside the claimed height.
+        # padding 12 + pearl row 22 + Oxblood Rose card 146 (RoseFan.CARD_HEIGHT_DP) + status ~18 dp, inside the claim.
         import re
         tree = patched_tree(self)
         height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
-        self.assertGreaterEqual(height, 12 + 18 + 96 + 18)
+        self.assertGreaterEqual(height, 12 + 22 + 146 + 18)
+        self.assertIn('LINK_ROW_DP = 22', self.STRIP)
+        self.assertIn('static final int CARD_WIDTH_DP = 124, CARD_HEIGHT_DP = 146', (OVERLAY/'RoseFan.java').read_text())
         self.assertNotIn('title = text(', self.STRIP, 'the HiFi link row replaces the old static title')
 
 class ControllerReadPermissionTest(unittest.TestCase):
@@ -803,13 +845,18 @@ class LivePreviewTest(unittest.TestCase):
         self.assertLess(show.index('clearCards();'), show.index('shownFrames = frames;'), 'the previous frames are released')
         self.assertIn('Bitmap frame = frames.get(task.taskId);', show)
         self.assertIn('String why = RoseAgentWork.previewText(RoseAgentWork.preview(task, locked), frame != null);', show)
-        self.assertIn('if (why == null) {\n                ImageView live = new ImageView(getContext());', show)
+        self.assertIn('if (why == null) {\n            ImageView live = new ImageView(getContext());', show)
+        # #410 in-place rebind: the same cards keep their views, and the previous frames are released only after every
+        # card has this read's frame or reason (never a frame from an earlier read, never a recycled one on screen).
+        self.assertLess(show.index('bind(card, task, frames, locked);'), show.index('if (same) release(previous);'))
+        self.assertIn('if (!same) clearCards();', show)
         visibility = code[code.index('protected void onWindowVisibilityChanged(int visibility) {'):code.index('private void setWorking(')]
         hidden = visibility.split('} else {')[1]
-        for step in ('removeCallbacks(previewTick);', 'generation++;', 'clearCards();'):
+        for step in ('removeCallbacks(previewTick);', 'generation++;', 'selection++;', 'clearCards();'):
             self.assertIn(step, hidden, f'leaving the overview: {step}')
         detached = code[code.index('protected void onDetachedFromWindow() {'):code.index('private void anchor()')]
         self.assertIn('clearCards();', detached)
+        self.assertIn('selection++;', detached, 'a tap whose read lands after leaving neither shows frames nor opens')
         locked = code[code.index('private static boolean locked(Context context) {'):code.index('private static Map<Integer, Bitmap> capture(')]
         self.assertIn('return keyguard == null || keyguard.isKeyguardLocked();', locked)
         self.assertIn('return true;', locked.split('catch')[1], 'an unreadable lock state counts as locked')
@@ -823,7 +870,7 @@ class LivePreviewTest(unittest.TestCase):
         self.assertNotIn('PictureInPicture', code)
         tree = patched_tree(self)
         height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
-        self.assertEqual(height, 160, 'the claimed space grows only by the preview body')
+        self.assertEqual(height, 200, '#410: the claimed space grows only to hold the Oxblood Rose card (146 dp)')
 
 class DeviceAppsParityTest(unittest.TestCase):
     """#156 parity (PR361 on main): membership is the platform's per-device app list, front or hidden, the same source
@@ -971,6 +1018,608 @@ class CommonParityReplayTest(unittest.TestCase):
                 if g['launcherCategory'] == g['homeCategory']:
                     self.assertIn('launcherApps', g, 'a same-category gap names both sets')
                     self.assertIn('homeApps', g, 'a same-category gap names both sets')
+
+class OxbloodRoseCarouselTest(unittest.TestCase):
+    """#410: the switcher's Rose carousel as the frozen Oxblood HiFi (prototypes/rose-hifi at f6503a0d) draws it: a
+    centred fan with depth (RoseFan, checked against the transforms Chromium computed for the pinned page) that snaps
+    exactly on a card. Source and JVM checks only: touch feel, rendering and timing need a device recording."""
+    FAN = (OVERLAY/'RoseAgentFan.java').read_text()
+    STRIP = (OVERLAY/'RoseAgentStrip.java').read_text()
+
+    def test_the_fan_geometry_and_placement_match_the_frozen_reference(self):
+        out = Path(tempfile.mkdtemp(prefix='rose-fan-'))
+        self.addCleanup(shutil.rmtree, out, True)
+        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
+            '-Xlint:-options', '-d', str(out), str(OVERLAY/'RoseFan.java'), str(ROOT/'os/tests/RoseFanTest.java')],
+            check=True)
+        result = subprocess.run(['java', '-cp', str(out), 'com.android.quickstep.fallback.RoseFanTest'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_every_release_cancel_and_fling_settles_exactly_on_a_card(self):
+        touch = self.FAN[self.FAN.index('public boolean onTouchEvent('):self.FAN.index('public boolean executeKeyEvent(')]
+        self.assertIn('if (action == MotionEvent.ACTION_DOWN) flung = false;', touch, 'each gesture starts unflung')
+        self.assertIn('if (event.getActionMasked() == MotionEvent.ACTION_DOWN) flung = false;\n        return super.onInterceptTouchEvent(event);',
+            self.FAN, 'also when the gesture starts on a card (onTouchEvent then never sees its ACTION_DOWN)')
+        self.assertIn('if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) && !flung) '
+            'settle(centred());', touch, 'a drag released or cancelled (e.g. by the system gesture) settles on a card')
+        fling = self.FAN[self.FAN.index('public void fling(int velocityX)'):self.FAN.index('public boolean onTouchEvent(')]
+        self.assertIn('settle(centred() + RoseFan.orderStep(velocityX > 0 ? 1 : velocityX < 0 ? -1 : 0, rtl()));', fling,
+            'a fling moves one card, never skipping work')
+        self.assertNotIn('super.fling', fling, 'no free momentum that could stop between cards')
+
+    def test_reduced_motion_moves_at_once_and_keeps_the_static_fan(self):
+        settle = self.FAN[self.FAN.index('private void settle(int index)'):self.FAN.index('protected void onLayout(')]
+        self.assertIn('if (ValueAnimator.areAnimatorsEnabled()) smoothScrollTo(x, 0);\n        else scrollTo(x, 0);', settle)
+        for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler(',
+                'ObjectAnimator', 'INFINITE'):
+            self.assertNotIn(timed, self.FAN, f'{timed}: no timer or endless animation in the carousel')
+
+    def test_keys_step_one_card_clamped_and_accessibility_focus_centres(self):
+        keys = self.FAN[self.FAN.index('public boolean executeKeyEvent('):self.FAN.index('void focused(View card)')]
+        self.assertIn('case KeyEvent.KEYCODE_DPAD_LEFT: step = RoseFan.orderStep(-1, rtl()); break;', keys)
+        self.assertIn('return event.getAction() == KeyEvent.ACTION_DOWN && move(step);', keys,
+            'one card per key; at an end the key is not taken, so focus can leave the row')
+        move = self.FAN[self.FAN.index('private boolean move(int orderStep)'):self.FAN.index('protected void onMeasure(')]
+        self.assertIn('int from = focused != null ? cards.indexOfChild(focused) : centred();', move)
+        self.assertIn('if (target == from) return false;', move)
+        for action in ('ACTION_SCROLL_FORWARD) return move(RoseFan.orderStep(1, rtl()));',
+                'ACTION_SCROLL_BACKWARD) return move(RoseFan.orderStep(-1, rtl()));',
+                'accessibilityActionScrollRight) return move(RoseFan.orderStep(1, rtl()));'):
+            self.assertIn(action, self.FAN, 'a screen reader scroll moves exactly one card')
+        self.assertIn('move(RoseFan.orderStep(h > 0 ? 1 : -1, rtl()));', self.FAN, 'a wheel notch moves one card')
+        self.assertIn('card.setOnFocusChangeListener(scroller.centreOnKeyFocus());', self.STRIP)
+        self.assertIn('if (eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) focused(host);', self.FAN)
+        self.assertIn('card.setAccessibilityDelegate(scroller.centreOnFocus());', self.STRIP)
+        self.assertIn('card.setContentDescription(', self.STRIP, 'every card keeps its spoken name and state')
+
+    def test_the_fan_only_places_cards_it_is_given(self):
+        for banned in ('getTasks', 'takeTaskSnapshot', 'startActivity', 'VirtualDeviceManager', 'RoseAgentWork.of',
+                'getSystemService', 'removeView', 'addView('):
+            self.assertNotIn(banned, self.FAN, f'{banned}: the fan never reads, captures, opens, adds or removes')
+        self.assertIn('card.setTranslationZ(RoseFan.depth(k) * density / 2f);', self.FAN, 'the centre card draws and '
+            'takes touches on top (ViewGroup orders both by Z)')
+
+    def test_entry_places_afresh_and_a_refresh_never_removes_the_card_under_a_finger(self):
+        show = self.STRIP[self.STRIP.index('private void show(RoseAgentWork next'):self.STRIP.index('private LinearLayout card()')]
+        self.assertIn('boolean same = keys.equals(before) && cards.getChildCount() == keys.size();', show)
+        self.assertIn('LinearLayout card = same ? (LinearLayout) cards.getChildAt(index) : card();', show)
+        self.assertIn('if (!scroller.placed()) { if (!keys.isEmpty()) scroller.place(RoseFan.initial(keys.size())); }', show)
+        self.assertIn('return RoseFan.scrollToCentre(centres[RoseFan.step(index, 0, centres.length)], getWidth());',
+            self.FAN, 'index to scroll from where the card is laid out, so right to left places the right card')
+        self.assertIn('else if (!same) scroller.place(RoseFan.keep(before, centred, keys));', show)
+        self.assertIn('return task.displayId + "/" + task.userId + "/" + task.packageName;', self.STRIP,
+            'a card is the same card by display, user and package, as RoseAgentWork.decide matches it')
+
+    def test_status_and_count_stay_readable_at_every_supported_font_scale(self):
+        """#410: the row is measured for the person's font size (RoseFan.rowHeightPx, checked over scales 0.85-2.0 in
+        RoseFanTest): the overview claims that height, the row takes it, and the status keeps two full lines."""
+        measure = self.STRIP[self.STRIP.index('protected void onMeasure('):self.STRIP.index('private final View.OnLayoutChangeListener')]
+        self.assertIn('MeasureSpec.makeMeasureSpec(rowHeight(getResources()), MeasureSpec.EXACTLY)', measure)
+        self.assertIn('status.setMaxLines(RoseFan.STATUS_LINES);', self.STRIP)
+        self.assertIn('status = text("", STATUS_SP);', self.STRIP)
+        self.assertIn('link = text("", LINK_SP);', self.STRIP)
+        self.assertIn('LINK_SP = 13, STATUS_SP = 13;', self.STRIP)
+        tree = patched_tree(self)
+        fallback = (tree/f'{QUICKSTEP}/FallbackActivityInterface.java').read_text()
+        self.assertIn('RoseAgentStrip.rowHeight(context.getResources())', fallback, 'the human cards make the same room')
+        actions = (tree/f'{QUICKSTEP}/views/OverviewActionsView.java').read_text()
+        self.assertIn('RoseAgentStrip.reservedBelow(getContext())', actions, 'the actions sit below the same height')
+
+    def test_the_live_view_is_the_real_frame_at_the_cards_width_never_stretched(self):
+        self.assertEqual(self.STRIP.count('int framePx = dp(RoseFan.CARD_WIDTH_DP);'), 2, 'the row and the tap read alike')
+        self.assertIn('Bitmap scaled = Bitmap.createScaledBitmap(copy, framePx, height, true);', self.STRIP)
+        self.assertIn('int height = Math.max(1, Math.round(copy.getHeight() * (framePx / (float) copy.getWidth())));',
+            self.STRIP, 'the task keeps its own aspect')
+        self.assertIn('live.setScaleType(ImageView.ScaleType.MATRIX);', self.STRIP, 'its top at 1:1, no crop-zoom')
+
+    def test_oxblood_materials_match_homes_contract_key_for_key(self):
+        """qa/oxblood/oxblood-contract.json is Home's (single writer); Launcher3 keeps its own copy and asks for changes
+        on #410. A mismatch here is a coordination signal, never a reason to edit the contract from this side."""
+        import json
+        contract = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())
+        def argb(name):
+            return int(re.search(rf'\b{name} = (0x[0-9A-F]{{8}})', self.STRIP)[1], 16)
+        def hexval(value):
+            return int(value.lstrip('#'), 16)
+        self.assertEqual(argb('CARD_FILL'), hexval(contract['manager']['card']['fill']))
+        self.assertEqual(argb('CARD_RING'), hexval(contract['manager']['card']['neutralRing']['color']))
+        self.assertEqual(argb('TEXT'), hexval(contract['ink']['primary']))
+        self.assertEqual(argb('TEXT_MUTED'), hexval(contract['ink']['secondary']))
+        self.assertEqual(argb('CURRENT_RING'), hexval(contract['ink']['secondary']))
+        colors = [int(c, 16) for c in re.search(r'PEARL_COLORS = \{([^}]*)\}', self.STRIP)[1].replace(' ', '').split(',')]
+        stops = [float(v.rstrip('f')) for v in re.search(r'PEARL_STOPS = \{([^}]*)\}', self.STRIP)[1].replace(' ', '').split(',')]
+        ruby = [(stop, hexval(color)) for stop, color in contract['pearl']['ruby']['stops'] if stop > 0]
+        self.assertEqual(list(zip(stops, colors)), [(round(a, 2), b) for a, b in ruby])
+        self.assertEqual(contract['pearl']['ruby']['stops'][0][1], contract['pearl']['ruby']['stops'][1][1],
+            'the first stop holds the colour of the 0.07 stop (GradientDrawable clamps before its first offset)')
+        self.assertIn(f"PEARL_DP = {contract['pearl']['sizes']['switcher']}", self.STRIP)
+        self.assertIn('radius = distance to the farthest corner', contract['pearl']['ruby']['gradient'])
+        self.assertIn('Math.hypot(0.66 * PEARL_DP, 0.72 * PEARL_DP)', self.STRIP)
+        self.assertIn('runningEdge', contract['manager'])
+        self.assertIn('authoritatively running only', contract['manager']['runningEdge']['when'])
+
+    def test_the_rose_fan_card_and_pearl_match_homes_switcher_keys(self):
+        """#423: Home added the switcher keys (fan, Rose row card, pearl) to the contract; RoseFan's own copy is
+        compared key for key, so a later contract change is a coordination signal on #410."""
+        import json
+        switcher = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())['switcher']
+        fan = (OVERLAY/'RoseFan.java').read_text()
+        def const(name):
+            return float(re.search(rf'\b{name} = ([0-9.]+)f?\b', fan)[1])
+        self.assertEqual(const('PERSPECTIVE_DP'), switcher['fan']['perspective'])
+        self.assertEqual(const('MAX_OFFSET'), switcher['fan']['clamp'])
+        rose = switcher['fan']['rose']
+        self.assertEqual((const('SHIFT_DP'), const('TURN_DEG'), const('SHRINK')), (rose['shift'], rose['turnDeg'], rose['shrink']))
+        card = switcher['rose']['card']
+        self.assertEqual((const('CARD_WIDTH_DP'), const('CARD_HEIGHT_DP'), const('CARD_RADIUS_DP')),
+            (card['width'], card['height'], card['radius']))
+        self.assertIn('10 - round(|k| * 4)', switcher['fan']['depth'])
+        self.assertIn('return 10 - Math.round(Math.abs(k) * 4);', fan)
+        self.assertEqual(switcher['rose']['initialCard'], 'the second card when there are three or more')
+        self.assertIn('static int initial(int count) { return count >= 3 ? 1 : 0; }', fan)
+        self.assertIn(f"PEARL_DP = {switcher['pearl']['size']}", self.STRIP)
+        self.assertEqual(switcher['snap']['reducedMotion'], 'instant')
+
+    def test_oxblood_materials_and_the_pearl_show_no_mic_or_call_state(self):
+        self.assertIn('static final int[] PEARL_COLORS = {0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612};',
+            self.STRIP)
+        for real in ('SensorPrivacy', 'setMicrophoneMute', 'isMicrophoneMute', 'RECORD_AUDIO', 'AudioManager'):
+            self.assertNotIn(real, self.STRIP + self.FAN, f'{real}: the switcher pearl is not a mic control or indicator')
+
+class OxbloodSwitcherBackdropTest(unittest.TestCase):
+    """#410: the smallest safe alignment of the whole switcher surface. The fallback overview's own scrim (the colour
+    layer RecentsState already draws behind both carousels, FLAG_SCRIM) becomes the Oxblood switcher base from Home's
+    contract. It is a theme value applied by RecentsActivity after the stock fallback style: no task, thumbnail, live
+    tile, gesture or launch code changes, and Launcher3's own in-launcher overview keeps its style."""
+
+    def test_the_scrim_is_the_contracts_switcher_base_in_the_fallback_overview_only(self):
+        import json
+        contract = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())
+        tree = patched_tree(self)
+        values = (tree/DIMENS).read_text()
+        style = re.search(r'<style name="RoseOverviewOxblood">\s*<item name="overviewScrimColor">(#[0-9A-F]{8})</item>\s*</style>',
+            values)
+        self.assertIsNotNone(style, values)
+        self.assertEqual(style[1], contract['fields']['screenBase'])
+        activity = (tree/f'{QUICKSTEP}/RecentsActivity.java').read_text()
+        stock = '        getTheme().applyStyle(R.style.OverviewBlurFallbackStyle, true);\n'
+        rose = '        getTheme().applyStyle(R.style.RoseOverviewOxblood, true);\n'
+        self.assertEqual(activity.count(rose), 1)
+        self.assertLess(activity.index(stock), activity.index(rose), 'applied after the stock style, so it wins')
+        self.assertLess(activity.index(rose), activity.index('inflateRootView(R.layout.fallback_recents_activity);'),
+            'before the views read the theme')
+        hunk = PATCH.read_text().split('RecentsActivity.java b/')[1].split('\ndiff --git')[0]
+        self.assertFalse([l for l in hunk.splitlines() if l.startswith('-') and not l.startswith('---')],
+            'RecentsActivity only gains the style; nothing of it is removed')
+        stock_scrim = (FIXTURES/'RecentsActivity.java').read_text()
+        self.assertIn(stock, stock_scrim)
+
+class OxbloodSwitcherFieldTest(unittest.TestCase):
+    """#410 S2: the switcher's Oxblood field (the contract's fields.rose, the pinned oxblood-rose.svg) drawn by OS
+    Product's own Launcher3 renderer on the fallback overview's scrim, through ScrimView's public drawing-controller seam,
+    at the scrim's own current opacity. Native renders and the comparison with Chromium's raster of the SVG are in
+    os/tests/native-render-switcher (RoseOxbloodFieldNativeTest)."""
+    STRIP = (OVERLAY/'RoseAgentStrip.java').read_text()
+    FIELD = (OVERLAY/'RoseOxbloodField.java').read_text()
+
+    def test_the_field_is_the_pinned_svg_shape_for_shape(self):
+        svg = (ROOT/'qa/oxblood/oxblood-contract.json').read_text()
+        import json
+        contract = json.loads(svg)
+        self.assertEqual(contract['fields']['rose']['source'], 'assets/oxblood-rose.svg')
+        self.assertEqual(contract['switcher']['field']['kind'], 'rose')
+        self.assertIn('scale = max(W/390, H/844); centred horizontally; top-aligned', contract['fields']['rose']['placement'])
+        for value in ('SHEET = {390, 118, 390, 292, 295, 580}', 'PLANE = {295, 580, 390, 515, 390, 844, 123, 844, 206, 642}',
+                'BASE = {0xFF120A0D, 0xFF0E080B, 0xFF12060A}', 'BASE_STOPS = {0f, .6f, 1f}',
+                'SHEET_COLORS = {0x598A3A4C, 0x008A3A4C}', 'PLANE_COLORS = {0xE67A1428, 0xFF36020D, 0xFF1A0207}',
+                'PLANE_STOPS = {0f, .45f, 1f}', 'GLINT = {0xE6FFF0F0, 0x00FF8A9A}',
+                'GLINT_X = 295, GLINT_Y = 580, GLINT_R = 26, BLUR_STD_DEV = 3',
+                'return Math.max(width / VIEW_W, height / VIEW_H);'):
+            self.assertIn(value, self.FIELD, value)
+        for forbidden in ('ValueAnimator', 'postDelayed', 'Handler(', 'SystemClock'):
+            self.assertNotIn(forbidden, self.FIELD, f'{forbidden}: static artwork')
+
+    def test_the_scrim_seam_is_the_pinned_upstream_api(self):
+        """The compile stub's ScrimView members are the pinned Launcher3 47accce ones, byte-pinned here."""
+        code = FIXTURES/'ScrimView.java'
+        self.assertEqual(hashlib.sha256(code.read_bytes()).hexdigest(), 'be8859147c13b41e1e9505be3e6e0423d75a4a8a6efd957a6b87e84e1908dd39')
+        source = code.read_text()
+        for member in ('public int getBackgroundColor() {', 'public void setDrawingController(ScrimDrawingController drawingController) {',
+                'public interface ScrimDrawingController {', 'void drawOnScrimWithScaleAndBottomOffset(\n                Canvas canvas, float scale, @Px int bottomOffsetPx);',
+                'mDrawingController.drawOnScrimWithScale(canvas, mHeaderScale);'):
+            self.assertIn(member, source, member)
+        layout = (FIXTURES/'fallback_recents_activity.xml').read_text()
+        self.assertIn('<com.android.launcher3.views.ScrimView', layout)
+        self.assertIn('android:id="@+id/scrim_view"', layout)
+
+    def test_the_field_rides_the_scrims_own_state_and_is_released(self):
+        attach = self.STRIP[self.STRIP.index('protected void onAttachedToWindow() {'):self.STRIP.index('protected void onDetachedFromWindow()')]
+        self.assertIn('View found = parent.findViewById(R.id.scrim_view);', attach)
+        self.assertIn('scrim.setDrawingController(fieldOnScrim);', attach)
+        self.assertIn('field.drawAsScrim(canvas, on.getWidth(), on.getHeight(), Color.alpha(on.getBackgroundColor()));',
+            self.STRIP, 'composited once as the scrim\'s own fill, at its current opacity')
+        self.assertIn('if (found instanceof ScrimView && reservedBelow(getContext()) > 0) {', attach,
+            'only in the RecentsActivity overview, where the Oxblood scrim style is applied')
+        self.assertIn('layer.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));', self.FIELD)
+        self.assertIn('if (scrimAlpha <= 0 || width <= 0 || height <= 0) return;', self.FIELD)
+        detach = self.STRIP[self.STRIP.index('protected void onDetachedFromWindow() {'):self.STRIP.index('private void anchor()')]
+        self.assertIn('scrim.setDrawingController(null);', detach)
+        for state in ('RecentsState', 'setScrimColors', 'setBackgroundColor('):
+            self.assertNotIn(state, self.STRIP, f'{state}: no new state logic; the scrim keeps driving itself')
+
+class OxbloodHumanCardTest(unittest.TestCase):
+    """#410: the smallest safe alignment of the human (top) carousel's own cards. Only colour values in the overview's
+    task card layouts change: each card's app-identity chip (IconAppChipView, which clips itself to its rounded outline
+    in code and never reads its background) becomes an Oxblood plate with an ivory name and chevron and an ivory
+    press/hover overlay, and the card's keyboard-focus border takes the contract's focus ring (hover stays stock, so
+    the two stay distinct). The chip's expanded menu (TaskMenuView) keeps its stock colours. No TaskView, live tile,
+    touch, dismiss, launch or navigation code, and no layout structure, changes."""
+
+    def test_the_human_cards_chip_and_borders_take_the_contracts_colours_and_nothing_else(self):
+        import json
+        contract = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())
+        tree = patched_tree(self)
+        values = (tree/DIMENS).read_text()
+        colors = dict(re.findall(r'<color name="(rose_oxblood_\w+)">(#[0-9A-F]{8})</color>', values))
+        fill = contract['manager']['card']['fill']
+        self.assertEqual(colors['rose_oxblood_chip'], '#F2' + fill[3:], 'the card fill, kept nearly opaque (95%)')
+        self.assertEqual(colors['rose_oxblood_ink'], contract['ink']['primary'])
+        self.assertEqual(colors['rose_oxblood_focus_ring'], contract['ink']['focusRing']['color'])
+        self.assertNotIn('rose_oxblood_hover_ring', colors, 'hover keeps the stock colour, distinct from focus')
+        chip = (tree/'quickstep/res/layout/icon_app_chip_view.xml').read_text()
+        self.assertIn('android:background="@color/rose_oxblood_chip"', chip)
+        self.assertIn('launcher:focusBorderColor="@color/rose_oxblood_focus_ring"', chip)
+        self.assertIn('android:textColor="@color/rose_oxblood_ink"\n        style="@style/IconAppChipMenuTextStyle" />', chip,
+            'the name\'s colour only; its size, font and fading stay the stock style\'s')
+        task = (tree/'quickstep/res/layout/task.xml').read_text()
+        self.assertIn('launcher:focusBorderColor="@color/rose_oxblood_focus_ring"', task)
+        self.assertIn('launcher:hoverBorderColor="@color/materialColorPrimary">', task, 'stock hover: focus stays distinct')
+        # The chip's arrow takes no stock light backing and an ivory chevron; its press/hover overlay is the ivory ink
+        # (the stock OnSurface overlay would vanish on the dark plate), same states and alphas as stock.
+        self.assertIn('android:background="@drawable/rose_oxblood_arrow_background"\n        '
+            'android:tint="@color/rose_oxblood_ink"\n        android:src="@drawable/ic_chevron_down"', chip)
+        arrow = (tree/'quickstep/res/drawable/rose_oxblood_arrow_background.xml').read_text()
+        for line in ('android:startColor="#00000000"', 'android:centerX="0.25"',
+                'android:centerColor="@color/rose_oxblood_chip"', 'android:endColor="@color/rose_oxblood_chip"',
+                '<corners android:radius="@dimen/dialogCornerRadius" />', 'Copyright (C) 2023 The Android Open Source Project'):
+            self.assertIn(line, arrow, 'the stock gradient that masks the title under the arrow, fading into the plate')
+        self.assertIn('android:foreground="@drawable/rose_oxblood_chip_fg"', chip)
+        overlay = (tree/'quickstep/res/color/rose_oxblood_chip_state_fg.xml').read_text()
+        for state in ('android:alpha="0.15" android:color="@color/rose_oxblood_ink" android:state_enabled="true" '
+                'android:state_pressed="true"', 'android:alpha="0.11" android:color="@color/rose_oxblood_ink" '
+                'android:state_enabled="true" android:state_hovered="true"'):
+            self.assertIn(state, overlay)
+        self.assertIn('Copyright (C) 2025 The Android Open Source Project', overlay, 'the upstream notice is kept')
+        self.assertIn('<solid android:color="@color/rose_oxblood_chip_state_fg" />',
+            (tree/'quickstep/res/drawable/rose_oxblood_chip_fg.xml').read_text())
+        # Only attribute values change in these layouts: the same elements, ids and attribute names, in order.
+        for name in ('task.xml', 'icon_app_chip_view.xml'):
+            stock = (FIXTURES/name).read_text()
+            patched = (tree/f'quickstep/res/layout/{name}').read_text()
+            def shape(text):
+                return re.findall(r'<\s*([\w.]+)|\b([\w:]+)="', text)
+            added = [a for a in shape(patched) if a not in shape(stock)]
+            self.assertEqual(sorted(set(added)), [] if name == 'task.xml' else [('', 'android:textColor'), ('', 'android:tint')],
+                name)
+            self.assertEqual(re.findall(r'android:id="([^"]+)"', stock), re.findall(r'android:id="([^"]+)"', patched))
+
+    def test_the_chip_code_never_depends_on_its_background(self):
+        """The pinned IconAppChipView clips to its own outline (app_chip_round_corner_radius) and animates that
+        outline; it never reads or casts its background, so a different colour value is all that changes."""
+        code = FIXTURES/'IconAppChipView.kt'
+        self.assertEqual(hashlib.sha256(code.read_bytes()).hexdigest(),
+            '31a644a01e48b9cdeb66332a7a1fff9c865012b8466696195adc918e31731fcd', 'Launcher3 47accce, byte for byte')
+        source = code.read_text()
+        for touch in (r'getBackground\(', r'\.background\b', r'\bbackground\s*=', 'setBackground', 'backgroundTint'):
+            self.assertIsNone(re.search(touch, source), f'{touch}: the chip code never reads or sets its background')
+        self.assertIn('R.dimen.app_chip_round_corner_radius', source, 'it clips to its own outline')
+        tree = patched_tree(self)
+        chip = (tree/'quickstep/res/layout/icon_app_chip_view.xml').read_text()
+        self.assertIn('android:clipToOutline="true"', chip)
+        self.assertIn('<com.android.quickstep.views.IconAppChipView', chip)
+        self.assertNotIn('setTextColor', source, 'nor its name\'s colour, so the layout attribute holds')
+
+class RoseEdgeGestureTest(unittest.TestCase):
+    """#410: the bottom-edge swipe-up's release rules and live preview geometry (RoseEdgeGesture), against values
+    copied from the frozen reference's app.js/oxblood.css (as RoseFanTest does) and Home's homeEdge keys. Pure source and JVM checks: not wired into Launcher3's
+    swipe handler yet, so no navigation changes; touch, timing and the real relayout need the builder and a device."""
+    EDGE = (OVERLAY/'RoseEdgeGesture.java').read_text()
+
+    def test_the_release_rules_and_preview_match_the_reference_values(self):
+        out = Path(tempfile.mkdtemp(prefix='rose-edge-'))
+        self.addCleanup(shutil.rmtree, out, True)
+        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
+            '-Xlint:-options', '-d', str(out), str(OVERLAY/'RoseEdgeGesture.java'),
+            str(ROOT/'os/tests/RoseEdgeGestureTest.java')], check=True)
+        result = subprocess.run(['java', '-cp', str(out), 'com.android.quickstep.fallback.RoseEdgeGestureTest'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_edge_geometry_is_homes_home_edge(self):
+        import json
+        edge = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())['homeEdge']
+        self.assertIn(f'EDGE_HEIGHT_DP = {edge["height"]}, EDGE_FLAT_TOP_DP = {edge["flatTop"]}', self.EDGE)
+        self.assertIn(f'CORNER_DP = {edge["concaveFilletRadius"]}', self.EDGE)
+
+    def test_only_the_edge_swipe_calls_it_and_it_has_no_android_or_platform_reach(self):
+        quickstep = ROOT/'os/overlays/packages/apps/Launcher3'
+        callers = sorted(p.name for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
+            and 'RoseEdgeGesture' in p.read_text())
+        self.assertEqual(callers, ['RoseEdgeState.java', 'RoseEdgeSwipe.java', 'RoseEdgeWindow.java'],
+            'its only callers are the edge\'s own: the swipe, the state\'s peek and the window')
+        self.assertNotIn('RoseEdgeGesture', PATCH.read_text())
+        self.assertNotIn('import ', self.EDGE, 'pure: no Android, IPC, permission or sensor types')
+        for reach in ('SensorPrivacy', 'AudioManager', 'Binder', 'Intent', 'Settings', 'System.', 'Thread'):
+            self.assertNotIn(reach, self.EDGE)
+
+EDGE_PATCH = ROOT/'os/patches/rose-edge-launcher3.patch'
+# Launcher3 47accce, byte for byte: the swipe handlers the edge patch changes, and the classes whose members it uses.
+EDGE_PINNED = {'AbsSwipeUpHandler.java': '7bd5815f17eed4c5e59cfe323f8f61ad6d3c5bfbdedc2d95a83183984350e0df',
+    'FallbackSwipeHandler.java': '194138f4ee572d6edef485087a08ae3377ad941b06bf8b5342d63b23e9805161',
+    'SwipeUpAnimationLogic.java': '9874ec5f07f78c0c255c50713046e9c74722dbc4ed53e1a168ee3c1d4c72afb3',
+    'GestureState.java': '3ceb83b87e02cd0505cd7a1aa727aa0d672e3c1fc2d586119346373a485c94cb',
+    'TransformParams.java': '22b960e05c9e6c694cbe725329b6ac6234fdccfd396523283055197a6a5d7eb2',
+    'SurfaceTransaction.java': 'f5ba9a7c03444b39a6702c944b267ad4c5abd5d88be65897fb9327fb41c7083c',
+    'TaskViewSimulator.java': '61642176403139f131ddfab56a61472cd6e7ff008729a43637210940d4dbb6e6',
+    'TopTaskTracker.java': '153de2f4898e8f90ef837b98682152c01124f3028760f49a0319d4a68de1aecc',
+    'RecentsAnimationDeviceState.java': '083299e6b7bec5bbb908566566dcacf2b102d6c19d97bf1932e2e039fdd58388',
+    'RemoteTargetGluer.java': '3ed7539dce2b071f0451ac294088e0a4d09f4d30f008c36ed93d4eb9b6aeab62',
+    'RecentsOrientedState.java': '6c008c0dff701471fa140a59f79eef76ae815950ac709e4acefe039723e3dd83',
+    'RecentsWindowSwipeHandler.java': 'c080919fbc48e1871591d7da4ee42d154d60865d771d7a4331120d48a136a59c'}
+EDGE_TARGETS = {'AbsSwipeUpHandler.java': f'{QUICKSTEP}/AbsSwipeUpHandler.java',
+    'FallbackSwipeHandler.java': f'{QUICKSTEP}/FallbackSwipeHandler.java',
+    'RecentsWindowSwipeHandler.java': f'{QUICKSTEP}/window/RecentsWindowSwipeHandler.java'}
+
+class RoseEdgeSwipePatchTest(unittest.TestCase):
+    """#410 E2a: rose-edge-launcher3.patch wires RoseEdgeGesture into Launcher3's fallback swipe handler, off unless
+    persist.wm.debug.rose_edge. Source checks only: the patch applies byte for byte to the pinned handlers, keeps
+    stock behaviour in the base class, and uses only members the pinned sources declare. The patched handlers are NOT
+    compiled here (that needs a real Launcher3 module build on the builder), and nothing is run on a device."""
+    EDGE_SWIPE = (OVERLAY/'RoseEdgeSwipe.java').read_text()
+    EDGE_STATE = (OVERLAY/'RoseEdgeState.java').read_text()
+
+    def patched(self):
+        tree = Path(tempfile.mkdtemp(prefix='launcher3-edge-'))
+        self.addCleanup(shutil.rmtree, tree, True)
+        for name, relative in EDGE_TARGETS.items():
+            (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(FIXTURES/name, tree/relative)
+        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+        check = subprocess.run(['git', '-C', str(tree), 'apply', '--check', str(EDGE_PATCH)], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        subprocess.run(['git', '-C', str(tree), 'apply', str(EDGE_PATCH)], check=True)
+        return {name: (tree/relative).read_text() for name, relative in EDGE_TARGETS.items()}
+
+    def test_fixtures_are_the_pinned_files(self):
+        for name, digest in EDGE_PINNED.items():
+            self.assertEqual(hashlib.sha256((FIXTURES/name).read_bytes()).hexdigest(), digest, name)
+
+    def test_the_patch_applies_and_changes_only_two_stock_lines(self):
+        text = EDGE_PATCH.read_text()
+        self.assertEqual(re.findall(r'^\+\+\+ b/(\S+)', text, re.M), list(EDGE_TARGETS.values()))
+        removed = [l for l in text.splitlines() if l.startswith('-') and not l.startswith('---')]
+        self.assertEqual(removed, ['-            recentsAttachedToAppWindow = mHasMotionEverBeenPaused || mIsLikelyToStartNewTask;',
+            '-        final GestureEndTarget endTarget = calculateEndTarget(',
+            '-                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed);',
+            '-                    /* onFinishComplete= */ null,',
+            '-                taskViewSimulator.apply(transformParams);',
+            '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);',
+            '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);'])
+        self.assertNotIn('\t', ''.join(l for l in text.splitlines() if l.startswith('+')), 'Launcher3 indents with spaces')
+        files = set(re.findall(r'^\+\+\+ b/(\S+)', PATCH.read_text(), re.M))
+        self.assertFalse(files & set(EDGE_TARGETS.values()), 'disjoint from rose-switcher-launcher3.patch')
+        self.patched()
+
+    def test_both_home_starts_share_launcher3s_identity_and_nothing_else(self):
+        """Home replies to gesture_nav_contract_v1 only after verifying the system recents component through the
+        Android 15 caller identity (Home's review, #410). The opt-in needs no permission and adds no authority: the
+        home app learns Launcher3's package and uid. It applies whether or not the edge switch is on."""
+        patched = self.patched()
+        opt_in = ('ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)\n'
+            '                .setShareIdentityEnabled(true);')
+        for name in ('FallbackSwipeHandler.java', 'RecentsWindowSwipeHandler.java'):
+            self.assertEqual(patched[name].count(opt_in), 1, name)
+            self.assertEqual(patched[name].count('makeCustomAnimation('), 1, f'{name}: the only home start')
+        rwsh = self.added_blocks('RecentsWindowSwipeHandler.java')
+        self.assertNotIn('Rose', rwsh.replace('RoseOS (#410)', ''), 'nothing else changes in the inactive handler')
+        self.assertEqual(len(rwsh.splitlines()), 4)
+
+    def test_the_base_class_keeps_stock_behaviour(self):
+        abs_ = self.patched()['AbsSwipeUpHandler.java']
+        self.assertIn('final GestureEndTarget endTarget = refineEndTarget(calculateEndTarget(\n'
+            '                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed),\n'
+            '                isCancel, mIsMotionPaused, endVelocityPxPerMs);', abs_)
+        self.assertIn('boolean isMotionPaused, float endVelocityPxPerMs) {\n        return endTarget;\n    }', abs_)
+        self.assertIn('TaskViewSimulator taskViewSimulator, TransformParams transformParams) {\n'
+            '        taskViewSimulator.apply(transformParams);\n    }', abs_)
+        self.assertIn('boolean hasMotionEverBeenPaused, boolean isLikelyToStartNewTask) {\n'
+            '        return hasMotionEverBeenPaused || isLikelyToStartNewTask;\n    }', abs_, 'stock attach rule by default')
+        self.assertIn('recentsAttachedToAppWindow = isRecentsAttachRequested(\n'
+            '                    mHasMotionEverBeenPaused, mIsLikelyToStartNewTask);', abs_)
+        # Frankel2026110501: a tray release is raised only once the recents finish back to the app has completed.
+        self.assertIn('    protected void onLastTaskResumed() {\n    }', abs_, 'the hook does nothing in stock Launcher3')
+        resume = abs_[abs_.index('private void resumeLastTask() {'):abs_.index('private void finishRejectHome() {')]
+        self.assertIn('/* onFinishComplete= */ this::onLastTaskResumed,', resume)
+        self.assertIn('} else {\n            onLastTaskResumed();\n        }', resume, 'no recents animation: at once')
+        self.assertEqual(abs_.count('onLastTaskResumed'), 3, 'called only from resumeLastTask')
+        self.assertIn('return mIsLikelyToStartNewTask;', abs_)
+        self.assertEqual(abs_.count('applyTargetTransform(taskViewSimulator, transformParams);'), 1)
+        self.assertNotIn('Rose', abs_.replace('RoseOS (#410)', ''), 'no Rose logic in the shared base class')
+
+    def added_blocks(self, name):
+        """The patch's added lines for one file, as text (the '+' stripped)."""
+        text = EDGE_PATCH.read_text()
+        part = text[text.index(f'+++ b/{EDGE_TARGETS[name]}'):]
+        nxt = part.find('\ndiff --git ', 1)
+        part = part if nxt < 0 else part[:nxt]
+        return '\n'.join(l[1:] for l in part.splitlines()[1:] if l.startswith('+'))
+
+    def test_the_fallback_handler_adds_exactly_this(self):
+        """Every line the patch adds to FallbackSwipeHandler, pinned: nothing here is compiled, so the text is the
+        check (a mistake in it would otherwise pass)."""
+        self.patched()
+        added = self.added_blocks('FallbackSwipeHandler.java')
+        expected = (ROOT/'os/tests/fixtures/rose-switcher/rose-edge-fallback-added.txt').read_text()
+        self.assertEqual(added + '\n', expected)
+
+    def test_the_fallback_handler_maps_only_its_own_outcomes(self):
+        fallback = self.patched()['FallbackSwipeHandler.java']
+        refine = fallback[fallback.index('protected GestureEndTarget refineEndTarget('):fallback.index('public void onRecentsAnimationCanceled(')]
+        self.assertTrue(refine.split('\n')[2:5] == ['        if (mRoseEdge == null || !mRoseEdge.enabled()) {',
+            '            return endTarget;', '        }'], 'switch off (the default): stock end target first')
+        self.assertIn('if (mGestureState.isHandlingAtomicEvent()) {\n            mRoseEdge.settled(endTarget == '
+            'GestureEndTarget.LAST_TASK);\n            return endTarget;', refine, 'atomic gestures keep their target but settle')
+        self.assertIn('if (endTarget == GestureEndTarget.NEW_TASK) {\n            mRoseEdge.abandon();', refine,
+            "Launcher3's horizontal quick switch stands")
+        self.assertIn('mRoseEdge.release(isCancel, endVelocityPxPerMs)', refine)
+        self.assertIn('case RoseEdgeGesture.RAISE:\n                case RoseEdgeGesture.STAY:\n'
+            '                case RoseEdgeGesture.CANCEL:\n                    refined = GestureEndTarget.LAST_TASK;', refine)
+        self.assertIn('case RoseEdgeGesture.HOME:\n                    refined = GestureEndTarget.HOME;', refine)
+        self.assertIn('case RoseEdgeGesture.SWITCHER_OPEN:\n                    refined = mDeviceState.isOverviewDisabled()\n'
+            '                            ? GestureEndTarget.LAST_TASK : GestureEndTarget.RECENTS;', refine)
+        self.assertIn('default:\n                    break;', refine, "STOCK keeps Launcher3's own target")
+        self.assertIn('mRoseEdge.settled(refined == GestureEndTarget.LAST_TASK);', refine)
+        pause = fallback[fallback.index('public MotionPauseDetector.OnMotionPauseListener getMotionPauseListener()'):
+            fallback.index('public void updateDisplacement(')]
+        self.assertIn('if (!isRoseStaged()) {\n            return stock;', pause, 'unstaged: Launcher3\'s pause rule')
+        self.assertIn('return () -> { };', pause, 'staged: the detector\'s pauses are dropped')
+        move = fallback[fallback.index('public void updateDisplacement('):fallback.index('protected boolean isRecentsAttachRequested(')]
+        self.assertIn('super.updateDisplacement(displacement);\n        if (!isRoseStaged()) {\n            return;', move)
+        self.assertIn('mRoseStockPause.onMotionPauseDetected();', move, 'the switcher stage attaches recents as a pause did')
+        self.assertIn('mRoseStockPause.onMotionPauseChanged(switcher);', move)
+        self.assertIn('maybeUpdateRecentsAttachedState(/* animate= */ true);', move, 'and detaches on the way back')
+        self.assertEqual(move.count('performHapticFeedback();'), 2, 'a haptic for the tray stage and the switcher stage')
+        attach = fallback[fallback.index('protected boolean isRecentsAttachRequested('):fallback.index('protected GestureEndTarget refineEndTarget(')]
+        self.assertIn('return mRoseEdge.stage() == RoseEdgeGesture.SWITCHER || isLikelyToStartNewTask;', attach)
+        for hook in ('public void onRecentsAnimationCanceled(', 'public void onConsumerAboutToBeSwitched()'):
+            body = fallback[fallback.index(hook):]
+            body = body[:body.index('    }\n\n')]
+            self.assertIn('mRoseEdge.abandon();', body, f'{hook}: the revealed tray is taken down')
+        transform = fallback[fallback.index('protected void applyTargetTransform('):fallback.index('private boolean isRoseFullscreenTask()')]
+        self.assertTrue(transform.split('\n')[2:6] == ['        if (!isRoseStaged()) {',
+            '            super.applyTargetTransform(taskViewSimulator, transformParams);', '            return;', '        }'],
+            'not staged (the switch off by default): stock transform first, nothing else evaluated')
+        self.assertEqual(transform.count('super.applyTargetTransform(taskViewSimulator, transformParams);'), 2)
+        self.assertIn('boolean attached = mRoseEdge.stage() == RoseEdgeGesture.SWITCHER || isLikelyToStartNewTask()\n'
+            '                || endTarget == GestureEndTarget.RECENTS || endTarget == GestureEndTarget.NEW_TASK\n'
+            '                || endTarget == GestureEndTarget.HOME;', transform)
+        self.assertIn('mCurrentShift.value * mTransitionDragLength', transform, 'the raw shift, never the magnetic one')
+        self.assertIn('mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture\n'
+            '                        || !isRoseFullscreenTask(),\n'
+            '                mDeviceState.isFullyGesturalNavMode(), mDeviceState.isImeRenderingNavButtons());', fallback,
+            'never over Home, a trackpad, a continued gesture, a task that is not full screen or three-button '
+            'navigation (the keyboard state is still passed, for the diagnostics only)')
+
+    def test_every_launcher3_member_it_uses_is_declared_at_the_pinned_revision(self):
+        """Derived from the patch: every method called and every m-field read on an added line is declared in the
+        pinned sources (or used there the same way), unless the patch or Rose's overlay classes define it."""
+        pinned = '\n'.join((FIXTURES/name).read_text() for name in EDGE_PINNED)
+        overlay = '\n'.join((OVERLAY/f).read_text() for f in ('RoseEdgeSwipe.java', 'RoseEdgeGesture.java', 'RoseEdgeState.java'))
+        added = self.added_blocks('AbsSwipeUpHandler.java') + '\n' + self.added_blocks('FallbackSwipeHandler.java')
+        code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', added, flags=re.S))
+        defined = set(re.findall(r'(?:protected|private|public)[^;=(]*?\b(\w+)\s*\(', code))
+        defined |= set(re.findall(r'private (?:final )?[\w.\[\]<>]+ (m\w+)', code))
+        rose = set(re.findall(r'public (?:static )?[\w\[\]<>]+ (\w+)\s*\(', overlay))
+        methods = set(re.findall(r'\.(\w+)\(', code)) | set(re.findall(r'(?<![\w.])(\w+)\(', code))
+        keywords = {'if', 'switch', 'return', 'super', 'new', 'RoseEdgeSwipe', 'Matrix', 'Rect'}
+        # Public SDK members the patch calls, checked against the platform's own android.jar below.
+        sdk = {'setShareIdentityEnabled': ('android.app.ActivityOptions',
+            'public android.app.ActivityOptions setShareIdentityEnabled(boolean);')}
+        import os
+        jars = sorted(Path(os.environ.get('ANDROID_HOME') or '/opt/roseos/android-sdk').glob('platforms/android-*/android.jar'))
+        for name, (cls, signature) in sdk.items():
+            if jars:
+                api = subprocess.run(['javap', '-cp', str(jars[-1]), cls], capture_output=True, text=True).stdout
+                self.assertIn(signature, api, f'{cls}.{name} in {jars[-1].parent.name}')
+        keywords |= set(sdk)
+        checked = 0
+        own = {f: (FIXTURES/f).read_text() for f in EDGE_TARGETS}
+        for name in sorted(methods - defined - rose - keywords):
+            declared = re.search(r'(?:public|protected)[^;=(\n]*\b%s\s*\(' % name, pinned) or any(
+                re.search(r'private[^;=(\n]*\b%s\s*\(' % name, own[f]) and f'{name}(' in self.added_blocks(f)
+                for f in own) or any(  # package-private, in the handlers' own package
+                re.search(r'^    (?!private)[\w<>\[\]]+ %s\s*\(' % name, (FIXTURES/f).read_text(), re.M)
+                for f in EDGE_PINNED if 'package com.android.quickstep;' in (FIXTURES/f).read_text())
+            used = re.search(r'\.%s\(' % name, pinned)
+            self.assertTrue(declared or used, f'{name}() is neither declared nor used at the pinned revision')
+            checked += 1
+        for field in sorted(set(re.findall(r'\b(m[A-Z]\w*)', code)) - defined):
+            self.assertRegex(pinned, r'(?:protected|public)?\s*(?:final\s+)?[\w.<>\[\]]+\s+%s\s*[;=]' % field,
+                f'{field} is declared at the pinned revision')
+            checked += 1
+        self.assertGreater(checked, 30)
+        # The two members read from FallbackSwipeHandler's own pinned fields and constructor.
+        fallback = (FIXTURES/'FallbackSwipeHandler.java').read_text()
+        self.assertIn('private final boolean mRunningOverHome;', fallback)
+        self.assertIn('boolean continuingLastGesture,', fallback)
+        for imported in ('import android.app.TaskInfo;', 'import android.view.Surface;', 'import android.graphics.Rect;',
+                'import com.android.quickstep.util.TransformParams.BuilderProxy;'):
+            self.assertIn(imported, fallback, 'already imported by the pinned file')
+        for member in ('public boolean isImeRenderingNavButtons()', 'public boolean isFullyGesturalNavMode()',
+                'public boolean isOverviewDisabled()'):
+            self.assertIn(member, (FIXTURES/'RecentsAnimationDeviceState.java').read_text())
+        abs_ = (FIXTURES/'AbsSwipeUpHandler.java').read_text()
+        for member in ('public MotionPauseDetector.OnMotionPauseListener getMotionPauseListener()',
+                'protected void performHapticFeedback()', 'protected void maybeUpdateRecentsAttachedState(boolean animate)',
+                'public void onRecentsAnimationCanceled(HashMap<Integer, ThumbnailData> thumbnailDatas)',
+                'public void onConsumerAboutToBeSwitched()'):
+            self.assertIn(member, abs_, 'overridable as the patch overrides or calls it')
+        self.assertIn('public void updateDisplacement(float displacement)', (FIXTURES/'SwipeUpAnimationLogic.java').read_text())
+        self.assertIn('protected float mCurrentDisplacement;', (FIXTURES/'SwipeUpAnimationLogic.java').read_text())
+
+    def test_the_overlay_classes_compile_against_the_sdk(self):
+        import os
+        sdk = os.environ.get('ANDROID_HOME') or '/opt/roseos/android-sdk'
+        jars = sorted(Path(sdk).glob('platforms/android-*/android.jar'))
+        if not jars:
+            self.skipTest('no Android SDK platform')
+        tmp = Path(tempfile.mkdtemp(prefix='rose-edge-compile-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        stub = tmp/'src/android/os/SystemProperties.java'
+        stub.parent.mkdir(parents=True)
+        # frameworks/base 84183aff core/java/android/os/SystemProperties.java (hidden; Launcher3 builds with platform APIs).
+        stub.write_text('package android.os; public class SystemProperties { '
+            'public static boolean getBoolean(String key, boolean def) { return def; } }')
+        result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:all', '-Xlint:-options',
+            '-implicit:none', '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
+            # RoseEdgeWindow uses the hidden ViewTreeObserver internal insets (Launcher3 builds with platform APIs), so
+            # only the android-all harness (os/staged/rose-edge-resize/native-test) compiles it.
+            str(OVERLAY/'RoseEdgeSwipe.java'), str(OVERLAY/'RoseEdgeState.java'), str(OVERLAY/'RoseEdgeGesture.java'),
+            str(OVERLAY/'RoseEdgeShell.java'), str(OVERLAY/'RoseEdgeLayout.java')],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        warnings = [l for l in result.stderr.splitlines() if l.strip() and not l.startswith('Picked up JAVA_TOOL_OPTIONS')]
+        self.assertEqual(warnings, [], 'no warnings')
+
+    def test_it_is_off_by_default_and_reaches_nothing_new(self):
+        self.assertIn('public static final String PROPERTY = "persist.wm.debug.rose_edge";', self.EDGE_SWIPE)
+        self.assertIn('SystemProperties.getBoolean(PROPERTY, false)', self.EDGE_SWIPE)
+        self.assertIn('String why = !enabled ? "switch off" : excluded ? "excluded" : !gestureNavigation ? "not gesture navigation"\n'
+            '                : !naturalRotation(context, displayId) ? "rotated"\n'
+            '                : locked(context) ? "locked" : !RoseEdgeState.hasListener() ? "no edge window"\n'
+            '                : !RoseEdgeShell.available() ? "shell unavailable" : null;\n'
+            '        this.staged = why == null;', self.EDGE_SWIPE,
+            'staged only with an edge window to draw it and the shell to resize the app, and never otherwise')
+        self.assertIn('public static final String DIAG_PROPERTY = "persist.wm.debug.rose_edge_diag";', self.EDGE_SWIPE)
+        self.assertIn('this.diag = enabled && SystemProperties.getBoolean(DIAG_PROPERTY, false);', self.EDGE_SWIPE,
+            'developer-only diagnostics, off by default')
+        self.assertIn('return !LISTENERS.isEmpty() && RoseEdgeShell.available();', self.EDGE_STATE)
+        self.assertIn('if (!canRaise()) return false;', self.EDGE_STATE, 'no raise without a listener and the shell')
+        for source in (self.EDGE_SWIPE, self.EDGE_STATE):
+            code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', source, flags=re.S))
+            for reach in ('SensorPrivacy', 'AudioManager', 'setMicrophoneMute', 'Binder', 'Intent', 'startActivity',
+                    'ContentResolver', 'Settings', 'SystemProperties.set', 'WindowManager', 'permission'):
+                self.assertNotIn(reach, code, reach)
+        self.assertIn('Looper.myLooper() != Looper.getMainLooper()', self.EDGE_STATE)
+
+    def test_the_normal_build_applies_it_after_the_switcher_patch(self):
+        # #410 (Chief): the normal OS build is the compile proof, so the edge patches are registered after the switcher.
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        block = patcher[patcher.index('if a.background_policy:'):patcher.index('preinstalls = preinstall_plan(')]
+        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch',\n"
+            "        'rose-edge-resize-launcher3.patch']", block)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -456,6 +456,59 @@ class Publisher(unittest.TestCase):
         with self.assertRaisesRegex(pipeline.CheckFailed, 'allocation refused: allocation_invalid'):
             pipeline.latest_notes(args, cand, artifact)
 
+    def test_explicit_private_allocation_keeps_identity_checks(self):
+        repo, record, artifact, cand, args = self.setup()
+        args.promote = False
+        args.draft_only = True
+        self.assertIn(f'Source: RoseOS-1 {repo.source}', pipeline.latest_notes(args, cand, artifact))
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'deterministic source'):
+            pipeline.latest_notes(args, dict(cand, sha=repo.source), artifact)
+        args.promote = True
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'without --promote'):
+            pipeline.latest_notes(args, cand, artifact)
+        args.promote = False
+        (artifact/'expected-identities.json').write_text(json.dumps({'apps': []}))
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'not the allocated apps'):
+            pipeline.latest_notes(args, cand, artifact)
+
+    def test_private_publish_rejects_scope_before_artifact_or_network_access(self):
+        for device, channel, promote, allocation in (
+                ('mustang', 'beta', False, 'allocation.json'),
+                ('frankel', 'prod', False, 'allocation.json'),
+                ('frankel', 'beta', True, 'allocation.json'),
+                ('frankel', 'beta', False, None)):
+            with self.subTest(device=device, channel=channel, promote=promote, allocation=allocation):
+                args = type('A', (), dict(draft_only=True, promote=promote, allocation=allocation))
+                with self.assertRaisesRegex(pipeline.CheckFailed, '--draft-only requires'):
+                    pipeline.publish(args, {}, dict(device=device, channel=channel), object())
+
+    def test_allocated_draft_completes_without_promote_or_finalize(self):
+        from unittest.mock import Mock, patch
+        repo, record, artifact, cand, args = self.setup()
+        args.promote = False
+        args.draft_only = True
+        args.artifact_dir = str(artifact)
+        (artifact/'pipeline-receipt.json').write_text(json.dumps(
+            dict(candidate=cand, manifestSha256='digest', simulated=False)))
+        (artifact/'assets').mkdir()
+        (artifact/'assets/releasekey.x509.pem').write_text('synthetic public certificate')
+        config = dict(target=dict(device='frankel'), identities=dict(
+            otaCertificateSha256='certificate', avbPublicKeySha256='digest'),
+            publication=dict(tag='frankel-{build}', channels=dict(beta=dict(promoteLatest=True))))
+        adapter = Mock(simulated=False)
+        adapter.publish.return_value = artifact/'downloaded-draft'
+        with patch.object(pipeline, 'sha256_file', return_value='digest'), \
+                patch.object(pipeline, 'cert_sha256', return_value='certificate'), \
+                patch.object(pipeline, 'manifest_tool') as verify:
+            report = pipeline.publish(args, config, cand, adapter)
+        self.assertFalse(report['promoted'])
+        self.assertEqual(report['draft'], 'verified')
+        adapter.publish.assert_called_once()
+        self.assertTrue(adapter.publish.call_args.kwargs['fresh'])
+        adapter.promote.assert_not_called()
+        adapter.finalize_public.assert_not_called()
+        self.assertEqual(verify.call_count, 3)
+
     def test_existing_tag_is_never_reconciled_or_overwritten(self):
         calls = []
 
@@ -499,11 +552,17 @@ class Workflow(unittest.TestCase):
         base = dict(os.environ, MODE='latest-beta', ROSE_DEVICE='frankel', CHANNEL='beta', CANDIDATE_SHA='', BUILD_NUMBER='',
             BUILD_TIMESTAMP='', APPS='', RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='',
             RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false',
-            GITHUB_SHA='a' * 40, BOOTSTRAP_PROFILE='none', MODELS_BOOTSTRAP_RUN='')
-        cases = [({}, True), ({'CANDIDATE_SHA': 'b' * 40}, False), ({'BUILD_NUMBER': '2026103001'}, False),
+            GITHUB_SHA='a' * 40, BOOTSTRAP_PROFILE='none', MUSTANG_PUBLISH_OTA='false',
+            MUSTANG_COMPILE_RUN='', MUSTANG_BOOTSTRAP_RUN='')
+        cases = [({}, True), ({'DRAFT_ONLY': 'true'}, True),
+            ({'DRAFT_ONLY': 'true', 'CAMPAIGN': 'start'}, False),
+            ({'DRAFT_ONLY': 'true', 'PROMOTE': 'true'}, False),
+            ({'DRAFT_ONLY': 'garbage'}, False),
+            ({'DRAFT_ONLY': 'true', 'MODE': 'os-release', 'CANDIDATE_SHA': 'b' * 40,
+              'BUILD_NUMBER': '2026103001', 'BUILD_TIMESTAMP': str(NOW), 'APPS': '[["dev.pixel.voice", 311]]'}, False), ({'CANDIDATE_SHA': 'b' * 40}, False), ({'BUILD_NUMBER': '2026103001'}, False),
             ({'APPS': '[["dev.pixel.voice", 311]]'}, False), ({'CHANNEL': 'prod'}, False), ({'PROMOTE': 'true'}, False),
             ({'RESUME_STAGE': 'sign', 'RESUME_UNSIGNED_SHA256': 'c' * 64}, False), ({'APP_PUBLISH': 'true'}, False),
-            ({'MODE': 'os-release'}, False),
+            ({'MODE': 'os-release'}, False), ({'MUSTANG_PUBLISH_OTA': 'true'}, False),
             ({'MODE': 'os-release', 'CANDIDATE_SHA': 'b' * 40, 'BUILD_NUMBER': '2026103001', 'BUILD_TIMESTAMP': str(NOW),
               'APPS': '[["dev.pixel.voice", 311]]'}, True),
             # RELEASE020: a campaign chains latest-beta only and has a fixed shape.
@@ -517,6 +576,48 @@ class Workflow(unittest.TestCase):
             self.assertEqual(result.returncode == 0, ok, (change, result.stderr[-300:]))
         self.assertIn('            git merge-base --is-ancestor "$GITHUB_SHA" origin/main\n', WORKFLOW)
 
+    def test_private_mode_uses_existing_input_and_normalizes_allocator_environment(self):
+        import os_release_shape as shape
+        self.assertLessEqual(len(shape.inputs(WORKFLOW)), 25)
+        self.assertIn('latest-draft', shape.modes(WORKFLOW))
+        normal = shape.dispatch_env(WORKFLOW)
+        private = shape.dispatch_env(WORKFLOW.replace('        default: latest-beta\n', '        default: latest-draft\n', 1))
+        self.assertEqual((normal['MODE'], normal['DRAFT_ONLY']), ('latest-beta', 'false'))
+        self.assertEqual((private['MODE'], private['DRAFT_ONLY']), ('latest-beta', 'true'))
+
+    def test_publisher_executes_draft_without_promotion_and_retains_allocation(self):
+        import re
+        import textwrap
+        body = WORKFLOW.split('- name: Revalidate, draft, download-check and promote if requested', 1)[1]
+        script = re.search(r'        run: \|\n((?: {10}.*\n)+)', body)[1]
+        script = textwrap.dedent(script)
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = Path(tmp)/'python3'
+            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$CAPTURE"\n')
+            stub.chmod(0o755)
+            base = dict(os.environ, PATH=tmp+os.pathsep+os.environ['PATH'], CAPTURE=tmp+'/args',
+                        MODE='latest-beta', DRAFT_ONLY='true', EXPLICIT_PROMOTE='false', CAMPAIGN='',
+                        RUNNER_TEMP=tmp, ROSE_DEVICE='frankel', CANDIDATE_SHA='a'*40,
+                        BUILD_NUMBER='2026110501', BUILD_TIMESTAMP=str(NOW), CHANNEL='beta')
+            for change, ok, promoted in [({}, True, False), ({'DRAFT_ONLY': 'false'}, True, True),
+                    ({'DRAFT_ONLY': 'true', 'EXPLICIT_PROMOTE': 'true'}, False, False),
+                    ({'CAMPAIGN': 'start'}, False, False),
+                    ({'MODE': 'os-release'}, False, False),
+                    ({'MODE': 'os-release', 'DRAFT_ONLY': 'false', 'EXPLICIT_PROMOTE': 'true'}, True, True)]:
+                capture = Path(base['CAPTURE'])
+                capture.unlink(missing_ok=True)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script], env={**base, **change},
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, ok, (change, result.stderr))
+                self.assertEqual(capture.exists(), ok)
+                if ok:
+                    args = capture.read_text().splitlines()
+                    self.assertEqual('--promote' in args, promoted)
+                    self.assertEqual('--draft-only' in args, not promoted)
+                    self.assertEqual('--allocation' in args, change.get('MODE', 'latest-beta') == 'latest-beta')
+        self.assertIn("DRAFT_ONLY: ${{ inputs.mode == 'latest-draft' }}", WORKFLOW)
+        self.assertIn("if: always() && inputs.mode == 'latest-beta' && inputs.campaign != ''", WORKFLOW)
+
     def test_builder_allocates_before_any_identity_is_used_and_publisher_takes_it(self):
         import re
         body = WORKFLOW.split('\njobs:\n', 1)[1]
@@ -526,14 +627,14 @@ class Workflow(unittest.TestCase):
             'python3 scripts/release-allocate.py latest --out "$RUNNER_TEMP/allocation.json"', 'name: os-release-allocation-${{ github.run_id }}',
             'name: Prepare stage receipts', 'actions-gcp-login.py login', 'os-release-stage.sh build build')]
         self.assertEqual(order, sorted(order))
-        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", builder)
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", builder)
         self.assertIn('      build_number: ${{ steps.candidate.outputs.build_number }}\n', builder)
         self.assertIn('      CANDIDATE_SHA: ${{ needs.builder.outputs.candidate_sha }}\n', publisher)
         self.assertIn('      BUILD_NUMBER: ${{ needs.builder.outputs.build_number }}\n', publisher)
         # nothing publishes unless the builder verified the candidate (or, dedicated route, signed-builder did)
         self.assertIn('    needs: [builder, signed-builder]\n', publisher)
         self.assertIn("    if: always() && needs.builder.result == 'success' && (needs.signed-builder.result == 'success' || (needs.builder.outputs.dedicated != 'true' && needs.signed-builder.result == 'skipped'))\n", publisher)
-        self.assertIn('[[ "$MODE" != latest-beta ]] || extra=(--promote --allocation "$RUNNER_TEMP/allocation/allocation.json")', publisher)
+        self.assertIn('extra=(--allocation "$RUNNER_TEMP/allocation/allocation.json")', publisher)
         self.assertIn('          name: os-release-allocation-${{ github.run_id }}\n          path: ${{ runner.temp }}/allocation\n', publisher)
         self.assertIn('          fetch-depth: 0  # latest-beta re-derives', publisher)
         for job in (builder, publisher):

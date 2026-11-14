@@ -19,6 +19,9 @@ import tempfile
 import types
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
@@ -660,8 +663,8 @@ class WorkflowTest(unittest.TestCase):
         for absent in ('id-token', 'secrets.', 'actions-gcp-login', 'os-release-stage', 'release-pipeline.py build', 'PIXEL_OTA', 'github-token'):
             self.assertNotIn(absent, export)
         self.assertIn('          name: emulator-alpha-export-${{ github.run_id }}\n', export)
-        self.assertIn(', alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', job['cleanup'])
-        self.assertIn('app-reuse, emulator-alpha-export, rango-factory-observe]\n', RELEASE_WORKFLOW)
+        self.assertIn('alpha-export', shape.cleanup_needs())
+        self.assertIn('emulator-alpha-export', shape.modes())
 
 if __name__ == '__main__':
     unittest.main()

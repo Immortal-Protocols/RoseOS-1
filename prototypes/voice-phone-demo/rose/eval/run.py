@@ -289,6 +289,11 @@ def build_pipeline(voice: str, parts: SimpleNamespace | None = None, keepalive: 
         return out
 
     brain = timed("brain", lambda: runtime.run(m.Brain, priority=LISTEN, name="eval-load-brain", timeout=900))
+    task_brain = brain
+    task_repo = os.environ.get("ROSE_TASK_BRAIN")
+    if task_repo and task_repo != getattr(brain, "repo", None):  # as app.py's --task-brain
+        task_brain = timed("task brain", lambda: runtime.run(lambda: m.Brain(task_repo), priority=LISTEN,
+                                                             name="eval-load-task-brain", timeout=900))
     ref = SimpleNamespace(conductor=None)  # components are built before the conductor that consumes them
 
     def on_listen(ev: Any) -> None:
@@ -306,7 +311,7 @@ def build_pipeline(voice: str, parts: SimpleNamespace | None = None, keepalive: 
         phone = m.Phone(bus=bus)
     except TypeError:
         phone = m.Phone()
-    tasks = m.TaskManager(runtime, brain, phone, bus, on_task_done)
+    tasks = m.TaskManager(runtime, task_brain, phone, bus, on_task_done)
     conductor = ref.conductor = m.Conductor(runtime, brain, listener, speaker, tasks, phone, bus)
     pipe = Pipeline(runtime, bus, brain, transport, listener, speaker, phone, tasks, conductor,
                     trace, playback, load_s)

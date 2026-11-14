@@ -1,0 +1,467 @@
+{
+  "build": "2026110302",
+  "candidate": {
+    "allocation": {
+      "build": "2026110302",
+      "device": "mustang",
+      "integrationDir": "/home/pixelbuild/rose-actions/mustang-reconcile-2026110302",
+      "observed": {
+        "consumedBuilds": [
+          "2026110301"
+        ],
+        "mustangStorageEntries": 2,
+        "releasesListed": 98,
+        "reservations": 1
+      },
+      "reservedAt": "2026-11-03T21:47:15Z",
+      "runAttempt": "1",
+      "runId": "41720536968",
+      "schema": "roseos.mustang-allocation.v1",
+      "source": "2b521e732fa1537e54ff0a77880810ab1f34cf99",
+      "workDir": "/home/pixelbuild/rose-actions/mustang-integrate-2026110302"
+    },
+    "device": "mustang",
+    "error": "RuntimeError: compile failed; inspect its recorded receipt; no retry",
+    "failedStage": "compile",
+    "label": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+    "model": "Pixel 10 Pro XL",
+    "omittedChecks": [
+      "Downloaded input hash verification",
+      "Focused tests, including wrong-device/hash/missing-input negative cases",
+      "Existing-device regression tests and required CI/full-suite runs (post-hoc follow-up)",
+      "Independent isolated source/output path and safe-file-handling verification",
+      "Free-space checks against the selected route reserve",
+      "OS/AVB signing-result and intended-public-identity verification",
+      "Packaged Rose app/signer and compiled-controller-policy verification",
+      "Required-partition and firmware-coverage checks",
+      "Installer-to-signed-output content comparison, including dynamic partitions",
+      "Installer-reference, device-requirement and public-AVB-metadata checks",
+      "Separate archive-signature status reporting"
+    ],
+    "phoneValidated": false,
+    "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+    "published": false,
+    "root": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1",
+    "runAttempt": "1",
+    "runId": "41720536968",
+    "schema": "roseos.mustang-candidate-run.v1",
+    "signed": false,
+    "signing": {
+      "reason": "Mustang bootstrap 41719073037 is complete with version 1 in both containers. Signing awaits a successful unsigned compile and a separate mustang-delivery dispatch consuming that bootstrap receipt; no further key generation. Access expires 2026-11-04T00:50:06Z.",
+      "status": "separate-bootstrap-and-delivery-required"
+    },
+    "source": "2b521e732fa1537e54ff0a77880810ab1f34cf99",
+    "stages": {
+      "compile": {
+        "exitCode": 1,
+        "receipt": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/receipts/compile/completed.json",
+        "result": {
+          "at": "2026-11-03T23:00:48Z",
+          "boundBytes": 268435456000,
+          "boundKind": "first-build-proposal",
+          "buildIdentity": {
+            "buildDatetime": "1793742435",
+            "buildNumber": "2026110302"
+          },
+          "consumedBytes": 120001429504,
+          "device": "mustang",
+          "enforcement": "sampled-stop",
+          "error": "make exited 0 but the expected outputs are not all collected",
+          "leftoverGroupEnded": null,
+          "lowestSampledAvailableBytes": 497703235584,
+          "measure": "filesystem-available-drop",
+          "ok": false,
+          "outDir": "out-mustang-build-2026110302",
+          "outputs": {
+            "actualBuildIdentity": {},
+            "artifacts": {
+              "otatools": {
+                "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/host/linux-x86/otatools.zip",
+                "state": "missing"
+              },
+              "targetFiles": {
+                "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/target/product/mustang/obj/PACKAGING/target_files_intermediates/mustang-target_files.zip",
+                "sha256": "87892fdabf63374d8afc66f3c986d92c9f2a7f0395e6df2d2eb8db4e9a833c03",
+                "sizeBytes": 4340146868,
+                "state": "collected"
+              },
+              "vendorBootImage": {
+                "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/target/product/mustang/vendor_boot.img",
+                "sha256": "34f95b423a2df8f51828feb21299f40b48b6c16e148bd21ad32729d709060ee1",
+                "sizeBytes": 67108864,
+                "state": "collected"
+              },
+              "vendorKernelBootImage": {
+                "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/target/product/mustang/vendor_kernel_boot.img",
+                "sha256": "9e293af7aff797977775b3c0e4d4ae8506d5be7fab1b99c363aa672809cad880",
+                "sizeBytes": 67108864,
+                "state": "collected"
+              }
+            },
+            "omitted": "CRC sweep, partition/firmware coverage, packaged app/policy and signing checks",
+            "outDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302",
+            "signed": false,
+            "verdict": "incomplete"
+          },
+          "peakSampledBytes": 120180772864,
+          "releaseReady": false,
+          "returncode": 0,
+          "sampleSeconds": 5,
+          "signed": false,
+          "sprint": {
+            "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+            "downloadedInputHashVerification": false,
+            "packagedAppAndPolicyVerification": false,
+            "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+            "reserveChecks": false
+          },
+          "stage": "compile",
+          "startAvailableBytes": 617884016640,
+          "stopped": null
+        }
+      },
+      "download": {
+        "exitCode": 0,
+        "receipt": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/receipts/download/completed.json",
+        "result": {
+          "announcedBytes": 11366092596,
+          "at": "2026-11-03T21:46:09Z",
+          "bytes": 11366092596,
+          "device": "mustang",
+          "downloadedInputHashVerification": "omitted per Mustang sprint plan",
+          "expectedBytes": 11366092596,
+          "expectedSha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+          "maxBytes": 11366092596,
+          "ok": true,
+          "releaseReady": false,
+          "sha256": null,
+          "signed": false,
+          "sprint": {
+            "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+            "downloadedInputHashVerification": false,
+            "packagedAppAndPolicyVerification": false,
+            "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+            "reserveChecks": false
+          },
+          "stage": "download",
+          "url": "https://dl.google.com/dl/android/aosp/mustang-cp3a.261005.005-factory-099acc44.zip"
+        }
+      },
+      "git-meta": {
+        "exitCode": 0,
+        "receipt": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/receipts/git-meta/completed.json",
+        "result": {
+          "at": "2026-11-03T21:44:53Z",
+          "boundBytes": 8589934592,
+          "boundKind": "proposal",
+          "consumedBytes": 1195106304,
+          "device": "mustang",
+          "fetchUrlPrefix": "https://github.com/GrapheneOS/",
+          "objectsSource": "public-fetch",
+          "ok": true,
+          "projects": {
+            "build/make": {
+              "alternates": false,
+              "gitDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/build/make/.git",
+              "gitDirBytes": 8085504,
+              "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+              "shallow": true,
+              "treeId": "8cba4028c35f5cc4e4ebab97b01b6ca93700623f"
+            },
+            "build/release": {
+              "alternates": false,
+              "gitDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/build/release/.git",
+              "gitDirBytes": 2322432,
+              "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22",
+              "shallow": true,
+              "treeId": "8db73ecd6007deb2a277847d73add8b0dffbc458"
+            },
+            "frameworks/base": {
+              "alternates": false,
+              "gitDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/frameworks/base/.git",
+              "gitDirBytes": 971116544,
+              "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+              "shallow": true,
+              "treeId": "ee02f0be7fb9f96722f897c64f642cb056c522e1"
+            },
+            "packages/apps/Launcher3": {
+              "alternates": false,
+              "gitDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/packages/apps/Launcher3/.git",
+              "gitDirBytes": 10039296,
+              "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+              "shallow": true,
+              "treeId": "31263ca2e7dfa16a8ce3fd06a5740517b43303ad"
+            },
+            "packages/apps/Updater": {
+              "alternates": false,
+              "gitDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/packages/apps/Updater/.git",
+              "gitDirBytes": 491520,
+              "revision": "52c34a55bd26f7856f9141d7e4237397084d6936",
+              "shallow": true,
+              "treeId": "55104608a98bd99e9edfbd2a0a5aa72a9eb902cc"
+            },
+            "packages/modules/Permission": {
+              "alternates": false,
+              "gitDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/packages/modules/Permission/.git",
+              "gitDirBytes": 5435392,
+              "revision": "4d6005dbabf3f2bf96e5215c5c2801809b051bf3",
+              "shallow": true,
+              "treeId": "370c6b17d2b241898ce45840d837e14d4f02b007"
+            },
+            "vendor/adevtool": {
+              "alternates": false,
+              "gitDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/vendor/adevtool/.git",
+              "gitDirBytes": 197615616,
+              "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+              "shallow": true,
+              "treeId": "f0863541755769c12b01f5e1a429bdc6cb704f07"
+            }
+          },
+          "releaseReady": false,
+          "signed": false,
+          "sprint": {
+            "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+            "downloadedInputHashVerification": false,
+            "packagedAppAndPolicyVerification": false,
+            "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+            "reserveChecks": false
+          },
+          "stage": "git-meta",
+          "workingTreeCommands": []
+        }
+      },
+      "integrate": {
+        "compiledAppAndPolicyVerification": "omitted",
+        "inputs": "/home/pixelbuild/rose-actions/mustang-integrate-2026110302/inputs/local-inputs.json",
+        "receiptDir": "/home/pixelbuild/rose-actions/mustang-reconcile-2026110302",
+        "result": {
+          "consumedBytes": 0,
+          "enforcement": "sampled-stop",
+          "leftoverGroupEnded": null,
+          "lowestSampledAvailableBytes": 616912863232,
+          "peakSampledBytes": 0,
+          "returncode": 0,
+          "sampleSeconds": 5,
+          "stopped": null
+        },
+        "source": "2b521e732fa1537e54ff0a77880810ab1f34cf99"
+      },
+      "lunch": {
+        "exitCode": 0,
+        "receipt": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/receipts/lunch/completed.json",
+        "result": {
+          "at": "2026-11-03T21:47:14Z",
+          "boundBytes": 8589934592,
+          "boundKind": "proposal",
+          "consumedBytes": 147709952,
+          "device": "mustang",
+          "enforcement": "sampled-stop",
+          "leftoverGroupEnded": null,
+          "lowestSampledAvailableBytes": 617920856064,
+          "ok": true,
+          "peakSampledBytes": 147709952,
+          "releaseReady": false,
+          "returncode": 0,
+          "sampleSeconds": 5,
+          "signed": false,
+          "sprint": {
+            "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+            "downloadedInputHashVerification": false,
+            "packagedAppAndPolicyVerification": false,
+            "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+            "reserveChecks": false
+          },
+          "stage": "lunch",
+          "stopped": null,
+          "targets": {
+            "TARGET_BUILD_VARIANT": "user",
+            "TARGET_DEVICE": "mustang",
+            "TARGET_PRODUCT": "mustang",
+            "TARGET_RELEASE": "cur"
+          }
+        }
+      },
+      "source": {
+        "exitCode": 0,
+        "receipt": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/receipts/source/completed.json",
+        "result": {
+          "at": "2026-11-03T21:43:50Z",
+          "availableBytesBefore": 766758678528,
+          "base": "/home/pixelbuild/grapheneos-2026100600",
+          "boundBytes": 161061273600,
+          "boundKind": "proposal",
+          "complete": true,
+          "copied": {
+            "entries": 2047683,
+            "fileBytes": 118544843301
+          },
+          "createdParent": false,
+          "device": "mustang",
+          "ok": true,
+          "processesStarted": 0,
+          "provenance": {
+            "integration": "included as found in the production working tree (its Frankel/Rose integration is not removed, re-applied or verified)",
+            "kind": "production-working-tree-byte-snapshot",
+            "pinnedManifestVerified": false,
+            "projectRevisionsVerified": false,
+            "resolvedManifest": null,
+            "selectionSha256": "identifies the copied paths, modes, sizes, link texts and file sha256s at copy time only; later stages change the tree by design (vendor output, OUT_DIR) and do not re-hash it",
+            "versionControlMetadata": "excluded (.git and .repo): project revisions cannot be re-derived from the copy, and a manifest or resolved manifest read elsewhere is not evidence for these bytes"
+          },
+          "releaseReady": false,
+          "selection": {
+            "apparentBytes": 118544843301,
+            "entries": 2047683,
+            "excluded": 1070,
+            "files": 1686964,
+            "problems": [],
+            "projectedBytes": 124828221440,
+            "selectionRecordBoundBytes": 546942976
+          },
+          "selectionRecord": {
+            "bytes": 308693170,
+            "claims": "the copied bytes at copy time only; no project revision is verified",
+            "format": "path TAB type TAB octal mode [TAB size TAB sha256 | TAB link text]; raw filesystem bytes with backslash, tab, CR and LF escaped",
+            "lines": 2047683,
+            "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source.selection.tsv",
+            "sha256": "34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4"
+          },
+          "selectionSha256": "34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4",
+          "signed": false,
+          "sourceRoot": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source",
+          "sprint": {
+            "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+            "downloadedInputHashVerification": false,
+            "packagedAppAndPolicyVerification": false,
+            "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+            "reserveChecks": false
+          },
+          "stage": "source",
+          "target": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source",
+          "timeoutSeconds": 7200,
+          "written": true
+        }
+      },
+      "vendor": {
+        "exitCode": 0,
+        "receipt": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/receipts/vendor/completed.json",
+        "result": {
+          "adevtoolHead": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+          "at": "2026-11-03T21:47:03Z",
+          "boundBytes": 137438953472,
+          "boundKind": "proposal",
+          "consumedBytes": 1797275648,
+          "device": "mustang",
+          "enforcement": "sampled-stop",
+          "leftoverGroupEnded": null,
+          "lowestSampledAvailableBytes": 617632464896,
+          "node": {
+            "device": 2049,
+            "inode": 54914,
+            "mode": "0o100755",
+            "mtimeNs": 1791963171000000000,
+            "path": "/usr/local/bin/node",
+            "size": 126816376
+          },
+          "ok": true,
+          "peakSampledBytes": 1797275648,
+          "releaseReady": false,
+          "returncode": 0,
+          "sampleSeconds": 5,
+          "signed": false,
+          "skipDepBuild": {
+            "ADEVTOOL_SKIP_DEP_BUILD": "1"
+          },
+          "sprint": {
+            "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+            "downloadedInputHashVerification": false,
+            "packagedAppAndPolicyVerification": false,
+            "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+            "reserveChecks": false
+          },
+          "stage": "vendor",
+          "stopped": null
+        }
+      },
+      "vendor-sprint-patch": {
+        "downloadedInputHashVerification": "omitted in helper and pinned adevtool unpacker",
+        "patch": "/home/pixelbuild/actions-runner/_work/RoseOS-1/RoseOS-1/os/build-only/mustang-inputs/adevtool-no-input-hash.patch",
+        "result": {
+          "consumedBytes": 0,
+          "enforcement": "sampled-stop",
+          "leftoverGroupEnded": null,
+          "lowestSampledAvailableBytes": null,
+          "peakSampledBytes": 0,
+          "returncode": 0,
+          "sampleSeconds": 5,
+          "stopped": null
+        }
+      }
+    }
+  },
+  "candidateReceiptSha256": "38e99d9f4c1df56af5c95ca9521f353ec44a5f23f82c3fed606ddfb07a7f196e",
+  "collectionRecovery": true,
+  "collectorSource": "7b5848c420d070d0219f0e99f05997ece245c748",
+  "compileRunId": "41720536968",
+  "compileSource": "2b521e732fa1537e54ff0a77880810ab1f34cf99",
+  "device": "mustang",
+  "label": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+  "makeRerun": false,
+  "makeReturncode": 0,
+  "omittedChecks": [
+    "Downloaded input hash verification",
+    "Focused tests, including wrong-device/hash/missing-input negative cases",
+    "Existing-device regression tests and required CI/full-suite runs (post-hoc follow-up)",
+    "Independent isolated source/output path and safe-file-handling verification",
+    "Free-space checks against the selected route reserve",
+    "OS/AVB signing-result and intended-public-identity verification",
+    "Packaged Rose app/signer and compiled-controller-policy verification",
+    "Required-partition and firmware-coverage checks",
+    "Installer-to-signed-output content comparison, including dynamic partitions",
+    "Installer-reference, device-requirement and public-AVB-metadata checks",
+    "Separate archive-signature status reporting"
+  ],
+  "originalReceiptsModified": false,
+  "originalWorkflowConclusion": "failure",
+  "outputs": {
+    "actualBuildIdentity": {
+      "build": "2026110302",
+      "device": "mustang",
+      "timestamp": "1793742435"
+    },
+    "artifacts": {
+      "otatools": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/soong/.intermediates/build/make/tools/otatools_package/otatools-package/linux_glibc_x86_64/gen/otatools.zip",
+        "sha256": "f8fc065e87083a51f64c74be57f4f06611721645273b9ae45081148203cebc22",
+        "sizeBytes": 536807666,
+        "state": "collected"
+      },
+      "targetFiles": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/target/product/mustang/obj/PACKAGING/target_files_intermediates/mustang-target_files.zip",
+        "sha256": "87892fdabf63374d8afc66f3c986d92c9f2a7f0395e6df2d2eb8db4e9a833c03",
+        "sizeBytes": 4340146868,
+        "state": "collected"
+      },
+      "vendorBootImage": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/target/product/mustang/vendor_boot.img",
+        "sha256": "34f95b423a2df8f51828feb21299f40b48b6c16e148bd21ad32729d709060ee1",
+        "sizeBytes": 67108864,
+        "state": "collected"
+      },
+      "vendorKernelBootImage": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302/target/product/mustang/vendor_kernel_boot.img",
+        "sha256": "9e293af7aff797977775b3c0e4d4ae8506d5be7fab1b99c363aa672809cad880",
+        "sizeBytes": 67108864,
+        "state": "collected"
+      }
+    },
+    "omitted": "CRC sweep, partition/firmware coverage, packaged app/policy and signing checks",
+    "outDir": "/home/pixelbuild/rose-actions/mustang-prep-41720536968-1/source/out-mustang-build-2026110302",
+    "signed": false,
+    "verdict": "complete"
+  },
+  "runAttempt": "1",
+  "runId": "41738359336",
+  "schema": "roseos.mustang-compile-collection.v1",
+  "status": "complete"
+}

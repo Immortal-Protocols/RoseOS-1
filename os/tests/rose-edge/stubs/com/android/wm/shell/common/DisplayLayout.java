@@ -1,0 +1,1 @@
+package com.android.wm.shell.common; public class DisplayLayout { public int width() { return 0; } public int height() { return 0; } public int rotation() { return 0; } public int densityDpi() { return 0; } public float density() { return 0; } }

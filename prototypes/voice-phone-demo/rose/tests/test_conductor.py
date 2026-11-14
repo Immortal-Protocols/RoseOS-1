@@ -25,7 +25,7 @@ from rose.brain import GEN_FAST, Brain, Mark, ToolCall, tool_segment
 from rose.bus import Bus
 from rose.conductor import (_PLAIN_TIME_Q, LOOK_CALL, LOOK_FILLER, LOOK_INTRO, NOT_RUNNING_HINT, SCREEN_HINT, Conductor,
                             Part, Reply, _bc_ish, _Capture, _claims_action, _claims_ui_action, _hide_thinking, _is_ack,
-                            _is_info_question, _screen_claim_at, _tool_pieces, _unrelated_question,
+                            _is_info_question, _promises_work, _screen_claim_at, _tool_pieces, _unrelated_question,
                             _wants_phone_action)
 from rose.runtime import Runtime, Sleep
 
@@ -209,6 +209,12 @@ def unit_checks() -> None:
             bad.append(f"acknowledgement not seen: {speech!r}")
     if not _claims_action("It won't make much difference, but sure. I'll turn it off for you now."):
         bad.append("a claimed action after advice was not seen")
+    # Qwen3.8-27B ended a money question with only "Sure, working that out for you."
+    for speech, promise in [("Sure, working that out for you.", True), ("Okay. Let me figure it out.", True),
+                            ("Let me do the math. About 38,800 dollars.", False),
+                            ("I'm working on a laptop.", False), ("You'll have about 38,800 dollars.", False)]:
+        if _promises_work(speech) != promise:
+            bad.append(f"promises work({speech!r}) != {promise}")
     if bool(_PLAIN_TIME_Q.match("Lunch with Priya, what time is it?")):
         bad.append("an event question was taken for a bare time question")
     for text, could_be in [("And n", True), ("MM Ham Hum", True), ("I'm home", False), ("actually what time", False)]:
@@ -730,7 +736,12 @@ def evidence_checks(bad):
             ("Can we add one plus two plus three up to forty nine on the calculator?", "", "Calculator"),
             ("Use Maps to find a coffee shop.", "", "Maps"),
             ("Type hello world.", "Claude", "Claude"),
-            ("Open Amazon and show me.", "", "Amazon")]:
+            ("Open Amazon and show me.", "", "Amazon"),
+            # Live, 2026-11-01: read-only look-ups in a named app were refused as "phone data".
+            ("On Amazon, search for a USB-C to USB-C cable and tell me the price and star rating of the first "
+             "two results. Don't add anything to the cart.", "", "Amazon"),
+            ("How much free storage does my phone have? Check in Settings.", "", "Settings"),
+            ("Search Amazon for a phone case.", "", "Amazon")]:
         got = _do_request_in(text, names, ctx)
         if got is None or got[0] != app:
             bad.append(f"do request not seen: {text!r} (context {ctx!r}) -> {got!r}, want {app!r}")
@@ -742,7 +753,9 @@ def evidence_checks(bad):
             ("I used the calculator app yesterday.", ""), ("What's on my screen?", ""), ("Play my chill mix.", ""),
             ("Set an alarm for seven.", ""), ("Text Sam that I'm on my way.", ""), ("Can you try the other buttons?", ""),
             ("What's fifteen percent of eighty?", "Calculator"), ("Do you think that's right?", "Calculator"),
-            ("How's it going?", "Calculator"), ("Is Spotify open?", ""), ("Did you open the app?", "")]:
+            ("How's it going?", "Calculator"), ("Is Spotify open?", ""), ("Did you open the app?", ""),
+            ("How do I check storage in Settings?", ""), ("Check the weather.", ""),
+            ("In my opinion, find a better way.", "")]:
         got = _do_request_in(text, names, ctx)
         if got is not None:
             bad.append(f"not a do request, but seen as one: {text!r} (context {ctx!r}) -> {got!r}")

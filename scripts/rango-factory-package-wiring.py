@@ -18,8 +18,15 @@ scripts/factory-package.py to literal historical expected pins, one manual run p
                                 own one-line JSON result (its refusal category and detail), never its stderr or log.
   observe  --run-id --attempt   factory-package.py observe of the pinned signed target-files into
                                 R/inspection/target-files-observation.json.
+  firmware-observe --run-id --attempt
+                                scripts/rango-firmware-observe.py (Signing) of the pinned signed target-files into the
+                                new R/inspection/firmware-observation.json. Its exit and one-line JSON result are kept
+                                write-once in R/inspection/firmware-attempt.json. Exit 0 (with a regular, new output)
+                                and 3 (a refusal, with no output) are reported results; anything else fails.
   classify --run-id --attempt   factory-package.py classify of R/package/rango-install-2026103001.zip, its stdout kept
-                                write-once as R/inspection/classify.json, with --work-dir R/classify-work. Exit 0
+                                write-once as R/inspection/classify.json, with --work-dir R/classify-work, and with
+                                --firmware-observation only when firmware-observe exited 0 with its output; otherwise
+                                classify keeps reporting the missing coverage truthfully. Exit 0
                                 (factoryReady) and 3 (incomplete, still JSON; expected: no archive signature and no
                                 firmware observation) are reported results; anything else fails.
   stage-installer --run-id --attempt
@@ -40,18 +47,18 @@ anything is written. 128 GiB is the helper's free-space precondition, not a usag
 not measurements: no total runtime has been measured. Exit status: 0 ok, 2 invalid, 3 refused, others from the helpers.
 """
 import argparse
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import factory_package_route as route_lib  # noqa: E402 (the device-neutral machinery this route binds)
+
 ROOT = Path(__file__).resolve().parents[1]
-HELPER = ROOT/'scripts/host-factory-package.py'
-INSPECTOR = ROOT/'scripts/factory-package.py'
+HELPER, INSPECTOR, FIRMWARE = route_lib.HELPER, route_lib.INSPECTOR, route_lib.FIRMWARE
 DEVICE, BUILD = 'rango', '2026103001'
 PRODUCTION = '/home/pixelbuild/grapheneos-2026100600'
 PINS = {
@@ -66,29 +73,25 @@ PINS = {
     'avbPkmd': {'sha256': 'aee947942b80c74dab9956209b7f7836a1824d9aeb1e9dd782dc157c63fd8f27'},
     'fastbootSha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9',
 }
-TASK_PARENT = '/home/pixelbuild/rose-actions'
-TASK_NAME = 'rango-factory-package-{run_id}-{attempt}'
-INSTALL = f'{DEVICE}-install-{BUILD}.zip'
+TASK_PARENT = route_lib.TASK_PARENT
 # Wrapper ceilings (seconds), not measurements. package: the helper's 60-min generation plus its unbounded hashing,
-# otatools unzip and target-files copy; observe: names-only target-files walk; classify: each tool call is bounded at
-# 3600 s by the helper, two expected (simg2img, lpunpack).
-BOUNDS = {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200, 'stageSeconds': 900}
+# otatools unzip and target-files copy; observe: names-only target-files walk; firmware: the target-files hash plus
+# at most two 1 GiB containers and their RADIO/ images (the helper has no time bound of its own); classify: each tool
+# call is bounded at 3600 s by the helper, two expected (simg2img, lpunpack). The firmware step's 600 s came out of
+# package (5400 -> 5100) and observe (900 -> 600), so the job total stays at the approved 297 minutes.
+BOUNDS = {'packageSeconds': 5100, 'observeSeconds': 600, 'firmwareSeconds': 570, 'classifySeconds': 7200,
+          'stageSeconds': 900}
 # The private installer artifact (actions/upload-artifact): proposed source bounds, not a measured size or duration.
 # Staging (900 s + 30 s kill) and the 45-min upload keep the approved job total at 297 minutes.
 INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45}
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
-ATTEMPT_SCHEMA = 'roseos.rango-factory-package-attempt.v1'
-ATTEMPT_NAME = 'rango-factory-package-attempt-{run_id}-{attempt}.json'
-RESULT_BYTES = 1 << 16  # the helper prints one short JSON line; anything longer is not trusted as a result
-CATEGORY = re.compile(r'[a-z][a-z_]{0,39}')
-UPLOAD = {'package/factory-package-receipt.json': 'factory-package-receipt.json',
-          'inspection/target-files-observation.json': 'target-files-observation.json',
-          'inspection/classify.json': 'classify.json', 'cleanup.json': 'cleanup.json'}
-
-
-class Invalid(Exception):
-    pass
+RESULT_BYTES, CATEGORY, UPLOAD = route_lib.RESULT_BYTES, route_lib.CATEGORY, route_lib.UPLOAD
+Invalid = route_lib.Invalid
+# The one Rango route the shared machinery runs; its derived names are exactly this wiring's historical ones.
+ROUTE = route_lib.Route(DEVICE, BUILD, PINS, installer=INSTALLER, task_parent=TASK_PARENT)
+TASK_NAME, INSTALL = ROUTE.task_name, ROUTE.install  # rango-factory-package-{run_id}-{attempt}, rango-install-2026103001.zip
+ATTEMPT_SCHEMA, ATTEMPT_NAME = ROUTE.attempt_schema, ROUTE.attempt_name
 
 
 def pointer(root, file, *keys):
@@ -129,200 +132,85 @@ def check(root=ROOT, pins=PINS):
     return dict(BOUNDS), math.ceil(total / 60) + JOB_MARGIN_MINUTES
 
 
+def _route(pins=PINS):
+    return ROUTE if pins is PINS else route_lib.Route(DEVICE, BUILD, pins, installer=INSTALLER, task_parent=TASK_PARENT)
+
+
 def task_root(run_id, attempt, parent=TASK_PARENT):
-    for label, value in (('run id', run_id), ('attempt', attempt)):
-        if not (isinstance(value, str) and value.isdigit() and value[0] != '0' and len(value) <= 20):
-            raise Invalid(f'a positive numeric {label} is required')
-    return Path(parent)/TASK_NAME.format(run_id=run_id, attempt=attempt)
+    return route_lib.task_root(ROUTE, run_id, attempt, parent)
 
 
 def lock_path(root=ROOT):
-    return pointer(root, 'os/release-pipeline/frankel.json', 'host', 'lockPath')
+    return route_lib.lock_path(root)
 
 
 def package_argv(root_dir, root=ROOT, pins=PINS):
-    return [sys.executable, str(HELPER), '--device', DEVICE, '--build', BUILD,
-            '--target-files', pins['targetFiles']['path'], '--target-files-sha256', pins['targetFiles']['sha256'],
-            '--otatools', pins['otatools']['path'], '--otatools-sha256', pins['otatools']['sha256'],
-            '--release-script', pins['releaseScript']['path'], '--release-script-sha256', pins['releaseScript']['sha256'],
-            '--fastboot-sha256', pins['fastbootSha256'],
-            '--lock', lock_path(root), '--out', str(root_dir/'package')]
+    return route_lib.package_argv(_route(pins), root_dir, root)
 
 
 def observe_argv(root_dir, run_id, attempt, pins=PINS):
-    return [sys.executable, str(INSPECTOR), 'observe', pins['targetFiles']['path'], '--flavor', DEVICE, '--build', BUILD,
-            '--source', f'os-release rango-factory-package run {run_id} attempt {attempt}',
-            '--out', str(root_dir/'inspection/target-files-observation.json')]
+    return route_lib.observe_argv(_route(pins), root_dir, run_id, attempt)
 
 
-def classify_argv(root_dir, pins=PINS):
-    return [sys.executable, str(INSPECTOR), 'classify', str(root_dir/'package'/INSTALL), '--flavor', DEVICE,
-            '--target-files', pins['targetFiles']['path'],
-            '--target-files-observation', str(root_dir/'inspection/target-files-observation.json'),
-            '--otatools', pins['otatools']['path'], '--otatools-sha256', pins['otatools']['sha256'],
-            '--work-dir', str(root_dir/'classify-work'), '--build', BUILD]
+def firmware_argv(root_dir, run_id, attempt, pins=PINS):
+    return route_lib.firmware_argv(_route(pins), root_dir, run_id, attempt)
+
+
+def classify_argv(root_dir, pins=PINS, firmware=False):
+    return route_lib.classify_argv(_route(pins), root_dir, firmware=firmware)
+
+
+def firmware_observe(root_dir, run_id, attempt, runner=subprocess.run, require_package=True):
+    """See factory_package_route.firmware_observe (Rango route)."""
+    return route_lib.firmware_observe(ROUTE, root_dir, run_id, attempt, runner, require_package)
+
+
+def firmware_observed(root_dir):
+    return route_lib.firmware_observed(root_dir)
 
 
 def new_dir(path):
-    path = Path(path)
-    if path.parent.is_symlink() or not path.parent.is_dir():
-        raise Invalid(f'{path.parent} must be an existing plain directory (not created here)')
-    path.mkdir(mode=0o700)  # FileExistsError: never reused
+    return route_lib.new_dir(path)
 
 
 def packaged(root_dir):
-    receipt = root_dir/'package/factory-package-receipt.json'
-    if receipt.is_symlink() or not receipt.is_file():
-        raise Invalid('no package receipt: nothing to inspect')
-    record = json.loads(receipt.read_text())
-    archive = root_dir/'package'/INSTALL
-    if record.get('status') != 'packaged' or archive.is_symlink() or not archive.is_file():
-        raise Invalid('the package step did not produce the install archive: nothing to inspect')
+    return route_lib.packaged(ROUTE, root_dir)
 
 
 def classify(root_dir, runner=subprocess.run):
-    packaged(root_dir)
-    new_dir(root_dir/'classify-work')
-    out = os.open(root_dir/'inspection/classify.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(out, 'w') as f:
-        code = runner(classify_argv(root_dir), stdout=f).returncode
-    return 0 if code in (0, 3) else (code or 1)
+    return route_lib.classify(ROUTE, root_dir, runner)
 
 
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for block in iter(lambda: f.read(8 << 20), b''):
-            digest.update(block)
-    return digest.hexdigest()
+sha256_file = route_lib.sha256_file
 
 
 def stage_installer(root_dir, cap=None, hasher=sha256_file):
-    """The ZIP the helper recorded, verified again before it may leave: regular file, recorded size and sha256, within
-    the cap, and only after inspection wrote its report. Writes R/SHA256SUMS; returns the export record."""
-    cap = INSTALLER['capBytes'] if cap is None else cap
-    packaged(root_dir)
-    report_file = root_dir/'inspection/classify.json'
-    if report_file.is_symlink() or not report_file.is_file():
-        raise Invalid('the inspection report is missing: the installer is not exported uninspected')
-    output = json.loads((root_dir/'package/factory-package-receipt.json').read_text()).get('output') or {}
-    if output.get('file') != INSTALL or not isinstance(output.get('size'), int) or not (
-            isinstance(output.get('sha256'), str) and len(output['sha256']) == 64):
-        raise Invalid('the package receipt does not record the install archive name, size and sha256')
-    archive = root_dir/'package'/INSTALL
-    size = os.lstat(archive).st_size
-    if size != output['size']:
-        raise Invalid(f'the archive is {size} bytes, not the recorded {output["size"]}: not exported')
-    if size > cap:
-        raise Invalid(f'the archive is {size} bytes, above the proposed {cap}-byte cap: not exported')
-    digest = hasher(archive)
-    if digest != output['sha256']:
-        raise Invalid('the archive sha256 differs from the package receipt: not exported')
-    fd = os.open(root_dir/'SHA256SUMS', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, 'w') as f:
-        f.write(f'{digest}  package/{INSTALL}\n')
-    return {'file': f'package/{INSTALL}', 'bytes': size, 'sha256': digest, 'capBytes': cap,
-            'retentionDays': INSTALLER['retentionDays']}
+    """See factory_package_route.stage_installer (Rango route)."""
+    return route_lib.stage_installer(ROUTE, root_dir, cap, hasher)
 
 
 def attempt_record_path(value, run_id, attempt):
-    """The attempt record lives outside R (which may never be created): a new file with the fixed per-run name in an
-    existing plain directory (the runner's temp directory in the workflow)."""
-    path = Path(value or '')
-    if (not value or not path.is_absolute() or os.path.normpath(value) != value
-            or path.name != ATTEMPT_NAME.format(run_id=run_id, attempt=attempt)):
-        raise Invalid(f'--attempt-record must be an absolute path named {ATTEMPT_NAME}')
-    if path.parent.is_symlink() or not path.parent.is_dir():
-        raise Invalid('the attempt record directory must be an existing plain directory')
-    return path
+    return route_lib.attempt_record_path(ROUTE, value, run_id, attempt)
 
 
 def sanitized_result(stdout):
-    """The helper's one-line JSON result reduced to fixed fields; anything else is not interpreted."""
-    lines = [line for line in (stdout or '').splitlines() if line.strip()]
-    if not lines or len(stdout) > RESULT_BYTES:
-        return {'category': 'no_result'}
-    try:
-        result = json.loads(lines[-1])
-    except ValueError:
-        return {'category': 'no_result'}
-    if isinstance(result, dict) and isinstance(result.get('refused'), str):
-        head = result['refused'].split(':', 1)[0]
-        return {'category': head if CATEGORY.fullmatch(head) else 'refused', 'detail': result['refused'][:500]}
-    if isinstance(result, dict) and isinstance(result.get('packaged'), dict):
-        output = result['packaged']
-        return {'category': 'packaged', 'output': {k: output.get(k) for k in ('file', 'sha256', 'size')}}
-    return {'category': 'no_result'}
+    return route_lib.sanitized_result(stdout)
 
 
 def package(root_dir, record_path, runner=subprocess.run):
-    """Create R, run the helper and keep its outcome in the write-once attempt record. Returns the exit status."""
-    record = {'schema': ATTEMPT_SCHEMA, 'step': 'package', 'taskRoot': str(root_dir)}
-    fd = os.open(record_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)  # before anything else
-    with os.fdopen(fd, 'w') as f:
-        try:
-            new_dir(root_dir)
-        except (Invalid, OSError) as error:
-            record.update(exit=2, category='task_root_refused', detail=str(error)[:500])
-        else:
-            try:
-                result = runner(package_argv(root_dir), stdout=subprocess.PIPE, text=True)
-            except OSError as error:
-                record.update(exit=1, category='spawn_failed', detail=type(error).__name__)
-            else:
-                record.update(exit=result.returncode, **sanitized_result(result.stdout))
-                print((result.stdout or '').strip()[:RESULT_BYTES], flush=True)
-        finally:
-            record.setdefault('exit', 1)
-            record.setdefault('category', 'wiring_interrupted')
-            f.write(json.dumps(record, indent=2, sort_keys=True) + '\n')
-    return record['exit']
+    """See factory_package_route.package (Rango route)."""
+    return route_lib.package(ROUTE, root_dir, record_path, runner)  # argv built after the record and R, as before
 
 
 def report(root_dir, upload_dir, installer_upload=None, record_path=None):
-    """The observed scratch state, then the allowlisted copies. Works when the task root was never created."""
-    upload_dir = Path(upload_dir)
-    upload_dir.mkdir(mode=0o700)
-    state = {'schema': 'roseos.rango-factory-package-cleanup.v1', 'taskRoot': str(root_dir),
-             'taskRootExists': root_dir.is_dir() and not root_dir.is_symlink()}
-    record = Path(record_path) if record_path else None
-    if record is not None and record.is_file() and not record.is_symlink():
-        (upload_dir/'package-attempt.json').write_bytes(record.read_bytes())
-        state['packageAttempt'] = 'recorded'
-    else:
-        state['packageAttempt'] = 'absent (the package step did not run or was stopped before recording)'
-
-    if state['taskRootExists']:
-        work, scratch = root_dir/'package/work', root_dir/'classify-work'
-        state['packageWorkRemoved'] = not os.path.lexists(work)
-        left = sorted(p.name for p in scratch.iterdir()) if scratch.is_dir() and not scratch.is_symlink() else []
-        state['classifyWorkLeft'] = left
-        if scratch.is_dir() and not scratch.is_symlink() and not left:
-            scratch.rmdir()
-        state['classifyWorkRemoved'] = not os.path.lexists(scratch)
-        state['retained'] = {name: (root_dir/'package'/name).is_file()
-                             for name in (INSTALL, 'factory-package-receipt.json', 'factory-package.log')}
-        state['uploaded'] = sorted(UPLOAD.values())
-        sums = root_dir/'SHA256SUMS'
-        state['installer'] = {'staged': sums.is_file() and not sums.is_symlink(),
-                              'sha256sums': sums.read_text().strip() if sums.is_file() and not sums.is_symlink() else None,
-                              'uploadOutcome': installer_upload or 'not-run', 'retentionDays': INSTALLER['retentionDays'],
-                              'capBytes': INSTALLER['capBytes']}
-        fd = os.open(root_dir/'cleanup.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-        with os.fdopen(fd, 'w') as f:
-            f.write(json.dumps(state, indent=2, sort_keys=True) + '\n')
-        for relative, name in UPLOAD.items():
-            source = root_dir/relative
-            if source.is_file() and not source.is_symlink():
-                (upload_dir/name).write_bytes(source.read_bytes())
-    else:
-        (upload_dir/'cleanup.json').write_text(json.dumps(state, indent=2, sort_keys=True) + '\n')
-    return state
+    """See factory_package_route.report (Rango route)."""
+    return route_lib.report(ROUTE, root_dir, upload_dir, installer_upload, record_path)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('check', 'package', 'observe', 'classify', 'stage-installer', 'report'))
+    p.add_argument('command', choices=('check', 'package', 'observe', 'firmware-observe', 'classify', 'stage-installer',
+                                       'report'))
     p.add_argument('--run-id')
     p.add_argument('--attempt')
     p.add_argument('--upload-dir')
@@ -335,7 +223,8 @@ def main(argv=None):
             if a.run_id or a.attempt or a.upload_dir:
                 raise Invalid('check takes no other option')
             print('\n'.join(f'{k}={v}' for k, v in (('package_seconds', bounds['packageSeconds']),
-                ('observe_seconds', bounds['observeSeconds']), ('classify_seconds', bounds['classifySeconds']),
+                ('observe_seconds', bounds['observeSeconds']), ('firmware_seconds', bounds['firmwareSeconds']),
+                ('classify_seconds', bounds['classifySeconds']),
                 ('stage_seconds', bounds['stageSeconds']), ('job_minutes', minutes))))
             return 0
         root_dir = task_root(a.run_id, a.attempt)
@@ -350,6 +239,8 @@ def main(argv=None):
             packaged(root_dir)
             new_dir(root_dir/'inspection')
             return subprocess.run(observe_argv(root_dir, a.run_id, a.attempt)).returncode
+        if a.command == 'firmware-observe':
+            return firmware_observe(root_dir, a.run_id, a.attempt)
         if a.command == 'classify':
             return classify(root_dir)
         if a.command == 'stage-installer':

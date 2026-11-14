@@ -1,0 +1,4 @@
+    // The following properties only make sense for internal engineering builds.
+
+    /** The time at which the build was produced, given in milliseconds since the UNIX epoch. */
+    public static final long TIME = getLong("ro.build.date.utc") * 1000;

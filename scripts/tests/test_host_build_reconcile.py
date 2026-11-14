@@ -42,7 +42,6 @@ class AppBuildTest(unittest.TestCase):
         root = self.root = Path(temp.name)
         self.source, self.candidate, self.release = root/'p1-inputs', root/'candidate', root/'release'
         assets = {'workspace/rose-agent/app/assets/connection.json': {'endpoint': 'https://100.64.0.1:9444', 'pin': PIN},
-            'workspace/rose-agent/app/assets/mac-screen-connection.json': {'endpoint': 'https://100.64.0.1:9445', 'pin': PIN},
             'workspace/pixel-clipboard/clipboard-connection.json': {'endpoint': 'https://100.64.0.1:9446'}}
         for relative, value in assets.items():
             write(self.source/relative, json.dumps(value))
@@ -93,6 +92,28 @@ class AppBuildTest(unittest.TestCase):
         self.assertEqual(set(hashes), {'voice'})
         self.assertEqual(sorted(p.relative_to(self.release).as_posix() for p in self.release.rglob('*')), ['unsigned', 'unsigned/voice.apk'])
         self.assertEqual((self.release/'unsigned/voice.apk').read_text().strip(), 'voice')
+
+    def test_a_directory_staged_before_the_retirement_still_builds_without_the_retired_input(self):
+        # #67: mac-screen-connection.json left PUBLIC_ASSETS. A builder's existing staged directory still holds it and
+        # lists it in its receipt; it is ignored (never verified, restored or required), so no restage is needed.
+        receipt = app_build.stage(self.source, self.assets, self.candidate)
+        self.assertNotIn(app_build.RETIRED_ASSETS[0], receipt['files'])
+        retired = self.assets/app_build.RETIRED_ASSETS[0]
+        write(retired, json.dumps({'endpoint': 'https://100.64.0.1:9445', 'pin': PIN}))
+        receipt['files'][app_build.RETIRED_ASSETS[0]] = hashlib.sha256(retired.read_bytes()).hexdigest()
+        (self.assets/app_build.RECEIPT).write_text(json.dumps(receipt))
+        app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_fake, voice_only=True)
+        self.assertFalse((self.candidate/app_build.RETIRED_ASSETS[0]).exists(), 'a retired input is never restored')
+        # Anything else extra still refuses, as does a missing current input.
+        receipt['files']['workspace/rose-agent/app/assets/other.json'] = '0' * 64
+        (self.assets/app_build.RECEIPT).write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(SystemExit, 'exactly the public inputs'):
+            app_build.build(self.candidate, self.root/'release-2', self.sdk, self.root/'jdk', self.assets, run=self.run_fake)
+        receipt['files'].pop('workspace/rose-agent/app/assets/other.json')
+        receipt['files'].pop(app_build.PUBLIC_ASSETS[0])
+        (self.assets/app_build.RECEIPT).write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(SystemExit, 'exactly the public inputs'):
+            app_build.build(self.candidate, self.root/'release-3', self.sdk, self.root/'jdk', self.assets, run=self.run_fake)
 
     def test_tampered_staged_input_or_unsafe_asset_is_refused(self):
         app_build.stage(self.source, self.assets, self.candidate)
@@ -345,19 +366,171 @@ class RetainedIntegrationOutputTest(unittest.TestCase):
         found = reconcile.historical_outputs(self.source, self.candidate, 'frameworks/base', SESSION[len('frameworks/base/'):])
         self.assertEqual(found.get(hashlib.sha256(self.retained).hexdigest()), self.commits['old'])
         self.assertEqual(reconcile.historical_outputs(self.source, self.candidate, 'build/make', 'x'), {})
+        self.assertEqual(reconcile.historical_outputs(self.source, self.candidate, 'device/google/x', 'x'), {})
         self.assertEqual(reconcile.historical_outputs(self.source, self.candidate, 'frameworks/base', 'absent.java'), {})
         self.assertEqual(reconcile.historical_outputs(self.source, self.candidate, 'frameworks/base',
             SESSION[len('frameworks/base/'):], limit=0), {})
 
-    def test_the_sequence_matches_the_patcher(self):
+    def test_the_sequences_match_the_patcher_and_the_recipe(self):
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
         self.assertIn("projects = {'frameworks/base': ['frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch']}",
             patcher)
         self.assertIn("projects['frameworks/base'] += BACKGROUND_FRAMEWORK_PATCHES", patcher)
+        self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')", patcher)
+        self.assertLess(patcher.index("projects['frameworks/base'] += BACKGROUND_FRAMEWORK_PATCHES"),
+            patcher.index("projects['frameworks/base'].append('rose-edge-wmshell.patch')"))
+        # 1G: the shade's one SystemUI binding comes after the Shell patch, last in frameworks/base.
+        self.assertLess(patcher.index("projects['frameworks/base'].append('rose-edge-wmshell.patch')"),
+            patcher.index("projects['frameworks/base'].append('rose-shade-systemui.patch')"))
         sys.path.insert(0, str(ROOT/'scripts'))
-        from background_apks import BACKGROUND_FRAMEWORK_PATCHES
-        self.assertEqual(reconcile.FRAMEWORKS_BASE_SEQUENCE,
-            ('frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch', *BACKGROUND_FRAMEWORK_PATCHES))
+        from background_apks import BACKGROUND_FRAMEWORK_PATCHES, ROSE_HOME_PATCHES
+        self.assertEqual(reconcile.FRAMEWORKS_BASE_SEQUENCE, ('frameworks-base.patch',
+            'rose-agent-self-update-frameworks-base.patch', *BACKGROUND_FRAMEWORK_PATCHES, 'rose-edge-wmshell.patch',
+            'rose-shade-systemui.patch'))
+        self.assertIs(reconcile.PATCH_SEQUENCES['frameworks/base'], reconcile.FRAMEWORKS_BASE_SEQUENCE)
+        # build/make: the tray's list, then the updater product, the background controller, the edge switch and the
+        # Rose keyboard (1M).
+        make = ["if a.agent_tray:projects['build/make'] = ['agent-tray-build-make.patch']",
+            "if a.updater_url:projects.setdefault('build/make', []).append('updater-product-build-make.patch')",
+            "projects.setdefault('build/make', []).append('background-control-build-make.patch')",
+            "if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')",
+            "projects['build/make'].append('rose-keyboard-build-make.patch')"]
+        positions = [patcher.index(line) for line in make]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(reconcile.PATCH_SEQUENCES['build/make'],
+            tuple(re.search(r"'([\w-]+\.patch)'", line).group(1) for line in make))
+        self.assertIn("projects['build/release'] = ['background-control-build-release.patch']", patcher)
+        self.assertEqual(reconcile.PATCH_SEQUENCES['build/release'], ('background-control-build-release.patch',))
+        self.assertIn("if a.updater_url:projects['packages/apps/Updater'] = ['updater-rose-channels.patch']", patcher)
+        self.assertEqual(reconcile.PATCH_SEQUENCES['packages/apps/Updater'], ('updater-rose-channels.patch',))
+        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch',\n"
+            "        'rose-edge-resize-launcher3.patch']", patcher)
+        self.assertEqual(reconcile.PATCH_SEQUENCES['packages/apps/Launcher3'],
+            ('rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch'))
+        self.assertEqual(reconcile.PATCH_SEQUENCES['packages/modules/Permission'],
+            tuple(ROSE_HOME_PATCHES['packages/modules/Permission']))
+        for sequence in reconcile.PATCH_SEQUENCES.values():
+            for name in sequence:
+                self.assertTrue((ROOT/'os/patches'/name).is_file(), name)
+        # The recipe the sequences describe: every reconciled project has one, with a background policy, the tray and
+        # an updater channel, and without a release index (so updater-rose-releases.patch is never applied).
+        settings = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['host']['integrate']['reconcile']
+        self.assertEqual(set(reconcile.PATCH_SEQUENCES), set(settings['projects']))
+        for flag in ('--background-policy', '--agent-tray', '--updater-url'):
+            self.assertIn(flag, settings['applyArgs'])
+        self.assertNotIn('--updater-release-index', settings['applyArgs'])
+
+MAKE_PRODUCTS = ROOT/'os/tests/fixtures/cuttlefish-alpha/build-make/target/product'
+LINEAGE = Path(__file__).resolve().parent/'fixtures/reconcile-lineage'
+GENERIC = 'build/make/target/product/generic_system.mk'
+EARLIER_MAKE = ('agent-tray-build-make.patch', 'updater-product-build-make.patch', 'background-control-build-make.patch')
+
+class RetainedBuildMakeOutputTest(unittest.TestCase):
+    """Run 41857685135: the retained generic_system.mk had held the agent-tray and background-control build/make output
+    since before host-reconcile existed, so no receipt owned it, and #440's first edit to that file (21d070f's edge
+    switch) read as an owner change. Pinned b0f697df build/make files (os/tests/fixtures/cuttlefish-alpha), the
+    repository's own build/make patches, and 21d070f's switch patch (fixtures/reconcile-lineage); nothing else."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        self.source, self.candidate, self.receipts = root/'R', root/'candidate', root/'receipts'
+        self.release = root/'release'
+        self.release.mkdir()
+        make = self.source/'build/make'
+        for name in ('generic_system.mk', 'media_system.mk', 'handheld_system_ext.mk'):
+            (make/'target/product').mkdir(parents=True, exist_ok=True)
+            (make/'target/product'/name).write_bytes((MAKE_PRODUCTS/name).read_bytes())
+        git('init', '-q', cwd=make)
+        git('add', '-A', cwd=make)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'b0f697df', cwd=make)
+        # The retained tree: the earlier integrations' output, in place before reconcile; the only receipt names nothing.
+        for name in EARLIER_MAKE:
+            git('apply', str(ROOT/'os/patches'/name), cwd=make)
+        self.retained = (self.source/GENERIC).read_bytes()
+        # The candidate repository: the earlier bundle, then 21d070f's switch on generic_system.mk, as two commits.
+        git('init', '-q', str(self.candidate), cwd=root)
+        self.commits = {}
+        for label, names in (('earlier', EARLIER_MAKE), ('switch', EARLIER_MAKE + ('rose-edge-build-make.patch',))):
+            for name in names:
+                source = LINEAGE/'rose-edge-build-make-21d070f.patch' if name == 'rose-edge-build-make.patch' \
+                    else ROOT/'os/patches'/name
+                (self.candidate/'os/patches').mkdir(parents=True, exist_ok=True)
+                (self.candidate/'os/patches'/name).write_bytes(source.read_bytes())
+            git('add', '-A', cwd=self.candidate)
+            git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', label, cwd=self.candidate)
+            self.commits[label] = subprocess.run(['git', '-C', str(self.candidate), 'rev-parse', 'HEAD'],
+                capture_output=True, text=True).stdout.strip()
+        # A patcher like the real one for this project: the candidate's build/make sequence, in order, on the shadow.
+        write(self.candidate/'scripts/apply-os-changes.py', f'''
+            import os, subprocess, sys
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            for name in {list(reconcile.PATCH_SEQUENCES['build/make'])!r}:
+                patch = os.path.join(here, 'os/patches', name)
+                if os.path.isfile(patch):
+                    subprocess.run(['git', '-C', os.path.join(sys.argv[1], 'build/make'), 'apply', patch], check=True)''')
+        self.receipts.mkdir()
+        (self.receipts/'0001-2026110401.json').write_text(json.dumps({'receiptType': 'reconcile', 'entries': {}}))
+
+    def switched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            (tree/'target/product').mkdir(parents=True)
+            (tree/'target/product/generic_system.mk').write_bytes((MAKE_PRODUCTS/'generic_system.mk').read_bytes())
+            git('init', '-q', cwd=tree)
+            for name in ('agent-tray-build-make.patch', 'background-control-build-make.patch'):
+                git('apply', '--include=target/product/generic_system.mk', str(ROOT/'os/patches'/name), cwd=tree)
+            git('apply', str(LINEAGE/'rose-edge-build-make-21d070f.patch'), cwd=tree)
+            return (tree/'target/product/generic_system.mk').read_bytes()
+
+    def run_reconcile(self, label='2026110402'):
+        return reconcile.reconcile(self.source, self.candidate, self.release, [], self.receipts, ['build/make'],
+            [], {}, label, patcher='candidate')
+
+    def test_run_41857685135_was_a_conflict_without_the_lineage(self):
+        actions, conflicts = reconcile.plan(self.source, ['build/make'], [], {GENERIC: (self.switched(), 0o644)},
+            {'entries': {}})
+        self.assertEqual((actions, conflicts), ({}, [GENERIC]))
+
+    def test_earlier_rose_build_make_output_is_replaced_with_backup_and_named_baseline(self):
+        record = self.run_reconcile()
+        self.assertEqual(record['changed'], [GENERIC])
+        self.assertEqual((self.source/GENERIC).read_bytes(), self.switched())
+        self.assertIn(b'persist.wm.debug.rose_edge=true', (self.source/GENERIC).read_bytes())
+        entry = record['entries'][GENERIC]
+        self.assertEqual((entry['before'], entry['reproducedFrom']),
+            (hashlib.sha256(self.retained).hexdigest(), self.commits['earlier']))
+        self.assertEqual((self.receipts/f'0002-2026110402-backup/{GENERIC}').read_bytes(), self.retained)
+        # The next candidate finds it task-owned through the receipt as usual.
+        self.assertEqual(self.run_reconcile('2026110403')['changed'], [])
+
+    def test_a_genuine_owner_edit_of_generic_system_mk_still_conflicts_and_nothing_is_written(self):
+        edited = self.retained + b'# owner\n'
+        (self.source/GENERIC).write_bytes(edited)
+        with self.assertRaisesRegex(reconcile.Conflict, 'generic_system.mk'):
+            self.run_reconcile()
+        self.assertEqual((self.source/GENERIC).read_bytes(), edited)
+        self.assertEqual(sorted(p.name for p in self.receipts.iterdir()), ['0001-2026110401.json'])
+
+    def test_a_version_where_a_patch_outside_the_sequence_touches_the_file_yields_no_lineage(self):
+        # Its output would be the sequence's alone, bytes no build at that version produced, so it must not count.
+        (self.candidate/'os/patches/zz-foreign-build-make.patch').write_text(
+            'diff --git a/target/product/generic_system.mk b/target/product/generic_system.mk\n'
+            '--- a/target/product/generic_system.mk\n+++ b/target/product/generic_system.mk\n'
+            '@@ -1 +1,2 @@\n #\n+# foreign\n')
+        git('add', '-A', cwd=self.candidate)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'foreign', cwd=self.candidate)
+        foreign = subprocess.run(['git', '-C', str(self.candidate), 'rev-parse', 'HEAD'], capture_output=True,
+            text=True).stdout.strip()
+        found = reconcile.historical_outputs(self.source, self.candidate, 'build/make', 'target/product/generic_system.mk')
+        self.assertNotIn(foreign, found.values())
+        self.assertEqual(found, {hashlib.sha256(self.retained).hexdigest(): self.commits['earlier'],
+            hashlib.sha256(self.switched()).hexdigest(): self.commits['switch']})
+
+    def test_the_lineage_is_exactly_the_earlier_and_the_current_sequence_outputs(self):
+        found = reconcile.historical_outputs(self.source, self.candidate, 'build/make', 'target/product/generic_system.mk')
+        self.assertEqual(found, {hashlib.sha256(self.retained).hexdigest(): self.commits['earlier'],
+            hashlib.sha256(self.switched()).hexdigest(): self.commits['switch']})
 
 class ReconcileTest(unittest.TestCase):
     """A two-project source tree; the fake candidate apply script edits a tracked file, adds an overlay and writes a

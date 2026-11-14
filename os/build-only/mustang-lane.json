@@ -1,0 +1,28 @@
+{
+  "schema": "roseos.mustang-dedicated-lane.v1",
+  "status": "bound",
+  "device": "mustang",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "runnerLabel": "roseos-mustang-builder",
+  "vm": {
+    "project": "protocols-465723",
+    "zone": "us-west2-a",
+    "instance": "roseos-mustang-builder-20261107-a",
+    "instanceId": "5585425566393384049"
+  },
+  "storageRoot": "/mnt/disks/mustang-data/roseos/rose-actions",
+  "diskResource": "projects/protocols-465723/zones/us-west2-a/disks/roseos-mustang-data-20261107-a",
+  "disk": {
+    "resource": "projects/protocols-465723/zones/us-west2-a/disks/roseos-mustang-data-20261107-a",
+    "id": "4322966418460195960"
+  },
+  "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+  "lockPath": "/mnt/disks/mustang-data/roseos/mustang.lock",
+  "queue": "mustang-ota",
+  "controller": {
+    "identityVariable": "MUSTANG_CONTROLLER_SERVICE_ACCOUNT",
+    "providerVariable": "MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER"
+  },
+  "infraEvidence": "os/build-only/mustang-infra-readback-20261107.json",
+  "basis": "Identity binding for the confirmed dedicated VM and data disk. Runtime admission, runner registration, source, signing, and publication stay in mustang-runtime.json and are not authorized by this file. Mustang must never use Frankel's builder. Legacy Mustang entry points remain retired."
+}

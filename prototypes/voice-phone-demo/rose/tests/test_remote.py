@@ -38,7 +38,7 @@ from websockets.sync.client import connect as ws_connect
 
 FAILURES: list[str] = []
 logging.getLogger("websockets").setLevel(logging.CRITICAL)  # a server close mid-handshake is expected here
-HOSTS = ["phone-test.tail0000.ts.net", "100.100.1.2", "192.168.1.70"]
+HOSTS = ["phone-test.tail0000.ts.net", "100.100.1.2"]
 
 
 def check(cond: bool, what: str) -> None:
@@ -217,7 +217,7 @@ def test_unit() -> None:
     check(uri == "roseagent://pair?v=1&name=Nathan%E2%80%99s%20MacBook%20Pro%20%282%29"
           "&hosts=a.ts.net,100.64.0.1&port=8443&pin=" + "f" * 64 + "&code=" + "A" * 26, "pair URI format")
     check([route_of(h) for h in ("x.tail1.ts.net", "100.127.0.1", "192.168.1.2", "100.128.0.1")]
-          == ["Tailscale", "Tailscale", "Wi-Fi", "Wi-Fi"], "route labels")
+          == ["Tailscale", "Tailscale", "Unsupported", "Unsupported"], "route labels")
 
 
 def test_live(cfg: Path) -> None:
@@ -263,8 +263,8 @@ def run_checks(rose: Rose, dash: int, rport: int, clock: Clock, cfg: Path) -> No
     check(re.fullmatch(r"[0-9a-f]{64}", pin) is not None, "pin is 64 lowercase hex")
     check(peer_pin(rport) == pin, "TLS certificate SHA-256 equals the pin")
     check(inv["hosts"] == HOSTS and inv["serverName"] == "Test Mac", "hosts and server name in the invite")
-    check(re.fullmatch(r"roseagent://pair\?v=1&name=Test%20Mac&hosts=phone-test\.tail0000\.ts\.net,100\.100\.1\.2,"
-                       rf"192\.168\.1\.70&port={rport}&pin={pin}&code=[A-Z2-7]{{26}}", inv["uri"]) is not None,
+    check(re.fullmatch(r"roseagent://pair\?v=1&name=Test%20Mac&hosts=phone-test\.tail0000\.ts\.net,100\.100\.1\.2"
+                       rf"&port={rport}&pin={pin}&code=[A-Z2-7]{{26}}", inv["uri"]) is not None,
           "QR URI matches the spec")
     png = base64.b64decode(inv["png"].split(",", 1)[1])
     check(inv["png"].startswith("data:image/png;base64,") and png.startswith(b"\x89PNG"), "invite carries a PNG QR")
@@ -275,7 +275,7 @@ def run_checks(rose: Rose, dash: int, rport: int, clock: Clock, cfg: Path) -> No
     check(st == 403, "pairing API refuses a foreign Origin")
 
     # ------------------------------------------------------------ dashboard: loopback Host/Origin only
-    check(dash_ws(dash, "/ws/phone") == 4003, "dashboard /ws/phone before pairing: the fake phone's 4003")
+    check(dash_ws(dash, "/ws/phone") == 4009, "dashboard /ws/phone refuses implicit USB before pairing too")
     for path in ("/ws/phone", "/ws/events", "/ws/audio"):
         check(dash_ws(dash, path, {"Origin": "https://evil.example"}) == 403,
               f"dashboard {path} refuses a foreign Origin (cross-site websocket)")
@@ -448,7 +448,7 @@ def run_checks(rose: Rose, dash: int, rport: int, clock: Clock, cfg: Path) -> No
     devs = local(dash, "GET", "/api/pair/devices")[1]["devices"]
     check(len(devs) == 1 and devs[0]["revoked"] is True and "publicKey" not in devs[0], "device list shows revoked")
     check(local(dash, "POST", "/api/pair/revoke", {"deviceId": "0" * 64})[0] == 404, "revoking an unknown id -> 404")
-    check(dash_ws(dash, "/ws/phone") == 4003, "dashboard /ws/phone opens again once no phone is paired")
+    check(dash_ws(dash, "/ws/phone") == 4009, "revocation does not reopen implicit USB phone control")
 
     # ------------------------------------------------------------ re-pair the same key
     code = code_of(local(dash, "POST", "/api/pair/new", {})[1]["uri"])

@@ -10,7 +10,7 @@
     "outDir": "out-rose-first-update-2026102701",
     "lockPath": "/home/pixelbuild/frankel-build.lock",
     "installclean": true,
-    "makeJobs": 48,
+    "makeJobs": 32,
     "makeGoals": [
       "vendorbootimage",
       "vendorkernelbootimage",
@@ -456,5 +456,50 @@
       "Voice binding already released"
     ],
     "basis": "INFRA-CANDIDATE-115: the Agent tray overlays (os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell, OS #85 adds AgentTrayLink and changes AgentTrayPrototype) are only copied into frameworks/base; the gate reads the SystemUI APK's dex in the target-files and the system_ext image bytes. Pinned frameworks/base 84183aff: wm_shell-sources globs src/**/*.java into WindowManager-Shell, a static library of SystemUI (system_ext_specific, privileged); SystemUI's proguard keeps com.android.wm.shell.* class names and strips only verbose logs, so the class descriptors and the new Log.w literal survive. The last two markers exist only with OS #85; a 2805-shaped SystemUI has only the first two. Derivations: scripts/tests/fixtures/systemui-84183aff/README.md. Code inclusion only; screen-off/resume behavior is runtime evidence"
+  },
+  "roseEdge": {
+    "props": [
+      "persist.wm.debug.rose_edge=true",
+      "persist.wm.debug.pixel_agent_tray=1"
+    ],
+    "propFiles": [
+      "SYSTEM/build.prop",
+      "SYSTEM/etc/build.prop",
+      "PRODUCT/etc/build.prop",
+      "SYSTEM_EXT/etc/build.prop"
+    ],
+    "classes": [
+      {
+        "apk": "(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/[^/]*Launcher3QuickStep[^/]*/[^/]+\\.apk",
+        "class": "Lcom/android/quickstep/fallback/RoseEdgeGesture;",
+        "method": null,
+        "literal": null
+      },
+      {
+        "apk": "(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/[^/]*Launcher3QuickStep[^/]*/[^/]+\\.apk",
+        "class": "Lcom/android/quickstep/fallback/RoseEdgeSwipe;",
+        "method": null,
+        "literal": "persist.wm.debug.rose_edge_diag"
+      },
+      {
+        "apk": "(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/SystemUI[^/]*/[^/]+\\.apk",
+        "class": "Lcom/android/wm/shell/roseedge/RoseEdgeController;",
+        "method": null,
+        "literal": "com.android.wm.shell.roseedge.IRoseEdge"
+      },
+      {
+        "apk": "(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/SystemUI[^/]*/[^/]+\\.apk",
+        "class": "Lcom/android/wm/shell/RoseEdgeMicSlot;",
+        "method": null,
+        "literal": "RoseEdgeMic"
+      }
+    ],
+    "literals": [
+      {
+        "apk": "(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/[^/]*Launcher3QuickStep[^/]*/[^/]+\\.apk",
+        "literal": "persist.wm.debug.rose_edge_diag"
+      }
+    ],
+    "basis": "OS Product's #410 1C/2A artifact checklist item 4 and its R8-literal checker (2026-11-05), run by bytes-verify and ota-verify through scripts/edge_artifact.py, which reads the dex itself (no dexdump on the builder). Props: PRODUCT_SYSTEM_PROPERTIES of rose-edge-build-make.patch and agent-tray-build-make.patch, both registered by --agent-tray, so SYSTEM/build.prop. Classes: RoseEdgeGesture and RoseEdgeSwipe (os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback) in Launcher3QuickStep, class only: at pinned Launcher3 47accce its R8 rules (-keep,allowshrinking,allowoptimization and -keepclasseswithmembernames on com.android.quickstep.**, no allowobfuscation) keep class names but may inline and remove single-call-site members such as stage and onMove (OS Product's review of #568); RoseEdgeController (com.android.wm.shell.roseedge) and RoseEdgeMicSlot (com.android.wm.shell) of rose-edge-wmshell.patch in SystemUI, whose static library WindowManager-Shell is. SystemUI's R8 keeps com.android.wm.shell.* class names but not subpackages, so a class may also pass on a whole string literal only its code holds: RoseEdgeSwipe's diagnostics switch, the IRoseEdge binder descriptor (a compile-time constant of the generated interface) and the mic slot's log tag. RoseEdgeGesture has none, so a rename fails closed. Literals, required as well and not a fallback: persist.wm.debug.rose_edge_diag in Launcher3QuickStep's dex is #548's artifact proof (the two classes predate it): #548 (6d2ee72) added it as RoseEdgeSwipe.DIAG_PROPERTY, a compile-time constant that javac inlines into SystemProperties.getBoolean in RoseEdgeSwipe's constructor, which FallbackSwipeHandler's constructor reaches (rose-edge-launcher3.patch), so R8 cannot drop it while the gesture is linked (OS Product, 2026-11-05). Code inclusion only; behaviour is device evidence"
   }
 }

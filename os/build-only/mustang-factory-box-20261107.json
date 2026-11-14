@@ -1,0 +1,51 @@
+{
+  "schema": "roseos.mustang-factory-box-observation.v1",
+  "admitted": false,
+  "extracted": false,
+  "transferred": false,
+  "vendorGenerated": false,
+  "sourceTreePinned": false,
+  "syncAuthorized": false,
+  "match": true,
+  "path": "/workspace/mustang-ota/source-inputs/mustang-cp3a.261005.005-factory-099acc44.zip",
+  "location": "box-only",
+  "sizeBytes": 11366092596,
+  "sha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+  "expectedSha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+  "downloadUrl": "https://dl.google.com/dl/android/aosp/mustang-cp3a.261005.005-factory-099acc44.zip",
+  "downloadFinishedLocal": "2026-11-07T07:13:04.366200-08:00",
+  "index": {
+    "repository": "https://github.com/GrapheneOS/adevtool",
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "path": "config/build-index/build-index-main.yml",
+    "lines": "369-372",
+    "sha256": "a108c6dd08afe9ad5e3fe09f36ae513b2fac34c7d18a2a66d5a90ebb742933f4",
+    "entry": [
+      "mustang CP3A.261005.005:",
+      "  desc: Oct 2026",
+      "  factory: 099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e mustang-cp3a.261005.005-factory-099acc44.zip",
+      "  ota: 62f7ec41d7ed3b945db37cdd211fb6314c1aaeace5ef060d8141e397571eeb85 mustang-ota-cp3a.261005.005-62f7ec41.zip"
+    ]
+  },
+  "installerInventory": {
+    "file": "mustang-install-2026110302.zip",
+    "reverified": true,
+    "safeEntries": 34,
+    "uncompressed": "about 4.63GB",
+    "androidSparseSuper": "1..16",
+    "apkExtracted": false,
+    "certificateExtracted": false,
+    "phoneAcceptance": false,
+    "inventoryObservedBeforeSparseConversion": true,
+    "simg2img": {
+      "completed": true,
+      "output": "super.raw.img",
+      "sizeBytes": 4191461376,
+      "source": "Debian signed sparse tools"
+    },
+    "lpunpackApplied": false,
+    "filesystemReaderApplied": false,
+    "readers": "The 34-entry inventory is from before sparse conversion. simg2img has since written super.raw.img of 4191461376 bytes. lpunpack and a filesystem reader have not run; APK and certificate bytes are still unextracted."
+  },
+  "basis": "The official factory ZIP was hashed on the box and matches the pinned adevtool build index. It has not been extracted, transferred to the Mustang disk, or admitted. The candidate installer inventory was rechecked without reading updater or certificate bytes."
+}

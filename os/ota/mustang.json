@@ -1,0 +1,25 @@
+{
+  "schema": "roseos.mustang-ota-config.v1",
+  "device": "mustang",
+  "repository": "Immortal-Protocols/pixel-ota",
+  "publicationEnabled": true,
+  "automationEnabled": false,
+  "bootstrapRun": "41719073037",
+  "signingAccess": {
+    "status": "approved",
+    "expiresAt": null,
+    "approvalRef": "os/ota/mustang-access-readback-unconditional.json",
+    "purpose": "Read only the two existing Mustang secret versions 1 as the existing signer. No bootstrap writes or key generation. Nathan granted the existing signer unconditional read access on both existing secrets; existing Dev Infra read the bindings back (metadata only) at 2026-11-05T01:17:39Z and Chief relayed it. expiresAt null is accepted only with that recorded unconditional readback; the earlier window (os/ota/mustang-access-readback-2026-11-05.json, 2026-11-05T06:20:18Z) no longer limits signing."
+  },
+  "baseline": {
+    "build": "2026110302",
+    "timestamp": "1793742435",
+    "source": "2b521e732fa1537e54ff0a77880810ab1f34cf99",
+    "signReceipt": "os/mustang-delivery/41738359336/sign.json",
+    "installedBuild": "2026110302",
+    "installedChannel": "stable",
+    "installationEvidence": "Nathan confirmed build 2026110302 installed with Beta selected on 2026-11-04 in the Mustang worker thread. Phone behavior has not been independently observed."
+  },
+  "plan": "https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614",
+  "activationRef": "Later additional-release authority reconciled by Chief on 2026-11-04: os/ota/mustang-ui-followup-authority.json. One fresh manual mustang-ota build/sign/public release and mustang-stable metadata after the UI work, using the Frankel 2026110403 app/policy inputs. Earlier OTA 2026110401 is already delivered. Automatic publication remains disabled; physical phone verification is optional and is not a release-completion gap. No new IAM, keys, credentials or access extension."
+}

@@ -1,0 +1,115 @@
+{
+  "schema": "roseos.mustang-hostdeps-recovery.v1",
+  "failedRunId": "42508459503",
+  "failedEvidence": "os/build-only/mustang-hostdeps-42508459503.json",
+  "observation": {
+    "administratorPolicy": {
+      "initializerExecuted": false,
+      "listedCommandExecuted": false,
+      "passwordlessExecutionAttested": false,
+      "policyExitCode": 1,
+      "probe": "sudo-policy-list-command-only",
+      "state": "policy-not-confirmed"
+    },
+    "authenticatedStop": false,
+    "availableBytes": 1288054849536,
+    "availableInodes": 94439695,
+    "dependencyOutput": {
+      "entries": {
+        "complete": true,
+        "elapsedSeconds": 0.115,
+        "entryCount": 2087,
+        "maxEntries": 100000,
+        "metadataOnly": true,
+        "specialEntries": [
+          {
+            "device": 2064,
+            "gid": 988,
+            "inode": 67408980,
+            "linkCount": 1,
+            "mode": 493,
+            "relativePath": ".path_interposer_log",
+            "sizeBytes": 0,
+            "type": "socket",
+            "uid": 999
+          }
+        ],
+        "timeoutSeconds": 30
+      },
+      "gid": 988,
+      "linkCount": 12,
+      "mode": 493,
+      "state": "directory",
+      "uid": 999
+    },
+    "guestIdentityVerified": true,
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42510553234",
+        "source": "93a3c95748164afa2cce4f4a9b02925b71a53291",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "lock": {
+      "availability": "available",
+      "gid": 0,
+      "linkCount": 1,
+      "mode": 420,
+      "state": "regular",
+      "uid": 0
+    },
+    "lockParent": {
+      "gid": 0,
+      "linkCount": 9,
+      "mode": 493,
+      "state": "directory",
+      "uid": 0
+    },
+    "makeStarted": false,
+    "otaAuthorized": false,
+    "pristineRuntimeAttestation": false,
+    "publishAuthorized": false,
+    "readOnlyGuestObservation": true,
+    "runnerCanCreateLock": false,
+    "runnerUid": 999,
+    "schema": "roseos.mustang-hostdeps-preflight.v1",
+    "signAuthorized": false
+  },
+  "observationReceiptSha256": "0fb4c0bd2d984eff682947b2bb427cc9dd6c0f6a105d4f2c78fd1f7aa66dd3d9",
+  "observationArtifact": {
+    "id": 13629212339,
+    "name": "mustang-preflight-42510553234-1",
+    "sizeBytes": 994,
+    "sha256": "b9a53c62bd0d88c2d14b57fd9e5cbe203f84c33bd89d1c47ce3fcc8a4b062593"
+  },
+  "workflowConclusion": "success",
+  "cleanupConclusion": "success",
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T10:33:31.032-08:00",
+    "lastStopTimestamp": "2026-11-08T10:35:27.982-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "retentionMethod": "same-filesystem renameat2 RENAME_NOREPLACE into the exact failed attempt",
+  "retentionExecutedByObservation": false,
+  "previousOutputUsedForNewBuild": false,
+  "sourceOfIpcPaths": {
+    "project": "GrapheneOS/platform_build_soong",
+    "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+    "socketSource": "ui/build/path.go",
+    "fifoSource": "ui/build/ninja.go"
+  },
+  "scope": "retain interrupted hostdeps output and permit a fresh bounded dependency build only",
+  "otaAuthorized": false,
+  "productionPinsChanged": false
+}

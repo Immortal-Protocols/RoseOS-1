@@ -1,0 +1,101 @@
+{
+  "allocationSha256": "4e63527df5d78e9eceea176a82d340f737b54f81d8ebe7add59d53738d61eb02",
+  "apps": [
+    [
+      "dev.pixel.voice",
+      368
+    ],
+    [
+      "dev.pixel.calculator.agent",
+      5
+    ],
+    [
+      "dev.pixel.backgroundcontrol",
+      40
+    ]
+  ],
+  "build": "2026110705",
+  "buildTimestamp": 1794081854,
+  "candidateSha": "5ceafc8a2a4916c61c9670c2858e1c8e0a2bb3d4",
+  "channel": "beta",
+  "clock": 1794081854,
+  "delta": [
+    {
+      "afterSha256": "8330d033da142533707357cace7a9e6653fc439e24e3e249e2ef7e81e3bddec6",
+      "beforeSha256": "e20c6f916ac7b8c34b26cf15645462e1a635b1f4d1236204015b749b125646e1",
+      "path": "workspace/rose-agent/app/AndroidManifest.xml",
+      "versionCode": [
+        311,
+        368
+      ],
+      "versionName": [
+        "311-hifi-visual-beta",
+        "368-os-beta-2026110705"
+      ]
+    },
+    {
+      "afterSha256": "2dfd74a95dcd484819b34cb05899806cab4cadbf5ae13fa2c81db74cfb20ab1e",
+      "beforeSha256": "58e77c590175dc4ec85dd53fd52130166732f8b952c2fb570ecb28a1da2a39df",
+      "path": "workspace/pixel-calculator-agent/AndroidManifest.xml",
+      "versionCode": [
+        4,
+        5
+      ],
+      "versionName": [
+        "1.3",
+        "1.3"
+      ]
+    },
+    {
+      "afterSha256": "350e76d1f8b271376c6f54c1340eadc11da20e565c48e22d55f581c83860d1be",
+      "beforeSha256": "26f669a62650e664293523446209ca9090bcc49d32e82163b717e02bdef5390e",
+      "path": "os/background-control/agent-pip/AndroidManifest.xml",
+      "versionCode": [
+        28,
+        40
+      ],
+      "versionName": [
+        "2.1.5-pip",
+        "2.1.5-pip"
+      ]
+    }
+  ],
+  "deltaSha256": "ca0c80fb0ade4b6a86eb82db6e15b979091a4dcbba0caebd9ee6580f26cdd750",
+  "device": "frankel",
+  "observationSha256": "0ce109705b6204e4eebf2cc90638c49d54d536e177d1a4c084ee4373f83e2042",
+  "packages": {
+    "dev.pixel.backgroundcontrol": {
+      "changedSinceRelease": false,
+      "previousVersionCode": 40,
+      "sourceVersionCode": 28,
+      "versionCode": 40,
+      "versionName": "2.1.5-pip"
+    },
+    "dev.pixel.calculator.agent": {
+      "changedSinceRelease": false,
+      "previousVersionCode": 5,
+      "sourceVersionCode": 4,
+      "versionCode": 5,
+      "versionName": "1.3"
+    },
+    "dev.pixel.voice": {
+      "changedSinceRelease": false,
+      "previousVersionCode": 368,
+      "sourceVersionCode": 311,
+      "versionCode": 368,
+      "versionName": "368-os-beta-2026110705"
+    }
+  },
+  "previous": {
+    "build": "2026110704",
+    "sourceSha": "f5b1210c358a31f305b004d8b9dc98a3906f398f"
+  },
+  "recipeSha": "c89d530cda33354ec593c1fb1338aa50e5dc7484",
+  "run": {
+    "attempt": "1",
+    "id": "42409144078"
+  },
+  "schema": "roseos.latest-allocation.v1",
+  "sourceSha": "c89d530cda33354ec593c1fb1338aa50e5dc7484",
+  "tag": "frankel-2026110705"
+}

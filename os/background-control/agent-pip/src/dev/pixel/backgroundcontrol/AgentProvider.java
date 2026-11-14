@@ -5,7 +5,7 @@ public final class AgentProvider extends ContentProvider {
  public Bundle call(String method,String arg,Bundle extras){
   if(getContext().getPackageManager().checkSignatures(android.os.Process.myUid(),Binder.getCallingUid())!=PackageManager.SIGNATURE_MATCH)throw new SecurityException("Caller signing identity does not match");
   JSONObject result;try{JSONObject p=new JSONObject(extras==null?"{}":extras.getString("params","{}"));switch(method){
-   case "capabilities":{int limit=Controller.sessionLimit(getContext());result=new JSONObject().put("status","ok").put("schemaVersion",4).put("multiSession",limit>=2).put("maxSessions",limit).put("backgroundOnly",true).put("operations",new JSONArray(new String[]{"list_apps","start","get_state","command","stop"}));break;}
+   case "capabilities":{int limit=Controller.sessionLimit(getContext());result=new JSONObject().put("status","ok").put("schemaVersion",4).put("multiSession",limit>=2).put("maxSessions",limit).put("backgroundOnly",true).put("visionText",true).put("visionSearch",true).put("operations",new JSONArray(new String[]{"list_apps","start","get_state","command","stop"}));break;}
    case "list_apps":result=Controller.apps(getContext());break;
    case "start":result=Controller.route(getContext(),"start",p);break;
    case "get_state":result=Controller.route(getContext(),"get_state",p);break;

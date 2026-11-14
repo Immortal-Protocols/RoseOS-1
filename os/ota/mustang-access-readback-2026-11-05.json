@@ -1,0 +1,23 @@
+{
+  "schema": "roseos.mustang-ota-access-readback.v1",
+  "observedAt": null,
+  "observedBy": "original Infra: metadata-only IAM policy readback, not a payload-access test",
+  "relayedBy": "Chief, to the Release session, on 2026-11-04 (UTC)",
+  "project": "protocols-465723",
+  "expiresAt": "2026-11-05T06:20:18Z",
+  "bindings": [
+    {
+      "secret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "expiresAt": "2026-11-05T06:20:18Z"
+    },
+    {
+      "secret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "expiresAt": "2026-11-05T06:20:18Z"
+    }
+  ],
+  "verification": "Recorded only from the relayed readback: both Mustang secret accessor bindings (the two secrets of os/ota/mustang-access-readback.json) for roseos-build-signer expire at 2026-11-05T06:20:18Z. The condition title and expression and the observation time were not relayed and are not recorded. Release made no IAM read or write and accessed no secret payload; original Infra owns the runtime and the readback."
+}

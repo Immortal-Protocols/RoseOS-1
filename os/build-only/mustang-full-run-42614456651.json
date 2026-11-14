@@ -1,0 +1,50 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42614456651",
+  "runNumber": 33,
+  "runAttempt": 1,
+  "source": "557a2dbbcec6d05a41c132b56715ba649f86e3ff",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129151309818,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "selected-pinned-blob-or-mode-differs-blob",
+  "failurePath": "external/bc/vs/bc.sln",
+  "exceptionType": "Refused",
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T12:13:48Z",
+  "sourceCopyStarted": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129153445110,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T12:18:52.427896+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T04:15:00.179-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 34,
+  "basis": "Completed native diagnostic moved from ANGLE to external/bc/vs/bc.sln in the ordered source walk. BC pinned root attributes also explicitly request CRLF. No separate dump of native file line endings or complete source candidate is claimed. Replace per-project rules with bounded private Git attribute evaluation over only hash-verified pinned attribute blobs, respecting hierarchy/macros and refusing filter/ident/encoding/legacy transformations. The next native comparison must establish the actual result. No source rewrite, allocation, Make, journal reset, credential/access change or held retry occurred."
+}

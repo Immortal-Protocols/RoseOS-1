@@ -1,0 +1,46 @@
+{
+  "schema": "roseos.mustang-dedicated-signing-route.v1",
+  "builder": {
+    "project": "protocols-465723",
+    "zone": "us-west2-a",
+    "instance": "roseos-mustang-builder-20261107-a",
+    "instanceId": "5585425566393384049"
+  },
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "identityVariable": "GCP_SIGNER_SERVICE_ACCOUNT",
+  "providerVariable": "MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER",
+  "establishedMustangIdentityPreserved": true,
+  "approved": true,
+  "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+  "provider": "projects/1072799993443/locations/global/workloadIdentityPools/mustang-actions/providers/mustang-main",
+  "metadataObservedAt": "2026-11-09T03:22:52Z",
+  "workloadIdentityPolicy": {
+    "etag": "BwZfz20fBC4=",
+    "role": "roles/iam.workloadIdentityUser",
+    "member": "principalSet://iam.googleapis.com/projects/1072799993443/locations/global/workloadIdentityPools/mustang-actions/attribute.repository_id/1428996648",
+    "condition": null,
+    "legacyMemberPreserved": true
+  },
+  "requiredSecretPolicies": {
+    "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1": {
+      "etag": "BwZffTxtY0g=",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "condition": null
+    },
+    "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1": {
+      "etag": "BwZffTy0DUc=",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "condition": null
+    }
+  },
+  "secretVersions": {
+    "keys": "1",
+    "passphrase": "1"
+  },
+  "payloadRead": false,
+  "signerImpersonated": false,
+  "workerChangedPermissions": false,
+  "basis": "Nathan applied the dedicated-provider trust addition and confirmed it. Existing dev-infra independently read signer and both secret policies; existing legacy member remains. Both secrets have unconditional accessor for the existing signer. Actual hosted capacity, login, payload access and successful signing are not established by this record."
+}

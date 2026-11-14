@@ -1,0 +1,27 @@
+{
+  "schema": "roseos.mustang-ota-access-readback.v1",
+  "observedAt": "2026-11-04T00:44:51.255525+00:00",
+  "project": "protocols-465723",
+  "expiresAt": "2026-11-04T04:44:11Z",
+  "bindings": [
+    {
+      "secret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "condition": {
+        "expression": "request.time < timestamp('2026-11-04T04:44:11Z')",
+        "title": "mustang-ota-read-four-hour"
+      }
+    },
+    {
+      "secret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "condition": {
+        "expression": "request.time < timestamp('2026-11-04T04:44:11Z')",
+        "title": "mustang-ota-read-four-hour"
+      }
+    }
+  ],
+  "verification": "Public IAM metadata readback only; no secret payload accessed; no worker IAM write."
+}

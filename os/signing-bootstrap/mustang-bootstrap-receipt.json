@@ -1,0 +1,168 @@
+{
+  "cleanup": {
+    "workspaceCreated": true,
+    "workspaceRemoved": true
+  },
+  "device": "mustang",
+  "localProof": {
+    "helperBlob": "66f52b19408e50aa8520fc9b6ae1b9f72c7bfb46",
+    "helperRevision": "b4e317ad6af4a719ffa41f9deffe70f3e1d298af",
+    "proof": {
+      "environment": {
+        "LC_ALL": "C",
+        "PATH": "/usr/bin:/bin"
+      },
+      "independentPackageProof": {
+        "performed": false,
+        "requires": [
+          "an approved vendor signing identity (fingerprint) recorded in the profile",
+          "that vendor keyring already retained on the protected host",
+          "the signed repository metadata for the installed release, already retained on the host",
+          "the installed package file (.deb or .rpm) already in the host package cache",
+          "the host's existing official verifier for that metadata (gpgv or rpm --checksig)"
+        ]
+      },
+      "profile": "fold-rango-v1",
+      "schema": "roseos.fold-tool-proof.v2",
+      "tools": {
+        "avbtool": {
+          "gitBlob": "c0f3c7c62c4121edca58727ae60e17818d46155c",
+          "interpreter": {
+            "path": "/usr/bin/python3",
+            "realPath": "/usr/bin/python3.11",
+            "sha256": "9bee109da0dce17a7c9eeaca9f420cc6770a9fe143b9382d73bd22fe59b21a5f"
+          },
+          "invocation": [
+            "/usr/bin/python3",
+            "/home/pixelbuild/grapheneos-2026100600/external/avb/avbtool.py"
+          ],
+          "path": "/home/pixelbuild/grapheneos-2026100600/external/avb/avbtool.py",
+          "revision": "ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee",
+          "sha256": "1aa6f2b462aa67aa3fdf488bee83ab517de8ad9d8228c7b45c35267ab2cf6781",
+          "trustBasis": "pinned-source"
+        },
+        "decrypt-keys": {
+          "gitBlob": "b621d1e02c1091089bd8e0d09c227d8f8e5006b5",
+          "interpreter": {
+            "path": "/bin/bash",
+            "realPath": "/usr/bin/bash",
+            "sha256": "55b89ab22bee4792a210f493a53fb066accd5d30b69837c28d98be5ff863efcf"
+          },
+          "invocation": [
+            "/bin/bash",
+            "/home/pixelbuild/grapheneos-2026100600/script/decrypt-keys"
+          ],
+          "path": "/home/pixelbuild/grapheneos-2026100600/script/decrypt-keys",
+          "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+          "sha256": "c0109995fe2c64d0f0010bcdecd2db3dd285a17e330aee101077eb6b7d347e4c",
+          "trustBasis": "pinned-source"
+        },
+        "generator": {
+          "gitBlob": "54bf82dd5ce666c6575866ea08fe67d232d3b5ad",
+          "interpreter": {
+            "path": "/bin/bash",
+            "realPath": "/usr/bin/bash",
+            "sha256": "55b89ab22bee4792a210f493a53fb066accd5d30b69837c28d98be5ff863efcf"
+          },
+          "invocation": [
+            "/bin/bash",
+            "/home/pixelbuild/grapheneos-2026100600/development/tools/make_key"
+          ],
+          "path": "/home/pixelbuild/grapheneos-2026100600/development/tools/make_key",
+          "revision": "4089e8b6cfe6cc088006fcc7ad34ba1132356a1b",
+          "sha256": "88073d52fd10ab7931c64c14be7860c8795350dfcb101460a315408c148d8e6d",
+          "trustBasis": "pinned-source"
+        },
+        "openssl": {
+          "integrity": {
+            "result": "clean",
+            "tool": "dpkg --verify"
+          },
+          "package": {
+            "architecture": "amd64",
+            "manager": "dpkg",
+            "name": "openssl",
+            "version": "3.0.22-1~deb12u2"
+          },
+          "path": "/usr/bin/openssl",
+          "realPath": "/usr/bin/openssl",
+          "sha256": "66521161cfad981e189bbc746560e0cc71a141b3765b3fe3658704d877c6ad7d",
+          "trustBasis": "managed-host-package"
+        }
+      }
+    },
+    "proofSha256": "9dc368fb48f8c18d4a0b5939bc3f0637dd0615dba0db9e214e88c9b438a509e0"
+  },
+  "operations": [
+    "gcloud secrets versions add PIXEL_OS_SIGNING_KEYS_MUSTANG_V1 --project protocols-465723 --data-file <workspace>/keys.tar.gz --format=json",
+    "gcloud secrets versions add PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1 --project protocols-465723 --data-file <workspace>/passphrase --format=json"
+  ],
+  "payloadReadback": "not performed",
+  "profile": "pro-mustang-v1",
+  "project": "protocols-465723",
+  "publicIdentity": {
+    "avbPublicKeySha256": "608b39aac976984e45ddbc39fc9ebc916f066656d8d4316395c9c408e06dbf2b",
+    "members": [
+      "avb.pem",
+      "avb_pkmd.bin",
+      "bluetooth.pk8",
+      "bluetooth.x509.pem",
+      "gmscompat_lib.pk8",
+      "gmscompat_lib.x509.pem",
+      "media.pk8",
+      "media.x509.pem",
+      "networkstack.pk8",
+      "networkstack.x509.pem",
+      "nfc.pk8",
+      "nfc.x509.pem",
+      "platform.pk8",
+      "platform.x509.pem",
+      "releasekey.pk8",
+      "releasekey.x509.pem",
+      "sdk_sandbox.pk8",
+      "sdk_sandbox.x509.pem",
+      "shared.pk8",
+      "shared.x509.pem"
+    ],
+    "otaCertificateSha256": "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8"
+  },
+  "reasons": [],
+  "recipeSha": "82a51373e1473df707731a78dc68786cf7245fed",
+  "recoveryNeeded": false,
+  "schema": "roseos.signing-bootstrap-receipt.v1",
+  "secrets": {
+    "keys": {
+      "committedVersion": "1",
+      "name": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "state": "committed"
+    },
+    "passphrase": {
+      "committedVersion": "1",
+      "name": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "state": "committed"
+    }
+  },
+  "status": "complete",
+  "tools": {
+    "avbtool": {
+      "path": "/home/pixelbuild/grapheneos-2026100600/external/avb/avbtool.py",
+      "sha256": "1aa6f2b462aa67aa3fdf488bee83ab517de8ad9d8228c7b45c35267ab2cf6781",
+      "trustBasis": "local-proof"
+    },
+    "decrypt-keys": {
+      "path": "/home/pixelbuild/grapheneos-2026100600/script/decrypt-keys",
+      "sha256": "c0109995fe2c64d0f0010bcdecd2db3dd285a17e330aee101077eb6b7d347e4c",
+      "trustBasis": "local-proof"
+    },
+    "generator": {
+      "path": "/home/pixelbuild/grapheneos-2026100600/development/tools/make_key",
+      "sha256": "88073d52fd10ab7931c64c14be7860c8795350dfcb101460a315408c148d8e6d",
+      "trustBasis": "local-proof"
+    },
+    "openssl": {
+      "path": "/usr/bin/openssl",
+      "sha256": "66521161cfad981e189bbc746560e0cc71a141b3765b3fe3658704d877c6ad7d",
+      "trustBasis": "local-proof"
+    }
+  }
+}

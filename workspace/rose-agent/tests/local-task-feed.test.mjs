@@ -124,7 +124,7 @@ test('invalid deliveries are dropped whole and the previous list stays',()=>{
 test('the released hunks are exactly these: page option, bridge method, teardown clears',()=>{
  const html=fs.readFileSync(path.join(ROOT,'workspace/rose-agent/app/assets/index.html'),'utf8');
  assert.equal((html.match(/Native\.localTasks/g)||[]).length,1);
- assert.match(html,/onLocalTasks:list=>\{if\(g===generation\|\|!list\.length\)Native\.localTasks\?\.\(JSON\.stringify\(list\)\);\},/);
+ assert.match(html,/onLocalTasks:list=>\{if\(g===generation\|\|!list\.length\)Native\.localTasks\?\.\(JSON\.stringify\(list\)\);localTaskCard\(list,g\);\},/);
  const svc=fs.readFileSync(path.join(SRC,'VoiceService.java'),'utf8');
  assert.match(svc,/@JavascriptInterface public void localTasks\(String raw\)\{localTaskFeed\.deliver\(generation,raw\);\}/);
  assert.match(svc,/new LocalTaskFeedGate\(callbacks::owns,WorkspaceOverviewFeed::accept\)/);

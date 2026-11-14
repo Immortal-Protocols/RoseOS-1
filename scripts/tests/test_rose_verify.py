@@ -213,8 +213,10 @@ class HomeCropTests(unittest.TestCase):
     def test_constants_match_production_home(self):
         layout = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java').read_text()
         self.assertIn('WALL_X = .62f, WALL_Y = .30f', layout)
-        home = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/RoseHomeView.java').read_text()
-        self.assertIn('HomeAppLayout.WALL_X, HomeAppLayout.WALL_Y', home)
+        # #410: Home draws the Oxblood field (OxbloodField.HOME, MainActivity's pager background), no longer this image;
+        # the crop constants remain HomeAppLayout's, and rose-verify's Home screenshot reference needs its own update.
+        main = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/MainActivity.java').read_text()
+        self.assertIn('launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));', main)
 
     @unittest.skipUnless(HAVE_PIL, 'needs Pillow')
     def test_coordinate_coded_image_crops_at_the_home_origin(self):
@@ -626,6 +628,30 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.failed(r), set())
 
 
+    # #410: runtime compares Home screenshots with the reference the expectation names.
+    def test_oxblood_expectation_selects_the_oxblood_reference(self):
+        if not HAVE_PIL:
+            self.skipTest('needs Pillow')
+        from PIL import Image
+        self.interactive_state()
+        Image.new('RGB', (540, 1200), (60, 12, 20)).save(self.state['screenshot'])
+        r = self.runtime(interactive=True, expectation=dict(ALPHA, home='oxblood'))
+        self.assertEqual(r['homeReference'], {'surface': 'oxblood', 'selection': 'expectation home'})
+        verdicts = {s['comparison']['home'] + ':' + s['comparison']['verdict'] for s in r['steps'] if 'comparison' in s}
+        self.assertEqual(verdicts, {'oxblood:not-compared'})
+        self.assertEqual(self.failed(r), set())
+        self.assertNotIn('home-key screenshot not black', r['unmeasured'])
+
+    def test_expectation_without_home_keeps_the_wallpaper_reference(self):
+        if not HAVE_PIL:
+            self.skipTest('needs Pillow')
+        self.interactive_state()
+        r = self.runtime(interactive=True)
+        self.assertEqual(r['homeReference']['surface'], 'hifi-wallpaper')
+        self.assertIn('names no home', r['homeReference']['selection'])
+        self.assertEqual(r['steps'][0]['comparison']['verdict'], 'wallpaper-consistent')
+
+
 class ExpectationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -704,6 +730,219 @@ class SourceTests(unittest.TestCase):
         self.assertEqual((r['versionCode'], r['routing']['homeEntryRules']), (302, None))
         self.assertIn('showPage(homePage,false)', r['routing']['entryMethod'])
 
+
+OXBLOOD_CONTRACT = json.loads((rv.ROOT/'qa/oxblood/oxblood-contract.json').read_text())
+# PR417's MainActivity line (#410 M1): Home's pager background is the Oxblood field, not the wallpaper.
+OXBLOOD_MAIN_LINE = 'launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));'
+
+
+def git_blob(data):
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+class OxbloodReferenceTests(unittest.TestCase):
+    """#410: Oxblood builds implement the frozen f6503a0 Oxblood reference (contract #414), not the HiFi wallpaper."""
+
+    def test_pins_are_the_contract_reference_and_the_frozen_field(self):
+        ref = OXBLOOD_CONTRACT['reference']
+        self.assertIn(ref['commit'], rv.OXBLOOD['prototype'])
+        self.assertIn(ref['artifactBlob'], rv.OXBLOOD['prototype'])
+        self.assertTrue(rv.OXBLOOD['fieldPath'].endswith('/' + OXBLOOD_CONTRACT['fields']['home']['source']))
+        self.assertIn('OxbloodField.java (HOME)', OXBLOOD_CONTRACT['fields']['home']['nativeRenderer'])
+        # Literals, checked against the tree's bytes (unchanged since f6503a0: same Git blob).
+        self.assertEqual(rv.OXBLOOD['fieldBlob'], 'e07c4586ad2c9c26a19dce6d9434a0f35dbc6ea5')
+        data = (rv.ROOT/rv.OXBLOOD['fieldPath']).read_bytes()
+        self.assertEqual(git_blob(data), rv.OXBLOOD['fieldBlob'])
+        self.assertEqual(hashlib.sha256(data).hexdigest(), rv.OXBLOOD['fieldSha256'])
+        self.assertEqual(rv.expected()['oxbloodReference'], rv.OXBLOOD)
+        self.assertEqual(rv.expected()['reference'], rv.REFERENCE, 'the wallpaper reference stays for its builds')
+
+    def test_crop_is_the_contract_placement(self):
+        placement = OXBLOOD_CONTRACT['fields']['home']['placement']
+        self.assertIn('centred horizontally', placement)
+        self.assertIn('top-aligned', placement)
+        self.assertEqual((rv.OXBLOOD_CROP['x'], rv.OXBLOOD_CROP['y']), (.5, 0.))
+        # Hand calculation, 390 x 1600 field over 540 x 1200: crop 390*1200/540 = 866.7 -> 867 tall, top 0 (top-aligned);
+        # 1170 x 2000 over 540 x 1200: crop 2000*540/1200 = 900 wide, left (1170-900)/2 = 135 (centred).
+        self.assertEqual(rv.cover_box(390, 1600, 540, 1200, .5, 0.), (0, 0, 390, 867))
+        self.assertEqual(rv.cover_box(1170, 2000, 540, 1200, .5, 0.), (135, 0, 1035, 2000))
+
+    def test_source_names_the_home_surface(self):
+        real = rv.git_show
+        main_path = 'workspace/rose-agent/app/src/dev/pixel/voice/MainActivity.java'
+        main = real('HEAD', main_path).decode()
+
+        def with_main(text):
+            with mock.patch.object(rv, 'git_show', side_effect=lambda rev, path:
+                                   text.encode() if path == main_path else real(rev, path)):
+                return rv.source('HEAD')['homeSurface']
+        self.assertEqual(with_main(main.replace(OXBLOOD_MAIN_LINE, '')), 'not-oxblood')
+        self.assertEqual(with_main(main + '\n// ' + OXBLOOD_MAIN_LINE + '\n'), 'oxblood')
+
+
+class ApkSignerOutputTests(unittest.TestCase):
+    def verify(self, output, status=0):
+        with mock.patch.object(rv, 'run', return_value=mock.Mock(stdout=output, returncode=status)):
+            return rv.signer(Path('/fake/tools'), Path('/fake/app.apk'))
+
+    def test_legacy_and_sdk37_labels_preserve_the_full_signer_set(self):
+        a, b = 'a' * 64, 'b' * 64
+        for output in [f'Signer #1 certificate SHA-256 digest: {a}\n',
+                       f'V3.0 Signer: certificate SHA-256 digest: {a.upper()}\n']:
+            self.assertEqual(self.verify(output)['certSha256'], [a])
+        output = (f'Signer (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: {a}\n'
+                  f'Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: {b}\n')
+        result = self.verify(output)
+        self.assertTrue(result['verified'])
+        self.assertEqual(result['certSha256'], [a, b])
+
+    def test_failed_verification_never_supplies_a_trusted_digest(self):
+        result = self.verify('Signer #1 certificate SHA-256 digest: ' + 'a' * 64, status=1)
+        self.assertFalse(result['verified'])
+        self.assertEqual(result['certSha256'], [])
+        self.assertEqual(result['status'], 'unsigned-or-unverified')
+
+    def test_unrecognized_or_malformed_lines_remain_unverified(self):
+        for output in ['Signer #1 certificate SHA-256 digest: abc',
+                       'untrusted prefix Signer #1 certificate SHA-256 digest: ' + 'a' * 64]:
+            self.assertEqual(self.verify(output)['status'], 'unsigned-or-unverified')
+
+
+class OxbloodApkTests(unittest.TestCase):
+    """The APK's own classes say whether its Home can be the Oxblood field; an expectation's home must agree."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def inspect(self, classes, home=None):
+        apk = self.tmp/'rose.apk'
+        with zipfile.ZipFile(apk, 'w') as z:
+            z.writestr('classes.dex', b'dex\n' + b''.join(f'Ldev/pixel/voice/{c};'.encode() for c in classes))
+        outputs = {'badging': BADGING.replace('dev.example.voice', 'dev.pixel.voice'),
+                   'xmltree': XMLTREE.replace('dev.example.voice', 'dev.pixel.voice'), 'resources': ''}
+        fake = lambda argv, check_rc=True, binary=False: mock.Mock(stdout=outputs[argv[2]], returncode=0)
+        expectation = None
+        if home is not None:
+            expectation = dict(ALPHA, home=home, apps=[dict(ALPHA['apps'][0], sha256=sha256(apk))])
+        with mock.patch.object(rv, 'run', side_effect=fake), \
+                mock.patch.object(rv, 'signer', return_value={'verified': True, 'certSha256': [ALPHA['appSignerSha256']]}):
+            return rv.inspect_apk(Path(self.tmp), apk, expectation)
+
+    def surface_check(self, r):
+        return next((c['result'] for c in r['checks'] if c['check'].startswith('expected Home surface')), None)
+
+    def test_dex_reports_the_surface(self):
+        home = ['MainActivity', 'RoseHomeView', 'RoseConversationActivity']
+        self.assertEqual(self.inspect(home)['homeSurfaceFromDex'], 'not-oxblood')
+        self.assertEqual(self.inspect(home + ['OxbloodField'])['homeSurfaceFromDex'], 'oxblood')
+        self.assertIsNone(self.surface_check(self.inspect(home + ['OxbloodField'])), 'no expectation, no check')
+
+    def test_expectation_home_must_match_the_apk(self):
+        home = ['MainActivity', 'RoseHomeView', 'RoseConversationActivity']
+        self.assertEqual(self.surface_check(self.inspect(home + ['OxbloodField'], 'oxblood')), 'pass')
+        self.assertEqual(self.surface_check(self.inspect(home, 'oxblood')), 'fail')
+        self.assertEqual(self.surface_check(self.inspect(home + ['OxbloodField'], 'hifi-wallpaper')), 'fail')
+        self.assertEqual(self.surface_check(self.inspect(home, 'hifi-wallpaper')), 'pass')
+
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+@unittest.skipUnless(HAVE_PIL, 'needs Pillow')
+class OxbloodCompareTests(unittest.TestCase):
+    """An Oxblood Home is compared with a raster of its field at OxbloodField's placement, never with the wallpaper."""
+
+    def setUp(self):
+        from PIL import Image, ImageDraw
+        self.Image, self.ImageDraw = Image, ImageDraw
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        # A synthetic dark field (Oxblood-like luminance, never black) with 220 px bands. Taller than the screenshot,
+        # so the vertical crop counts: the wallpaper's 30% puts the top at (1600-867)*.3 = 220, half a band period off.
+        field = Image.new('RGB', (390, 1600), (23, 1, 4))
+        draw = ImageDraw.Draw(field)
+        for top in range(0, 1600, 440):
+            draw.rectangle((0, top, 390, top + 219), fill=(110, 30, 44))
+        self.field = self.save(field, 'field.png')
+        self.home = rv.cover_crop(field, 540, 1200, rv.OXBLOOD_CROP)
+
+    def save(self, image, name):
+        path = self.tmp/name
+        image.save(path)
+        return path
+
+    def oxblood_home(self):
+        shot = self.home.copy()
+        draw = self.ImageDraw.Draw(shot)
+        draw.rectangle((0, 1080, 540, 1200), fill=(74, 20, 26))   # edge plate
+        draw.rectangle((60, 720, 120, 780), fill=(40, 30, 32))    # a tile
+        draw.text((33, 65), 'Mon 2', fill=(234, 219, 208))        # date
+        return self.save(shot, 'home.png')
+
+    def test_oxblood_home_matches_its_field_not_the_wallpaper(self):
+        shot = self.oxblood_home()
+        r = rv.compare(shot, self.tmp/'out', self.field, label='home', home='oxblood')
+        self.assertEqual((r['home'], r['verdict']), ('oxblood', 'field-consistent'), r)
+        self.assertEqual(r['referenceCrop']['box'], [0, 0, 390, 867])
+        self.assertEqual(r['referenceBasis'], rv.OXBLOOD)
+        self.assertIn('caller-supplied', r['referenceProvenance'])
+        # The pre-#410 default reference calls the same correct Oxblood Home different: the stale expectation.
+        legacy = rv.compare(shot, self.tmp/'out', label='legacy')
+        self.assertEqual((legacy['home'], legacy['verdict']), ('hifi-wallpaper', 'differs-from-reference'))
+        # Its own field at the wallpaper's 62% 30% crop misaligns the bands: placement matters.
+        misplaced = rv.compare(shot, self.tmp/'out', self.field, label='misplaced')
+        self.assertEqual(misplaced['verdict'], 'differs-from-reference')
+
+    def test_without_a_field_raster_only_black_screen_is_detected(self):
+        r = rv.compare(self.oxblood_home(), self.tmp/'out', label='home', home='oxblood')
+        self.assertEqual((r['verdict'], r['reference']), ('not-compared', None))
+        self.assertNotIn('wallpaperCellCoverage', r)
+        self.assertGreater(r['meanLuminance'], 20)
+        black = rv.compare(self.save(self.Image.new('RGB', (540, 1200), (3, 3, 3)), 'black.png'), self.tmp/'out',
+                           home='oxblood')
+        self.assertEqual(black['verdict'], 'black-screen')
+        unrelated = rv.compare(self.save(self.Image.new('RGB', (540, 1200), (240, 240, 230)), 'white.png'),
+                               self.tmp/'out', self.field, home='oxblood')
+        self.assertEqual(unrelated['verdict'], 'differs-from-reference')
+        with self.assertRaises(rv.Fail) as err:
+            rv.compare(self.oxblood_home(), self.tmp/'out', home='fold')
+        self.assertEqual(err.exception.code, 2)
+
+    def test_cli_home_oxblood(self):
+        shot = str(self.oxblood_home())
+        code, out, _ = run_cli('compare', shot, '--out', str(self.tmp/'o'), '--home', 'oxblood',
+                               '--reference', str(self.field))
+        self.assertEqual((code, json.loads(out)['verdict']), (0, 'field-consistent'))
+        code, out, _ = run_cli('compare', shot, '--out', str(self.tmp/'o'), '--home', 'oxblood')
+        self.assertEqual((code, json.loads(out)['verdict']), (0, 'not-compared'))
+        black = str(self.save(self.Image.new('RGB', (540, 1200), (0, 0, 0)), 'black.png'))
+        self.assertEqual(run_cli('compare', black, '--out', str(self.tmp/'o'), '--home', 'oxblood')[0], 1)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as err:
+            rv.main(['compare', shot, '--out', str(self.tmp/'o'), '--home', 'fold'])
+        self.assertEqual(err.exception.code, 2)
+
+
+class OxbloodExpectationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def write(self, obj):
+        path = self.tmp/'e.json'
+        path.write_text(json.dumps(obj))
+        return path
+
+    def test_home_is_optional_and_closed(self):
+        base = json.loads(Path(ALPHA['path']).read_text())
+        self.assertNotIn('home', base, 'recorded expectations predate #410')
+        for home in rv.HOME_SURFACES:
+            loaded = rv.load_expectation(self.write(dict(base, home=home)))
+            self.assertEqual((loaded['home'], rv.expectation_summary(loaded)['home']), (home, home))
+        for bad in ('fold', '', None, 1):
+            with self.subTest(bad), self.assertRaisesRegex(rv.Fail, 'home must be'):
+                rv.load_expectation(self.write(dict(base, home=bad)))
 
 if __name__ == '__main__':
     unittest.main()

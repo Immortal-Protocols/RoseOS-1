@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/GrapheneOS/adevtool",
+  "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+  "path": "config/build-index/build-index-main.yml",
+  "lines": {
+    "1": "mustang CP3A.261005.005:",
+    "2": "  desc: Oct 2026",
+    "3": "  factory: 099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e mustang-cp3a.261005.005-factory-099acc44.zip",
+    "4": "  ota: 62f7ec41d7ed3b945db37cdd211fb6314c1aaeace5ef060d8141e397571eeb85 mustang-ota-cp3a.261005.005-62f7ec41.zip"
+  }
+}

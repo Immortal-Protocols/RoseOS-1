@@ -1413,7 +1413,7 @@ class Workflow(unittest.TestCase):
     def test_mode_is_gated_by_the_guard_and_reuses_the_existing_trust(self):
         j = jobs(WORKFLOW)
         guard, builder, publisher = j['guard'], j['rango-builder'], j['rango-publisher']
-        self.assertIn('models-sign, rango-retained, ', WORKFLOW)
+        self.assertIn('rango-factory-inspect, rango-retained, ', WORKFLOW)
         self.assertIn('        default: latest-beta\n', WORKFLOW)
         self.assertNotIn('runtime is not selected', WORKFLOW)  # bindings gate the route, not an unconditional refusal
         self.assertLess(guard.index('python3 scripts/rango-retained.py preflight --job guard'), guard.index('name: Bootstrap preflight'))

@@ -1,0 +1,193 @@
+import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
+import com.android.quickstep.GestureState.GestureEndTarget;
+import com.android.quickstep.fallback.RoseEdgeGesture;
+import com.android.quickstep.fallback.RoseEdgeSwipe;
+import com.android.quickstep.util.MotionPauseDetector;
+import com.android.quickstep.util.TaskViewSimulator;
+import com.android.systemui.shared.recents.model.ThumbnailData;
+import java.util.HashMap;
+    // RoseOS (#410): the raised edge's staged gesture (tray, then switcher; a flick goes Home) and its live preview,
+    // off unless persist.wm.debug.rose_edge.
+    private final RoseEdgeSwipe mRoseEdge;
+    private final Matrix mRoseMatrix = new Matrix();
+    private final Rect mRoseCrop = new Rect();
+    private final float[] mRoseRadius = new float[1];
+    /** Launcher3's own motion-pause listener, driven by the switcher stage instead of the pause detector. */
+    private MotionPauseDetector.OnMotionPauseListener mRoseStockPause;
+    private boolean mRoseSwitcherEverShown;
+    private final BuilderProxy mRosePreview = (builder, app, params) -> builder.setMatrix(mRoseMatrix)
+            .setWindowCrop(mRoseCrop).setCornerRadius(mRoseRadius[0]);
+
+        mRoseEdge = new RoseEdgeSwipe(context, displayId, mGestureState.getTopRunningTaskId(),
+                mDeviceState.getTouchSlop(),
+                mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture
+                        || !isRoseFullscreenTask(),
+                mDeviceState.isFullyGesturalNavMode(), mDeviceState.isImeRenderingNavButtons());
+    private boolean isRoseStaged() {
+        return mRoseEdge != null && mRoseEdge.staged();
+    }
+
+    /**
+     * RoseOS (#410): in a staged gesture the switcher is a stage (RoseEdgeGesture.SWITCHER), not Launcher3's motion
+     * pause, so a slow drag reveals the tray instead of the switcher. The pause detector's events are dropped and
+     * Launcher3's own listener is driven by the stage (updateDisplacement).
+     */
+    @Override
+    public MotionPauseDetector.OnMotionPauseListener getMotionPauseListener() {
+        MotionPauseDetector.OnMotionPauseListener stock = super.getMotionPauseListener();
+        if (!isRoseStaged()) {
+            return stock;
+        }
+        mRoseStockPause = stock;
+        return () -> { };
+    }
+
+    /**
+     * RoseOS (#410): each move updates the staged gesture: the tray is revealed with the finger (the edge window), the
+     * tray stage is entered with a haptic, and the switcher stage visibly attaches Launcher3's switcher (as a pause did)
+     * and detaches it again when the finger comes back down.
+     */
+    @Override
+    public void updateDisplacement(float displacement) {
+        super.updateDisplacement(displacement);
+        if (!isRoseStaged()) {
+            return;
+        }
+        int previous = mRoseEdge.stage();
+        int stage = mRoseEdge.onMove(mCurrentDisplacement);
+        if (stage == previous) {
+            return;
+        }
+        boolean switcher = stage == RoseEdgeGesture.SWITCHER;
+        if (switcher != (previous == RoseEdgeGesture.SWITCHER) && mRoseStockPause != null) {
+            if (switcher && !mRoseSwitcherEverShown) {
+                mRoseSwitcherEverShown = true;
+                // Launcher3's first pause: attach recents to the app (the visible switcher) with its haptic.
+                mRoseStockPause.onMotionPauseDetected();
+            } else {
+                if (switcher) {
+                    performHapticFeedback();
+                }
+                maybeUpdateRecentsAttachedState(/* animate= */ true);
+            }
+            mRoseStockPause.onMotionPauseChanged(switcher);
+        } else if (stage == RoseEdgeGesture.TRAY && previous == RoseEdgeGesture.NONE) {
+            performHapticFeedback();
+        }
+    }
+
+    /** RoseOS (#410): in a staged gesture, recents attaches exactly in the switcher stage (or for a quick switch). */
+    @Override
+    protected boolean isRecentsAttachRequested(
+            boolean hasMotionEverBeenPaused, boolean isLikelyToStartNewTask) {
+        if (!isRoseStaged()) {
+            return super.isRecentsAttachRequested(hasMotionEverBeenPaused, isLikelyToStartNewTask);
+        }
+        return mRoseEdge.stage() == RoseEdgeGesture.SWITCHER || isLikelyToStartNewTask;
+    }
+
+    /**
+     * RoseOS (#410): the staged release (RoseEdgeGesture.release): the switcher stage opens the switcher, a flick
+     * before it goes Home, a release at the tray keeps the tray and shortens the app, anything else goes back to the
+     * app. Launcher3's own cancel and horizontal quick switch stand.
+     */
+    @Override
+    protected GestureEndTarget refineEndTarget(GestureEndTarget endTarget, boolean isCancel,
+            boolean isMotionPaused, float endVelocityPxPerMs) {
+        if (mRoseEdge == null || !mRoseEdge.enabled()) {
+            return endTarget;
+        }
+        if (mGestureState.isHandlingAtomicEvent()) {
+            mRoseEdge.settled(endTarget == GestureEndTarget.LAST_TASK);
+            return endTarget;
+        }
+        GestureEndTarget refined = endTarget;
+        if (endTarget == GestureEndTarget.NEW_TASK) {
+            mRoseEdge.abandon();
+        } else {
+            switch (mRoseEdge.release(isCancel, endVelocityPxPerMs)) {
+                case RoseEdgeGesture.RAISE:
+                case RoseEdgeGesture.STAY:
+                case RoseEdgeGesture.CANCEL:
+                    refined = GestureEndTarget.LAST_TASK;
+                    break;
+                case RoseEdgeGesture.HOME:
+                    refined = GestureEndTarget.HOME;
+                    break;
+                case RoseEdgeGesture.SWITCHER_OPEN:
+                    refined = mDeviceState.isOverviewDisabled()
+                            ? GestureEndTarget.LAST_TASK : GestureEndTarget.RECENTS;
+                    break;
+                default:
+                    break;
+            }
+        }
+        mRoseEdge.settled(refined == GestureEndTarget.LAST_TASK);
+        return refined;
+    }
+
+    /** RoseOS (#410): a gesture that ends without a release still takes down the tray it revealed. */
+    @Override
+    public void onRecentsAnimationCanceled(HashMap<Integer, ThumbnailData> thumbnailDatas) {
+        if (mRoseEdge != null) {
+            mRoseEdge.abandon();
+        }
+        super.onRecentsAnimationCanceled(thumbnailDatas);
+    }
+
+    @Override
+    public void onConsumerAboutToBeSwitched() {
+        if (mRoseEdge != null) {
+            mRoseEdge.abandon();
+        }
+        super.onConsumerAboutToBeSwitched();
+    }
+
+    /**
+     * RoseOS (#410): the release went back to the app and the recents transition has finished, so a tray release now
+     * asks the shell to shorten the app (RoseEdgeSwipe.returnedToApp). Raising earlier would resize the app while the
+     * recents transition still owns it.
+     */
+    @Override
+    protected void onLastTaskResumed() {
+        if (mRoseEdge != null) {
+            mRoseEdge.returnedToApp();
+        }
+        super.onLastTaskResumed();
+    }
+
+    /**
+     * RoseOS (#410): while a staged gesture is outside the switcher stage, the app's own leash follows the tray at
+     * full width (RoseEdgeSwipe.preview); in the switcher stage, for a quick switch or once the release goes Home or to
+     * the switcher, Launcher3's transform as before.
+     */
+    @Override
+    protected void applyTargetTransform(
+            TaskViewSimulator taskViewSimulator, TransformParams transformParams) {
+        if (!isRoseStaged()) {
+            super.applyTargetTransform(taskViewSimulator, transformParams);
+            return;
+        }
+        GestureEndTarget endTarget = mGestureState.getEndTarget();
+        boolean attached = mRoseEdge.stage() == RoseEdgeGesture.SWITCHER || isLikelyToStartNewTask()
+                || endTarget == GestureEndTarget.RECENTS || endTarget == GestureEndTarget.NEW_TASK
+                || endTarget == GestureEndTarget.HOME;
+        if (mDp == null || !mRoseEdge.preview(attached, mCurrentShift.value * mTransitionDragLength,
+                mDp.getDeviceProperties().getWidthPx(), mDp.getDeviceProperties().getHeightPx(), mRoseMatrix,
+                mRoseCrop, mRoseRadius)) {
+            super.applyTargetTransform(taskViewSimulator, transformParams);
+            return;
+        }
+        transformParams.applySurfaceParams(transformParams.createSurfaceParams(mRosePreview));
+    }
+
+    private boolean isRoseFullscreenTask() {
+        TaskInfo task = mGestureState.getRunningTask() != null
+                ? mGestureState.getRunningTask().getLegacyBaseTask() : null;
+        return task != null && task.getWindowingMode() == WINDOWING_MODE_FULLSCREEN;
+    }
+
+        // RoseOS (#410): share Launcher3's identity with the home app, so it can verify that a gesture_nav_contract_v1
+        // request really comes from the system recents component before it replies.
+        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)
+                .setShareIdentityEnabled(true);

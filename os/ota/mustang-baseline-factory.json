@@ -1,0 +1,33 @@
+{
+  "archive": {
+    "id": 13280698927,
+    "path": null,
+    "runId": "41738359336",
+    "sha256": "c6aea80e23b5aeb775454692ff2da28ca8ff27495d79603e67ec2c0dfc1a6dae",
+    "sizeBytes": 2108061108
+  },
+  "basis": "Source-only factory-image baseline observer. No artifact retrieval/transfer, credential, infrastructure, runtime or phone action is enabled. Actual approved local data and verified tools are required. Original archive-signature and factory-content omissions remain recorded.",
+  "installer": {
+    "file": "mustang-install-2026110302.zip",
+    "sha256": "4eae7e7e54191f30168649e75f2cfefb10fdbff1bffbfc2655ec079a4a8cce5e",
+    "sizeBytes": 2108057621
+  },
+  "limits": {
+    "reserveBytes": null,
+    "seconds": null,
+    "workBytes": null
+  },
+  "schema": "roseos.mustang-factory-baseline-input.v1",
+  "sourceRecords": {
+    "os/mustang-delivery/41738359336/artifacts.json": "7b4f35a38b7b54b038ce9c1c403d6e2d32de097c91b9607117630500388529a6",
+    "os/mustang-delivery/41738359336/delivery.json": "0d9d54f214ca47afea43001a572632e1f46a26c72b06f9793a5c0d4e7e0a9d8c",
+    "os/mustang-delivery/41738359336/package.json": "b6dbde2db931cd36b147668014e36dbda334beb20d53c5f8971dc781f9e74283",
+    "os/mustang-delivery/41738359336/sign.json": "43ad954c051538c999750fca60c9d972d866cb685abad78c55dda3d309848c11",
+    "os/mustang-ota/41761758623/baseline.json": "a7bd6ba43b92a55506c7441277912fc23e5c564d3910ab93770ff7e85e08d2b4",
+    "os/mustang-ota/41761758623/mustang-ota-receipt.json": "25f377952c10efdfca764d9a50f3e3a8783a196b030bb75eb516d6a684c23741",
+    "os/mustang-ota/41761758623/publication.json": "4f31b03f347cc8fa1d8d259764712c0fe2bffe6ca75c2d5c5c429a7397555570"
+  },
+  "status": "unbound",
+  "tools": {},
+  "transferEvidence": null
+}

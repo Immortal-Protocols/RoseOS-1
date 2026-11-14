@@ -114,14 +114,14 @@ final class LocalRoseAuth {
         }
 
         if (!"1".equals(params.get("v"))) {
-            throw new InvalidInvite("This pairing code is for a different version of Rose. Update Rose Agent and Rose on the Mac.");
+            throw new InvalidInvite("This pairing code is for a different version of Rose. Update Rose Agent and Rose on the backend.");
         }
         String name = params.get("name");
         if (name == null || name.trim().isEmpty() || name.length() > 128 || hasControl(name)) {
-            throw new InvalidInvite("The pairing code has no valid Mac name.");
+            throw new InvalidInvite("The pairing code has no valid backend name.");
         }
         String pin = lower(params.get("pin"));
-        if (pin == null || !pin.matches("[0-9a-f]{64}")) throw new InvalidInvite("The pairing code has no valid Mac identity.");
+        if (pin == null || !pin.matches("[0-9a-f]{64}")) throw new InvalidInvite("The pairing code has no valid backend identity.");
         String code = params.get("code");
         code = code == null ? null : code.toUpperCase(Locale.ROOT);
         if (code == null || !code.matches("[A-Z2-7]{26}")) throw new InvalidInvite("The pairing code has no valid one-time code.");
@@ -135,11 +135,12 @@ final class LocalRoseAuth {
         }
         if (port < 1 || port > 65535) throw new InvalidInvite("The pairing code has no valid port.");
         String hostList = params.get("hosts");
-        if (hostList == null || hostList.isEmpty()) throw new InvalidInvite("The pairing code lists no address for the Mac.");
+        if (hostList == null || hostList.isEmpty()) throw new InvalidInvite("The pairing code lists no address for the backend.");
         List<String> hosts = new ArrayList<>();
         for (String h : hostList.split(",", -1)) {
             String host = lower(h.trim());
             if (!validHost(host)) throw new InvalidInvite("The pairing code lists an address this phone can't use.");
+            if (!tailscaleHost(host)) throw new InvalidInvite("Rose requires Tailscale. Connect Tailscale on the backend and generate a new pairing code.");
             if (!hosts.contains(host)) hosts.add(host);
         }
         if (hosts.size() > MAX_HOSTS) throw new InvalidInvite("The pairing code lists too many addresses.");
@@ -170,19 +171,25 @@ final class LocalRoseAuth {
         return out;
     }
 
-    /** How the phone reaches the Mac, for the UI: "Tailscale", "Wi-Fi" or "USB". */
-    static String route(String host) {
+    /** Tailscale-only endpoints; old saved LAN/USB addresses must never be tried. */
+    static boolean tailscaleHost(String host) {
         String h = lower(host);
-        if (h == null) return "Wi-Fi";
+        if (!validHost(h)) return false;
         int[] ip = ipv4(h);
-        if (ip != null) {
-            if (ip[0] == 127) return "USB";
-            if (ip[0] == 100 && (ip[1] & 0xc0) == 64) return "Tailscale";  // 100.64.0.0/10
-            return "Wi-Fi";
-        }
-        if (h.equals("localhost")) return "USB";
-        if (h.endsWith(".ts.net")) return "Tailscale";
-        return "Wi-Fi";
+        return ip != null ? ip[0] == 100 && (ip[1] & 0xc0) == 64 : h.endsWith(".ts.net");
+    }
+
+    /** Migrate saved endpoint order without changing the key, pin, or pairing identity. */
+    static List<String> tailscaleHosts(List<String> hosts, String lastHost) {
+        List<String> out = new ArrayList<>();
+        if (tailscaleHost(lastHost) && hosts.contains(lastHost)) out.add(lastHost);
+        for (String host : hosts) if (tailscaleHost(host) && !out.contains(host)) out.add(host);
+        return out;
+    }
+
+    /** Labels an allowed endpoint, leaving legacy addresses unsupported. */
+    static String route(String host) {
+        return tailscaleHost(host) ? "Tailscale" : "Unsupported";
     }
 
     /**

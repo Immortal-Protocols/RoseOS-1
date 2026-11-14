@@ -20,6 +20,52 @@ final class WorkspaceOverviewFeed {
  static final int MAX_CHARS=200000,MAX_TASKS=40;
  private static volatile List<WorkspaceOverview.Task> latest=Collections.emptyList();
  private static volatile String connection="";
+ // Separate lifecycle receipts: invalid input can keep readable history, but
+ // must never keep claiming that the producer is still executing.
+ private static final java.util.Map<String,ActivityReceipt> activity=new java.util.HashMap<>();
+ static final class ActivityReceipt {
+  final String key,state;final long sample,received;final boolean executing;
+  ActivityReceipt(String key,String state,long sample,long received,boolean executing){
+   this.key=key;this.state=state;this.sample=sample;this.received=received;this.executing=executing;
+  }
+ }
+ static final class ActivitySnapshot {
+  final java.util.Set<String> running=new java.util.HashSet<>(),finished=new java.util.HashSet<>();
+  boolean reliable;
+  long runningUntil,finishedUntil;
+ }
+ static long activityClock(){return System.nanoTime()/1000000;}
+ static synchronized ActivitySnapshot activitySnapshot(long now){
+  ActivitySnapshot out=new ActivitySnapshot();out.reliable=!activity.isEmpty();
+  for(ActivityReceipt r:activity.values()){
+   // Keep this class independent of the renderer for the existing host tests.
+   if(now<r.received||now-r.received>3000){out.reliable=false;continue;}
+   if(r.executing){out.running.add(r.key);out.runningUntil=Math.max(out.runningUntil,r.received+3000);}
+   else if("done".equals(r.state)||"failed".equals(r.state)||"cancelled".equals(r.state)){out.finished.add(r.key);out.finishedUntil=Math.max(out.finishedUntil,r.received+3000);}
+  }
+  // A stale task cannot hide unrelated fresh execution, but cannot manufacture
+  // completion either. The renderer uses finished only for known completions.
+  if(!out.running.isEmpty())out.reliable=true;
+  return out;
+ }
+ private static void acceptActivity(String raw,long now){
+  java.util.Map<String,ActivityReceipt> next=new java.util.HashMap<>();
+  for(Object o:(List<?>)MiniJson.parse(raw)){
+   Map<?,?> m=(Map<?,?>)o;Object a=m.get("activity");
+   if(!(a instanceof Map)||num(m,"contract")!=1||str(m,"server").isEmpty()||str(m,"connection").isEmpty())continue;
+   Map<?,?> am=(Map<?,?>)a;double sample=num(am,"sample");Object executing=am.get("executing");
+   if(num(am,"version")!=1||!Double.isFinite(sample)||sample<0||sample!=Math.floor(sample)||sample>9007199254740991d||!(executing instanceof Boolean))continue;
+   String key=str(m,"connection")+"|"+str(m,"server")+"|"+str(m,"key"),state=str(m,"status");
+   ActivityReceipt previous=activity.get(key);long received=now;
+   if(previous!=null){
+    if(sample<previous.sample)continue;
+    if(sample==previous.sample)received=previous.received; // duplicate never renews freshness
+   }
+   boolean running=Boolean.TRUE.equals(executing)&&"running".equals(state)&&Boolean.TRUE.equals(m.get("background"));
+   next.put(key,new ActivityReceipt(key,state,(long)sample,received,running));
+  }
+  activity.clear();activity.putAll(next);
+ }
 
  /** The handoff entry point (contract for App Core's VoiceService bridge):
   * <ul>
@@ -33,15 +79,16 @@ final class WorkspaceOverviewFeed {
   * should also pass "[]" when its page or local connection is torn down without a delivery, so no earlier list
   * outlives its connection.</li>
   * </ul> */
- static void accept(String raw){
-  Parsed p=parse(raw);if(p==null)return;
+ static synchronized void accept(String raw){
+  Parsed p=parse(raw);if(p==null){activity.clear();return;}
+  acceptActivity(raw,activityClock());
   latest=p.tasks;connection=p.connection;
  }
  static List<WorkspaceOverview.Task> tasks(){return latest;}
  /** The scope of the current delivery: the newest task's server within this connection; unknown when empty or when
   * that task has no server (then nothing verifies, so Watch/Stop stay unavailable). */
  static WorkspaceOverview.Scope scope(){return scopeOf(latest);}
- static void clearForTest(){latest=Collections.emptyList();connection="";}
+ static synchronized void clearForTest(){latest=Collections.emptyList();connection="";activity.clear();}
 
  static final class Parsed { final List<WorkspaceOverview.Task> tasks;final String connection;
   Parsed(List<WorkspaceOverview.Task> tasks,String connection){this.tasks=tasks;this.connection=connection;} }

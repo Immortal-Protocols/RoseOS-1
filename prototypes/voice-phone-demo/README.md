@@ -48,17 +48,17 @@ Things to try:
 - "Text Mom I'll call her tonight", then "actually, make that tomorrow."
 - The **Simulate incoming text** buttons: Rose mentions the text at the next quiet moment.
 
-## The real phone, over USB, Wi-Fi or Tailscale
+## The real phone, over Tailscale
 
 `--phone real` replaces the fake phone with an Android phone running Rose Agent
-(`workspace/rose-agent/`; protocol in `rose/realphone.py`). Over USB the phone
-reaches Rose through `adb reverse tcp:8091 tcp:8091`. Without a cable, click
-**Pair phone** in the dashboard (or run `.venv/bin/python -m rose.pair`) and
-scan the QR code from Rose Agent's **Pair with Mac** menu item. After that the
-phone reconnects over the same Wi-Fi or from anywhere on your Tailscale network,
-through a TLS listener on port 8443 that accepts only paired, signed requests.
-Setup and the security model are in [REMOTE.md](REMOTE.md); `--no-remote` turns
-the listener off.
+(`workspace/rose-agent/`; protocol in `rose/realphone.py`). Connect Tailscale on
+both devices using the same tailnet. Click **Pair phone** in the Mac dashboard
+(or run `.venv/bin/python -m rose.pair`), then scan its QR from Rose Agent's
+**Pair with Rose** menu. The phone reconnects through the pinned TLS listener
+on port 8443 after network or app changes. Pairing advertises only full MagicDNS
+names and Tailscale IPv4 addresses; it reports a disconnected Tailscale client
+instead of falling back to LAN or USB. The dashboard stays on localhost.
+Setup and the security model are in [REMOTE.md](REMOTE.md).
 
 **She sees the screen.** The brain is a vision-language model, and with the
 real phone both Rose and her phone agent look at screenshots (Rose Agent's
@@ -84,6 +84,15 @@ ask to see it happen, or on phones without the controller. Alarms, timers,
 music and directions stay direct intents. `ROSE_WORKSPACE=off` turns the
 workspace off. Details: `rose/background.py` and [DESIGN.md](rose/DESIGN.md).
 
+**Two apps at once.** Where the phone's controller and OS allow two sessions
+(controller provider schema 4, `multiSession`; RoseOS Pixel 10 builds from
+2026-11-02), Rose has two workspaces. Two tasks work in two apps side by side
+("work out 47 times 23" while "check my alarms" runs), and one task keeps its
+last two apps open, so going back to the first one returns to the same screen.
+An app that another running task has open is not taken from it. Each session
+has its own notification and Stop, and stopping one does not affect the other.
+Phones with one session behave as described above.
+
 ## Models (all local, MLX, one process)
 
 | Part | Model | Cost on this Mac |
@@ -95,11 +104,31 @@ workspace off. Details: `rose/background.py` and [DESIGN.md](rose/DESIGN.md).
 | Brain and voice of Rose | `mlx-community/Qwen3.6-35B-A3B-4bit` (3B active) | ~85 tok/s; a turn's prompt in 45–65 ms with the cache |
 | Speech | `gradium/phonon-31m-en` (Phonon 31M, 9 voices) | first audio ~6 ms, 25× real time |
 
+### A bigger brain for tasks
+
+`--task-brain mlx-community/Qwen3.8-27B-4bit` (or `$ROSE_TASK_BRAIN`) loads
+Qwen3.8-27B (dense, 15 GB more) for the phone agent and the thinker while
+the 35B-A3B keeps the conversation. `--brain` (or `$ROSE_BRAIN`) picks the
+conversation model. Measured on an M4 Max, 2026-11-01:
+
+| Setup | Eval (22) | Voice to voice | Decode |
+|---|---|---|---|
+| 35B-A3B for everything (default) | 21–22 | 0.3–0.6 s | 92–94 tok/s |
+| 35B-A3B talks, 27B tasks and thinks | 22 | 0.3–0.6 s | 26 tok/s for tasks (steps ~3× slower) |
+| 27B for everything | 20 (hard math thinks ~40 s) | 0.9–1.4 s, up to 2.7 s | 25–27 tok/s |
+
+```bash
+.venv/bin/hf download mlx-community/Qwen3.8-27B-4bit
+.venv/bin/python -m rose.app --phone real --task-brain mlx-community/Qwen3.8-27B-4bit
+```
+
 One MLX thread runs every model through a cooperative priority scheduler
 (`rose/runtime.py`): listening first, then speech, then Rose's reply, then
 background tasks. Each unit of GPU work is small (one token, one 128–256
 token prompt chunk, one 80 ms audio frame), so a phone task can never delay
-Rose's next word by more than about 60 ms. A tiny GPU op after every 250 ms
+Rose's next word by more than about 60 ms. Background prompt chunks are sized
+per model at load (`brain.bg_chunk`): 128 tokens on the 35B-A3B, 32 (~165 ms)
+on the dense 27B. A tiny GPU op after every 250 ms
 without work keeps macOS from idling the GPU: without it, a turn's prompt
 after a 3 s pause takes ~250 ms instead of ~60 ms.
 

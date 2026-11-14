@@ -8,7 +8,7 @@ Each step yields one kind of evidence; one kind never stands in for another.
 | `artifact-inspection` | Signed/published bytes: checksums, signatures, candidate, image contents, APK identity | Boot, rendering, behavior |
 | `runtime-readonly` | A booted guest's properties, installed bytes/versions, HOME resolution | What the screen shows |
 | `runtime-interactive` | Launch paths, screenshots, UI dumps, transitions on that guest | A physical phone or another OS product |
-| `screenshot-comparison` | Heuristic wallpaper match plus a side-by-side image | Visual acceptance (a person reviews it) |
+| `screenshot-comparison` | Heuristic match with the candidate's Home reference (wallpaper or Oxblood field raster) plus a side-by-side image | Visual acceptance (a person reviews it) |
 | Physical acceptance | Owner-run checks on the actual phone | Anything beyond that phone and build |
 
 Tool: `scripts/rose-verify.py` (offline except `runtime`; JSON out; exit 0 ok,
@@ -37,7 +37,11 @@ another build's pins and never a loosened pin. `runtime` and
 - **Schema** (docstring of `rose-verify.py`): `label`, `channel`, `candidate`
   (full SHA), `target`, `apps` (`package`, `version`, `sha256`, `imagePath` for
   extraction), `appSignerSha256`, `basis`; optional `build`,
-  `avbPublicKeySha256`.
+  `avbPublicKeySha256`, `home` (`hifi-wallpaper` or `oxblood`: the reference
+  the candidate's Home implements; an expectation without it is compared with
+  the wallpaper, as every build before #410 draws it). With `home`, `apk`
+  also checks that `OxbloodField` is compiled in exactly when `home` is
+  `oxblood`.
 - **Fail-closed:** unknown keys, nulls, short hashes, non-integer versions,
   repeated packages and empty app lists exit 2. An unlisted package, a missing
   `imagePath`, a device other than `target.device`, or a differing candidate or
@@ -80,6 +84,33 @@ APP-OS-VISUAL-1030).
   renderer label (SwiftShader is not device GPU evidence), and write down what
   matches and differs side by side. That written interpretation is the visual
   evidence.
+
+## Reference: Oxblood (#410 builds)
+
+A build whose Home draws `OxbloodField.HOME` (MainActivity's pager background;
+`source` reports `homeSurface`, `apk` reports `homeSurfaceFromDex`) implements
+the frozen Oxblood reference instead of the wallpaper above. The wallpaper
+stays the reference for every build whose Home draws it.
+
+- **Prototype:** `prototypes/rose-hifi/Rose-HiFi.html` at
+  `f6503a0d00db674d9f5c38dc79758ff61cc26c82`, Git blob `5b9c6c89…62ef`;
+  shared values in `qa/oxblood/oxblood-contract.json` (#414).
+- **Field:** `src/assets/oxblood-home.svg` (blob `e07c4586…6ea5`, SHA-256
+  `7ba8d8bc…d3f1`), pinned by `rose-verify.py` (`OXBLOOD`). It is vector
+  artwork with no raster in the product, and `rose-verify` does not render SVG.
+- **`compare --home oxblood --reference RASTER`:** cover-crops the given
+  raster of that field centred across and top-aligned (`OxbloodField`'s
+  placement, recorded as `referenceCrop`). Verdicts: `black-screen`,
+  `field-consistent`, `differs-from-reference`. The raster is caller-supplied:
+  record how it was made (for example the pre-installed headless Chromium
+  drawing the frozen SVG with `background-size: cover;
+  background-position: center top` at the screenshot's size, and its renderer
+  label). Without `--reference`, and in `runtime` with an expectation `home`
+  of `oxblood`, only black-screen detection runs (`not-compared`); the
+  screenshot is kept for a later `compare`.
+- **Status:** implementation reference; a match means "consistent with the
+  frozen field", not visual acceptance. Home content (date, tiles, edge)
+  lowers coverage; always look at the side-by-side.
 
 **Historical Fold reference** (Agent 302–308, 2804, alpha, and
 `qa/verification/rose-agent-304-infra-runtime-100.md`; before main `6d9c724`):
@@ -141,8 +172,8 @@ It says what a revision declares, not what a device runs.
   does all of this on a fresh instance once Infra sets
   `ROSEOS_ALPHA_RUNTIME_READY`; its run id is the handback.
 - **Read-only:** `rose-verify.py runtime --serial S --handback REF --expect E
-  --out DIR [--user N]`. One tested user (default `am get-current-user`; an
-  unknown or unreadable user stops the run) is bound to every observation:
+  --out DIR [--user N]`. One tested user (default: the current user; an
+  unknown or unreadable one stops the run) is bound to every observation:
   `pm path`, the dumpsys `User U:` state, device-wide versionCodes and SYSTEM
   flag, on-device APK hash, HOME role holders, the **unqualified** MAIN/HOME
   resolution, and the PR70 marker `rose_home_role_selected` (read only). Other
@@ -151,8 +182,8 @@ It says what a revision declares, not what a device runs.
   system HOME key (passes only on Rose Home); explicit Rose HOME (labeled; never
   offsets step 1); Open Rose → `RoseConversationActivity`; Back → Rose Home;
   launcher-icon entry (recorded, version-dependent); HOME again. Screenshots
-  are compared when Pillow is present, otherwise kept and marked `unavailable`.
-  Only a temporary `/data/local/tmp` UI dump is written and removed. `ok` means
+  are compared with Pillow, else kept as `unavailable`. Only a temporary
+  `/data/local/tmp` UI dump is written, then removed. `ok` means
   no failure; `unmeasured` lists unavailable checks.
 
 ## D. Physical phone (owner only)
@@ -160,17 +191,16 @@ It says what a revision declares, not what a device runs.
 Only the owner, or someone the owner asks, runs `runtime --physical-device`.
 Report pass/fail facts and versions only.
 
-## E. Signed outputs, failed-job cleanup and publication (Oct 30 streams)
+## E. Signed outputs, failed-job cleanup and publication
 
-For the dedicated signer and release automation. Keep three records per run:
+Keep three records per run:
 **source** (pinned main SHA and config at run start), **signed output** (the
 signer's immutable, hash-bound result and receipt), **public/device** (the
-pixel-ota release, then any phone). Use real runs; no release is made to test.
-Infra supplies host-side listings; the verifier has no host access.
+pixel-ota release, then any phone). Use real runs, never a test release; Infra
+supplies host listings (the verifier has no host access).
 
-**Signer identity** — every signed output, before and after the signer
-cutover, must equal the permanent identities; any change fails (no
-regeneration):
+**Signer identity** — every signed output must equal the permanent identities;
+any change fails (no regeneration):
 
 | Device | App signer | OTA certificate (`releasekey.x509.pem` DER SHA-256) | AVB key (`avb_pkmd.bin` SHA-256) |
 | --- | --- | --- | --- |
@@ -188,9 +218,8 @@ receipts), and the APKs with `apksigner`.
 - the signing lock is released and never held a build worker's lock; record
   signing wait time per run;
 - nothing partial is public: no draft left, feed line and Latest unchanged;
-- a retry either reuses the durable signed output byte-for-byte or re-signs
-  with the same identity; one build number never has two different public
-  outputs.
+- a retry reuses the signed output byte-for-byte or re-signs with the same
+  identity; one build number never has two public outputs.
 
 **Publication** — per device and run:
 
@@ -209,11 +238,51 @@ receipts), and the APKs with `apksigner`.
 Baseline: `rango-2026103001` (release 429262439, OTA `2613738b…1bbf`) is a
 manual OTA publication; first install and phone acceptance are not shown.
 
+## F. Factory installers (`{device}-install-{build}.zip`)
+
+`scripts/factory-package.py` on delivered bytes (tiers: `docs/OS-FLAVORS.md`);
+no downloads; no host or key reads.
+
+1. **Pin:** `python3 -I scripts/factory-package.py contract --flavor F`
+   (exit 0), then read `factorySigning`. A null `publicKey` fails
+   `signatureVerified` (all three at `9f2c478`, where no job produces an
+   installer). Never substitute the OTA certificate, AVB or adjacent keys.
+2. **Classify:**
+
+   ```sh
+   python3 -I scripts/factory-package.py classify ARCHIVE --flavor F --build B \
+     --target-files TF --target-files-observation OBS.json \
+     --firmware-observation FW.json --otatools ZIP --otatools-sha256 H \
+     --work-dir /scratch/factory [--signature ABS.sig] [--first-use-binding FU.json]
+   ```
+
+   - Only role `factory-install` can be ready (never an OTA or the generator's
+     `{device}-factory-{build}.zip`).
+   - `structurallyComplete`: exact members, byte-equal to the observed signed
+     target-files; `avb_pkmd.bin` equals the AVB pin.
+   - `contentVerified`: super, unpacked with the pinned otatools, equals the
+     target-files images.
+   - `signatureVerified`: `ssh-keygen -Y verify`, `allowed_signers` from the
+     pin only, namespace `factory images`, over the classified bytes.
+   - `factoryReady` needs all three with `missing` and `problems` empty
+     (exit 0; 3 refused). Record both lists verbatim.
+
+| Claim | Established by | Not established |
+| --- | --- | --- |
+| Signed images | Equality with the signed target-files; AVB pin; the release `avbtool` receipt (E) | Archive origin (`classify` reads vbmeta headers only) |
+| Signed outer archive | `signatureVerified` | Image contents |
+| Phone acceptance | Owner-run phone checks (D) | Anything `classify` reports (`phoneValidated: false`) |
+
+Record each tier, the contract revision and the archive, signature, verifier
+and otatools sha256; synthetic observations never count.
+
 ## Checklist
 
 Mark each item observed, failed or unavailable, with its evidence kind. Values
 are 2804/alpha; for Agent builds from `6d9c724`, item 5 expects `67e39754…63c5`
-and item 11 the HiFi reference.
+and item 11 the HiFi reference; for Oxblood builds (#410) item 11 is the Oxblood
+reference, item 7's comparison needs a field raster, and the expectation names
+`home: oxblood`.
 
 | # | Item | Kind | Expected |
 | --- | --- | --- | --- |
@@ -231,17 +300,15 @@ and item 11 the HiFi reference.
 | 12 | Tested user; other users | runtime | One recorded user; others `unavailable` |
 | 13 | PR70 default HOME (images with the patch) | runtime, per user | First start: holder `dev.pixel.voice`, marker `1`; a later owner choice persists across reboot and update; absent, disabled or non-SYSTEM Rose leaves the holder, marker `1`; profiles have no HOME role |
 | 14 | Signer identity, cleanup, publication | artifact / host receipts | Section E |
+| 15 | Factory installer tiers | artifact | Section F; `factoryReady` false while the pin is null |
 
 ## Method revisions
 
-| Revision | Where | Change |
-| --- | --- | --- |
-| r1 | PR69 `f35b860c` | First method; fixed alpha contract, no user binding. The 2804 record stays as made |
-| r2 | PR71 `b63377be` | Fail-closed `--expect`; every runtime observation bound to one tested user; `method` in every receipt |
-| r3 | PR75 `ddeb5594` | Interactive capture without Pillow; labeled explicit Rose HOME and Back check; app-only 304 expectation |
-
-Limits: one user per run, never switching; versionCode and bytes are
-device-wide; candidates Infra has not supplied have no expectation.
+r1 PR69 `f35b860c` (first method; the 2804 record stays as made); r2 PR71
+`b63377be` (fail-closed `--expect`, one tested user per receipt, `method`);
+r3 PR75 `ddeb5594` (Pillow-free interactive capture, labeled HOME/Back check,
+app-only 304 expectation). Limits: one user per run; versionCode and bytes
+are device-wide; unsupplied candidates have no expectation.
 
 ## Never claim
 
@@ -250,4 +317,5 @@ Cuttlefish or the reverse; acceptance from a heuristic or beyond what the
 selected reference records; historical boots (`docs/upstream/`) as current;
 one user's state for another; a candidate's identity from another candidate,
 source or a planned version; production signing reliability from a fixture
-pass.
+pass; `factoryReady` from structure, a `.sig`'s presence or signed images;
+phone results from `classify`.

@@ -8,24 +8,23 @@ public class MainActivity extends Activity {
  LinearLayout page,voiceCenter;FrameLayout endSlot;TextView state,hint,route,task,connection,guardianName,taskModel;TaskStatusCard taskCard;Button end,send,guardianBack;
  EditText composer;MicControl micButton;boolean drawer=false;long seenTypedFinished=0;
  Typeface roundedFont;long startFeedbackUntil,endFeedbackUntil;String endingLabel="",lastFeedbackState="";
- boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
+ boolean chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
- LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,appAreaWidth=-1,appAreaHeight=-1;float appCellHeight=-1;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
- ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,ourAppsPage=1;boolean voiceControls;
+ LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,homeCapacity;final HomePlan.Viewport appViewport=new HomePlan.Viewport(),homeViewport=new HomePlan.Viewport();int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
+ ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,ourAppsPage=1;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
  final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){packageGeneration++;if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
  /** Home visual card trial. false removes the card, its detail view and its Home options entry. */
  static final boolean VISUAL_CARDS=true;
- MacScreenPanel macPanel;FrameLayout screenDetail;boolean screenHostActive;
+ boolean screenHostActive;
  FrameLayout visualSlot,visualDetail;LinearLayout visualDays,visualBody;Button visualPin,visualDismiss;JSONObject visualData;long seenVisual=-1;int visualDay;
  @Override public boolean dispatchTouchEvent(MotionEvent event){
   int action=event.getActionMasked();
   if(action==MotionEvent.ACTION_DOWN){
-   consumeHomeSwipe=false;watchHomeSwipe=!drawer&&visualDetail==null&&screenDetail==null;swipeStartX=event.getX();swipeStartY=event.getY();
+   consumeHomeSwipe=false;watchHomeSwipe=!drawer&&visualDetail==null;swipeStartX=event.getX();swipeStartY=event.getY();
    WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
    if(insets!=null&&insets.isVisible(WindowInsets.Type.ime()))watchHomeSwipe=false;
-   if(watchHomeSwipe&&macPanel!=null&&macPanel.isShown()){int[] pos=new int[2];macPanel.getLocationOnScreen(pos);if(event.getRawX()>=pos[0]&&event.getRawX()<pos[0]+macPanel.getWidth()&&event.getRawY()>=pos[1]&&event.getRawY()<pos[1]+macPanel.getHeight())watchHomeSwipe=false;}
    if(watchHomeSwipe&&composer!=null&&composer.isShown()){int[] pos=new int[2];composer.getLocationOnScreen(pos);if(event.getRawX()>=pos[0]&&event.getRawX()<pos[0]+composer.getWidth()&&event.getRawY()>=pos[1]&&event.getRawY()<pos[1]+composer.getHeight())watchHomeSwipe=false;}
    // The task area owns vertical gestures, including at the ends of its scroll range.
    if(watchHomeSwipe&&taskScroll!=null&&taskScroll.isShown()){int[] pos=new int[2];taskScroll.getLocationOnScreen(pos);if(event.getRawX()>=pos[0]&&event.getRawX()<pos[0]+taskScroll.getWidth()&&event.getRawY()>=pos[1]&&event.getRawY()<pos[1]+taskScroll.getHeight())watchHomeSwipe=false;}
@@ -49,47 +48,45 @@ public class MainActivity extends Activity {
  android.graphics.drawable.Drawable raised(int face,int edge,int radius){return PlayfulTheme.surface(face,edge,getResources().getDisplayMetrics().density,radius);}
  void command(String action){if("end".equals(action)){VoiceService s=VoiceService.instance;beginEnding(s==null||!s.live||!s.connected);startFeedbackUntil=0;}startForegroundService(new Intent(this,VoiceService.class).setAction(action));}
  void toggleVoice(){if(checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{"android.permission.RECORD_AUDIO","android.permission.POST_NOTIFICATIONS"},1);return;}VoiceService s=VoiceService.instance;if(s!=null&&s.live&&s.connected)command("mute");else if(s==null||!s.communicating){startFeedbackUntil=SystemClock.uptimeMillis()+2000;renderVoice(false,true,false,"",0);command("talk");}}
- void sendTyped(){if(experimentalHome)openChat();VoiceService s=VoiceService.instance;if(s==null){Toast.makeText(this,"Still connecting. Try again shortly.",0).show();return;}if(s.submitText(composer.getText().toString().trim())){((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);composer.clearFocus();refresh();}}
+ void sendTyped(){openChat();VoiceService s=VoiceService.instance;if(s==null){Toast.makeText(this,"Still connecting. Try again shortly.",0).show();return;}if(s.submitText(composer.getText().toString().trim())){((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);composer.clearFocus();refresh();}}
  void saveDraft(){if(composer!=null)getPreferences(0).edit().putString("typed-draft",composer.getText().toString()).apply();}
- boolean keepScreenOnEnabled(){return ScreenPolicy.keepScreenOn(this);}
- void setKeepScreenOnEnabled(boolean enabled){ScreenPolicy.setKeepScreenOn(this,enabled);ScreenPolicy.apply(this,screenHostActive);}
  // The Quick Settings tile can change the choice while this activity stays resumed under the shade.
  final android.content.SharedPreferences.OnSharedPreferenceChangeListener screenPolicyChanged=(prefs,key)->{if(ScreenPolicy.KEEP_ON.equals(key))ScreenPolicy.apply(this,screenHostActive);};
- void toggleLockedControl(){if(LockedControl.enabled(this)){LockedControl.disable(this);Toast.makeText(this,"App control while locked is off.",0).show();}else LockedControl.enable(this,()->{});}
  @Override public void onCreate(Bundle b){PixelAppearance.attach(this);super.onCreate(b);PixelAppearance.bars(this);setVolumeControlStream(AudioManager.STREAM_VOICE_CALL);getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);startForegroundService(new Intent(this,VoiceService.class));home();showHomeFor(getIntent(),b==null);showSettingsFor(getIntent());if(b!=null&&b.containsKey("home-page")&&launcherPager!=null)launcherPager.showPage(HomePages.restore(b.getInt("home-page"),launcherPager.getChildCount()),false);IntentFilter packages=new IntentFilter();packages.addAction(Intent.ACTION_PACKAGE_ADDED);packages.addAction(Intent.ACTION_PACKAGE_REMOVED);packages.addAction(Intent.ACTION_PACKAGE_CHANGED);packages.addAction(Intent.ACTION_PACKAGE_REPLACED);packages.addDataScheme("package");if(Build.VERSION.SDK_INT>=33)registerReceiver(launcherPackages,packages,Context.RECEIVER_EXPORTED);else registerReceiver(launcherPackages,packages);launcherReceiverRegistered=true;if(!DeviceIdentity.paired(this)&&!LocalRoseLink.enabled(this))startActivity(new Intent(this,PairingActivity.class));else if(b==null)LocalRosePairActivity.offerOnLaunch(this);if(!PhoneEnvironment.permitted(this)&&!getSharedPreferences("location-context",0).getBoolean("asked",false))requestLocationContext();}
  void requestLocationContext(){getSharedPreferences("location-context",0).edit().putBoolean("asked",true).apply();requestPermissions(new String[]{"android.permission.ACCESS_COARSE_LOCATION","android.permission.ACCESS_FINE_LOCATION"},72);}
  void requestPhotoAccess(){if(Build.VERSION.SDK_INT>=34)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES","android.permission.READ_MEDIA_VISUAL_USER_SELECTED"},74);else if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES"},74);else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},74);}
  @Override public void onRequestPermissionsResult(int r,String[] p,int[] g){super.onRequestPermissionsResult(r,p,g);if(r==74){if(galleryWidget!=null)galleryWidget.reload();return;}if(r==72){VoiceService s=VoiceService.instance;if(s!=null){s.notification(s.communicating);PhoneEnvironment.get(this).setActive(s.communicating);s.appWindowChanged();}return;}if(checkSelfPermission("android.permission.RECORD_AUDIO")==PackageManager.PERMISSION_GRANTED){startForegroundService(new Intent(this,VoiceService.class));command("talk");}}
- void base(){if(taskCard!=null)taskCard.dispose();destroyMacScreen();visualDetail=null;page=new LinearLayout(this);page.setOrientation(1);page.setBackground(new PlayfulTheme.World());page.setPadding(dp(24),dp(18),dp(24),dp(12));setContentView(page);page.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(24)+i.getSystemWindowInsetLeft(),dp(18)+i.getSystemWindowInsetTop(),dp(24)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());if(!drawer&&voiceCenter!=null)voiceCenter.setVisibility(chatMode||i.isVisible(WindowInsets.Type.ime())?View.GONE:View.VISIBLE);return i.consumeSystemWindowInsets();});}
+ void base(){getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);if(taskCard!=null)taskCard.dispose();visualDetail=null;page=new LinearLayout(this);page.setOrientation(1);page.setBackground(new PlayfulTheme.World());page.setPadding(dp(24),dp(18),dp(24),dp(12));setContentView(page);page.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(24)+i.getSystemWindowInsetLeft(),dp(18)+i.getSystemWindowInsetTop(),dp(24)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());if(!drawer&&voiceCenter!=null)voiceCenter.setVisibility(chatMode||i.isVisible(WindowInsets.Type.ime())?View.GONE:View.VISIBLE);return i.consumeSystemWindowInsets();});}
  void home(){
-  saveDraft();drawer=false;chatMode=false;experimentalHome=getPreferences(0).getBoolean("conversation-home",true);if(!experimentalHome)chatMode=false;seenConversation=-2;base();page.setFocusableInTouchMode(true);
-  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setBaselineAligned(false);TextView brand=text(experimentalHome?"":"✦ Pixel",28,ink);brand.setOnLongClickListener(v->{homeOptions(brand);return true;});brand.setTypeface(null,Typeface.BOLD);guardianName=brand;header.addView(brand,new LinearLayout.LayoutParams(0,dp(44),1));guardianBack=button("Back to Pixel",()->command("guardian_back"));guardianBack.setTextSize(12);guardianBack.setVisibility(View.GONE);header.addView(guardianBack,new LinearLayout.LayoutParams(-2,dp(44)));brand.setGravity(Gravity.CENTER_VERTICAL);route=text("Microphone off",12,ink);route.setPadding(dp(12),dp(9),dp(12),dp(9));route.setBackground(raised(0xeafffff6,PixelAppearance.color(0xffd5e7f2),18));route.setVisibility(View.GONE);header.addView(route);if(experimentalHome){Button options=button("···",()->{});options.setTextSize(24);options.setBackgroundColor(Color.TRANSPARENT);options.setContentDescription("Home options");options.setOnClickListener(v->homeOptions(options));header.addView(options,new LinearLayout.LayoutParams(dp(44),dp(44)));}page.addView(header);
+  saveDraft();drawer=false;chatMode=false;seenConversation=-2;base();page.setFocusableInTouchMode(true);
+  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setBaselineAligned(false);TextView brand=text("",28,ink);brand.setOnLongClickListener(v->{homeOptions(brand);return true;});brand.setTypeface(null,Typeface.BOLD);guardianName=brand;header.addView(brand,new LinearLayout.LayoutParams(0,dp(44),1));guardianBack=button("Back to Pixel",()->command("guardian_back"));guardianBack.setTextSize(12);guardianBack.setVisibility(View.GONE);header.addView(guardianBack,new LinearLayout.LayoutParams(-2,dp(44)));brand.setGravity(Gravity.CENTER_VERTICAL);route=text("Microphone off",12,ink);route.setPadding(dp(12),dp(9),dp(12),dp(9));route.setBackground(raised(0xeafffff6,PixelAppearance.color(0xffd5e7f2),18));route.setVisibility(View.GONE);header.addView(route);Button options=button("···",()->{});options.setTextSize(24);options.setBackgroundColor(Color.TRANSPARENT);options.setContentDescription("Home options");options.setOnClickListener(v->homeOptions(options));header.addView(options,new LinearLayout.LayoutParams(dp(44),dp(44)));page.addView(header);
   taskScroll=new ScrollView(this);taskScroll.setFillViewport(false);taskScroll.setClipToPadding(false);taskScroll.setPadding(0,dp(10),0,dp(14));taskScroll.setVerticalScrollBarEnabled(false);LinearLayout topContent=new LinearLayout(this);topContent.setOrientation(1);taskScroll.addView(topContent,new ScrollView.LayoutParams(-1,-2));page.addView(taskScroll,new LinearLayout.LayoutParams(-1,0,1));
   taskCard=new TaskStatusCard(this);topContent.addView(taskCard,new LinearLayout.LayoutParams(-1,-2));
   visualSlot=new FrameLayout(this);visualSlot.setVisibility(View.GONE);LinearLayout.LayoutParams visualParams=new LinearLayout.LayoutParams(-1,-2);visualParams.topMargin=dp(12);topContent.addView(visualSlot,visualParams);seenVisual=-1;
   voiceCenter=new LinearLayout(this);voiceCenter.setOrientation(1);voiceCenter.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);voiceCenter.setPadding(0,dp(8),0,0);page.addView(voiceCenter,new LinearLayout.LayoutParams(-1,-2));taskModel=text("Model connecting…",13,secondary);taskModel.setGravity(Gravity.CENTER);taskModel.setMaxLines(1);taskModel.setEllipsize(android.text.TextUtils.TruncateAt.END);LinearLayout.LayoutParams modelParams=new LinearLayout.LayoutParams(-1,dp(28));modelParams.bottomMargin=dp(8);voiceCenter.addView(taskModel,modelParams);micButton=new MicControl();micButton.setOnClickListener(v->toggleVoice());voiceCenter.addView(micButton,new LinearLayout.LayoutParams(dp(188),dp(188)));
   state=text("Tap to talk",18,secondary);state.setGravity(Gravity.CENTER);state.setTypeface(chatFont(800));state.setAccessibilityHeading(true);LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(-1,dp(28));titleParams.topMargin=dp(12);state.setVisibility(View.VISIBLE);voiceCenter.addView(state,titleParams);hint=text("Microphone off",15,secondary);hint.setGravity(Gravity.CENTER);hint.setMaxLines(2);LinearLayout.LayoutParams hintParams=new LinearLayout.LayoutParams(-1,dp(40));hintParams.topMargin=dp(4);hint.setVisibility(View.INVISIBLE);voiceCenter.addView(hint,hintParams);
-  chatScroll=new ScrollView(this);chatScroll.setOnTouchListener((v,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN)userScrolling=true;return false;});chatScroll.setOnScrollChangeListener((v,x,y,oldX,oldY)->{if(userScrolling)stickToBottom=chatMessages.getHeight()-chatScroll.getHeight()-y<dp(80);});chatScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);chatScroll.setPadding(0,0,0,dp(12));chatMessages=new LinearLayout(this);chatMessages.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatMessages.setOrientation(1);chatScroll.addView(chatMessages,new ScrollView.LayoutParams(-1,-2));page.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));chatScroll.setVisibility(experimentalHome&&chatMode?View.VISIBLE:View.GONE);
-  breathingRoom=taskScroll;breathingRoom.setVisibility(experimentalHome&&chatMode?View.GONE:View.VISIBLE);if(experimentalHome&&chatMode)voiceCenter.setVisibility(View.GONE);
+  chatScroll=new ScrollView(this);chatScroll.setOnTouchListener((v,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN)userScrolling=true;return false;});chatScroll.setOnScrollChangeListener((v,x,y,oldX,oldY)->{if(userScrolling)stickToBottom=chatMessages.getHeight()-chatScroll.getHeight()-y<dp(80);});chatScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);chatScroll.setPadding(0,0,0,dp(12));chatMessages=new LinearLayout(this);chatMessages.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatMessages.setOrientation(1);chatScroll.addView(chatMessages,new ScrollView.LayoutParams(-1,-2));page.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));chatScroll.setVisibility(chatMode?View.VISIBLE:View.GONE);
+  breathingRoom=taskScroll;breathingRoom.setVisibility(chatMode?View.GONE:View.VISIBLE);if(chatMode)voiceCenter.setVisibility(View.GONE);
   endSlot=new FrameLayout(this);end=button("×",()->command("end"));end.setTextSize(36);end.setTypeface(chatFont(900));end.setIncludeFontPadding(false);end.setPadding(0,0,0,dp(5));end.setTextColor(0xff593447);android.graphics.drawable.StateListDrawable endStates=new android.graphics.drawable.StateListDrawable();endStates.addState(new int[]{android.R.attr.state_pressed},chatSurface(0xffffa18d,0xffad6458,32));endStates.addState(new int[]{},chatSurface(0xffffb5a3,0xffad6458,32));end.setBackground(endStates);end.setOnTouchListener((v,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN&&v.isEnabled())v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);return false;});end.setContentDescription("End voice session");endSlot.addView(end,new FrameLayout.LayoutParams(dp(62),dp(62),Gravity.CENTER_HORIZONTAL));page.addView(endSlot,new LinearLayout.LayoutParams(-1,dp(76)));
   task=text("",14,secondary);task.setMaxLines(4);task.setPadding(dp(16),dp(12),dp(16),dp(12));task.setBackground(raised(PixelAppearance.color(0xeafff7e5),PixelAppearance.color(0xffd5e7f2),18));LinearLayout.LayoutParams taskParams=new LinearLayout.LayoutParams(-1,-2);taskParams.bottomMargin=dp(14);topContent.addView(task,taskParams);
   LinearLayout entry=new LinearLayout(this);entry.setGravity(Gravity.CENTER_VERTICAL);entry.setPadding(dp(14),0,dp(5),0);entry.setBackground(raised(PixelAppearance.color(0xfffff7e5),PixelAppearance.color(0xffb3d0e4),24));
-  composer=new EditText(this);composer.setTextSize(experimentalHome?22:16);if(experimentalHome){composer.setTypeface(chatFont(800));composer.setIncludeFontPadding(false);composer.setLetterSpacing(.005f);}composer.setTextColor(ink);composer.setHintTextColor(secondary);composer.setHint("Message…");composer.setContentDescription("Message Pixel");composer.setSingleLine(true);composer.setOnFocusChangeListener((v,focused)->{if(focused&&experimentalHome)openChat();});composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);composer.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);composer.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(12000)});composer.setBackgroundColor(Color.TRANSPARENT);composer.setPadding(0,0,dp(8),0);composer.setText(getPreferences(0).getString("typed-draft",""));composer.setOnEditorActionListener((v,action,event)->{if(action==android.view.inputmethod.EditorInfo.IME_ACTION_SEND){sendTyped();return true;}return false;});entry.addView(composer,new LinearLayout.LayoutParams(0,dp(experimentalHome?68:54),1));
-  send=button("↑",()->sendTyped());send.setTextSize(24);send.setTextColor(Color.WHITE);send.setBackground(raised(green,PixelAppearance.color(0xff3f567a),18));send.setPadding(0,0,0,0);send.setContentDescription("Send message");if(experimentalHome){entry.setBackground(chatSurface(PixelAppearance.color(0xfffff7e5),PixelAppearance.dark()?0xff101a2b:0xff789ab5,25));entry.setPadding(dp(20),0,dp(7),dp(5));send.setTypeface(chatFont(900));send.setTextSize(30);send.setTextColor(0xff29385d);send.setBackground(chatSurface(0xffffd66b,0xffb9872f,20));}entry.addView(send,new LinearLayout.LayoutParams(dp(experimentalHome?54:44),dp(experimentalHome?54:44)));page.addView(entry,new LinearLayout.LayoutParams(-1,dp(experimentalHome?70:54)));entry.setVisibility(View.GONE);
+  composer=new EditText(this);composer.setTextSize(22);composer.setTypeface(chatFont(800));composer.setIncludeFontPadding(false);composer.setLetterSpacing(.005f);composer.setTextColor(ink);composer.setHintTextColor(secondary);composer.setHint("Message…");composer.setContentDescription("Message Pixel");composer.setSingleLine(true);composer.setOnFocusChangeListener((v,focused)->{if(focused)openChat();});composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);composer.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);composer.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(12000)});composer.setBackgroundColor(Color.TRANSPARENT);composer.setPadding(0,0,dp(8),0);composer.setText(getPreferences(0).getString("typed-draft",""));composer.setOnEditorActionListener((v,action,event)->{if(action==android.view.inputmethod.EditorInfo.IME_ACTION_SEND){sendTyped();return true;}return false;});entry.addView(composer,new LinearLayout.LayoutParams(0,dp(68),1));
+  send=button("↑",()->sendTyped());send.setTextSize(24);send.setTextColor(Color.WHITE);send.setBackground(raised(green,PixelAppearance.color(0xff3f567a),18));send.setPadding(0,0,0,0);send.setContentDescription("Send message");entry.setBackground(chatSurface(PixelAppearance.color(0xfffff7e5),PixelAppearance.dark()?0xff101a2b:0xff789ab5,25));entry.setPadding(dp(20),0,dp(7),dp(5));send.setTypeface(chatFont(900));send.setTextSize(30);send.setTextColor(0xff29385d);send.setBackground(chatSurface(0xffffd66b,0xffb9872f,20));entry.addView(send,new LinearLayout.LayoutParams(dp(54),dp(54)));page.addView(entry,new LinearLayout.LayoutParams(-1,dp(70)));entry.setVisibility(View.GONE);
   LinearLayout footer=new LinearLayout(this);footer.setGravity(Gravity.CENTER_VERTICAL);footer.setBaselineAligned(false);connection=text("Voice off",12,secondary);connection.setGravity(Gravity.CENTER_VERTICAL);connection.setIncludeFontPadding(false);footer.addView(connection,new LinearLayout.LayoutParams(0,dp(54),1));Button apps=button("Apps  ▦",()->apps());apps.setTextSize(14);apps.setGravity(Gravity.CENTER);apps.setIncludeFontPadding(false);apps.setPadding(0,0,0,0);apps.setTextColor(secondary);apps.setBackground(raised(PixelAppearance.color(0xcffff7e5),PixelAppearance.color(0xffb3d0e4),18));footer.addView(apps,new LinearLayout.LayoutParams(dp(100),dp(42)));footer.setVisibility(View.GONE);page.addView(footer);page.requestFocus();attachLauncherPages();refresh();
  }
 
- Typeface chatFont(int weight){if(roundedFont==null)roundedFont=Typeface.createFromAsset(getAssets(),"fonts/nunito.ttf");return Typeface.create(roundedFont,weight,false);}
+ Typeface chatFont(int weight){return CustomizationVisuals.conversationTypeface(this,CustomizationStore.read(this).font,weight);} // 1O: default is the same Nunito face
  android.graphics.drawable.Drawable chatSurface(int face,int shadow,int radius){
   float d=getResources().getDisplayMetrics().density;
   GradientDrawable back=new GradientDrawable();back.setColor(shadow);back.setCornerRadius(dp(radius));
   GradientDrawable front=new GradientDrawable();front.setColor(face);front.setCornerRadius(dp(radius));front.setStroke(dp(2),shadow);
   android.graphics.drawable.LayerDrawable layers=new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{back,front});layers.setLayerInset(0,0,dp(5),0,0);layers.setLayerInset(1,0,0,0,dp(5));return layers;
  }
- void guardianPicker(){EditText name=new EditText(this);name.setHint("Member name");new AlertDialog.Builder(this).setTitle("Talk to a Guardian").setView(name).setNegativeButton("Cancel",null).setPositiveButton("Connect",(d,w)->{VoiceService service=VoiceService.instance;if(service!=null)service.connectGuardian(name.getText().toString());}).show();}
- void homeOptions(View anchor){PopupMenu menu=new PopupMenu(this,anchor);if(!voiceControls)menu.getMenu().add("Voice controls").setOnMenuItemClickListener(i->{showVoiceControls();return true;});menu.getMenu().add("Server connection").setOnMenuItemClickListener(i->{startActivity(new Intent(this,ServerConnectionActivity.class));return true;});menu.getMenu().add("Conversation mode").setCheckable(true).setChecked(getSharedPreferences("conversation-mode",0).getBoolean("active",false)).setOnMenuItemClickListener(i->{command("toggle_conversation_mode");return true;});menu.getMenu().add("Conversation notes").setOnMenuItemClickListener(i->{startActivity(new Intent(this,ConversationModeActivity.class));return true;});menu.getMenu().add("Pair with Mac").setOnMenuItemClickListener(i->{if(LocalRoseLink.enabled(this))startActivity(new Intent(this,LocalRosePairActivity.class));else startActivity(new Intent(this,PairingActivity.class));return true;});menu.getMenu().add("Location access").setOnMenuItemClickListener(i->{if(PhoneEnvironment.permitted(this))startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:"+getPackageName())));else requestLocationContext();return true;});menu.getMenu().add("General Decisions routing").setCheckable(true).setChecked(getSharedPreferences("decisions-routing",0).getBoolean("enabled",false)).setOnMenuItemClickListener(i->{command("toggle_decisions_routing");return true;});menu.getMenu().add("Live Mac screen").setCheckable(true).setChecked(macScreenEnabled()).setOnMenuItemClickListener(i->{getPreferences(0).edit().putBoolean("mac-screen-enabled",!macScreenEnabled()).apply();home();return true;});menu.getMenu().add("Keep screen on").setCheckable(true).setChecked(keepScreenOnEnabled()).setOnMenuItemClickListener(i->{setKeepScreenOnEnabled(!keepScreenOnEnabled());return true;});menu.getMenu().add("App control while locked").setCheckable(true).setChecked(LockedControl.enabled(this)).setOnMenuItemClickListener(i->{toggleLockedControl();return true;});if(experimentalHome){menu.getMenu().add("Classic home").setOnMenuItemClickListener(i->{getPreferences(0).edit().putBoolean("conversation-home",false).apply();chatMode=false;home();return true;});}else{menu.getMenu().add("Try conversation home").setOnMenuItemClickListener(i->{getPreferences(0).edit().putBoolean("conversation-home",true).apply();home();return true;});}if(VISUAL_CARDS)menu.getMenu().add("Visual cards").setCheckable(true).setChecked(VisualStore.enabled(this)).setOnMenuItemClickListener(i->{VisualStore.setEnabled(this,!VisualStore.enabled(this));syncVisual();return true;});menu.getMenu().add("Reject changed screens").setCheckable(true).setChecked(getSharedPreferences("screen-change-guard",0).getBoolean("enabled",true)).setOnMenuItemClickListener(i->{android.content.SharedPreferences prefs=getSharedPreferences("screen-change-guard",0);prefs.edit().putBoolean("enabled",!prefs.getBoolean("enabled",true)).apply();return true;});menu.getMenu().add("Stable-field typing").setCheckable(true).setChecked(getSharedPreferences("text-input-guard",0).getBoolean("enabled",false)).setOnMenuItemClickListener(i->{android.content.SharedPreferences prefs=getSharedPreferences("text-input-guard",0);prefs.edit().putBoolean("enabled",!prefs.getBoolean("enabled",false)).apply();return true;});menu.getMenu().add("Voice boost (+6 dB)").setCheckable(true).setChecked(getSharedPreferences("voice-output-boost",0).getBoolean("enabled",false)).setOnMenuItemClickListener(i->{VoiceService s=VoiceService.instance;if(s!=null)s.setVoiceBoostEnabled(!s.voiceBoostEnabled());return true;});VoiceService current=VoiceService.instance;AudioDeviceInfo glasses=current==null?null:current.bluetoothDevice();if(glasses!=null){String key=glasses.getProductName().toString()+"-double-tap-mute";menu.getMenu().add("Double tap toggles mute").setCheckable(true).setChecked(getSharedPreferences("glasses-controls",0).getBoolean(key,false)).setOnMenuItemClickListener(i->{android.content.SharedPreferences prefs=getSharedPreferences("glasses-controls",0);prefs.edit().putBoolean(key,!prefs.getBoolean(key,false)).apply();return true;});}menu.getMenu().add("Set up connected glasses").setOnMenuItemClickListener(i->{GlassesSetup.begin(this);return true;});menu.getMenu().add("Talk to a Guardian").setOnMenuItemClickListener(i->{guardianPicker();return true;});menu.getMenu().add("Your apps").setOnMenuItemClickListener(i->{apps();return true;});menu.getMenu().add("Result card style").setOnMenuItemClickListener(i->{new AlertDialog.Builder(this).setTitle("Result card style").setSingleChoiceItems(new String[]{"Agent HTML (trial)","Structured native","Plain text"},getSharedPreferences("task-card",0).getString("mode","native").equals("html")?0:getSharedPreferences("task-card",0).getBoolean("rich",true)?1:2,(dialog,which)->{VoiceService s=VoiceService.instance;if(s!=null)s.setResultCardMode(new String[]{"html","native","text"}[which]);dialog.dismiss();}).show();return true;});menu.show();}
+ /** Rose Agent's settings (owner request): Pair with Mac and About only, in a window-owned dialog (SettingsDialog).
+  * Opened by a long press on Home and by the conversation's Settings (ACTION_SETTINGS). */
+ void homeOptions(View anchor){SettingsDialog.show(this);}
  void scrollChatToEnd(){if(chatMode&&stickToBottom&&chatScroll!=null&&chatMessages!=null)chatScroll.post(()->{if(chatMode&&stickToBottom)chatScroll.scrollTo(0,chatMessages.getHeight());});}
- void openChat(){if(!experimentalHome)return;chatMode=true;forceChatBottom=true;stickToBottom=true;userScrolling=false;voiceCenter.setVisibility(View.GONE);breathingRoom.setVisibility(View.GONE);chatScroll.setVisibility(View.VISIBLE);if(visualSlot!=null)visualSlot.setVisibility(View.GONE);scrollChatToEnd();}
+ void openChat(){chatMode=true;forceChatBottom=true;stickToBottom=true;userScrolling=false;voiceCenter.setVisibility(View.GONE);breathingRoom.setVisibility(View.GONE);chatScroll.setVisibility(View.VISIBLE);if(visualSlot!=null)visualSlot.setVisibility(View.GONE);scrollChatToEnd();}
  void renderConversation(String raw){
   if(chatMessages==null)return;
   try{org.json.JSONArray messages=new org.json.JSONObject(raw).optJSONArray("messages");if(messages==null)return;
@@ -145,7 +142,6 @@ public class MainActivity extends Activity {
  /** Called from the refresh tick. Does nothing unless the store revision moved. */
  void syncVisual(){
   if(visualSlot==null)return;
-  if(macScreenEnabled()){showMacCard();return;}
   if(!VISUAL_CARDS)return;
   try{
    long revision=VisualStore.revision(this);if(revision==seenVisual)return;seenVisual=revision;
@@ -174,6 +170,7 @@ public class MainActivity extends Activity {
  }
  void closeVisual(){
   if(visualDetail==null)return;
+  customizationChanged.run(); // 1O: a change held while the card was open applies once it has closed
   if(visualDetail.getParent() instanceof ViewGroup)((ViewGroup)visualDetail.getParent()).removeView(visualDetail);
   visualDetail=null;if(page!=null)page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
  }
@@ -310,12 +307,11 @@ public class MainActivity extends Activity {
   LinearLayout.LayoutParams panelParams=new LinearLayout.LayoutParams(-1,-2);panelParams.topMargin=dp(12);visualBody.addView(panel,panelParams);
  }
 
- void apps(){closeVoiceControls();if(launcherPager!=null)launcherPager.showPage(ourAppsPage,true);}
+ void apps(){if(launcherPager!=null)launcherPager.showPage(ourAppsPage,true);}
  boolean canSwipePages(MotionEvent event){
-  if(screenDetail!=null||visualDetail!=null)return false;
+  if(visualDetail!=null)return false;
   WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
   if(insets!=null&&insets.isVisible(WindowInsets.Type.ime()))return false;
-  if(voiceControls)return false; // the pages stay put under the voice controls
   return true;
  }
  boolean touchInside(View view,MotionEvent event){
@@ -346,7 +342,10 @@ public class MainActivity extends Activity {
    return "com.android.vending".equals(installer);
   }catch(PackageManager.NameNotFoundException|IllegalArgumentException|SecurityException unavailable){return false;}
  }
+ /** A measured page asked for Home to be re-planned and the rebuild has not run yet: its cells are about to move. */
+ boolean replanPending;
  void attachLauncherPages(boolean preservePage){
+  replanPending=false;
   // A rebuild that keeps the page keeps it while it still exists (HomePages.restore); a fresh build opens on Home.
   int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():-1;
   Intent query=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
@@ -369,29 +368,46 @@ public class MainActivity extends Activity {
   ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>();
   // Home, then the app pages next to it under the fixed tray, and nothing after them (HomePages, #223).
   titles.add("Home");pages.add(new ArrayList<>());
-  // One continuous real inventory, our apps first, then Play Store and other installs, each in name order, then the
-  // one "…" System folder cell (a null entry) holding the system and duplicate apps; the page count follows from it and
-  // the inset viewport (HomeAppLayout), never a fixed count.
+  // One continuous real inventory, our apps first, then Play Store and other installs, each in name order; the page
+  // count follows from it and the inset viewport (HomeAppLayout), never a fixed count. The system and duplicate apps
+  // are in the one System folder, whose cell is Home's last (#410: the reference's 'System apps' cell).
   ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,storeApps,otherApps))launchable.addAll(group);
-  ArrayList<ResolveInfo> entries=new ArrayList<>(launchable);if(!systemApps.isEmpty())entries.add(null);
+  ArrayList<ResolveInfo> entries=new ArrayList<>(launchable);
   folderApps=systemApps;launchable.addAll(systemApps); // Home's default apps may be system apps
-  planAppPages();int appPages=HomeAppLayout.pages(entries.size(),appPerPage);
-  for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(entries.size(),appPerPage,i);pages.add(new ArrayList<>(entries.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
-  int count=pages.size();homePage=HomePages.HOME;ourAppsPage=HomePages.FIRST_APPS;
+  planAppPages();
+  // Home fills first (#410 owner density correction): its curated apps, then the start of the inventory, then the
+  // System folder as its last cell (HomeAppLayout.homeShare). The app pages continue the inventory after it: an app
+  // placed on Home is left out of them, never repeated to fill space.
+  List<ResolveInfo> curated=RoseHomeView.homeApps(getPackageManager(),getPackageName(),launchable,false);
+  HashSet<String> curatedKeys=new HashSet<>();for(ResolveInfo app:curated)curatedKeys.add(componentKey(app));
+  ArrayList<ResolveInfo> rest=new ArrayList<>();for(ResolveInfo app:entries)if(!curatedKeys.contains(componentKey(app)))rest.add(app);
+  int[] share=HomeAppLayout.homeShare(curated.size(),!folderApps.isEmpty(),rest.size(),homeCapacity);
+  ArrayList<ResolveInfo> homeEntries=new ArrayList<>(curated.subList(0,share[0]));homeEntries.addAll(rest.subList(0,share[1]));
+  HashSet<String> onHome=new HashSet<>();for(ResolveInfo app:homeEntries)onHome.add(componentKey(app));
+  if(!folderApps.isEmpty())homeEntries.add(null);
+  ArrayList<ResolveInfo> appEntries=new ArrayList<>();for(ResolveInfo app:entries)if(!onHome.contains(componentKey(app)))appEntries.add(app);
+  // App pages only for what Home could not hold: when Home holds every app there is no empty overflow page (with no
+  // apps at all, one page still says so).
+  int appPages=appEntries.isEmpty()&&!entries.isEmpty()?0:HomeAppLayout.pages(appEntries.size(),appPerPage);
+  for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(appEntries.size(),appPerPage,i);pages.add(new ArrayList<>(appEntries.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
+  int count=pages.size();homePage=HomePages.HOME;ourAppsPage=count>HomePages.FIRST_APPS?HomePages.FIRST_APPS:HomePages.HOME;
   selected=HomePages.restore(selected,count);
-  // One wallpaper behind every page, drawn at the scroll position so it stays put while the pages slide.
-  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new RoseHomeView.Wallpaper(getResources()));
+  // One Oxblood field behind every page (#410), drawn at the scroll position so it stays put while the pages slide.
+  // Plan 1E: the field is the theme's (Glacier's raster field, or Oxblood's with its variant); prepare decodes it first.
+  RoseThemeNow.prepare(this);
+  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));launcherPager.getBackground().setColorFilter(CustomizationVisuals.wallpaperFilter(plannedCustomization.shownWallpaper()));
+  HomeGlassTile.Backdrop.set((OxbloodField)launcherPager.getBackground(),launcherPager); // the tiles' backdrop blur samples this field (#410)
   launcherPager.permission=this::canSwipePages;
   launcherPager.listener=index->{launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   // The one row of page dots is fixed in the HomeFrame.
   homePageDots=null;LinearLayout fixedDots=makePageDots(titles);
-  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),homeColumns));
+  launcherPager.addView(roseHome=new RoseHomeView(this,homeEntries,homeColumns,this::homeMeasured));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
-  for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),entries.isEmpty()));
-  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
-  setContentView(homeFrame);drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
+  for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),appEntries.isEmpty()));
+  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
+  setContentView(homeFrame);homeBars();drawer=true;drawnCustomization=plannedCustomization;CustomizationStore.markHomeApplied(this,drawnCustomization.revision,homeColumns);launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
  /** A small square uses one of two columns; wide screens do not inflate it. */
@@ -413,23 +429,61 @@ public class MainActivity extends Activity {
   * reported it, else an estimate from the screen configuration for the first build. */
  void planAppPages(){
   float density=getResources().getDisplayMetrics().density;android.content.res.Configuration c=getResources().getConfiguration();
-  float width=appAreaWidth>0?appAreaWidth:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
-  float height=appAreaHeight>0?appAreaHeight:HomeAppLayout.estimatedHeightDp(c.screenHeightDp,HomeTray.HEIGHT_DP,HomeTray.GAP_DP,HomeFrame.DOTS_DP)*density;
-  float cell=appCellHeight>0?appCellHeight:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
-  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);homeColumns=HomeAppLayout.homeColumns(width,height,cell,density);
+  boolean appsKnown=appViewport.known(),homeKnown=homeViewport.known();
+  float width=appsKnown?appViewport.width:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
+  float height=appsKnown?appViewport.height:HomeAppLayout.estimatedHeightDp(c.screenHeightDp)*density;
+  float cell=appsKnown?appViewport.cell:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
+  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);
+  // Home's grid has the same side margins but starts below the date and has unlabelled cells: its own measurement.
+  float homeWidth=homeKnown?homeViewport.width:width;
+  float homeHeight=homeKnown?homeViewport.height:HomeAppLayout.estimatedHomeHeightDp(c.screenHeightDp,HomeAppLayout.DATE_SP*c.fontScale*1.17f)*density;
+  float homeCell=homeKnown?homeViewport.cell:HomeAppLayout.TILE_DP*density;
+  plannedCustomization=CustomizationStore.read(this);int preferred=plannedCustomization.homeColumns; // 1O: 0 is today's automatic rule
+  homeColumns=CustomizationConfig.effectiveHomeColumns(preferred,homeWidth/density);homeCapacity=CustomizationConfig.homeCapacity(preferred,homeWidth,homeHeight,homeCell,density);
  }
- /** A page measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
- void appPageMeasured(int width,int height,float cell){
-  if(!HomeAppLayout.replan(appColumns,appPerPage,width,height,cell,getResources().getDisplayMetrics().density))return;
-  if(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight)return;
-  appAreaWidth=width;appAreaHeight=height;appCellHeight=cell;
-  handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
+ /** F01 (HomePlan): every measurement Home's grid reports is recorded, including one that fits the current plan (the
+  * old rule dropped those, and a build reporting two sizes then re-planned between them forever). */
+ void homeMeasured(int width,int height,float cell){homeViewport.record(width,height,cell);settleHomePlan();}
+ /** Re-plans Home's pages once the measurements have been quiet for HomePlan.SETTLE_MS, only if the latest real
+  * viewport no longer fits the plan, and never straight back to the plan Home just left (HomePlan.Breaker). */
+ final HomePlan.Breaker homePlanBreaker=new HomePlan.Breaker();
+ Runnable homePlanCheck;
+ /** Nov 7 plan 1O: the customization Home planned with and last drew. A change (a new revision in CustomizationStore)
+  * re-plans Home, coalesced on the main thread, and rebuilds it once only when what Home draws differs: the effective
+  * plan (columns and capacity, so 0 -> 4 where automatic is already 4 is not a rebuild), the wallpaper shown, the
+  * font or the theme (plan 1E: a theme rebuilds Home in its colours; columns and font are kept). Other changes are acknowledged without a rebuild. A change waits while the visual card or the Mac screen is
+  * open (both re-post it on close), and never runs on a destroyed instance. A user change bypasses homePlanBreaker,
+  * which still governs automatic re-plans. */
+ CustomizationConfig plannedCustomization=CustomizationConfig.DEFAULTS,drawnCustomization=null;
+ final Runnable applyCustomization=()->{if(launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null)return;
+  CustomizationConfig drawn=drawnCustomization;if(drawn!=null&&CustomizationStore.read(this).revision==drawn.revision)return;
+  int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};planAppPages();CustomizationConfig next=plannedCustomization;
+  if(drawn!=null&&homeColumns==kept[0]&&homeCapacity==kept[1]&&appColumns==kept[2]&&appPerPage==kept[3]&&next.shownWallpaper().equals(drawn.shownWallpaper())&&next.font.equals(drawn.font)&&next.theme.equals(drawn.theme)){drawnCustomization=next;CustomizationStore.markHomeApplied(this,next.revision,homeColumns);return;}
+  if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}attachLauncherPages(true);};
+ final Runnable customizationChanged=()->{handler.removeCallbacks(applyCustomization);handler.post(applyCustomization);};
+ boolean homePlanStale(){float density=getResources().getDisplayMetrics().density;
+  return homeViewport.known()&&CustomizationConfig.homeStale(plannedCustomization.homeColumns,homeColumns,homeCapacity,homeViewport.width,homeViewport.height,homeViewport.cell,density)||HomePlan.appsStale(appColumns,appPerPage,appViewport,density);}
+ void settleHomePlan(){
+  replanPending=homePlanStale();
+  if(homePlanCheck!=null)handler.removeCallbacks(homePlanCheck);
+  homePlanCheck=()->{homePlanCheck=null;if(launcherPager==null||isFinishing())return;
+   if(!homePlanStale()){replanPending=false;return;}
+   String current=HomePlan.key(homeColumns,homeCapacity,appColumns,appPerPage);
+   int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};
+   planAppPages();
+   if(homePlanBreaker.allow(current,HomePlan.key(homeColumns,homeCapacity,appColumns,appPerPage),SystemClock.elapsedRealtime()))attachLauncherPages(true);
+   else{homeColumns=kept[0];homeCapacity=kept[1];appColumns=kept[2];appPerPage=kept[3];if(drawnCustomization!=null)plannedCustomization=drawnCustomization;replanPending=false;}};
+  handler.postDelayed(homePlanCheck,HomePlan.SETTLE_MS);
  }
+ /** The identity of a launchable entry (package and activity), for placing each app exactly once. */
+ static String componentKey(ResolveInfo app){return app.activityInfo.packageName+"/"+app.activityInfo.name;}
+ /** An app page's measurement, recorded and settled like Home's (HomePlan). */
+ void appPageMeasured(int width,int height,float cell){appViewport.record(width,height,cell);settleHomePlan();}
  /** One app page: the measured grid of real apps over the shared wallpaper, or a truthful note when none are installed. */
  View appPage(ArrayList<ResolveInfo> apps,String title,boolean noApps){
   View result;
   if(noApps){TextView none=appLabel("No other apps are installed.");none.setGravity(Gravity.CENTER);none.setMaxLines(3);result=none;}
-  else{HomeAppPage grid=new HomeAppPage(this,appColumns,this::appPageMeasured);for(ResolveInfo app:apps)grid.addView(app==null?folderTile():appTile(app));result=grid;}
+  else{HomeAppPage grid=new HomeAppPage(this,appColumns,this::appPageMeasured);for(ResolveInfo app:apps)grid.addView(appTile(app));result=grid;}
   result.setContentDescription(title);
   result.setPadding(dp(HomeAppLayout.MARGIN_DP),dp(HomeAppLayout.TOP_DP),dp(HomeAppLayout.MARGIN_DP),0);
   result.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetLeft(),dp(HomeAppLayout.TOP_DP)+i.getSystemWindowInsetTop(),dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
@@ -437,37 +491,106 @@ public class MainActivity extends Activity {
  }
  /** The reference label (HomeAppTile.label). */
  TextView appLabel(String label){return HomeAppTile.label(this,label);}
+ /** Light status and navigation icons over the dark Oxblood field (#410), whatever the system theme. base() restores
+  * the theme's own bars for every other screen. */
+ void homeBars(){getWindow().setStatusBarColor(0);getWindow().setNavigationBarColor(0);View decor=getWindow().getDecorView();decor.setSystemUiVisibility(decor.getSystemUiVisibility()&~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));}
  LinearLayout makePageDots(ArrayList<String> titles){
   LinearLayout dots=new LinearLayout(this);dots.setGravity(Gravity.CENTER);dots.setOrientation(0);
+  // #410: an indicator only, as in the reference (19dp apart); paging is by swipe, and the pager names the page and
+  // offers scroll actions to accessibility services.
+  dots.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
   for(int i=0;i<titles.size();i++){
-   final int target=i;TextView dot=new TextView(this);dot.setBackground(new HomeDot(getResources().getDisplayMetrics().density));dot.setTag(i);dot.setSelected(i==0);
-   dot.setContentDescription("Go to "+titles.get(i).toLowerCase(Locale.ROOT));dot.setFocusable(true);dot.setOnClickListener(v->launcherPager.showPage(target,true));
-   dots.addView(dot,new LinearLayout.LayoutParams(dp(HomeFrame.DOTS_DP),dp(HomeFrame.DOTS_DP)));pageDots.add(dot);
+   TextView dot=new TextView(this);dot.setBackground(new HomeDot(getResources().getDisplayMetrics().density));dot.setTag(i);dot.setSelected(i==0);
+   dots.addView(dot,new LinearLayout.LayoutParams(dp(19),dp(HomeFrame.DOTS_DP)));pageDots.add(dot);
   }
   return dots;
  }
- /** A real app's cell (HomeAppTile): its simplified mark on the subdued tile and its label, opening it (WorkspaceLauncher). */
- View appTile(ResolveInfo app){
+ /** A real app's cell (HomeAppTile) on the app pages or in the folder: its mark on the glass tile and its name, opening
+  * it (WorkspaceLauncher). */
+ View appTile(ResolveInfo app){return appTile(app,true);}
+ /** labelled=false: Home's cell, the same mark and launch path with the name as its accessible name only. */
+ View appTile(ResolveInfo app,boolean labelled){
   final String label=AppLabels.label(getPackageManager(),app.activityInfo.packageName,app.loadLabel(getPackageManager()).toString());
-  View tile=HomeAppTile.tile(this,appMark(app),label);
+  String glyph=HomeAppGroups.glyph(app.activityInfo.packageName,AppLabels.preferredCamera(getPackageManager()));
+  boolean mono=glyph!=null&&HomeGlyph.known(glyph);
+  View tile=HomeAppTile.tile(this,mono?new HomeGlyph(glyph):appMark(app),label,mono,labelled);
   tile.setOnClickListener(v->{closeSystemFolder();WorkspaceLauncher.open(this,app,label);});
+  tile.setTag(GestureContract.tag(app.activityInfo.packageName,app.activityInfo.name)); // the gesture's landing target (GestureContract)
+  tile.setOnLongClickListener(v->{appOptions(v,app,label);return true;}); // F03: App info and Android's own uninstall route
   return tile;
  }
- /** The app's mark (#403): a suite app's or a duplicate's simplified glyph (HomeAppGroups.glyph), else the app's own
-  * monochrome themed layer, else its own icon unchanged, so another app's identity is never redrawn. */
+ /** F03 (AppRemoval): an app's long press offers its removal through Android's own UI only: the system uninstall
+  * confirmation while Rose Agent holds REQUEST_DELETE_PACKAGES, otherwise the app's system App info page. A built-in
+  * app is named as such and offered App info. Nothing is removed without the owner confirming in Android. */
+ void appOptions(View anchor,ResolveInfo app,String label){
+  ApplicationInfo info=app.activityInfo.applicationInfo;String pkg=app.activityInfo.packageName;
+  AppRemoval.Offer offer=AppRemoval.offer(pkg.equals(getPackageName()),(info.flags&ApplicationInfo.FLAG_SYSTEM)!=0,(info.flags&ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)!=0,
+    checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED);
+  if(offer==null)return;
+  PopupMenu menu=new PopupMenu(this,anchor);
+  if(AppRemoval.MODELS.equals(pkg)&&retiredApp(pkg))menu.getMenu().add(AppRemoval.RETIRED_NOTE).setEnabled(false); // 1I
+  if(offer.remove!=null)menu.getMenu().add(offer.remove).setOnMenuItemClickListener(i->{openRemoval(pkg,label,offer.route,AppRemoval.UNINSTALL_UPDATES.equals(offer.remove));return true;});
+  if(offer.note!=null)menu.getMenu().add(offer.note).setEnabled(false);
+  if(offer.remove==null||offer.route!=AppRemoval.Route.APP_INFO)menu.getMenu().add(AppRemoval.APP_INFO).setOnMenuItemClickListener(i->{openRemoval(pkg,label,AppRemoval.Route.APP_INFO,false);return true;});
+  menu.show();
+ }
+ /** Opens the route's Android screen for the package. The confirmation is asked for its result (1J, onActivityResult);
+  * any removal also reaches Home through launcherPackages (rebuild). */
+ void openRemoval(String pkg,String label,AppRemoval.Route route,boolean updatesOnly){
+  closeSystemFolder();
+  android.net.Uri uri=android.net.Uri.fromParts("package",pkg,null);
+  Intent open=route==AppRemoval.Route.CONFIRM?new Intent(Intent.ACTION_DELETE,uri):new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,uri);
+  try{
+   if(route==AppRemoval.Route.CONFIRM){open.putExtra(Intent.EXTRA_RETURN_RESULT,true);removing=pkg;removingLabel=label;removingUpdates=updatesOnly;startActivityForResult(open,REMOVE_REQUEST);}
+   else startActivity(open);
+  }catch(ActivityNotFoundException|SecurityException unavailable){removing=null;Toast.makeText(this,"Android's app settings for "+label+" are not available",Toast.LENGTH_SHORT).show();}
+ }
+ /** 1I (AppRemoval.retired): the installed package is the genuine retired app, by its exact package and signer. */
+ boolean retiredApp(String pkg){
+  try{
+   SigningInfo info=getPackageManager().getPackageInfo(pkg,PackageManager.GET_SIGNING_CERTIFICATES).signingInfo;
+   if(info==null)return false;
+   ArrayList<String> digests=new ArrayList<>();java.security.MessageDigest sha=java.security.MessageDigest.getInstance("SHA-256");
+   for(Signature signer:info.hasMultipleSigners()?info.getApkContentsSigners():info.getSigningCertificateHistory()){
+    StringBuilder hex=new StringBuilder();for(byte b:sha.digest(signer.toByteArray()))hex.append(String.format("%02x",b));digests.add(hex.toString());}
+   return AppRemoval.retired(pkg,digests);
+  }catch(Exception absent){return false;}
+ }
+ /** 1I: once, a phone that still has the retired Rose Models app is offered its uninstall (RetiredAppNotice), through
+  * Android's own confirmation. Not now leaves it installed in the System folder, whose long press still offers it. */
+ boolean retiredOffered;
+ @Override protected void onPostResume(){super.onPostResume();handler.post(this::offerRetiredUninstall);}
+ void offerRetiredUninstall(){
+  if(retiredOffered||!drawer||launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null||systemFolder!=null)return;
+  android.content.SharedPreferences answers=getSharedPreferences(AppRemoval.RETIRED_PREFS,0);
+  if(answers.getBoolean(AppRemoval.MODELS_NOTICE,false)||!retiredApp(AppRemoval.MODELS))return;
+  retiredOffered=true;
+  RetiredAppNotice.show(this,()->answers.edit().putBoolean(AppRemoval.MODELS_NOTICE,true).apply(),
+    ()->openRemoval(AppRemoval.MODELS,AppRemoval.MODELS_NAME,checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED?AppRemoval.Route.CONFIRM:AppRemoval.Route.APP_INFO,false));
+ }
+ static final int REMOVE_REQUEST=0x5244;String removing,removingLabel;boolean removingUpdates;
+ /** 1J: the owner's answer in Android's uninstall confirmation, checked against the package manager (AppRemoval.outcome). */
+ @Override protected void onActivityResult(int request,int result,Intent data){
+  super.onActivityResult(request,result,data);
+  if(request!=REMOVE_REQUEST||removing==null)return;
+  String pkg=removing,label=removingLabel;boolean updates=removingUpdates;removing=null;
+  boolean installed;try{getPackageManager().getPackageInfo(pkg,0);installed=true;}catch(PackageManager.NameNotFoundException gone){installed=false;}
+  AppRemoval.Outcome outcome=AppRemoval.outcome(result==RESULT_OK,result==RESULT_CANCELED,installed,updates);
+  if(AppRemoval.refreshes(outcome)&&launcherPager!=null&&!isFinishing()){packageGeneration++;attachLauncherPages(true);}
+  String message=AppRemoval.message(outcome,label);if(message!=null)Toast.makeText(this,message,Toast.LENGTH_SHORT).show();
+ }
+ /** Any other app's mark (#410): its own icon, unrestyled, so a regular installed app keeps its identity. Rose's suite
+  * and its duplicates draw the simplified glyph instead (appTile, HomeAppGroups.glyph). */
  android.graphics.drawable.Drawable appMark(ResolveInfo app){
-  String glyph=HomeAppGroups.glyph(app.activityInfo.packageName,AppLabels.preferredCamera(getPackageManager()));
-  if(glyph!=null&&HomeGlyph.known(glyph))return new HomeGlyph(glyph);
-  try{android.graphics.drawable.Drawable themed=HomeGlyph.themed(app.activityInfo.loadUnbadgedIcon(getPackageManager()));if(themed!=null)return themed;}
-  catch(RuntimeException unavailable){/* the app's own icon below */}
   return app.loadIcon(getPackageManager());
  }
  ArrayList<ResolveInfo> folderApps=new ArrayList<>();Dialog systemFolder;
- /** The "…" System folder's cell on the app pages; opens HomeFolder. */
- View folderTile(){
-  View tile=HomeAppTile.tile(this,new HomeGlyph("more"),HomeAppGroups.FOLDER_LABEL);
+ /** The System folder's cell, Home's last (#410: the reference's four-circle 'System apps' mark); opens HomeFolder. */
+ View folderTile(boolean labelled){
+  View tile=HomeAppTile.tile(this,new HomeGlyph("system"),HomeAppGroups.FOLDER_LABEL,true,labelled);
   tile.setContentDescription(HomeAppGroups.folderDescription(folderApps.size()));
   tile.setOnClickListener(v->openSystemFolder());
+  tile.setTag(GestureContract.FOLDER_TAG);
   return tile;
  }
  void openSystemFolder(){
@@ -490,8 +613,8 @@ public class MainActivity extends Activity {
   starting=starting||SystemClock.uptimeMillis()<startFeedbackUntil;
   renderVoice(active,starting,isMuted,error,s==null?0:s.level);
   updateText(taskModel,s==null?"Model connecting…":s.guardianName.isEmpty()?s.taskModelLabel:s.guardianName+"’s Guardian");
-  if(taskCard!=null)taskCard.render(s==null?"{\"current\":null}":s.taskStateJson,s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000),screenHostActive&&hasWindowFocus()&&(launcherPager==null||voiceControls)&&visualDetail==null&&screenDetail==null);
-  if(s==null){task.setVisibility(View.GONE);return;}updateText(guardianName,s.guardianName.isEmpty()?(experimentalHome?"":"✦ Pixel"):s.guardianName+"’s Guardian");guardianName.setTextSize(s.guardianName.isEmpty()?28:18);guardianBack.setVisibility(s.guardianName.isEmpty()?View.GONE:View.VISIBLE);if(experimentalHome&&s.conversationRevision!=seenConversation){renderConversation(s.conversationJson);seenConversation=s.conversationRevision;}updateText(route,audioLabel(s));updateText(connection,active?"Voice connected":starting?"Connecting voice…":"Voice off");send.setEnabled(!s.typedSending);composer.setEnabled(!s.typedSending);
+  if(taskCard!=null)taskCard.render(s==null?"{\"current\":null}":s.taskStateJson,s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000),screenHostActive&&hasWindowFocus()&&launcherPager==null&&visualDetail==null);
+  if(s==null){task.setVisibility(View.GONE);return;}updateText(guardianName,s.guardianName.isEmpty()?"":s.guardianName+"’s Guardian");guardianName.setTextSize(s.guardianName.isEmpty()?28:18);guardianBack.setVisibility(s.guardianName.isEmpty()?View.GONE:View.VISIBLE);if(s.conversationRevision!=seenConversation){renderConversation(s.conversationJson);seenConversation=s.conversationRevision;}updateText(route,audioLabel(s));updateText(connection,active?"Voice connected":starting?"Connecting voice…":"Voice off");send.setEnabled(!s.typedSending);composer.setEnabled(!s.typedSending);
   if(s.typedFinished!=seenTypedFinished){seenTypedFinished=s.typedFinished;if(s.typedError.isEmpty()&&composer.getText().toString().trim().equals(s.typedLastSent)){composer.setText("");saveDraft();}}
   String progress=s.typedSending?"Sending…":!s.typedError.isEmpty()?s.typedError:s.task;task.setVisibility(s.typedSending||!s.typedError.isEmpty()?View.VISIBLE:View.GONE);updateText(task,progress);
  }
@@ -516,22 +639,83 @@ public class MainActivity extends Activity {
   endSlot.setVisibility(active||starting||ending?View.VISIBLE:View.GONE);end.setEnabled(!ending&&(active||starting));if(!ending){end.animate().cancel();end.setAlpha(1f);}
   updateText(end,"×");end.setContentDescription(ending?endingLabel:starting?"Cancel connection":"End session");
  }
- @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();handler.removeCallbacks(tick);handler.post(tick);}
+ @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;roseLaunch.reset();ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);CustomizationStore.register(this,customizationChanged);customizationChanged.run();handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onStop(){super.onStop();homeStopped=true;}
  /** The shown page survives recreation (HomePages.restore). */
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(launcherPager!=null)out.putInt("home-page",launcherPager.currentPage());}
- @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
- @Override public void onNewIntent(Intent i){super.onNewIntent(i);int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);showSettingsFor(i);}
+ @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();roseLaunch.reset();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);saveDraft();handler.removeCallbacks(tick);super.onPause();}
+ @Override public void onNewIntent(Intent i){super.onNewIntent(i);RoseConversationActivity.closeTask();int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);showSettingsFor(i);gestureContract(i,homeShown);}
+ /** Launcher3's gesture_nav_contract_v1 on a swipe Home from an app (GestureContract; #410 comments 6593674343,
+  * 6593742638): reply with the window rect of the closing app's tile on the page Home lands on, so the closing window
+  * springs into it. Fails closed at every step, and never changes the page, layout, voice, tasks or sessions:
+  * no reply unless this is MainActivity itself on SDK 35+, a HOME intent with Home not already showing, from the
+  * device's recents component as the platform names it (ComponentCaller; Launcher3 must share its identity), with an
+  * exact, well-formed v1 Bundle for this user, and a wholly visible tile. The reply is a RectF only, sent once. */
+ void gestureContract(Intent i,boolean homeShown){
+  if(Build.VERSION.SDK_INT<GestureContract.MIN_SDK)return;
+  try{
+   boolean homeIntent=Intent.ACTION_MAIN.equals(i.getAction())&&i.hasCategory(Intent.CATEGORY_HOME);
+   if(!GestureContract.entry(getClass()==MainActivity.class,Build.VERSION.SDK_INT,homeIntent,homeShown))return;
+   // Identity before any of the sender's extras is read; getCurrentCaller throws where per-intent callers are off.
+   android.app.ComponentCaller caller=getCurrentCaller();
+   if(caller==null||!GestureContract.caller(caller.getPackage(),caller.getUid(),recentsPackage()))return;
+   Bundle c=i.getBundleExtra(GestureContract.EXTRA);if(c==null||c.isEmpty()||!c.getBoolean(GestureContract.ENABLE,true))return;
+   ComponentName root=c.getParcelable(GestureContract.COMPONENT,ComponentName.class);
+   UserHandle user=c.getParcelable(GestureContract.USER,UserHandle.class);
+   Message callback=c.getParcelable(GestureContract.CALLBACK,Message.class);
+   if(root==null||user==null||callback==null||callback.replyTo==null||!(callback.obj instanceof ParcelUuid)||!android.os.Process.myUserHandle().equals(user))return;
+   String key=root.getPackageName()+"/"+root.getClassName();boolean inFolder=false;
+   for(ResolveInfo app:folderApps)if(componentKey(app).equals(key))inFolder=true;
+   final String tag=GestureContract.tag(root.getPackageName(),root.getClassName());final boolean folder=inFolder;
+   final Message reply=Message.obtain();reply.copyFrom(callback);final Messenger to=callback.replyTo;
+   final LauncherPager pager=launcherPager;if(pager==null)return;
+   // Once, after the landing page is laid out: at the next pre-draw, or never (no reply) if none comes within 500ms.
+   // The window's own observer (the decor stays attached), so the listener is always removed even if Home is rebuilt
+   // first; the send runs one message later, after that frame's measure callbacks, and not while they re-plan Home.
+   final View decor=getWindow().getDecorView();
+   final android.view.ViewTreeObserver.OnPreDrawListener[] once=new android.view.ViewTreeObserver.OnPreDrawListener[1];
+   once[0]=()->{decor.getViewTreeObserver().removeOnPreDrawListener(once[0]);handler.post(()->sendGestureReply(pager,tag,folder,reply,to));return true;};
+   decor.getViewTreeObserver().addOnPreDrawListener(once[0]);
+   handler.postDelayed(()->decor.getViewTreeObserver().removeOnPreDrawListener(once[0]),500);
+  }catch(RuntimeException unreadable){} // a malformed or unreadable contract is no contract
+ }
+ void sendGestureReply(LauncherPager pager,String tag,boolean inFolder,Message reply,Messenger to){
+  try{
+   if(pager!=launcherPager||replanPending||isFinishing())return; // a rebuilt or about-to-be-rebuilt Home: no target
+   View decor=getWindow().getDecorView();
+   android.graphics.RectF target=HomeGestureTarget.find(pager.getChildAt(pager.currentPage()),tag,inFolder,decor.getWidth(),decor.getHeight());
+   if(target==null)return;
+   Bundle data=new Bundle();data.putParcelable(GestureContract.ICON_POSITION,target);reply.setData(data);
+   to.send(reply);
+  }catch(RemoteException|RuntimeException lost){} // sent once or not at all; never retried, nothing logged
+ }
+ /** The package of the device's recents component (framework config_recentsComponentName), or null. */
+ static String recentsPackage(){
+  try{android.content.res.Resources r=android.content.res.Resources.getSystem();int id=r.getIdentifier("config_recentsComponentName","string","android");
+   return id==0?null:GestureContract.recentsPackage(r.getString(id));}catch(RuntimeException unavailable){return null;}
+ }
  /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
  String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
  /** An unchanged HOME or app-icon return keeps the built Home, pager, catalog, conversation page and draft (OS-HOME-REUSE-001). */
- boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,homeFrame!=null&&homeFrame.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null||screenDetail!=null,experimentalHome!=getPreferences(0).getBoolean("conversation-home",true));}
+ boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,homeFrame!=null&&homeFrame.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null,false);}
  /** The same snapshot RoseConversationActivity and AgentTrayService build: no service is inactive, never guessed. */
  static ConversationState conversationState(){VoiceService s=VoiceService.instance;return s==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);}
  /** Home's Rose entry: App's conversation surface (APP-P2-002-HOOK-001). Plain explicit Intent in this task, so Back
   * returns Home and HOME clears it; navigation only, never a voice or task command. */
  void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
+ final HomeRoseLaunch roseLaunch=new HomeRoseLaunch();
+ /** Home's Rose control (#410, app.js:183-201): the same plain explicit Intent as openRoseConversation, opened with the
+  * platform's clip-reveal from the control's rectangle when animations are on (the system runs and scales it), and one
+  * launch at a time (HomeRoseLaunch): a repeated or interrupted tap opens nothing extra. */
+ void openRoseFromHome(){
+  if(!roseLaunch.tap(SystemClock.uptimeMillis()))return;
+  Intent i=new Intent(this,RoseConversationActivity.class);View from=homeTray==null?null:homeTray.presence;
+  float scale=android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f);
+  if(from!=null&&from.isAttachedToWindow()&&from.getWidth()>0&&HomeRoseLaunch.animate(scale))
+   startActivity(i,ActivityOptions.makeClipRevealAnimation(from,0,0,from.getWidth(),from.getHeight()).toBundle());
+  else startActivity(i);
+ }
  // The tray's overview well: the system task overview through the owner-enabled phone-controls service only (HomeOverview).
  static boolean overviewAvailable(){return PhoneAccessibility.active!=null;}
  void openOverview(){HomeOverview.Result result=homeOverview.request(SystemClock.elapsedRealtime(),()->{PhoneAccessibility a=PhoneAccessibility.active;return a==null?null:a.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS);});String notice=HomeOverview.notice(result);if(notice!=null)Toast.makeText(this,notice,Toast.LENGTH_SHORT).show();if(result==HomeOverview.Result.REQUESTED)checkOverviewLater(homeOverview.token());}
@@ -544,42 +728,20 @@ public class MainActivity extends Activity {
   * They open over Home only on request, from the Home options or the conversation's Settings; Back or HOME closes
   * them. Nothing is reset: the same views and preferences as before. */
  static final String ACTION_SETTINGS="dev.pixel.voice.action.HOME_SETTINGS";
- void showVoiceControls(){voiceControls=true;attachVoiceControls();}
- void attachVoiceControls(){if(page==null)return;if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);page.setClickable(true);addContentView(page,new ViewGroup.LayoutParams(-1,-1));drawer=false;page.requestApplyInsets();refresh();}
- void closeVoiceControls(){voiceControls=false;drawer=true;if(page!=null&&page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);}
  /** The conversation's Settings opens the Home options over Home (the setup that used to sit on the voice page). */
- void showSettingsFor(Intent intent){if(intent!=null&&ACTION_SETTINGS.equals(intent.getAction())&&homeFrame!=null)homeFrame.post(()->{if(!isFinishing())homeOptions(homeFrame);});}
+ void showSettingsFor(Intent intent){if(intent!=null&&ACTION_SETTINGS.equals(intent.getAction()))getWindow().getDecorView().post(()->{if(!isFinishing()&&!isDestroyed())homeOptions(getWindow().getDecorView());});}
  /** HOME returning from an app or the conversation keeps the page left (previous); HOME on Home, or the app icon, shows Home (HomePages). */
- void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome){closeVoiceControls();closeSystemFolder();}if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
+ void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome)closeSystemFolder();if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
  void showHomeFor(Intent intent,boolean fresh){showHomeFor(intent,fresh,-1,true);}
  /** The tray's Rose from what VoiceService already publishes, once per refresh tick; hidden or paused stops its animation. */
- void refreshHomeRose(boolean shown){if(homeTray==null)return;VoiceService s=VoiceService.instance;ConversationState c=conversationState();homeTray.show(c,HomeRose.state(c,s==null?Float.NaN:s.trayInputLevel,s==null?Float.NaN:s.trayOutputLevel,s==null?0L:s.trayAudioObservedAt,SystemClock.elapsedRealtime(),HomeRose.reducedMotion(android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f)),shown));}
- @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(experimentalHome&&chatMode){chatMode=false;home();}else if(voiceControls)closeVoiceControls();else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
+ /** Rose's microphone-input mute as every surface shows it: the live call's own mute during a call, else the shared state. */
+ boolean roseMicShown(){ConversationState c=conversationState();return RoseMicInput.shown(c.active(),c.muted,RoseMicState.muted(this));}
+ /** Home's mic well: asks for the other state (recorded, and applied to a live call); never starts or ends voice. */
+ void toggleRoseMic(){RoseMicState.request(this,!roseMicShown());if(homeTray!=null)homeTray.applyMic(roseMicShown());}
+ void refreshHomeRose(boolean shown){if(homeTray==null)return;VoiceService s=VoiceService.instance;ConversationState c=conversationState();homeTray.show(c,HomeRose.state(c,s==null?Float.NaN:s.trayInputLevel,s==null?Float.NaN:s.trayOutputLevel,s==null?0L:s.trayAudioObservedAt,SystemClock.elapsedRealtime(),HomeRose.reducedMotion(android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f)),shown),RoseMicInput.shown(c.active(),c.muted,RoseMicState.muted(this)));}
+ @Override public void onBackPressed(){if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(chatMode){chatMode=false;home();}else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
 
- boolean macScreenEnabled(){return getPreferences(0).getBoolean("mac-screen-enabled",false);}
- void showMacCard(){
-  if(macPanel!=null)return;
-  visualSlot.removeAllViews();
-  macPanel=new MacScreenPanel(this,true,this::expandMacScreen,()->{if(screenDetail!=null)closeMacScreen();else{getPreferences(0).edit().putBoolean("mac-screen-enabled",false).apply();home();}});
-  macPanel.setBackground(shape(paper,24));macPanel.setClipToOutline(true);visualSlot.addView(macPanel,new FrameLayout.LayoutParams(-1,-2));visualSlot.setVisibility(View.VISIBLE);visualSlot.postDelayed(()->{if(micButton!=null)micButton.invalidate();if(state!=null)state.invalidate();},350);
-  if(screenHostActive)macPanel.resume();
- }
- void expandMacScreen(){
-  if(macPanel==null||screenDetail!=null)return;
-  visualSlot.removeView(macPanel);FrameLayout overlay=new FrameLayout(this);overlay.setBackground(new PlayfulTheme.World());overlay.setPadding(page.getPaddingLeft(),page.getPaddingTop(),page.getPaddingRight(),page.getPaddingBottom());
-  overlay.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(page.getPaddingLeft(),page.getPaddingTop(),page.getPaddingRight(),Math.max(page.getPaddingBottom(),i.getInsets(WindowInsets.Type.ime()).bottom));return i;});overlay.addView(macPanel,new FrameLayout.LayoutParams(-1,-1));macPanel.setCompact(false);addContentView(overlay,new ViewGroup.LayoutParams(-1,-1));screenDetail=overlay;page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
- }
- void closeMacScreen(){
-  if(screenDetail==null)return;
-  ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(macPanel.getWindowToken(),0);
-  screenDetail.removeView(macPanel);if(screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
-  macPanel.setCompact(true);visualSlot.addView(macPanel,new FrameLayout.LayoutParams(-1,-2));page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
- }
- void destroyMacScreen(){
-  if(macPanel!=null){macPanel.destroy();macPanel=null;}
-  if(screenDetail!=null&&screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
- }
- @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
+ @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}CustomizationStore.unregister(this,customizationChanged);handler.removeCallbacks(applyCustomization);super.onDestroy();}
  class MicControl extends View {
   final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);String label="Start";boolean listening;float targetLevel,displayLevel;long lastFrame;
   MicControl(){super(MainActivity.this);setClickable(true);setFocusable(true);setContentDescription("Start session");}

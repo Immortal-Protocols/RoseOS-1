@@ -4,6 +4,14 @@ Read README.md and the relevant current guide under docs/ before changes.
 `docs/upstream/` and `os/reference-scripts/` are historical context, not current
 run instructions or independent authorization. Follow the user's current scope.
 
+- Frankel, Mustang and Yogi must each use a separate builder VM and storage,
+  with separate queues and controller/STOP routing. Different runner labels or
+  output folders on the same host do not satisfy this requirement.
+- Mustang must never run on Frankel's builder, immortal-os-builder, again.
+  Historical routing/configuration is not authorization to reuse it. Keep
+  unbound dedicated routes blocked; provisioning, access changes and live
+  deletion need their own applicable authorization.
+
 - Preserve user changes. Inspect origin, HEAD and worktree before fetching or
   changing branches. Use isolated checkouts for simultaneous work.
 - `workspace/rose-agent/` contains the Android launcher and private backend.

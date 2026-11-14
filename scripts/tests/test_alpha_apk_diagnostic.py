@@ -17,6 +17,9 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import alpha_image  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 spec = importlib.util.spec_from_file_location('alpha_apk_diagnostic', SCRIPTS/'alpha-apk-diagnostic.py')
 diag = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(diag)
@@ -299,10 +302,10 @@ class SourceTest(unittest.TestCase):
 
 class WorkflowTest(unittest.TestCase):
     def job(self):
-        return WORKFLOW[WORKFLOW.index('  alpha-apk-diagnostic:'):WORKFLOW.index('  publisher:')]
+        return shape.jobs(WORKFLOW)['alpha-apk-diagnostic']  # exactly this job, not every job up to the publisher
 
     def test_the_mode_is_explicit_read_only_and_cleaned_up(self):
-        self.assertIn('emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe]', WORKFLOW)
+        self.assertIn('emulator-alpha-apk-diagnostic', shape.modes())
         job = self.job()
         self.assertIn("if: inputs.mode == 'emulator-alpha-apk-diagnostic'", job)
         self.assertIn('runs-on: [self-hosted, roseos-frankel-builder]', job)
@@ -313,7 +316,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('python3 scripts/alpha-apk-diagnostic.py run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" '
             '--run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --evidence-dir "$ROSE_BASE/evidence"', job)
         self.assertIn('if: always()\n        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"', job)
-        self.assertIn('alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]', WORKFLOW)  # the builder is always stopped afterwards
+        self.assertIn('alpha-apk-diagnostic', shape.cleanup_needs())  # the builder is always stopped afterwards
         guard = WORKFLOW[WORKFLOW.index('  guard:'):WORKFLOW.index('  controller:')]
         self.assertIn("if: inputs.mode == 'emulator-alpha-apk-diagnostic'\n        run: python3 scripts/emulator-alpha.py preflight --job guard", guard)
         # Promotion, resume, app publication and alpha recovery stay outside this mode (existing guard rules).

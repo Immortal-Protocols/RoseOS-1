@@ -60,7 +60,7 @@ function world(){
   closeWorkspace:async()=>{const s=await (backgroundPhone.endForStop?backgroundPhone.endForStop(taskStop.current?.()??null):backgroundPhone.close());if(s?.status==='cleanup_failed')throw Error('cleanup_failed');}});
  const responses=[];
  const context=vm.createContext({taskStop,backgroundEnabled:true,backgroundPhone,crypto,setImmediate,Date,Error,checkPausedApp:()=>{},
-  AsyncLocalStorage,Object,Set,peerIdentity:req=>req?.peer??null,birdPaused:false,
+  AsyncLocalStorage,Object,Set,peerIdentity:req=>req?.peer??null,deviceAuth:{paired:req=>!!req?.peer},birdPaused:false,
   autoGenerator:{active:false},visualTrial:false,busy:true,genericUiActions:new Set(),visualGuard:{},measurePhone:()=>{},
   phone:{create:c=>({id:'c'+Math.random(),action:c.action,status:'pending'}),complete:()=>{},get:()=>({status:'pending'})},
   phonePush:{publish:()=>{}},rawVisualCaptures:new Map(),decisionsConfig:{read:()=>({enabled:false})},

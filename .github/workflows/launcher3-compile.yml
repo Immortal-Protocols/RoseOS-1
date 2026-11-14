@@ -1,0 +1,153 @@
+name: Launcher3 compile (independent harness)
+run-name: launcher3-compile ${{ github.run_id }}
+
+# 1E: the standalone Launcher3 compile harness on its own capacity, never a release builder
+# (docs/LAUNCHER3-INDEPENDENT-HANDOFF.md, docs/OS-RELEASE.md "Launcher3 compile harness"). Manual dispatch from main
+# only, attempt 1 only; no schedule or other trigger. Its binding, os/build-only/launcher3-compile-lane.json, is
+# source-bound for verifyIntegrated. This workflow does not gate any OTA or release workflow. Every job checks out this
+# run's own commit. The worker's runner, the VM and the controller identity all come from that one reviewed,
+# Infra-evidenced binding; nothing here names a host. A passing compile report is not a build, signature, install or
+# release. Runtime is not approved.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # The harness's own queue (the bound lane.queue must equal it): never os-release-frankel, yogi-ota or an Agent queue.
+  # queue: max keeps waiting runs in order up to GitHub's limit of 100 pending runs (a run past it can still be
+  # dropped); cancel-in-progress is off, so a running compile is never cancelled by a newer dispatch.
+  group: launcher3-compile
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      outer_seconds: ${{ steps.bounds.outputs.outer_seconds }}
+      finish_seconds: ${{ steps.bounds.outputs.finish_seconds }}
+      job_minutes: ${{ steps.bounds.outputs.job_minutes }}
+      runs_on: ${{ steps.lane.outputs.runs_on }}
+    steps:
+      - name: Main only, attempt 1 only
+        run: |
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main && "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo "::error::launcher3-compile runs once, dispatched from main"; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # The pinned contract, the committed binding (an unbound input exits 4) and the bounds; reads no host path.
+      - name: Contract, binding and bounds
+        id: bounds
+        run: python3 scripts/launcher3-compile.py check >> "$GITHUB_OUTPUT"
+      # The validated binding's runner, queue and controller variables, admitted only for this workflow's own routing.
+      - name: Dedicated lane routing
+        id: lane
+        run: python3 scripts/launcher3-routing.py guard >> "$GITHUB_OUTPUT"
+
+  controller:
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # The harness's own controller identity and provider; never a release, Yogi or Mustang one.
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.LAUNCHER3_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: python3 scripts/actions-gcp-login.py login "$LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT"
+      # The ownership record is written and synced before the start request; an existing record is never retried.
+      - name: Start the dedicated VM, ownership first
+        run: python3 scripts/launcher3_controller.py start --ownership-record "$RUNNER_TEMP/launcher3-ownership.json"
+      - name: Ownership record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: launcher3-ownership-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/launcher3-ownership.json
+          retention-days: 7
+          if-no-files-found: warn
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+
+  worker:
+    # LAUNCHER3-COMPILE on the dedicated runner only. One bounded command (scripts/launcher3-compile.py run) holds the
+    # lane's nonblocking lock for its whole run, byte-copies the bound source tree read-only into a new run root under
+    # the binding's taskParent, checks the copy for the bound branch and only then runs a contained
+    # `m -j8 Launcher3QuickStepLib`; the adapter re-checks the exact main workflow, commit, run, attempt and RUNNER_NAME.
+    # The run step execs timeout, so a cancel reaches it and it forwards the signal. finish always runs and uploads only
+    # report.json, classification.json and cleanup.json (7 days; never a log, the tree or outputs), and removes only this
+    # run's tree, out, home and tmp. contents: read only: no OIDC token, controller, signer, secret, signing, packaging,
+    # install, phone action or publication.
+    needs: [guard, controller]
+    runs-on: ${{ fromJSON(needs.guard.outputs.runs_on) }}
+    timeout-minutes: ${{ fromJSON(needs.guard.outputs.job_minutes || '1') }}
+    permissions:
+      contents: read
+    env:
+      OUTER_SECONDS: ${{ needs.guard.outputs.outer_seconds }}
+      FINISH_SECONDS: ${{ needs.guard.outputs.finish_seconds }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Recheck the contract, binding and bounds on the worker
+        run: |
+          set -euo pipefail
+          [[ "$OUTER_SECONDS" =~ ^[1-9][0-9]{0,5}$ && "$FINISH_SECONDS" =~ ^[1-9][0-9]{0,4}$ ]]
+          python3 scripts/launcher3-compile.py check > "$RUNNER_TEMP/launcher3-check.txt"
+          grep -qx "outer_seconds=$OUTER_SECONDS" "$RUNNER_TEMP/launcher3-check.txt"
+          grep -qx "finish_seconds=$FINISH_SECONDS" "$RUNNER_TEMP/launcher3-check.txt"
+      - name: Compile (bounded, under the lane lock)
+        run: exec timeout --kill-after=30s "${OUTER_SECONDS}s" python3 scripts/launcher3-compile.py run --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Allowlisted reports and this run's cleanup
+        if: always()
+        run: timeout --kill-after=30s "${FINISH_SECONDS}s" python3 scripts/launcher3-compile.py finish --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/launcher3-compile-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Reports artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: launcher3-compile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/launcher3-compile-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+
+  cleanup:
+    # Stops only a VM this run's controller started, from this run's own ownership record. A missing, foreign, changed
+    # or malformed record refuses STOP; a VM already running when start was requested is left running. Never the plain
+    # stop-builder and never the release builder.
+    needs: [guard, controller, worker]
+    if: always() && needs.controller.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.LAUNCHER3_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: This run's ownership record only
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: launcher3-ownership-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/launcher3-ownership
+      - run: python3 scripts/actions-gcp-login.py login "$LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT"
+      - name: Stop only a VM this run started
+        run: python3 scripts/launcher3_controller.py stop --ownership-record "$RUNNER_TEMP/launcher3-ownership/launcher3-ownership.json"
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout

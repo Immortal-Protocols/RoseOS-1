@@ -16,6 +16,9 @@ import textwrap
 import unittest
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 PY = sys.executable
@@ -1447,8 +1450,13 @@ class WorkflowAlphaTest(unittest.TestCase):
             "        run: python3 scripts/emulator-alpha.py preflight --job guard\n", guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         self.assertIn('    needs: guard\n', self.jobs['controller'])
-        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, rango-factory-observe, blazer-prep, rango-factory-package, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
-        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
+        # cleanup still waits for every job that may hold the builder (other devices' jobs may follow these)
+        self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'rango-builder',
+                              'rango-publisher', 'rango-factory-observe', 'blazer-prep', 'rango-factory-package',
+                              'rango-factory-inspect', 'blazer-compile', 'blazer-integrate', 'app-builder',
+                              'alpha-builder', 'alpha-successor', 'alpha-apk-diagnostic', 'alpha-verify-retained', 'alpha-export',
+                              'app-reuse', 'request-signing', 'signed-builder', 'publisher'}, set(shape.cleanup_needs()))
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", self.jobs['builder'])
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
 
     def test_successor_mode_is_isolated_and_runs_exactly_the_bound_sequence(self):
@@ -1473,7 +1481,8 @@ class WorkflowAlphaTest(unittest.TestCase):
         self.assertIn('          name: emulator-alpha-successor-${{ github.run_id }}\n          path: ${{ env.ROSE_BASE }}/evidence\n', job)
         self.assertIn("      - name: Remove the attempt directory (the successor and probe receipts stay beside the predecessor)\n        if: always()\n", job)
         # No other job runs in this mode: each builder job is bound to its own mode, the publishers to theirs.
-        for name, mode in (('builder', "os-release' || inputs.mode == 'latest-beta"), ('app-builder', 'app-only'), ('alpha-builder', 'emulator-alpha')):
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", self.jobs['builder'])
+        for name, mode in (('app-builder', 'app-only'), ('alpha-builder', 'emulator-alpha')):
             self.assertIn(f"    if: inputs.mode == '{mode}'\n", self.jobs[name])
         self.assertIn("      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success' && needs.app-builder.outputs.app_skip != 'true') ||\n"
             "      (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))\n", self.jobs['app-publisher'])

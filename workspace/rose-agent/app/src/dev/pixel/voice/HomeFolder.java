@@ -1,7 +1,6 @@
 package dev.pixel.voice;
 
 import android.content.Context;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
@@ -32,7 +31,7 @@ final class HomeFolder extends FrameLayout {
   super(context);
   float density = context.getResources().getDisplayMetrics().density;
   scrim = new View(context);
-  scrim.setBackgroundColor(SCRIM);
+  scrim.setBackgroundColor(RoseThemeNow.c(SCRIM));
   scrim.setContentDescription("Close " + name);
   scrim.setOnClickListener(v -> close.run());
   addView(scrim, new LayoutParams(-1, -1));
@@ -40,9 +39,9 @@ final class HomeFolder extends FrameLayout {
   panel = new LinearLayout(context);
   panel.setOrientation(LinearLayout.VERTICAL);
   GradientDrawable surface = new GradientDrawable();
-  surface.setColor(PANEL);
+  surface.setColor(RoseThemeNow.c(PANEL));
   surface.setCornerRadius(RADIUS_DP * density);
-  surface.setStroke(Math.max(1, Math.round(density)), PANEL_RING);
+  surface.setStroke(Math.max(1, Math.round(density)), RoseThemeNow.c(PANEL_RING));
   panel.setBackground(surface);
   panel.setElevation(12 * density);
   int pad = HomeAppTile.dp(density, PANEL_PAD_DP);
@@ -53,8 +52,8 @@ final class HomeFolder extends FrameLayout {
   title = new TextView(context);
   title.setText(name);
   title.setTextSize(17f);
-  title.setTextColor(HomeGlyph.CREAM);
-  title.setTypeface(Typeface.create(Typeface.SANS_SERIF, 500, false));
+  title.setTextColor(RoseThemeNow.c(HomeGlyph.CREAM));
+  title.setTypeface(CustomizationVisuals.labelTypeface(context, 500)); // 1O font choice; default SANS_SERIF 500
   title.setGravity(Gravity.CENTER);
   title.setAccessibilityHeading(true);
   LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-1, -2);

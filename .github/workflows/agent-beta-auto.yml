@@ -4,6 +4,7 @@ name: Agent Beta auto-release
 # existing os-release.yml app-only route once for that exact tested SHA with apps=auto (scripts/agent-beta-auto.py).
 # Secret-free: only the job's short-lived GITHUB_TOKEN (actions:write, contents:read). Inert unless the repository variable
 # AGENT_BETA_AUTO is 'on'. Releases are serialized with every OS run by os-release's FIFO queue and host lock.
+# TEMPORARILY HELD in source (2026-11-04), whatever the variable says: see the dispatch job's `if:`.
 
 on:
   workflow_run:
@@ -20,7 +21,12 @@ concurrency:
 
 jobs:
   dispatch:
-    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    # TEMPORARY HOLD (owner-approved, 2026-11-04): automatic Agent Beta dispatch is paused here, in source, while the
+    # shared builder's storage is recovered; the AGENT_BETA_AUTO variable is left as it is. The literal `false &&` keeps
+    # this job from starting, so nothing is checked out and no dispatch request is sent, whatever the variable says.
+    # Manual os-release dispatches (app-only, Frankel, Mustang) never use this workflow. Resuming is an explicit,
+    # reviewed change: delete `false && ` below and the hold test in scripts/tests/test_agent_beta_auto.py.
+    if: false && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

@@ -1,0 +1,7 @@
+/.idea/
+/dist/
+!/dl/
+/dl/*
+!/dl/.find-ignore
+/lib/
+/node_modules/

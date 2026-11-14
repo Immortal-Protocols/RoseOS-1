@@ -1,0 +1,1 @@
+package android.content; public class Intent { public static final String ACTION_SCREEN_OFF = "android.intent.action.SCREEN_OFF"; public Intent setComponent(ComponentName c) { return this; } public String getAction() { return null; } public ComponentName getComponent() { return null; } }

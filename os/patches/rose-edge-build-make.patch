@@ -1,0 +1,11 @@
+diff --git a/target/product/handheld_system.mk b/target/product/handheld_system.mk
+index 029bdd6..0e1437c 100644
+--- a/target/product/handheld_system.mk
++++ b/target/product/handheld_system.mk
+@@ -131,3 +131,6 @@ PRODUCT_VENDOR_PROPERTIES += \
+     ro.carrier?=unknown \
+     ro.config.notification_sound?=OnTheHunt.ogg \
+     ro.config.alarm_alert?=Alarm_Classic.ogg
++
++# Rose raised edge (#410): Launcher3's short-swipe edge and WMShell's real app resize; default off without this.
++PRODUCT_SYSTEM_PROPERTIES += persist.wm.debug.rose_edge=true

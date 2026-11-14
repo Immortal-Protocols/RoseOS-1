@@ -6,16 +6,18 @@
   factory-package.py classify ARCHIVE --flavor F [evidence...]
   factory-package.py package  ARCHIVE --flavor F --out NEW_DIR [evidence...]
 evidence: --target-files TF --target-files-observation OBS.json --firmware-observation FW.json
-          --otatools ZIP --otatools-sha256 H [--ssh-keygen PATH] [--work-dir DIR] [--max-work-bytes N]
+          --otatools ZIP --otatools-sha256 H [--ssh-keygen PATH] [--work-dir DIR] [--max-work-bytes N] [--signature ABS.sig]
           [--build B] [--avb-public-key-sha256 H] [--first-use-binding FIRST_USE.json]
 
-F is os/flavors/F.json (frankel or rango), cross-checked against os/devices/pixel10.json and the pinned adevtool
+F is os/flavors/F.json (frankel, rango or blazer), cross-checked against os/devices/pixel10.json and the pinned adevtool
 android-info.txt on every load. ARCHIVE is any candidate: an OTA, a target-files, an img zip, or the factory install
 archive {device}-install-{build}.zip that generate-release.sh produces with fastboot optimize-factory-image. Only the
 last can be factory-ready. Three separate tiers are reported:
 
 structurallyComplete  ZIP members safe, unique, link-free with valid CRCs; android-info.txt and exactly the matching
-                      bootloader-/radio- images and the VENDOR/firmware/dauntless/ GSC files the pinned generator copies
+                      bootloader-/radio- images (named with the ASCII-lowercased version, as the pinned release script
+                      writes them; android-info.txt versions stay case-sensitive) and the VENDOR/firmware/dauntless/
+                      GSC files the pinned generator copies
                       (device_common 1f5ba267 fixture), byte-equal to the target-files, and no other member; every non-dynamic A/B partition either an IMAGES/ image present
                       byte-equal or listed as carried by the bootloader/radio image in a firmware observation bound to
                       those images' sha256 (never inferred from absence); contiguous sparse super_N.img segments for
@@ -24,11 +26,13 @@ contentVerified       the super segments rebuilt with simg2img and unpacked with
                       otatools archive (never from the candidate) in a bounded job-owned directory that is removed on
                       success and failure; the unpacked dynamic partition set and every logical image byte-equal to the
                       signed target-files, which matches the release-delivered names-only observation.
-signatureVerified     ARCHIVE.sig verified by ssh-keygen -Y verify against the flavor's pinned factory-signing principal,
-                      public key and namespace "factory images" (generate-release.sh). Never an adjacent key; presence
+signatureVerified     ARCHIVE.sig, or --signature ABS.sig (e.g. Signing's own output root), read once no-follow and
+                      verified by ssh-keygen -Y verify against the flavor's pinned factory-signing principal, public
+                      key and namespace "factory images" (generate-release.sh), over the archive streamed no-follow
+                      and re-hashed to the classified sha256. Never an adjacent key; presence
                       alone is nothing. AVB key equality is a separate check.
 factoryReady = all three with no missing input or problem. It is still not relock safety, first boot or phone acceptance.
-package copies a factory-ready ARCHIVE and ARCHIVE.sig into NEW_DIR with factory-package.json binding the archive,
+package copies a factory-ready ARCHIVE and its verified signature (as ARCHIVE.sig) into NEW_DIR with factory-package.json binding the archive,
 signed target-files, tool identities and observed inventory. observe writes the names-only target-files observation
 (no image bytes) that the release owner delivers through its normal receipt path.
 Exit status: 0 ready / packaged / observed / contract valid, 3 refused (the JSON names every missing input and
@@ -47,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from release_receipts import sha256_file  # noqa: E402
@@ -61,6 +66,19 @@ MAGIC = {'boot': b'ANDROID!', 'init_boot': b'ANDROID!', 'vendor_boot': b'VNDRBOO
 VBMETA_MAGIC = b'AVB0'
 SPARSE_MAGIC = b'\x3a\xff\x26\xed'
 SUPER = re.compile(r'super_(\d+)\.img')
+# The pinned generate-release.sh (permission-apex fixture, lines 50-52) names the firmware members from
+# `get_radio_image`: `grep "require version-$1" OTA/android-info.txt | cut -d '=' -f 2 | tr '[:upper:]' '[:lower:]'`, and
+# the device_common generator copies them as bootloader-$DEVICE-$BOOTLOADER.img / radio-$DEVICE-$RADIO.img. tr in the C
+# locale lowers ASCII A-Z only. android-info.txt itself keeps the raw, case-sensitive version.
+RADIO_IMAGE_FUNCTION = re.compile(r'get_radio_image\(\) \{\n(.*?)\n\}', re.S)
+PRODUCER_LOWER = "tr '[:upper:]' '[:lower:]'"
+ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+# android-info.zip as the pinned fastboot.cpp 322ff512 FlashAllTool::CheckRequirements (lines 1882-1900) writes it:
+# exactly fastboot-info.txt ("version 1\n", line 1885) then android-info.txt (the captured android-info.txt bytes).
+ANDROID_INFO_ZIP_ENTRIES = ('fastboot-info.txt', 'android-info.txt')
+FASTBOOT_INFO = b'version 1\n'
+ANDROID_INFO_ZIP_MAX_BYTES = 1 << 20
+ANDROID_INFO_ENTRY_MAX_BYTES = 64 << 10
 HEX64 = re.compile(r'[0-9a-f]{64}')
 OBSERVED_PREFIXES = ('META/', 'IMAGES/', 'RADIO/', 'OTA/', 'VENDOR/firmware/')
 TOOLS = ('bin/simg2img', 'bin/lpunpack')
@@ -71,6 +89,13 @@ TARGET_READ = OBSERVED_PREFIXES + ('SYSTEM/build.prop',)
 LINK_TEXT_BYTES = 4095
 DEFAULT_MAX_WORK = 64 << 30
 TOOL_TIMEOUT = 3600
+
+def producer_version(value):
+    """A firmware version as the pinned release script writes it into member names (ASCII lowercase)."""
+    return value.translate(ASCII_LOWER)
+
+def member_versions(flavor):
+    return {k: producer_version(flavor['firmware'][k]) for k in ('bootloader', 'baseband')}
 
 class ContractError(Exception):
     pass
@@ -124,6 +149,8 @@ def load_flavor(name, root=ROOT):
     signing = flavor['factorySigning']
     checks['factorySigning.namespace'] = (signing['namespace'], NAMESPACE)
     checks['releaseScript namespace'] = (f'ssh-keygen -Y sign -n "{NAMESPACE}"'.encode() in script_bytes, True)
+    radio = RADIO_IMAGE_FUNCTION.search(script_bytes.decode(errors='replace'))
+    checks['releaseScript lowercases firmware member versions'] = (bool(radio) and PRODUCER_LOWER in radio.group(1), True)
     factory = flavor['artifacts']['factory']
     if pinned_layout(flavor):
         check_generator_layout(name, flavor, script_bytes, root, checks)
@@ -138,6 +165,7 @@ def load_flavor(name, root=ROOT):
         raise ContractError(f'{name}: install-mode declarations must be factory wipe+unlock, OTA no wipe')
     check_peer_identities(name, pinned_avb_key(flavor, root), root)
     check_readiness(name, flavor)
+    check_first_install(name, flavor, root)
     check_historical(name, flavor, root)
     return flavor
 
@@ -199,6 +227,50 @@ def check_historical(name, flavor, root):
         if type(limits) is not list or not limits or any(type(x) is not str or not x.strip() for x in limits):
             raise ContractError(f'{name}: {where}.doesNotEstablish must list what the observation does not establish')
         walk(entry, where)
+
+FIRST_INSTALL_KEYS = {'product', 'fastbootMinVersion', 'fastbootMinVersionFrom', 'requiresUnlockedBootloader', 'erasesUserData',
+                      'flashes', 'checkRequirements', 'avbCustomKey', 'otaContinuity', 'relockClaimedSafe', 'ownerSteps', 'basis'}
+
+def check_first_install(name, flavor, root):
+    """The optional first-install requirements: every value re-derived from the contract's own pinned sources (the
+    generator fixture's minimum fastboot, the factory install-mode declarations, the firmware pins, android-info and the
+    OTA certificate pointer), so a requirement can never drift from what the archive actually does. Relock is never
+    claimed safe."""
+    if 'firstInstall' not in flavor:
+        return
+    first, device, factory = flavor['firstInstall'], flavor['device']['codename'], flavor['artifacts']['factory']
+    if not isinstance(first, dict) or set(first) != FIRST_INSTALL_KEYS:
+        raise ContractError(f'{name}: firstInstall must have exactly {sorted(FIRST_INSTALL_KEYS)}')
+    generator = flavor['inventory']['generatorFixture']
+    text = (root/generator['fixture']/'generate-factory-images-common.sh').read_text()
+    minimum = re.search(r'^MIN_FASTBOOT_VERSION_STR="([0-9.]+)"$', text, re.M)
+    info = android_info((root/flavor['provenance']['androidInfoFixture']).read_text())
+    checks = {
+        'product': (first['product'], device),
+        'fastbootMinVersion': (first['fastbootMinVersion'], minimum.group(1) if minimum else None),
+        'fastbootMinVersionFrom': (first['fastbootMinVersionFrom'],
+                                   f'{generator["fixture"]}/generate-factory-images-common.sh MIN_FASTBOOT_VERSION_STR'),
+        'requiresUnlockedBootloader': (first['requiresUnlockedBootloader'], factory['requiresUnlockedBootloader']),
+        'erasesUserData': (first['erasesUserData'], factory['dataWipe']),
+        'flashes': (first['flashes'], {'bootloader': flavor['firmware']['bootloader'], 'bootloaderSlots': 'both',
+                                       'radio': flavor['firmware']['baseband']}),
+        'checkRequirements': (first['checkRequirements'], {'board': info.get('board'), 'partitionExists': info.get('partition-exists'),
+                                                           'versionBootloader': info.get('version-bootloader'),
+                                                           'versionBaseband': info.get('version-baseband')}),
+        'avbCustomKey': (first['avbCustomKey'], {'file': 'avb_pkmd.bin', 'sha256From': flavor['identity'].get('avbPublicKeySha256From')
+                                                 or 'identity.avbPublicKeySha256'}),
+        'otaContinuity.otaCertificateSha256From': ((first['otaContinuity'] or {}).get('otaCertificateSha256From'),
+                                                  flavor['identity'].get('otaCertificateSha256From')),
+        'relockClaimedSafe': (first['relockClaimedSafe'], False),
+        'ownerSteps': (isinstance(first['ownerSteps'], list) and bool(first['ownerSteps'])
+                       and all(isinstance(x, str) and x for x in first['ownerSteps']), True),
+    }
+    drift = [key for key, (have, want) in checks.items() if have != want]
+    if drift:
+        raise ContractError(f'{name}: firstInstall disagrees with its sources: {", ".join(drift)}')
+    if resolve_sha256_pointer(first['otaContinuity']['otaCertificateSha256From'], root,
+                              f'{name}: firstInstall.otaContinuity.otaCertificateSha256From') is None:
+        raise ContractError(f'{name}: firstInstall.otaContinuity needs a resolvable OTA certificate pin')
 
 def check_readiness(name, flavor):
     """The optional readiness declaration: strict booleans and a list of receipt references. Source cannot carry a
@@ -542,7 +614,7 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
     if not pinned_layout(flavor):
         result['missing'].append(f'contract:{flavor["flavor"]} pinned generator layout (artifacts.factory.generatorMembers '
                                  'anchored in the device_common 1f5ba267 fixture)')
-    expand = lambda s: s.format(device=device, build=build, **{k: flavor['firmware'][k] for k in ('bootloader', 'baseband')})
+    expand = lambda s: s.format(device=device, build=build, **member_versions(flavor))  # member names, as produced
     required = [expand(m) for m in factory['requiredMembers']]
     result['missing'] += [f'factory:{m}' for m in required if m not in files]
     if 'android-info.txt' in files:
@@ -632,23 +704,42 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
         'virtualAb': inventory['virtualAb'], 'withoutImage': inventory['withoutImage'], 'notFlashedByFastboot': not_flashed,
         'images': sorted(expected), 'sparseImages': sorted(sparse_members), 'gscFirmware': sorted(gsc), 'superSegments': len(supers)})
 
+def android_info_zip_problem(archive, files):
+    """Why android-info.zip is not the pinned capture, or None: exactly fastboot-info.txt then android-info.txt, plain
+    unencrypted entries within the size caps, fastboot-info.txt exactly FASTBOOT_INFO and android-info.txt byte-equal to
+    the archive's android-info.txt. Sizes are checked from the headers before any entry is read."""
+    if archive.getinfo(files['android-info.zip']).file_size > ANDROID_INFO_ZIP_MAX_BYTES:
+        return f'is larger than {ANDROID_INFO_ZIP_MAX_BYTES} bytes'
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive.read(files['android-info.zip']))) as inner:
+            entries = inner.infolist()
+            if tuple(e.filename for e in entries) != ANDROID_INFO_ZIP_ENTRIES:
+                return f'holds {[e.filename for e in entries]}, not exactly {list(ANDROID_INFO_ZIP_ENTRIES)}'
+            for entry in entries:
+                if entry.flag_bits & 0x1:
+                    return f'entry {entry.filename} is encrypted'
+                if entry.file_size > ANDROID_INFO_ENTRY_MAX_BYTES:
+                    return f'entry {entry.filename} is larger than {ANDROID_INFO_ENTRY_MAX_BYTES} bytes'
+            if inner.read('fastboot-info.txt') != FASTBOOT_INFO:
+                return f'fastboot-info.txt is not exactly {FASTBOOT_INFO!r}'
+            if inner.read('android-info.txt') != archive.read(files['android-info.txt']):
+                return 'android-info.txt is not exactly the archive android-info.txt'
+    except (zipfile.BadZipFile, zlib.error, OSError, KeyError, RuntimeError, NotImplementedError, EOFError):
+        return 'is not a readable zip'
+    return None
+
 def check_install_scripts(archive, files, flavor, build, supers, result):
-    """The FlashCapturer output (pinned optimize-factory-image excerpt): android-info.zip holds exactly the
-    android-info.txt, and script.txt carries the product/slot/max-download-size checks, the two other-slot bootloader
-    flashes, check-requirements and one `flash super super_N.img` per segment, and names only archive members."""
+    """The FlashCapturer output (pinned optimize-factory-image excerpt): android-info.zip is the pinned capture
+    (fastboot-info.txt then android-info.txt, android_info_zip_problem), and script.txt carries the
+    product/slot/max-download-size checks, the two other-slot bootloader flashes, check-requirements and one
+    `flash super super_N.img` per segment, and names only archive members."""
     factory, device = flavor['artifacts']['factory'], flavor['device']['codename']
     checks = factory['scriptChecks']
-    fields = dict(device=device, build=build, maxDownloadSize=checks['maxDownloadSize'],
-                  **{k: flavor['firmware'][k] for k in ('bootloader', 'baseband')})
+    fields = dict(device=device, build=build, maxDownloadSize=checks['maxDownloadSize'], **member_versions(flavor))
     if 'android-info.zip' in files and 'android-info.txt' in files:
-        try:
-            with zipfile.ZipFile(io.BytesIO(archive.read(files['android-info.zip']))) as inner:
-                same = inner.namelist() == ['android-info.txt'] and \
-                    inner.read('android-info.txt') == archive.read(files['android-info.txt'])
-        except (zipfile.BadZipFile, OSError, KeyError):
-            same = False
-        if not same:
-            result['problems'].append('install-script:android-info.zip is not exactly the archive android-info.txt')
+        problem = android_info_zip_problem(archive, files)
+        if problem:
+            result['problems'].append(f'install-script:android-info.zip {problem}')
     if 'script.txt' not in files:
         return
     lines = [line.strip() for line in archive.read(files['script.txt']).decode(errors='replace').splitlines()]
@@ -832,16 +923,75 @@ def verify_content(archive_path, target_files, inventory_dynamic, super_members,
     finally:
         shutil.rmtree(job, ignore_errors=True)
 
-def verify_signature(path, flavor, ssh_keygen, work_dir, result):
-    """ssh-keygen -Y verify against the contract's pinned principal and key, namespace "factory images"."""
+SIGNATURE_MAX_BYTES = 65536
+NO_FOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+def signature_path(path, signature):
+    """The detached signature: the sibling ARCHIVE.sig by default, or an explicit absolute --signature PATH (e.g. a new
+    output root that holds only the signature); ContractError for a relative or .. path."""
+    if signature is None:
+        return Path(str(path) + '.sig'), 'sibling'
+    sig = Path(signature)
+    if not sig.is_absolute() or '..' in sig.parts:
+        raise ContractError('--signature must be an absolute path without ..')
+    return sig, 'explicit'
+
+def read_signature(sig):
+    """The signature's exact bytes from one O_NOFOLLOW descriptor (regular, at most SIGNATURE_MAX_BYTES); None if it is
+    absent, a link or not a regular file."""
+    try:
+        fd = os.open(sig, NO_FOLLOW)
+    except OSError:
+        return None
+    try:
+        if not statmod.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, SIGNATURE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    return data if 0 < len(data) <= SIGNATURE_MAX_BYTES else None
+
+def verify_streamed(tool, signers, principal, sig_copy, path, timeout=600):
+    """(returncode, sha256 of exactly the archive bytes ssh-keygen read): the archive is opened O_NOFOLLOW and streamed
+    to ssh-keygen -Y verify through a pipe while it is hashed, so the verdict binds to those bytes."""
+    fd = os.open(path, NO_FOLLOW)
+    digest, complete = hashlib.sha256(), True
+    try:
+        proc = subprocess.Popen([str(tool), '-Y', 'verify', '-f', str(signers), '-I', principal, '-n', NAMESPACE,
+                                 '-s', str(sig_copy)], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        try:
+            while True:
+                block = os.read(fd, 1 << 20)
+                if not block:
+                    break
+                digest.update(block)
+                proc.stdin.write(block)
+        except BrokenPipeError:
+            complete = False  # the verifier stopped reading; its exit status decides, the digest binds nothing
+        finally:
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                complete = False
+        returncode = proc.wait(timeout=timeout)
+    finally:
+        os.close(fd)
+    return returncode, digest.hexdigest() if complete else None
+
+def verify_signature(path, flavor, ssh_keygen, work_dir, result, signature=None):
+    """ssh-keygen -Y verify against the contract's pinned principal and key, namespace "factory images", of exactly the
+    signature bytes read once (no-follow) and exactly the archive bytes classified (streamed and re-hashed)."""
     signing, device = flavor['factorySigning'], flavor['device']['codename']
-    sig = Path(str(path) + '.sig')
-    result['signature'] = {'file': sig.name, 'namespace': NAMESPACE, 'principal': signing['principal']}
+    sig, source = signature_path(path, signature)
+    result['signature'] = {'file': sig.name, 'path': str(sig), 'source': source, 'namespace': NAMESPACE,
+                           'principal': signing['principal']}
     if signing['publicKey'] is None:
         result['missing'].append(f'factory-signing identity: pinned principal and ssh-ed25519 public key for {device}, '
                                  f'namespace "{NAMESPACE}" ({signing["owner"]}; never generated here)')
         return False
-    if sig.is_symlink() or not sig.is_file():
+    data = read_signature(sig)
+    if data is None:
         result['missing'].append(f'factory:{sig.name} (detached signature)')
         return False
     tool = ssh_keygen or shutil.which('ssh-keygen')
@@ -850,19 +1000,21 @@ def verify_signature(path, flavor, ssh_keygen, work_dir, result):
         return False
     result['signature']['verifier'] = {'path': str(tool), 'sha256': sha256_file(tool)}
     with tempfile.TemporaryDirectory(prefix='factory-signers-', dir=work_dir) as job:
-        signers = Path(job)/'allowed_signers'
+        signers, copy = Path(job)/'allowed_signers', Path(job)/'archive.sig'
         signers.write_text(f'{signing["principal"]} namespaces="{NAMESPACE}" {signing["publicKey"]}\n')
-        with open(path, 'rb') as stream:
-            try:
-                done = subprocess.run([str(tool), '-Y', 'verify', '-f', str(signers), '-I', signing['principal'],
-                                       '-n', NAMESPACE, '-s', str(sig)], stdin=stream, capture_output=True, timeout=600)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                result['problems'].append(f'signature-invalid:verifier {type(error).__name__}')
-                return False
-    if done.returncode:
+        copy.write_bytes(data)
+        try:
+            returncode, streamed = verify_streamed(tool, signers, signing['principal'], copy, path)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result['problems'].append(f'signature-invalid:verifier {type(error).__name__}')
+            return False
+    if returncode:
         result['problems'].append('signature-invalid:ssh-keygen -Y verify refused the detached signature')
         return False
-    result['signature']['sha256'] = sha256_file(sig)
+    if streamed != result.get('sha256'):
+        result['problems'].append('identity-mismatch:the archive bytes verified differ from the bytes classified')
+        return False
+    result['signature']['sha256'] = hashlib.sha256(data).hexdigest()
     return True
 
 def resolve_avb_key(flavor, avb_key, first_use_binding, root, result):
@@ -881,7 +1033,7 @@ def resolve_avb_key(flavor, avb_key, first_use_binding, root, result):
 
 def classify(path, flavor_name, target_files=None, build=None, avb_key=None, root=ROOT, *, target_files_observation=None,
              firmware_observation=None, otatools=None, otatools_sha256=None, ssh_keygen=None, first_use_binding=None,
-             work_dir=None, max_work_bytes=DEFAULT_MAX_WORK, allow_synthetic=False):
+             work_dir=None, max_work_bytes=DEFAULT_MAX_WORK, allow_synthetic=False, signature=None):
     flavor = load_flavor(flavor_name, root)
     device = flavor['device']['codename']
     path = Path(path)
@@ -922,12 +1074,16 @@ def classify(path, flavor_name, target_files=None, build=None, avb_key=None, roo
         fw = read_json(firmware_observation, 'firmware-observation', result) if firmware_observation else None
         inventory = target_inventory(Path(target_files), flavor, build, result, obs, allow_synthetic) if target_files else None
         result['installMode'] = flavor['artifacts']['factory']
+        if 'firstInstall' in flavor:  # the owner's first-install requirements, with the pins they name resolved
+            result['firstInstall'] = dict(flavor['firstInstall'], avbPublicKeySha256=avb_key,
+                otaCertificateSha256=resolve_sha256_pointer(flavor['firstInstall']['otaContinuity']['otaCertificateSha256From'],
+                                                            root, f'{flavor_name}: firstInstall'))
         check_factory(archive, names, flavor, build, inventory, avb_key, fw, result, allow_synthetic)
     result['structurallyComplete'] = not result['missing'] and not result['problems']
     if result['structurallyComplete']:
         result['contentVerified'] = verify_content(path, target_files, inventory['dynamic'], result['superMembers'], otatools,
             otatools_sha256, work_dir, max_work_bytes, result, result.pop('sparseMembers', {}))
-    result['signatureVerified'] = verify_signature(path, flavor, ssh_keygen, work_dir, result)
+    result['signatureVerified'] = verify_signature(path, flavor, ssh_keygen, work_dir, result, signature)
     result['factoryReady'] = all(result[k] for k in ('structurallyComplete', 'contentVerified', 'signatureVerified')) \
         and not result['missing'] and not result['problems']
     return result
@@ -939,9 +1095,11 @@ def package(path, flavor_name, target_files, out, build=None, avb_key=None, root
     path, out = Path(path), Path(out)
     out.mkdir(parents=True, exist_ok=False)
     copied = {}
-    for source in (path, path.with_name(path.name + '.sig')):
-        shutil.copyfile(source, out/source.name)
-        copied[source.name] = sha256_file(out/source.name)
+    shutil.copyfile(path, out/path.name)
+    copied[path.name] = sha256_file(out/path.name)
+    data = read_signature(Path(result['signature']['path']))  # the explicit or sibling signature, read no-follow again
+    (out/(path.name + '.sig')).write_bytes(data or b'')
+    copied[path.name + '.sig'] = sha256_file(out/(path.name + '.sig'))
     if copied[path.name] != result['sha256'] or copied[path.name + '.sig'] != result['signature']['sha256']:
         shutil.rmtree(out)
         raise Refused(dict(result, factoryReady=False, problems=['identity-mismatch:archive or signature changed while packaging']))
@@ -963,7 +1121,7 @@ def main(argv=None):
         p.add_argument('--flavor', required=True)
         p.add_argument('--target-files', required=name == 'package')
         for flag in ('--build', '--avb-public-key-sha256', '--target-files-observation', '--firmware-observation',
-                     '--otatools', '--otatools-sha256', '--ssh-keygen', '--first-use-binding', '--work-dir'):
+                     '--otatools', '--otatools-sha256', '--ssh-keygen', '--first-use-binding', '--work-dir', '--signature'):
             p.add_argument(flag)
         p.add_argument('--max-work-bytes', type=int, default=DEFAULT_MAX_WORK)
         if name == 'package':
@@ -988,7 +1146,8 @@ def main(argv=None):
                 raise ContractError(f'--{flag.replace("_", "-")} must be 64 lowercase hex digits')
         evidence = dict(target_files_observation=args.target_files_observation, firmware_observation=args.firmware_observation,
             otatools=args.otatools, otatools_sha256=args.otatools_sha256, ssh_keygen=args.ssh_keygen,
-            first_use_binding=args.first_use_binding, work_dir=args.work_dir, max_work_bytes=args.max_work_bytes)
+            first_use_binding=args.first_use_binding, work_dir=args.work_dir, max_work_bytes=args.max_work_bytes,
+            signature=args.signature)
         if args.command == 'classify':
             result = classify(args.archive, args.flavor, args.target_files, args.build, args.avb_public_key_sha256, **evidence)
         else:

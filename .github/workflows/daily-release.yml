@@ -1,0 +1,49 @@
+name: Daily release dispatcher
+
+# 1E: every day at 04:00 America/Los_Angeles, dispatch each enabled flavor's own entry (os/release-pipeline/lanes/daily.json)
+# through scripts/daily-release.py. Each lane is decided on its own: a lane with a run still pending, or whose last
+# delivered run already built this main commit, is skipped. One lane's failure never stops another, and each route
+# keeps its last good release when it fails. Manual dispatch of every entry stays as it is.
+# Schedules are UTC, so both UTC hours that can be 04:00 Pacific are listed: 11:00 (PDT) and 12:00 (PST). The dispatcher
+# acts only on the one that is the committed window's local time on that date, judged by the cron that fired rather
+# than the start time, so a late start still runs and a daylight-saving change never runs a day twice or not at all.
+# Only enabled lanes dispatch (today Frankel; Mustang and Yogi stay disabled). Enabling a lane is its own reviewed
+# change, approved by that lane's owner and Chief. A manual run is a dry run by default.
+# Secret-free: only this job's short-lived GITHUB_TOKEN (actions:write to dispatch and read runs, contents:read).
+
+on:
+  schedule:
+    - cron: '0 11 * * *'
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Decide every lane and report, but dispatch nothing (default). Enabled lanes only ever dispatch from main.
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: daily-release-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Decide each lane and dispatch only the enabled, undelivered ones
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: python3 scripts/daily-release.py dispatch

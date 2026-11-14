@@ -10,6 +10,8 @@
   "factory": {
     "file": "blazer-cp3a.261005.005-factory-cd7d12c2.zip",
     "sha256": "cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3",
+    "sizeBytes": 11362467847,
+    "sizeBasis": "Content-Length and x-identity-content-length of one HTTP HEAD of the pinned URL on 2026-11-03 from a source session, not the builder, with no body transferred (last-modified Tue, 29 Sep 2026 23:23:23 GMT, etag \"6dee2d2\"). Public metadata only, not a download or content proof: the sha256 pin stays the identity, and the download stage refuses any other announced or received size. Run 41606163426 stopped at the earlier unverified 8 GiB bound because the archive is 10.58 GiB.",
     "url": "https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip"
   },
   "pins": {
@@ -28,14 +30,63 @@
     "downloadEnv": "ADEVTOOL_IMG_DOWNLOAD_DIR"
   },
   "compile": {
-    "outDir": "out-blazer-build",
+    "outDirTemplate": "out-blazer-build-{build}",
     "makeGoals": [
       "vendorbootimage",
       "vendorkernelbootimage",
       "target-files-package",
       "otatools-package"
     ],
-    "maxJobs": 256
+    "maxJobs": 256,
+    "timeoutSeconds": 28800,
+    "measure": "filesystem-available-drop",
+    "basis": "First-build proposal, not a measurement: 8 h is a cap on one compile of the four make goals on the operator's builder, with SIGTERM then SIGKILL of the process group at the cap; actual duration is unmeasured. Outputs are kept on any stop. The tree must be isolated from the production source root and carry the admitted Rose integration; compile neither signs nor packages. F1/F2: BUILD_NUMBER and BUILD_DATETIME are exported from --build-number/--build-datetime, which must equal the admitted inputs' build (and so the reservation-derived integration) and the reservedAt (epoch seconds) of that build's write-once blazer-allocate reservation beside the integration directory; the runner's own values are dropped. Each build writes its own fresh OUT_DIR out-blazer-build-<build>; an existing one refuses and earlier outputs are never touched."
+  },
+  "gitMeta": {
+    "projects": [
+      {
+        "path": "build/make",
+        "name": "platform_build",
+        "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+      },
+      {
+        "path": "build/release",
+        "name": "platform_build_release",
+        "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22"
+      },
+      {
+        "path": "frameworks/base",
+        "name": "platform_frameworks_base",
+        "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3"
+      },
+      {
+        "path": "packages/apps/Launcher3",
+        "name": "platform_packages_apps_Launcher3",
+        "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f"
+      },
+      {
+        "path": "packages/apps/Updater",
+        "name": "platform_packages_apps_Updater",
+        "revision": "52c34a55bd26f7856f9141d7e4237397084d6936"
+      },
+      {
+        "path": "packages/modules/Permission",
+        "name": "platform_packages_modules_Permission",
+        "revision": "4d6005dbabf3f2bf96e5215c5c2801809b051bf3"
+      },
+      {
+        "path": "vendor/adevtool",
+        "name": "adevtool",
+        "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+      }
+    ],
+    "objectsSource": "public-fetch",
+    "fetchUrlPrefix": "https://github.com/GrapheneOS/",
+    "boundBytes": 8589934592,
+    "boundKind": "proposal",
+    "projectTimeoutSeconds": 1800,
+    "timeoutSeconds": 5400,
+    "basis": "Genuine Git metadata for an isolated copy, which excludes every .git: host-reconcile runs rev-parse HEAD, show HEAD:path, clone --shared and a sparse checkout on its six projects, and the vendor stage runs git -C vendor/adevtool rev-parse HEAD. Each needs only the pinned commit, its tree and blobs, so each project gets a depth-1 shallow repository of exactly its pinned-manifest revision (the refs/tags/2026100600 commits; a commit id is a content address, so equality proves the tree). objectsSource public-fetch: the manifest's own GrapheneOS remote over https; no production object, alternates or link. 8 GiB, 1800 s per project and 5400 s in all are unmeasured proposals. Needs Original Infra's runtime approval for the fetch; nothing here was fetched."
   },
   "adevtool": {
     "depsDir": "out_adevtool_deps",
@@ -69,8 +120,9 @@
   "capacity": {
     "reserveBytes": 322122547200,
     "allowanceRequired": true,
-    "compileAllowanceBytes": null,
-    "basis": "available - bound >= reserve on the filesystem each stage writes. Preparation stages use the explicit proposal bounds in preparation.*.boundBytes. compile (outside preparation) still needs a measured compileAllowanceBytes, which is null."
+    "compileAllowanceBytes": 268435456000,
+    "compileAllowanceKind": "first-build-proposal",
+    "basis": "available - bound >= reserve on the filesystem each stage writes. Preparation stages use the explicit proposal bounds in preparation.*.boundBytes. compile uses compileAllowanceBytes, a finite first-build proposal of 250 GiB (268435456000 bytes): no measurement of this tree's OUT_DIR exists, and a first build cannot wait for one, so the allowance is reviewed rather than measured. It is admission headroom and a sampled stop, never a quota: preflight needs available - 250 GiB >= the 300 GiB reserve (550 GiB free on the source tree's filesystem), and while compile runs the drop in available bytes since start (which also counts any other writer on that filesystem) is sampled against 250 GiB and available bytes against the reserve. Writes between samples can overshoot. An allowance that proves too small stops the build, keeps its outputs and is revised from that run's receipt."
   },
   "preparation": {
     "stages": [
@@ -89,18 +141,20 @@
       "cleanupSeconds": 240,
       "cleanupBasis": "After a stop, removal of this run's own staging is bounded to 240 s, inside the 300 s between timeoutSeconds and Release's outer timeout, so completed.json is written before that timeout. Removal of ~1.7 million files is unmeasured: whatever is not removed in time stays, is named in completed.json (stagingLeft) and blocks the next source run until it is removed deliberately.",
       "exclusionsFrom": "os/release-pipeline/cuttlefish-alpha.json preparation.exclusions",
-      "includeRoots": [
-        "out_adevtool_deps"
+      "includePaths": [
+        "out_adevtool_deps/adevtool_revision",
+        "out_adevtool_deps/host/linux-x86"
       ],
+      "includeBasis": "adevtool's deps as their pinned consumer reads them, from the public GrapheneOS adevtool source at 17df3b79 (src/config/paths.ts sha256 418823cca30a381208e13acd7ea30d5ff37be411f1492ccd05f290ba4c95bd8e, getHostBinPath): out_adevtool_deps/adevtool_revision compared exactly with `git -C vendor/adevtool rev-parse HEAD` stdout (the hash and one newline), and out_adevtool_deps/host/linux-x86/bin/<program> for the 14 programs every getHostBinPath call site names; nothing else under out_adevtool_deps is read by adevtool. The rest of host/linux-x86 is kept because those tools load it (lib64/ libraries, framework/ JARs). Only these deps are checked before copying (deps_problems); the vendor stage's other tree needs and the kernel directory are its own admission. out_adevtool_deps itself can be a whole build OUT_DIR (os/reference-scripts/build-tray-emulator-current.sh, historical: OUT_DIR=out_adevtool_deps), so nothing else in it is selected or walked; attempt 41547295738 refused on six such entries (.ninja_fifo, target/product/emu64x links into /apex, siso_config link into build/soong). Later vendor gap, not a copy gate: the snapshot has no vendor/adevtool .git, so in it getHostBinPath's rev-parse fails, the error is swallowed and adevtool rebuilds its deps (scripts/run-build.sh: lunch and m) unless ADEVTOOL_SKIP_DEP_BUILD=1, and generate-all's writeVersionCheckFile (src/blobs/build.ts) needs the same rev-parse; see docs/OS-FLAVORS.md.",
       "stagingPrefix": ".source-staging-",
       "boundBasis": "150 GiB and 7200 s are unverified proposals. Basis (historical, not a measurement of the current tree): the emulator alpha's copy of the same production root with the same exclusions allocated 120.16 GiB in 1,696,997 files on 2026-10-28 (cuttlefish-alpha.json preparation.basis), and its copy budget was 150 GiB. The stage measures its own full selection (no entry cap) before writing and refuses when the projected bytes exceed this bound; the Pro inspect's 1,131,550,560,256-byte reference walk was truncated, counts excluded outputs and repo metadata, and is never used as an estimate.",
-      "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includeRoots are adevtool's host-tool deps, which the vendor stage needs, copied as their own selection whose links may not leave them. The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
+      "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includePaths are adevtool's deps the vendor stage needs (the adevtool_revision file and the complete host/linux-x86 distribution, copied as its own selection whose links may not leave it); the selected deps must hold the pinned revision and the tools (never the vendor stage's other needs). The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
     },
     "download": {
-      "boundBytes": 8589934592,
+      "boundBytes": 11362467847,
       "timeoutSeconds": 3600,
       "partSuffix": ".part",
-      "boundBasis": "8 GiB is an unverified proposal for the Pro factory ZIP: no Pro archive size is recorded, and the historical Frankel factory ZIP size is not Pro evidence. An archive above the bound stops and is removed, never kept."
+      "boundBasis": "Exactly factory.sizeBytes (11,362,467,847 bytes, the pinned URL's HEAD Content-Length): one byte more stops and removes the .part, a different announced Content-Length is refused before writing, and a rename needs exactly that size and the sha256 pin. 3600 s needs about 3.0 MiB/s sustained; the download duration is unmeasured."
     },
     "vendor": {
       "boundBytes": 137438953472,
@@ -114,6 +168,21 @@
         "minMajor": 24,
         "versionTimeoutSeconds": 60,
         "minMajorFrom": "scripts/blazer-preparation-preflight.py NODE_MIN_MAJOR"
+      },
+      "adevtoolGit": {
+        "metadataPath": "vendor/adevtool/.git",
+        "argv": [
+          "git",
+          "-C",
+          "vendor/adevtool",
+          "rev-parse",
+          "HEAD"
+        ],
+        "timeoutSeconds": 60,
+        "skipDepBuildEnv": {
+          "ADEVTOOL_SKIP_DEP_BUILD": "1"
+        },
+        "basis": "GrapheneOS adevtool 17df3b79 src/config/paths.ts (sha256 418823cc...) getHostBinPath rebuilds its deps (scripts/run-build.sh: lunch and m) whenever out_adevtool_deps/adevtool_revision differs from `git -C vendor/adevtool rev-parse HEAD` stdout or that git call fails, unless ADEVTOOL_SKIP_DEP_BUILD=1. The vendor stage always sets that switch, so preparation never compiles, and makes the skipped comparison itself before generation: the marker must be exactly the pin and one newline, and this git call (GIT_* stripped, GIT_CEILING_DIRECTORIES at the source root) must print exactly the pin and one newline. A tree without vendor/adevtool/.git (the source-stage snapshot excludes all .git) is refused in preflight: generate-all's writeVersionCheckFile (src/blobs/build.ts) needs the same git call. This makes no snapshot usable and relaxes no version check."
       }
     },
     "lunch": {
@@ -134,7 +203,7 @@
       "basis": "Not a filesystem quota: every sampleSeconds the stage's watched paths are measured against its boundBytes and the filesystem's available bytes against capacity.reserveBytes, and an overrun or timeout stops the stage's process group (SIGTERM, then SIGKILL after killGraceSeconds). Writes between samples can overshoot. An enforced quota (project quota, loop device, cgroup io) and containment of descendants that start their own session need host-side authority and are not provided here."
     },
     "totalTimeoutSeconds": 23400,
-    "totalBasis": "6.5 hours: source 7200 + download 3600 + vendor 10800 + lunch 1800 seconds. The 294 GiB of proposal bounds (source 150, download 8, vendor 128, lunch 8) are checked one stage at a time against the 300 GiB reserve at each stage's start.",
+    "totalBasis": "6.5 hours: source 7200 + download 3600 + vendor 10800 + lunch 1800 seconds. The about 296.6 GiB of bounds (source 150, download 10.58 exact, vendor 128, lunch 8) are checked one stage at a time against the 300 GiB reserve at each stage's start.",
     "candidateLayout": {
       "children": {
         "sourceRoot": "source",
@@ -143,6 +212,41 @@
       },
       "ancestorBoundary": "/home/pixelbuild",
       "basis": "inspect derives R/source, R/downloads and R/receipts from one proposed --candidate-root R and reports the lstat chain of R's ancestors up to ancestorBoundary (the parent of the production source root); statvfs is read only on the nearest existing ancestor of each path. Candidates are proposals, never bindings."
+    },
+    "gitInspection": {
+      "targets": {
+        "production": "/home/pixelbuild/grapheneos-2026100600/vendor/adevtool/.git",
+        "candidate": "/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git"
+      },
+      "maxSeconds": 60,
+      "basis": "inspect-git: one level of each fixed target's metadata and at most 65 bytes of its HEAD (64 accepted; the 65th only detects oversize and is never reported), through git_facts; no tree, size, collision, Node, download or candidate-path scan, no writes, no git process and no gitfile content. The production target is the production source root plus vendor.adevtoolGit.metadataPath; the candidate is Infra's historical receipt 41473133543 sourceRoot plus that path, a fixed path, not a binding and not known to exist. For a separately approved observation only.",
+      "targetSets": {
+        "adevtool-projects-gitdir": {
+          "projectsGitdir": {
+            "root": "/home/pixelbuild/grapheneos-2026100600",
+            "path": ".repo/projects/vendor/adevtool.git"
+          }
+        }
+      },
+      "targetSetsBasis": "Explicit, additive target sets for the separate `inspect-git-set --target-set NAME`; `inspect-git` keeps inspecting exactly the two targets above. adevtool-projects-gitdir is the gitdir that the production vendor/adevtool/.git link names (observation 41566744429: ../../.repo/projects/vendor/adevtool.git), inspected with the same git_facts bounds; the link itself is never followed by the helper. For a separately approved observation (O1) only."
+    },
+    "gitObjectsInspection": {
+      "host": "immortal-os-builder",
+      "root": "/home/pixelbuild/grapheneos-2026100600",
+      "path": ".repo/project-objects/adevtool.git/objects",
+      "maxEntries": 100000,
+      "maxDepth": 3,
+      "maxSeconds": 120,
+      "maxOutputBytes": 65536,
+      "excludeNames": [
+        "hooks",
+        "rr-cache"
+      ],
+      "existenceOnly": [
+        "info/alternates",
+        "info/http-alternates"
+      ],
+      "basis": "O2, inspect-git-objects: bounded metadata of the objects directory that O1 (runtime 41586224611) found linked from .repo/projects/vendor/adevtool.git/objects (link text ../../../project-objects/adevtool.git/objects); Original Infra derived this exact lexical target. Its existence, layout and size are unobserved. Walked through no-follow directory descriptors from /, at most 100,000 listed entries, depth 3 below the root, a cooperative 120 s deadline and at most 64 KiB of JSON; no file content is opened, no link followed and no other filesystem entered. hooks and rr-cache are excluded; info/alternates and info/http-alternates get existence and type only. Proposed bounds for a separately approved observation only; metadata totals prove no object integrity, reachability or provenance."
     }
   }
 }

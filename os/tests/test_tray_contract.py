@@ -5,6 +5,8 @@ updated on its own. These checks keep both sides of the Messenger protocol and t
 voice-glow shader in step."""
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +34,48 @@ class TrayContractTest(unittest.TestCase):
         self.tray = (SHELL/'AgentTrayPrototype.java').read_text()
         self.controls = (SHELL/'AgentStatusControls.java').read_text()
         self.link = (SHELL/'AgentTrayLink.java').read_text()
+
+    def test_reply_theme_callback_compiles_and_runs_with_later_field(self):
+        # Frankel 2026111002: Java rejects a simple-name forward reference even
+        # inside a deferred lambda. Compile the actual production statement in
+        # the same field order, without requiring an Android tree or device.
+        reply = self.tray.split('private final Messenger reply =', 1)[1].split(
+            'private final ServiceConnection connection', 1)[0]
+        statement = re.search(r'^\s*((?:this\.)?theme\.fromRose\([^\n]+;)', reply, re.M)
+        self.assertIsNotNone(statement)
+        source = '''package com.android.wm.shell;
+public class TrayThemeCallbackTest {
+    static class Bundle {
+        String getString(String key) { return RoseTheme.DEFAULT; }
+    }
+    private final java.util.function.Consumer<Bundle> reply = data -> {
+        %s
+    };
+    private String acknowledged;
+    private final RoseThemeMirror theme = new RoseThemeMirror(new RoseThemeMirror.Port() {
+        public String read() { return RoseTheme.DEFAULT; }
+        public boolean write(String id) { return true; }
+        public void acknowledge(String id) { acknowledged = id; }
+    });
+    public static void main(String[] args) {
+        TrayThemeCallbackTest tray = new TrayThemeCallbackTest();
+        tray.reply.accept(new Bundle());
+        if (!RoseTheme.DEFAULT.equals(tray.acknowledged)) throw new AssertionError();
+    }
+}
+''' % statement.group(1)
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)/'TrayThemeCallbackTest.java'
+            fixture.write_text(source)
+            compile_result = subprocess.run([
+                'java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-d', directory,
+                str(SHELL/'RoseTheme.java'), str(SHELL/'RoseThemeMirror.java'), str(fixture)
+            ], capture_output=True, text=True)
+            self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
+            run = subprocess.run(['java', '-cp', directory,
+                                  'com.android.wm.shell.TrayThemeCallbackTest'],
+                                 capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
 
     def test_the_tray_draws_nothing_at_rest(self):
         # #224: the idle grey lines across the status bar read as artifacts and are not in the HiFi design.
@@ -66,8 +110,14 @@ class TrayContractTest(unittest.TestCase):
         # the tray accepts only STATE replies.
         self.assertIn('static final int REGISTER = 1, UNREGISTER = 2;', self.link)
         self.assertIn('message.what != 100', self.tray)
-        # Tap commands the tray can send are exactly START/MUTE/UNMUTE/END.
-        self.assertIn('return !active ? 3 : tapped == 1 ? 6 : muted ? 5 : 4;', self.controls)
+        # Tap commands the status bar can send are exactly START/END, from the agent glow. The microphone glow and
+        # "Mic off" are display-only: the Rose chin holds the only microphone control (F08, keyboard rule 4), so
+        # MUTE/UNMUTE stay in the protocol for the chin but never come from a status-bar tap.
+        self.assertIn('if (tapped != 1 || hit != tapped || at - downAt > 400) return 0;', self.controls)
+        self.assertIn('return active ? 6 : 3;', self.controls)
+        touch = self.controls[self.controls.index('int touch('):]
+        self.assertNotRegex(touch, r'\bmuted\b|\? 5|\? 4|return 4|return 5')
+        self.assertNotIn('muted, ViewConfiguration', self.tray)
 
     def test_protocol_version_and_state_keys_match(self):
         self.assertIn('b.putInt("protocolVersion",1)', self.service)
@@ -104,8 +154,111 @@ class TrayContractTest(unittest.TestCase):
         self.assertNotIn('bindServiceAsUser', self.tray.replace(
             self.tray[self.tray.index('new AgentTrayLink.Port()'):self.tray.index('AgentTrayPrototype(Context source')], ''))
 
+    def test_register_says_whether_the_rose_chin_can_be_raised(self):
+        # F08 (agreed with Home): REGISTER's arg2 is AgentStatusControls.chinArg (AgentStatusControlsTest), read fresh
+        # for each REGISTER; only the link re-registers (AgentTrayLink.refresh, AgentTrayLinkTest) when it changes.
+        send = self.tray[self.tray.index('private boolean send(int action) {'):]
+        send = send[:send.index('\n    }\n') + 6]
+        self.assertIn('if (action == AgentTrayLink.REGISTER) message.arg2 = sentChin = chinArg();', send)
+        self.assertNotIn('arg1', send)
+        # 1C's RETURN_TO attempt is the tray's only arg1.
+        code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', self.tray, flags=re.S))
+        self.assertEqual(code.count('arg1'), 1)
+        self.assertIn('AgentTrayLink.Return.returnTo(message.getData().getLong("token"), message.arg1,', code)
+        self.assertIn('return AgentStatusControls.chinArg(SystemProperties.getBoolean(EDGE_PROPERTY, false), '
+            'link.user(),', self.tray)
+        self.assertIn('Settings.Secure.getIntForUser(context.getContentResolver(), Settings.Secure.NAVIGATION_MODE, 0,',
+            self.tray)
+        self.assertIn('private static final String EDGE_PROPERTY = "persist.wm.debug.rose_edge";', self.tray)
+        # Not by class name: R8 may rename com.android.wm.shell.roseedge, which SystemUI's keep rule does not cover.
+        self.assertNotIn('Class.forName', self.tray)
+        self.assertIn('if (chinArg() != sentChin) link.refresh();', self.tray)
+        self.assertIn('Settings.Secure.getUriFor(Settings.Secure.NAVIGATION_MODE), false,', self.tray)
+        self.assertIn('SystemProperties.addChangeCallback(() -> handler.post(this::chinMaybeChanged));', self.tray)
+        # The edge's switch is the one the Shell controller reads and only the edge's build patch sets.
+        controller = (ROOT/'os/patches/rose-edge-wmshell.patch').read_text()
+        self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', controller)
+        self.assertIn('persist.wm.debug.rose_edge=true', (ROOT/'os/patches/rose-edge-build-make.patch').read_text())
+
+    def test_mic_off_shows_in_the_status_bar_while_muted(self):
+        # Keyboard handoff rule 4 (818a032, prototypes/rose-keyboard/HANDOFF.md): while Rose's microphone input is
+        # muted the status bar shows "Mic off" with the chin's slashed mic and ruby outline (RoseEdgeMicSlot's
+        # MUTED_INK/MUTED_RING), screen-reader label "Microphone muted", at rest or in a session.
+        waves = self.tray[self.tray.index('private final class Waves'):]
+        self.assertIn('if (muted) drawMicOff(canvas, rightStart + dp(4));', waves)
+        self.assertNotIn('if (active && muted) drawMicOff', waves)
+        draw = waves[waves.index('void drawMicOff('):]
+        self.assertIn('final String label = "Mic off";', draw)
+        self.assertIn('micOffPath.moveTo(4.5f, 3.5f); micOffPath.lineTo(19.5f, 20.5f);', ' '.join(draw.split()))
+        self.assertIn('static final int MUTED_INK = 0xffff8c9a;', waves)
+        self.assertIn('static final int MUTED_RING = 0xbfff5a6e;', waves)
+        chin = (ROOT/'os/patches/rose-edge-wmshell.patch').read_text()
+        self.assertIn('static final int MUTED_INK = 0xffff8c9a;', chin)
+        self.assertIn('static final int MUTED_RING = 0xbfff5a6e;', chin)
+        self.assertIn('setContentDescription(muted ? "Microphone muted"', waves)
+        # The description follows every state change, including a reset.
+        self.assertEqual(self.tray.count('if (view != null) view.describe();'), 2)
+        # An indicator, not a control: no new touch target.
+        self.assertNotIn('drawMicOff', self.tray[self.tray.index('int targetAt('):self.tray.index('Waves() {')])
+
     def test_app_glow_shader_matches_the_os_copy(self):
         self.assertEqual(shader(APP/'StatusVoiceGlow.java'), shader(SHELL/'StatusVoiceGlow.java'))
+    def test_the_return_protocol_rides_the_trusted_link(self):
+        # 1C v1, pinned with App Core and Home/App: SystemUI to Rose 7 RETURN_TARGET and 8 RETURN_RESULT (0 RETURNED,
+        # 1 UNAVAILABLE, 2 REFUSED); Rose to SystemUI 101 RETURN_TO and 102 RETURN_CANCEL.
+        self.assertIn('public static final int TARGET = 7, RESULT = 8;', self.link)
+        self.assertIn('public static final int RETURN_TO = 101, CANCEL = 102;', self.link)
+        self.assertIn('public static final int RETURNED = 0, UNAVAILABLE = 1, REFUSED = 2;', self.link)
+        # Rose's requests pass the same gates as STATE: subscribed, and Rose Agent's uid for the bound user.
+        reply = self.tray[self.tray.index('private final Messenger reply'):
+            self.tray.index('private final ServiceConnection')]
+        self.assertLess(reply.index('if (!this.link.subscribed() || !trusted(message.sendingUid)) return true;'),
+            reply.index('AgentTrayLink.Return.RETURN_TO'))
+        self.assertIn('if (message.what == AgentTrayLink.Return.CANCEL) return true;', reply)
+        self.assertIn('(attempt, result) -> handler.post(() -> sendReturnResult(attempt, result)));', reply)
+        # RETURN_TARGET goes out after each REGISTER and on every change, with the tray's reply Messenger.
+        self.assertIn('if (action == AgentTrayLink.REGISTER) handler.post(this::sendReturnTarget);', self.tray)
+        self.assertIn('AgentTrayLink.Return.listen(() -> handler.post(this::sendReturnTarget));', self.tray)
+        target = self.tray[self.tray.index('private void sendReturnTarget()'):]
+        target = target[:target.index('\n    }\n')]
+        for field in ('data.putInt("protocolVersion", 1);', 'data.putLong("token", target.token);',
+                'data.putString("package", target.packageName);', 'data.putInt("userId", target.userId);',
+                'data.putString("label", target.label);', 'message.replyTo = reply;',
+                'if (voice == null || !link.subscribed()) return;'):
+            self.assertIn(field, target)
+        self.assertIn('Message.obtain(null, AgentTrayLink.Return.RESULT, attempt, result);', self.tray)
+        # Without the shell installed a return is refused, never guessed; the seam stays inside SystemUI's process.
+        self.assertIn('if (s == null) { answer.answer(attempt, REFUSED); return; }', re.sub(r'\s+', ' ', self.link))
+        self.assertIn('public static final Target NONE = new Target(0, "", 0, "");', self.link)
+        # Nothing new is exported: the service keeps its single STATUS_BAR_SERVICE-protected export.
+        manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
+        self.assertEqual(manifest.count('android:name=".AgentTrayService"'), 1)
+
+    def test_both_sides_speak_the_one_v1(self):
+        # 1C v1 is pinned once, here, against App Core's Rose side (#736): the same codes, results, version and keys.
+        # No other numbering may exist on either side.
+        rose = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/TrayReturn.java'
+        if not rose.exists():
+            self.skipTest('App Core\'s TrayReturn (#736) is not on this branch yet')
+        theirs = rose.read_text()
+        self.assertIn('static final int TARGET = 7, RESULT = 8, RETURN = 101, CANCEL = 102;', theirs)
+        self.assertIn('static final int RETURNED = 0, UNAVAILABLE = 1, REFUSED = 2;', theirs)
+        self.assertIn('static final int PROTOCOL = 1;', theirs)
+        self.assertIn('public static final int TARGET = 7, RESULT = 8;', self.link)
+        self.assertIn('public static final int RETURN_TO = 101, CANCEL = 102;', self.link)
+        self.assertIn('public static final int RETURNED = 0, UNAVAILABLE = 1, REFUSED = 2;', self.link)
+        # Rose reads exactly the keys the tray writes, and the tray reads the token key Rose writes.
+        service = re.sub(r'\s+', '', self.service)
+        for key, kind in (('protocolVersion', 'Int'), ('token', 'Long'), ('package', 'String'), ('userId', 'Int'),
+                ('label', 'String')):
+            self.assertIn(f'data.put{kind}("{key}",', self.tray)
+            self.assertIn(f'd.get{kind}("{key}"', service)
+        self.assertIn('b.putLong("token",token)', service)
+        self.assertIn('message.getData().getLong("token")', self.tray)
+        for stale in ('= 103', '= 104', 'RETURN = 102'):
+            self.assertNotIn(stale, theirs)
+            self.assertNotIn(stale, self.link)
+
 
 if __name__ == '__main__':
     unittest.main()

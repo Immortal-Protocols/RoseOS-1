@@ -1,0 +1,244 @@
+{
+  "schema": "roseos.yogi-ota-config.v1",
+  "device": "yogi",
+  "model": "Pixel 11 Pro Fold",
+  "repository": "Immortal-Protocols/pixel-ota",
+  "publicationEnabled": false,
+  "automationEnabled": false,
+  "activationBasis": "Nathan approved Yogi OTA source work only (relayed by Chief, 2026-11-05). No build, key, access, signing, publication, dispatch or phone action is authorized by this file. Publication and automation stay false until separately authorized.",
+  "plan": "https://app.notion.com/p/40e7c646c81b81629d22eb03edd73abd",
+  "builder": {
+    "status": "runner-unregistered",
+    "project": "protocols-465723",
+    "zone": "us-west2-b",
+    "instance": "roseos-yogi-builder-20261105-b",
+    "instanceId": "2720796557371812468",
+    "restoredDiskId": "938743673401685238",
+    "runnerLabel": "roseos-yogi-builder-20261105-b",
+    "root": "/srv/rose-yogi",
+    "retainedSource": "/srv/rose-yogi/src",
+    "attempts": "/srv/rose-yogi/attempts",
+    "lock": "/srv/rose-yogi/yogi-build.lock",
+    "bootstrapState": "/srv/rose-yogi/signing-bootstrap-state",
+    "coverDisplayInput": "/srv/rose-yogi/inputs/cover-display-reference.json",
+    "jobs": 48,
+    "minimumFreeBytes": 700000000000,
+    "evidence": {
+      "runner": {
+        "id": 21,
+        "name": "roseos-yogi-builder-20261105-b",
+        "version": "2.338.2",
+        "scope": "repository Immortal-Protocols/RoseOS-1",
+        "service": "disabled, inactive",
+        "serviceLatestGuestObservation": "Chief receipt correction, 2026-11-06 (no timestamp recorded): the latest guest observation before the VM STOP was active/running but disabled, not inactive. Historical guest evidence only; it is no claim about the runner on the stopped VM. The direct route still requires observed inactive/disabled and no runner process before every step.",
+        "group": {
+          "poolId": 1,
+          "selection": "official default group",
+          "organizationGroupId": null
+        },
+        "labels": [
+          "self-hosted",
+          "Linux",
+          "X64",
+          "roseos-yogi-builder",
+          "roseos-yogi-builder-20261105-b"
+        ],
+        "replacementLabelInstalled": true,
+        "replacementLabelReadback": "Chief-verified operator relay, 2026-11-06 (no timestamp recorded): roseos-yogi-builder-20261105-b added to repository runner ID 21 and read back with self-hosted, Linux, X64 and roseos-yogi-builder preserved; runner offline/idle; original and replacement VMs stopped at that check. Organization eligibility is not changed by this readback.",
+        "workflowRestriction": "not enforced by registration; only label routing separates Yogi jobs",
+        "labelsReadback": "before the replacement label: complete repository runner list, 2026-11-06T01:17:20Z (one runner: ID 21, offline, not busy; labels self-hosted, Linux, X64, roseos-yogi-builder)",
+        "repositoryLabelUnique": true,
+        "organizationEligibility": null,
+        "organizationEligibilityReadback": "denied: organization runner-group read returned HTTP 403 at 2026-11-06T01:24:17Z (needs organization admin or the runners-and-runner-groups permission); not retried, no other route",
+        "status": "registered, offline, not busy; service disabled/inactive"
+      },
+      "storage": {
+        "disk": {
+          "name": "roseos-yogi-builder-20261105-b",
+          "id": "938743673401685238",
+          "sizeGiB": 2000,
+          "type": "pd-ssd",
+          "attachment": "boot",
+          "zone": "us-west2-b"
+        },
+        "diskLineage": "restored disk 938743673401685238 attached as the 2,000 GiB pd-ssd boot disk of the replacement VM",
+        "filesystemDevice": {
+          "number": 2049,
+          "paths": [
+            "/srv/rose-yogi",
+            "/srv/rose-yogi/src"
+          ]
+        },
+        "mounts": {
+          "guestDevice": "/dev/sda1",
+          "guestDisk": "/dev/sda",
+          "filesystemType": "ext4",
+          "filesystemUuid": "64959ab3-d595-45a4-9cb8-da4af456efdd",
+          "mountPoint": "/",
+          "sameFilesystem": "the retained source, the attempts directory and the runner directories",
+          "meaning": "guestDevice is the mounted filesystem /dev/sda1 (partition); guestDisk is the whole replacement disk /dev/sda, the known disk 938743673401685238 on VM 2720796557371812468. They are distinct and not interchangeable.",
+          "readback": "Chief-verified operator mount receipt relay, 2026-11-06 (no timestamp recorded): bounded guest observation; temporary SSH key removed and session closed; runner service still inactive/disabled; both original and replacement VMs stopped and both disks preserved afterwards; no readiness dispatch."
+        },
+        "attemptsCreated": true,
+        "freeBytesReported": "1.709 TB",
+        "envsetupLinkVerified": true
+      },
+      "controller": {
+        "account": "roseos-yogi-controller@protocols-465723.iam.gserviceaccount.com",
+        "role": "projects/protocols-465723/roles/roseosYogiControllerV1",
+        "scope": "get/start/stop bound on the replacement VM; the original zone-a binding is retained, so the account can address more than one VM and source still rejects the original",
+        "federation": "exact repository and owner IDs, public visibility, yogi-ota.yml@refs/heads/main, manual dispatch, GitHub-hosted controller jobs"
+      },
+      "readiness": {
+        "provenance": "Chief relay of the operator's saved receipts, 2026-11-06: an explicitly summarized relay record, not the raw readiness receipt. Fields the handoff did not include are null and must not be reconstructed.",
+        "run": {
+          "id": "42152223661",
+          "attempt": "1",
+          "source": "a4730376706241e0b0b1387386a5e09c9f8146e2"
+        },
+        "runner": {
+          "id": 21,
+          "name": "roseos-yogi-builder-20261105-b"
+        },
+        "builder": {
+          "project": "protocols-465723",
+          "zone": "us-west2-b",
+          "instance": "roseos-yogi-builder-20261105-b",
+          "instanceId": "2720796557371812468"
+        },
+        "result": {
+          "passed": true,
+          "checksPassed": 20,
+          "checksTotal": 20,
+          "failures": 0,
+          "categories": [
+            "identity",
+            "directories",
+            "lock",
+            "inputs",
+            "free space",
+            "retained-tree paths",
+            "tools"
+          ],
+          "checks": null,
+          "checksNote": "The individual raw check names and values were not in the handoff; they are not reconstructed here.",
+          "freeBytes": 1708976877568
+        },
+        "receipt": {
+          "file": "yogi-readiness.json",
+          "sha256": "2574161d47cd6508cbe0c443feb6ea9fc1c74f5d6ad446edd6c4778d559a44ca"
+        },
+        "artifact": {
+          "id": 13472464984,
+          "name": "yogi-readiness-42152223661-1",
+          "archiveSizeBytes": 1023,
+          "archiveSha256": "fe816882b3d9141ff5cf46e98dcd5dc8535c441914a74d20a202cc2c9f7f0b9d",
+          "hashNote": "receipt.sha256 is the readiness JSON file; archiveSha256 is the artifact archive. They are distinct."
+        },
+        "ownership": {
+          "observedBeforeStart": "TERMINATED",
+          "startedByThisOperation": true,
+          "basis": "INFERRED, not captured: derived from the retained source and the successfully executed ownership-gated cleanup STOP; not read from the raw retained ownership JSON.",
+          "rawRecord": null
+        },
+        "cleanup": {
+          "job": "127678829392",
+          "result": "ownership-validated STOP succeeded"
+        },
+        "controlPlaneReadback": {
+          "basis": "Independent control-plane readback (direct), relayed by Chief.",
+          "replacement": {
+            "instanceId": "2720796557371812468",
+            "status": "TERMINATED",
+            "stopTime": "2026-11-06T02:47:37.143Z",
+            "observedAt": "2026-11-06T02:48:45.783777Z"
+          },
+          "original": {
+            "role": "original VM, as the relay names it (retired from this route)",
+            "instanceId": "8812446529823929967",
+            "status": "TERMINATED"
+          },
+          "disks": "both READY",
+          "timeNote": "stopTime is when the instance stopped; observedAt is when that state was read back."
+        },
+        "limits": "Proves readiness only on this run: not build/signing routing exclusivity (runner.organizationEligibility stays unknown), not signing readiness, not publication authority. builder.status and every stage gate are unchanged."
+      },
+      "state": "TERMINATED at 2026-11-06T01:00:52Z, both disks READY and preserved; temporary SSH access removed. Stopped again after the later bounded mount observation (relay, no timestamp recorded), both VMs stopped and both disks preserved",
+      "source": "Chief relay of the Mac operator saved receipts, 2026-11-06; mounts from the later Chief-verified mount receipt relay (see storage.mounts.readback). Null values are unverified and must not be inferred (device number 2049 alone never identified the guest device, UUID or mount point)."
+    },
+    "retired": {
+      "instance": "roseos-yogi-builder-20261103-a",
+      "zone": "us-west2-a",
+      "note": "Original zone-a VM, preserved. Never a target or fallback of this route.",
+      "instanceId": "8812446529823929967",
+      "instanceIdSource": "Chief relay of the operator's control-plane readback after readiness run 42152223661 (2026-11-06): original instance 8812446529823929967 TERMINATED. The direct route checks it is TERMINATED before every operation."
+    },
+    "direct": {
+      "status": "unbound",
+      "basis": "Operator-driven direct route (scripts/yogi_direct.py, docs/YOGI-DIRECT.md): SSH to the exact replacement VM authenticated by the committed host-key pin, no GitHub self-hosted scheduling. Stages check and compile (bootstrap A to an unsigned compile) only; signing, key bootstrap, install, staging and publication are refused on this route. Every null below is an unverified dependency, not a default; status stays unbound until each is recorded from an operator receipt with provenance and separately approved.",
+      "route": null,
+      "sshUser": null,
+      "hostKey": null,
+      "runnerService": null,
+      "operatorAccess": null,
+      "operationRoot": "/srv/rose-yogi/direct",
+      "lock": "/srv/rose-yogi/yogi-direct.lock"
+    },
+    "basis": "Replacement dedicated Yogi VM (exact tuple: project, zone, name, numeric ID). The controller checks all four on every describe and poll. Runner label is replacement-specific because the old label's uniqueness is not evidenced. status stays runner-unregistered, and every not-ready guard stays closed, until the missing receipt fields and actual readiness evidence are recorded. Never shared with Frankel, Mustang, Rango, Blazer or Agent builds."
+  },
+  "signing": {
+    "status": "unbound",
+    "profile": "yogi-v1",
+    "project": "protocols-465723",
+    "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+    "secrets": {
+      "keys": "PIXEL_OS_SIGNING_KEYS_YOGI_V1",
+      "passphrase": "PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1"
+    },
+    "bootstrapReceipt": "os/signing-bootstrap/yogi-bootstrap-receipt.json",
+    "access": null,
+    "basis": "A Yogi-only OS key set; no other device's keys. The containers do not exist yet. Public pins (OTA certificate, AVB public key) exist only after the separately authorized bootstrap writes its receipt; nothing here claims them. Signing reads remain refused while status is not approved with an unexpired window."
+  },
+  "labBaseline": {
+    "build": "2026110401",
+    "timestamp": "1793778172",
+    "source": "c47898373a72fc856517a91c0cf13e75c8b80662",
+    "appSignerSha256": "a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc",
+    "avbPublicKeySha256": "7728e30f50bfa5cea165f473175a08803f6a8346642b5aa10913e9d9e6defef6",
+    "artifactPackagesUpdater": false,
+    "installedBuildVerified": false,
+    "installedOtaTrustInspected": false,
+    "reason": "Established from the recorded artifact inspection: no packaged Updater, test-keys build tags, public AOSP development AVB and app identities. Not established: that the phone runs exactly this artifact (no installed-build readback), its installed OTA trust contents, and whether any sideload or data-preserving transition is possible. Proposed supported design: a one-time, separately authorized wipe installation of the Yogi bootstrap build (userdata and metadata erased), then in-place OTAs."
+  },
+  "bootstrap": {
+    "status": "not-built",
+    "build": null,
+    "timestamp": null,
+    "source": null,
+    "installEvidence": null,
+    "basis": "Build A: the first Yogi-key image with the owned Updater, delivered as a private fastboot install image. Every published Yogi OTA must be newer than it and signed by the same Yogi identity."
+  },
+  "allocationFloor": {
+    "build": "2026110401",
+    "timestamp": "1793778172",
+    "basis": "Lab candidate identity; every allocated Yogi build number and BUILD_DATETIME is strictly greater."
+  },
+  "appInputs": {
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+    "packages": [
+      "dev.pixel.backgroundcontrol",
+      "dev.pixel.voice",
+      "dev.pixel.calculator.agent"
+    ],
+    "record": "os/app-inputs/frankel-2026110403.json",
+    "basis": "One decision record, owned by Release: os/app-inputs/frankel-2026110403.json (schema roseos.app-inputs-record.v1, PR #565), committed by Release only after a separately authorized app-inputs-export run for Frankel 2026110403 (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; signer 650d47f9...0bfb). The Yogi job downloads exactly that record's run and artifact id, admits it with Release's scripts/app-inputs-verify.py verify (its own aapt/apksigner), then re-runs its own admission. Never signed on the Yogi builder. Bootstrap A and OTA B use the same set. Unbound (the guard refuses) until Release commits that record on main; Yogi commits no export fields. The 14-day artifact window starts at the export: bootstrap A and OTA B must both download within it, or Release re-exports and commits a new record."
+  },
+  "wire": {
+    "tag": "yogi-{build}",
+    "otaAsset": "yogi-ota_update-{build}.zip",
+    "metadataAsset": "yogi-stable",
+    "metadataLine": "{build} {buildDateUtc} yogi stable",
+    "channel": "stable",
+    "latest": false
+  }
+}

@@ -68,17 +68,17 @@ import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLSocketFactory;
 
 /**
- * Pairs this phone with Rose on a Mac by scanning the QR code the Mac shows (dashboard "Pair
+ * Pairs this phone with Rose on a backend by scanning the QR code the backend shows (dashboard "Pair
  * phone" or `python -m rose.pair`). Also opened by a roseagent://pair link, so the system Camera
  * app can scan the code too. The user confirms before anything is sent; the window is secure
  * (no screenshots or recents preview) because it shows a live one-time code.
  *
- * Pairing sends the one-time code and this phone's public key (LocalRoseKey) to the Mac over
+ * Pairing sends the one-time code and this phone's public key (LocalRoseKey) to the backend over
  * TLS pinned to the certificate hash in the QR, then proves the key works with a signed
  * GET /hello before the pairing is saved (LocalRoseConnection).
  *
  * Because any app or web page can open a roseagent://pair link: the confirm screen asks the
- * user to compare the Mac ID with the one the Mac shows next to its code; a link is refused
+ * user to compare the backend ID with the one the backend shows next to its code; a link is refused
  * while this phone is already paired (the in-app scanner can still replace a pairing, and
  * says so); a second link cannot swap the invite behind an open confirm screen or a pairing in
  * progress; touches through an overlay are ignored; and Pair only enables after a moment.
@@ -88,7 +88,7 @@ public final class LocalRosePairActivity extends Activity {
     private static final int MAX_RESPONSE = 16384;
     private static final long PAIR_ENABLE_DELAY_MS = 1000;
     private static final String EXTRA_OFFER = "dev.pixel.voice.extra.LOCAL_ROSE_OFFER";
-    static final String UNREACHABLE = "Is this phone on the same Wi-Fi or Tailscale as the Mac?";
+    static final String UNREACHABLE = "Connect Tailscale on this phone and the backend using the same network/account.";
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
@@ -116,22 +116,18 @@ public final class LocalRosePairActivity extends Activity {
     private int sensorOrientation;
 
     /**
-     * Opens the pairing screen at launch when local mode is on, not paired, and USB Rose is not
-     * answering, once per install (later: the menu's Pair with Mac). The offered screen asks for
+     * Opens the pairing screen at launch when local mode is on, not paired, once per install
+     * (later: the menu's Pair with Rose). The offered screen asks for
      * the camera only when the user taps Scan code.
      */
     static void offerOnLaunch(Activity a) {
         if (!LocalRoseLink.enabled(a) || LocalRoseConnection.pairedFlag(a)) return;
         if (LocalRoseConnection.prefs(a).getBoolean("pairOffered", false)) return;
-        android.content.Context app = a.getApplicationContext();
-        new Thread(() -> {
-            if (LocalRoseLink.reachable(app)) return;
-            a.runOnUiThread(() -> {
-                if (a.isFinishing() || a.isDestroyed()) return;
-                LocalRoseConnection.prefs(a).edit().putBoolean("pairOffered", true).apply();
-                a.startActivity(new Intent(a, LocalRosePairActivity.class).putExtra(EXTRA_OFFER, true));
-            });
-        }, "local-rose-pair-offer").start();
+        a.runOnUiThread(() -> {
+            if (a.isFinishing() || a.isDestroyed()) return;
+            LocalRoseConnection.prefs(a).edit().putBoolean("pairOffered", true).apply();
+            a.startActivity(new Intent(a, LocalRosePairActivity.class).putExtra(EXTRA_OFFER, true));
+        });
     }
 
     @Override
@@ -169,7 +165,7 @@ public final class LocalRosePairActivity extends Activity {
         if (LocalRoseConnection.pairedFlag(this)) {
             // A link can't replace a pairing: only this screen's own scanner can.
             stopCamera();
-            showPaired("A pairing link was opened, but this phone is already paired. To pair with a different Mac, tap Scan new code and scan the code on that Mac.");
+            showPaired("A pairing link was opened, but this phone is already paired. To pair with a different backend, tap Scan new code and scan the code on that backend.");
             return true;
         }
         try {
@@ -253,8 +249,8 @@ public final class LocalRosePairActivity extends Activity {
         confirming = false;
         scanning = false;
         frame.setVisibility(View.GONE);
-        title.setText("Pair with your Mac");
-        body.setText("To use Rose on your Mac over Wi-Fi or Tailscale, scan the code it shows: on the Mac, open Rose and choose Pair phone (or run python -m rose.pair).\n\nYou can do this later from the menu: Pair with Mac.");
+        title.setText("Pair with your backend");
+        body.setText("To use Rose on your backend over Tailscale, scan the code it shows: on the backend, open Rose and choose Pair phone (or run python -m rose.pair).\n\nYou can do this later from the menu: Pair with Rose.");
         status.setText("");
         button(secondary, "Not now", v -> finish());
         button(primary, "Scan code", v -> showScanner(null));
@@ -264,8 +260,8 @@ public final class LocalRosePairActivity extends Activity {
     private void showScanner(String note) {
         confirming = false;
         permissionDenied = false;
-        title.setText("Pair with your Mac");
-        body.setText("On the Mac, open Rose and choose Pair phone (or run python -m rose.pair), then point this camera at the code.");
+        title.setText("Pair with your backend");
+        body.setText("On the backend, open Rose and choose Pair phone (or run python -m rose.pair), then point this camera at the code.");
         status.setText(note == null ? "" : note);
         frame.setVisibility(View.VISIBLE);
         button(secondary, "Cancel", v -> finish());
@@ -279,15 +275,15 @@ public final class LocalRosePairActivity extends Activity {
         confirming = true;
         frame.setVisibility(View.GONE);
         title.setText("Pair with " + invite.name + "?");
-        StringBuilder text = new StringBuilder("Rose on this Mac will hear you and control this phone.\n\n")
-                .append("Check that the Mac shows this Mac ID next to its code:\n").append(groups(invite.serverId()))
+        StringBuilder text = new StringBuilder("Rose on this backend will hear you and control this phone.\n\n")
+                .append("Check that the backend shows this Backend ID next to its code:\n").append(groups(invite.serverId()))
                 .append("\nPair only if it matches.\n\nAddresses: ").append(join(invite.hosts));
         LocalRoseConnection.Paired current = LocalRoseConnection.paired(this);
         if (current != null && !current.pin.equals(invite.pin)) {
             text.append("\n\nThis replaces this phone's pairing with ").append(current.serverName)
-                    .append(" (Mac ID ").append(groups(current.serverId)).append("). That Mac will no longer reach this phone.");
+                    .append(" (Backend ID ").append(groups(current.serverId)).append("). That backend will no longer reach this phone.");
         } else if (current != null) {
-            text.append("\n\nThis pairs again with the same Mac.");
+            text.append("\n\nThis pairs again with the same backend.");
         }
         if (fromLink) text.append("\n\nThis code was opened from a link, not this screen's scanner.");
         body.setText(text.toString());
@@ -310,7 +306,8 @@ public final class LocalRosePairActivity extends Activity {
         frame.setVisibility(View.GONE);
         LocalRoseConnection.Paired p = LocalRoseConnection.paired(this);
         if (p == null) {
-            showScanner(note);
+            showScanner(note != null ? note : LocalRoseConnection.pairedFlag(this)
+                    ? "This saved pairing cannot be used. Connect Tailscale on the backend and scan a new pairing code." : null);
             return;
         }
         title.setText("Paired with " + p.serverName);
@@ -319,22 +316,22 @@ public final class LocalRosePairActivity extends Activity {
             JSONObject s = new JSONObject(LocalRoseConnection.status(this));
             switch (s.optString("state")) {
                 case "connected": state = "Connected · " + s.optString("route"); break;
-                case "unpaired": state = "The Mac no longer accepts this phone. Scan a new code to pair again."; break;
+                case "unpaired": state = "The backend no longer accepts this phone. Scan a new code to pair again."; break;
                 case "offline":
                     state = "clock".equals(s.optString("reason"))
-                            ? "The Mac refused this phone's time. Turn on automatic date and time in Settings; it reconnects by itself."
-                            : "Mac offline. " + UNREACHABLE;
+                            ? "The backend refused this phone's time. Turn on automatic date and time in Settings; it reconnects by itself."
+                            : "backend offline. " + UNREACHABLE;
                     break;
                 default: state = "Connecting…";
             }
         } catch (JSONException ignored) {
         }
-        body.setText("Addresses: " + join(p.hosts) + "\nMac ID: " + groups(p.serverId)
-                + "\n\nTo remove this phone on the Mac as well, use Pair phone › Remove there.");
+        body.setText("Addresses: " + join(p.hosts) + "\nBackend ID: " + groups(p.serverId)
+                + "\n\nTo remove this phone on the backend as well, use Pair phone › Remove there.");
         status.setText(note != null ? note : state);
         button(secondary, "Unpair", v -> new AlertDialog.Builder(this)
                 .setTitle("Unpair from " + p.serverName + "?")
-                .setMessage("Rose on the Mac won't reach this phone until you pair again.")
+                .setMessage("Rose on the backend won't reach this phone until you pair again.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Unpair", (d, w) -> {
                     LocalRoseConnection.unpair(this);
@@ -377,7 +374,7 @@ public final class LocalRosePairActivity extends Activity {
                 message = e.getMessage() != null && e.getMessage().startsWith("This phone")
                         ? e.getMessage() : "This phone's secure key storage isn't working, so it can't pair.";
             } catch (Exception e) {
-                message = "Pairing failed. Make a new code on the Mac and try again.";
+                message = "Pairing failed. Make a new code on the backend and try again.";
             }
             final String shown = message;
             final boolean done = ok;
@@ -400,7 +397,7 @@ public final class LocalRosePairActivity extends Activity {
         });
     }
 
-    /** POST /pair to each address in order; returns the Mac's name once saved. */
+    /** POST /pair to each address in order; returns the backend's name once saved. */
     private String pairNow(LocalRoseAuth.Invite invite) throws Exception {
         LocalRoseKey key = LocalRoseKey.loadOrCreate(this);
         byte[] request = new JSONObject().put("code", invite.code)
@@ -431,17 +428,17 @@ public final class LocalRosePairActivity extends Activity {
             } finally {
                 c.disconnect();
             }
-            if (code == 403) throw new Failure("That code expired or was used. Make a new one on the Mac.");
-            if (code == 400) throw new Failure("The Mac couldn't read this phone's request. Update Rose Agent and Rose on the Mac.");
-            if (code != 200) throw new Failure("The Mac couldn't pair right now (error " + code + "). Make a new code and try again.");
+            if (code == 403) throw new Failure("That code expired or was used. Make a new one on the backend.");
+            if (code == 400) throw new Failure("The backend couldn't read this phone's request. Update Rose Agent and Rose on the backend.");
+            if (code != 200) throw new Failure("The backend couldn't pair right now (error " + code + "). Make a new code and try again.");
             JSONObject r;
             try {
                 r = new JSONObject(text);
             } catch (JSONException e) {
-                throw new Failure("The Mac's answer wasn't understood. Update Rose Agent and Rose on the Mac.");
+                throw new Failure("The backend's answer wasn't understood. Update Rose Agent and Rose on the backend.");
             }
             if (!key.deviceId().equals(r.optString("deviceId")) || !invite.serverId().equals(r.optString("serverId"))) {
-                throw new Failure("The Mac's answer didn't match this phone. Make a new code and try again.");
+                throw new Failure("The backend's answer didn't match this phone. Make a new code and try again.");
             }
             String name = r.optString("serverName", invite.name);
             if (name.trim().isEmpty() || name.length() > 128) name = invite.name;
@@ -449,11 +446,11 @@ public final class LocalRosePairActivity extends Activity {
             LocalRoseConnection.savePairing(this, invite, name, key.deviceId(), host);
             return name;
         }
-        if (wrongIdentity) throw new Failure("The computer that answered isn't the Mac in this code. Make a new code on the Mac and scan it again.");
+        if (wrongIdentity) throw new Failure("The computer that answered isn't the backend in this code. Make a new code on the backend and scan it again.");
         throw new Failure("Couldn't reach " + invite.name + ". " + UNREACHABLE);
     }
 
-    /** A signed GET /hello: proves the Mac accepts this phone's key before the pairing is saved. */
+    /** A signed GET /hello: proves the backend accepts this phone's key before the pairing is saved. */
     private void verify(SSLSocketFactory tls, String host, LocalRoseAuth.Invite invite, LocalRoseKey key) throws Exception {
         HttpsURLConnection c = open(tls, host, invite.port, "/hello");
         try {
@@ -462,7 +459,7 @@ public final class LocalRosePairActivity extends Activity {
             for (Map.Entry<String, String> h : headers.entrySet()) c.setRequestProperty(h.getKey(), h.getValue());
             int code = c.getResponseCode();
             if (code == 401 || code == 403) {
-                throw new Failure("The Mac didn't accept this phone's signature. Check that the phone's date and time are set automatically, then make a new code on the Mac.");
+                throw new Failure("The backend didn't accept this phone's signature. Check that the phone's date and time are set automatically, then make a new code on the backend.");
             }
         } catch (IOException e) {
             // Paired a moment ago at this address; the link retries by itself.
@@ -798,7 +795,7 @@ public final class LocalRosePairActivity extends Activity {
             stopCamera();
             showConfirm(invite, false);
         } catch (LocalRoseAuth.InvalidInvite e) {
-            status.setText(e.getMessage() + " Point the camera at the code on your Mac.");
+            status.setText(e.getMessage() + " Point the camera at the code on your backend.");
         }
     }
 

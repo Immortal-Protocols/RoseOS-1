@@ -1,0 +1,76 @@
+{
+  "schema": "roseos.builder-reclaim-policy.v1",
+  "basis": "BUILDER-RECLAIM (Release-owned): the safely regenerable build data on the shared builder's attempt storage, and when scripts/builder-reclaim.py may reclaim it. Nothing in the repository pruned this storage before; each Mustang run alone copied 118,544,843,301 bytes of source and used 119,999,254,528 bytes compiling (os/mustang-ota/41761758623/collection.json), and the builder ran out of disk on 2026-11-04 (os/mustang-ota/41884368820). Default deny: only entries a class matches are candidates, and within each only the paths the class lists. An entry is kept whole when any tracked file under pinSources names it, when it belongs to the current run, or when it is among its class's keepNewest newest. Everything else on the builder, including the retained source tree, its OUT_DIR and releases, signed outputs, ledgers, receipts and operator inputs, is never touched (neverReclaimed).",
+  "root": "/home/pixelbuild/rose-actions",
+  "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
+  "receiptDir": "reclaim",
+  "trashDir": ".reclaim-trash",
+  "pinSources": [".github/workflows", "os", "scripts"],
+  "classes": [
+    {
+      "name": "mustang-prep",
+      "parent": ".",
+      "entry": "mustang-prep-(?P<run>[1-9][0-9]{0,19})-(?P<attempt>[1-9][0-9]{0,3})",
+      "reclaim": [{"path": "source", "keep": ["releases"]}, {"path": "downloads"}],
+      "keepNewest": 2,
+      "regenerate": "Every mustang-build run prepares a fresh mustang-prep-<run>-<attempt>: it copies its own source tree from the retained tree, downloads the vendor inputs again and compiles into its own out-mustang-* directories (scripts/mustang-pipeline.py run_root, source and downloads).",
+      "readers": "Only the delivery of that same compile: mustang_collection.py and mustang-sign-package.py use mustang-prep-<run>-1/source and its out-mustang-build-<build>. The two newest are kept whole for that, a pinned recovery prep (os/build-only/mustang-collection-recovery.json) is kept by its pin, and source/releases (the signed copies the sign step writes there) is always kept. Signed outputs live in mustang-sign-<run>-<attempt>, which is never reclaimed."
+    },
+    {
+      "name": "blazer-prep",
+      "parent": ".",
+      "entry": "blazer-prep-(?P<run>[1-9][0-9]{0,19})-(?P<attempt>[1-9][0-9]{0,3})",
+      "reclaim": [{"path": "source", "keep": ["releases"]}, {"path": "downloads"}],
+      "keepNewest": 1,
+      "regenerate": "blazer-prep copies its source tree and downloads its vendor inputs into a new blazer-prep-<run>-<attempt> (scripts/blazer-build-only.py; os/build-only/blazer-prep-host.json inspectCandidates.rootTemplate).",
+      "readers": "The Blazer integrate and compile bindings name their prep by path (os/build-only/blazer-prep-host.json, blazer-integrate-host.json), so a bound prep is kept by its pin; the newest is kept whole."
+    },
+    {
+      "name": "launcher3-compile",
+      "parent": ".",
+      "entry": "launcher3-compile-(?P<run>[1-9][0-9]{0,19})-(?P<attempt>[1-9][0-9]{0,3})",
+      "reclaim": [{"path": "tree"}, {"path": "out"}, {"path": "home"}, {"path": "tmp"}],
+      "keepNewest": 0,
+      "regenerate": "Each launcher3-compile run copies a new tree and compiles into its own out, home and tmp under a new run root (scripts/launcher3-compile.py task_root).",
+      "readers": "Only that run. Its own finish removes exactly these WORK_DIRS and keeps receipts/ (scripts/launcher3-compile.py WORK_DIRS and finish); this class is the backstop for a run whose finish never ran, with the same paths."
+    },
+    {
+      "name": "run-scratch",
+      "parent": ".",
+      "entry": "(?:app|app-reuse|app-inputs-export|cf-alpha|cf-alpha-successor|cf-alpha-apk-diagnostic|cf-alpha-verify-retained|cf-alpha-export)-(?P<run>[1-9][0-9]{0,19})",
+      "reclaim": [{"path": "."}],
+      "keepNewest": 0,
+      "regenerate": "Each run of these routes creates its own <route>-<run id> directory (.github/workflows/os-release.yml app-builder, app-reuse, app-inputs-export and the emulator-alpha jobs).",
+      "readers": "Only that run, whose last step removes the directory whatever happened; a directory left behind belongs to a run whose job was killed before that step."
+    },
+    {
+      "name": "device-readiness-scratch",
+      "parent": ".",
+      "entry": "device-readiness-(?P<run>[1-9][0-9]{0,19})-(?P<attempt>[1-9][0-9]{0,3})",
+      "reclaim": [{"path": "."}],
+      "keepNewest": 0,
+      "regenerate": "Each device-readiness attempt creates its own task root (scripts/device-readiness.py task_root).",
+      "readers": "Only that attempt, which removes it when its marker matches; one left behind belongs to a killed attempt."
+    },
+    {
+      "name": "alpha-staging",
+      "parent": "alpha-source",
+      "entry": "\\.staging-[A-Za-z0-9._-]{1,200}",
+      "reclaim": [{"path": "."}],
+      "keepNewest": 0,
+      "regenerate": "A preparation copies into a new .staging-<identity>-<nonce> and renames it to its preparation id only when complete (scripts/alpha_source.py prepare).",
+      "readers": "None: a completed preparation no longer has the .staging name, and prepare removes its own failed staging; one left behind belongs to a killed preparation."
+    }
+  ],
+  "neverReclaimed": {
+    "the retained source tree, its OUT_DIR and releases/": "outside the attempt storage root: /home/pixelbuild/grapheneos-2026100600 (os/release-pipeline/frankel.json host.sourceRoot, outDir)",
+    "frankel-<build>[-resume-<run>]": "signed and unsigned outputs, resume inputs, and the only record of a build number used by an os-release-mode run (scripts/release-allocate.py observe)",
+    "allocations, app-allocations, mustang-allocations, blazer-allocations": "allocation ledgers",
+    "reconcile, mustang-reconcile-<build>, blazer-reconcile-<build>, mustang-integrate-<build>, blazer-integrate-<build>": "reconcile receipts and owner backups; their names are allocation records (scripts/mustang-allocate.py)",
+    "mustang-collect-, mustang-sign-, mustang-package-, mustang-ota-<run>-<attempt>": "signed target-files, OTA and installer outputs; the next Mustang OTA reads its baseline from a sign directory (os/ota/mustang.json)",
+    "rango-*, frankel-factory-*, rango-factory-*": "retained Rango inputs, identity records and installer packages",
+    "alpha-source/<preparation id>": "prepared alpha trees and their retained output, pinned by os/release-pipeline/cuttlefish-alpha.json",
+    "public-assets, tools": "operator-staged inputs",
+    "reclaim, .reclaim-trash": "this step's own receipts and trash"
+  }
+}

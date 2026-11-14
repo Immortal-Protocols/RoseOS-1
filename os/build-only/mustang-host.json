@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "runtimeStatus": "retired-shared-host",
+  "runtimePolicy": "Historical bindings only. Mustang must never run on this Frankel host again. Legacy entry points refuse; the separate lifecycle contract is os/build-only/mustang-lane.json and is unbound.",
+  "host": "immortal-os-builder",
+  "project": "protocols-465723",
+  "zone": "us-west2-a",
+  "instanceId": "685707771105568194",
+  "jobs": 48,
+  "node": "/usr/local/bin/node",
+  "appsDir": "/home/pixelbuild/rose-actions/frankel-2026110403/release/signed-apps",
+  "policy": "/home/pixelbuild/rose-actions/frankel-2026110403/release/background-policy.json",
+  "appInputAllocation": "os/ota/mustang-frankel-2026110403-allocation.json",
+  "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
+  "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
+  "basis": "Frankel 2026110403, producer 41873084560, source 4e85677ee273630a79eae195e0a044d75226e122. Both paths are rebound together. The downloaded allocation receipt pins the three app versions; the normal signed-input admission must verify current APK bytes, signing receipts and matching policy before integration/compile. A stopped-builder path confirmation is not current file-existence proof. No Blazer or Rango artifacts, package installation or openssh-client change.",
+  "signingBlocker": "Mustang bootstrap 41719073037 is complete with version 1 in both containers. This unsigned route performs no signing. A separate mustang-delivery consumes the completed producer and original bootstrap. OTA read-access admission and expiry are recorded in os/ota/mustang.json; no further key generation or automatic access extension."
+}

@@ -1,5 +1,5 @@
-"""The real phone: Rose Agent on an Android phone, reached over USB (``adb reverse tcp:8091 tcp:8091``)
-or, once paired by QR code, over Wi-Fi or Tailscale through the TLS listener (rose/remote.py).
+"""The real phone: Rose Agent on Android, paired by QR code and reached over Tailscale
+through the pinned TLS listener (rose/remote.py).
 
 Rose Agent dials ``/ws/phone``. Commands go down as ``{"id", "action", ...args}`` and results
 come back as ``{"type": "result", "id", "result"}`` (the phone side is
@@ -60,7 +60,7 @@ from typing import Any, Callable
 
 from PIL import Image, ImageDraw
 
-from .background import CONTROLLER, CONTROLLER_STATES, WORKSPACE_IDLE_S, Workspace
+from .background import CONTROLLER, CONTROLLER_STATES, WORKSPACE_IDLE_S, Workspace, Workspaces
 from .phone import ActionResult, Element, Screen, W, H, _parse_time
 
 MAX_ELEMENTS = 70   # rows shown to the agent per screen
@@ -155,7 +155,7 @@ class PhoneLink:
             if ws is None or loop is None:
                 return {"status": "offline",
                         "message": "Rose Agent is not connected. Open it on the phone "
-                                   "(paired over Wi-Fi or Tailscale, or on USB)."}
+                                   "(connect Tailscale on both devices and pair with Rose)."}
             cid = str(uuid.uuid4())
             fut: concurrent.futures.Future = concurrent.futures.Future()
             self._pending[cid] = fut
@@ -181,8 +181,9 @@ class RealSession:
 
     blocking = True  # actions wait on the phone: run them off the MLX thread
 
-    def __init__(self, phone: "RealPhone", name: str, on_screen: bool = False):
+    def __init__(self, phone: "RealPhone", name: str, on_screen: bool = False, workspace=None):
         self.phone, self.name = phone, name
+        self.scoped = workspace  # an independent session's own workspace; else the shared pool
         self.on_screen = bool(on_screen)
         self._background: bool | None = None
         self.obs: dict = {}
@@ -282,7 +283,7 @@ class RealSession:
     # ----- actions (wait on the phone) ---------------------------------
     def refresh(self) -> dict:
         if self.background:
-            r = self.phone.workspace.inspect()
+            r = self._unit().inspect()
         else:
             r = self.phone.link.call("inspect_ui")
         self._observe(r)
@@ -321,18 +322,29 @@ class RealSession:
             self.shot = {"status": self.obs.get("status") or "unreadable"}
             return None
         if self.background:
-            shot, tree = self.phone.workspace.observe()
+            shot, tree = self._unit().observe()
             self._observe(tree)
             self.image, self.shot = self.phone._decode(shot)
             return self.image
         self.image, self.shot = self.phone.capture()
         return self.image
 
+    @property
+    def workspace(self):
+        """The workspace this task works in: its own (independent sessions) or its pool unit."""
+
+        return self.scoped or self.phone.workspaces.for_view(self.name)
+
+    _unit = workspace.fget
+
+    def _start_app(self, pkg: str) -> dict:
+        return self.scoped.start(pkg) if self.scoped else self.phone.workspaces.start(self.name, pkg)
+
     def _cmd(self, action: str, **args: Any) -> dict:
         """One screen command, in the workspace or on the visible screen."""
 
         if self.background:
-            return self.phone.workspace.command(action, **args)
+            return self._unit().command(action, **args)
         return self.phone.link.call(action, **args)
 
     def open_app(self, app: str) -> ActionResult:
@@ -349,7 +361,7 @@ class RealSession:
     def _open_in_workspace(self, pkg: str, label: str) -> ActionResult:
         """Start (or reuse) Rose's workspace for ``pkg``; a refusal is said plainly, never worked around."""
 
-        r = self.phone.workspace.start(pkg)
+        r = self._start_app(pkg)
         ok = r.get("status") in ("opened", "launch_unverified")
         if ok:
             self._observed(r)
@@ -399,13 +411,13 @@ class RealSession:
 
     def back(self) -> ActionResult:
         if self.background:
-            return self._after(self.phone.workspace.command("back"), "Went back.")
+            return self._after(self._cmd("back"), "Went back.")
         return self._after(self.phone.link.call("back"), "Went back.")
 
     def home(self) -> ActionResult:
         if self.background:
             # The workspace has no home screen: going home ends it (BackgroundPhone: home == stop).
-            r = self.phone.workspace.command("home")
+            r = self._cmd("home")
             return self._after(r, "Closed Rose's workspace.", settle=False)
         return self._after(self.phone.link.call("home"), "Went to the home screen.")
 
@@ -434,8 +446,8 @@ class RealSession:
 
         label = self.phone.app_label(MAPS)
         label = "Maps" if label == MAPS else label
-        ws = self.phone.workspace
-        r = ws.start(MAPS)
+        r = self._start_app(MAPS)
+        ws = self._unit()
         if r.get("status") not in ("opened", "launch_unverified"):
             self.refresh()
             return ActionResult(False, _ws_why(r, label))
@@ -580,6 +592,10 @@ class RealPhone:
 
     real = True
     vision = True  # observations carry a screenshot; the agent may tap points in it
+    # Screenshot-only control of Codex app threads (rose/vision_phone.py, --vision-control): off by default, so app
+    # threads keep the accessibility tools and their send/purchase guard until the owner opts in. Its typing also
+    # needs a controller that reports visionText.
+    vision_control = False
 
     def __init__(self, bus=None):
         self.bus = bus
@@ -593,6 +609,8 @@ class RealPhone:
         self.workspace = Workspace(self._controller, in_use=self._workspace_in_use,
                                    record=lambda rec: bus.emit("workspace", **rec) if bus is not None else None,
                                    on_change=lambda: self._changed("workspace", {"app": self.workspace_app()}))
+        # On a two-slot controller each task view drives its own session (Workspaces).
+        self.workspaces = Workspaces(self.workspace, self._new_unit, self._scoped)
         self._bg: tuple[bool, float] | None = None  # (controller answered, when probed)
         self._bg_lock = threading.Lock()
         self.link = PhoneLink(on_change=self._link_changed)
@@ -607,7 +625,7 @@ class RealPhone:
         self._last_shot: tuple[float, Image.Image | None, dict] = (float("-inf"), None, {})
 
     # ----- the fake Phone's surface ------------------------------------
-    def session(self, name: str, on_screen: bool = False) -> RealSession:
+    def session(self, name: str, on_screen: bool = False, independent: bool = False, visual: bool = False) -> RealSession:
         """A task's view (made on first use; ``on_screen`` is fixed then).
 
         ``on_screen`` False (the default): the task works in Rose's workspace when the phone has
@@ -617,16 +635,32 @@ class RealPhone:
         with self._lock:
             s = self._sessions.get(name)
             if s is None:
-                s = self._sessions[name] = RealSession(self, name, on_screen=on_screen)
+                workspace = None
+                if independent:
+                    from .scoped_workspace import ScopedWorkspace
+                    workspace = ScopedWorkspace(self._controller)
+                if visual:
+                    if not independent or on_screen:
+                        raise ValueError('Vision control requires an independent background workspace')
+                    from .vision_phone import VisionSession
+                    session_class = VisionSession
+                else:
+                    session_class = RealSession
+                s = self._sessions[name] = session_class(self, name, on_screen=on_screen, workspace=workspace)
+                if independent:
+                    s._background = True  # never fall back to the owner's screen
                 if not on_screen:
-                    self.workspace.begin_task()
+                    (s.scoped or self.workspaces).begin_task()
             return s
 
     def close_session(self, name: str) -> None:
         with self._lock:
             s = self._sessions.pop(name, None)
         if s is not None and s._background:
-            self.workspace.touch()  # the workspace stays open for a follow-up; idle time starts now
+            if s.scoped is not None:
+                s.scoped.touch()  # the workspace stays open for a follow-up; idle time starts now
+            else:
+                self.workspaces.release(name)  # it stays open for a follow-up; idle time starts now
 
     def screen(self, view: str | None = None) -> Screen:
         s = self._session_for(view)
@@ -743,7 +777,15 @@ class RealPhone:
     def notify(self, app: str, title: str, text: str) -> None:
         pass  # real notifications come from the phone (not read yet)
 
+    def copy_to_clipboard(self, text: str) -> dict:
+        """Put exactly ``text`` on the phone's clipboard (rose.clipboard; blocking: call it off the server's loop)."""
+        from .clipboard import copy
+        return copy(self.link.call, text)
+
     def reset(self) -> None:
+        for session in list(self._sessions.values()):
+            if session.scoped is not None:
+                threading.Thread(target=session.scoped.close, args=("reset",), daemon=True).start()
         with self._lock:
             self._sessions.clear()
             self._shown = None
@@ -753,15 +795,18 @@ class RealPhone:
     def close(self) -> None:
         """Rose is shutting down: close her workspace (blocking; call it off the server's loop)."""
 
-        if self.workspace.session is not None and self.link.connected:
-            self.workspace.close("shutdown")
+        if self.link.connected:
+            for unit in {*self.workspaces.open_units(), *self._scoped()}:
+                if unit.session is not None:
+                    unit.close("shutdown")
 
     def _close_workspace_soon(self, reason: str) -> None:
         """Close the workspace on a worker thread: reset runs on threads that must not wait on the phone."""
 
-        if self.workspace.session is not None and self.link.connected:
-            threading.Thread(target=self.workspace.close, args=(reason,), name="rose-workspace-close",
-                             daemon=True).start()
+        if self.link.connected:
+            for unit in self.workspaces.open_units():
+                threading.Thread(target=unit.close, args=(reason,), name="rose-workspace-close",
+                                 daemon=True).start()
 
     # ----- Rose's workspace (rose/background.py) ----------------------------------------
     def background_available(self) -> bool:
@@ -794,6 +839,11 @@ class RealPhone:
             status = r.get("status")
             if status in CONTROLLER_STATES:
                 answer = True
+                # How many sessions it runs side by side (schema 4); older ones refuse the op: one.
+                try:
+                    self.workspaces.configure(self.workspace._send("capabilities", {}))
+                except Exception:
+                    self.workspaces.configure(None)
             elif status == "unavailable" or "unsupported phone action" in str(r.get("message") or "").lower():
                 answer = False  # no controller (older phones, the Fold) or an old Rose Agent
             else:
@@ -801,13 +851,46 @@ class RealPhone:
             self._bg = (answer, time.monotonic())
             return answer
 
-    def workspace_app(self) -> str | None:
-        """The label of the app open in Rose's workspace, or None when it is closed (never waits)."""
+    def _scoped(self) -> list[Workspace]:
+        """The independent sessions' own workspaces (Codex mode), outside the pool."""
 
-        s = self.workspace.session
+        return [s.scoped for s in list(self._sessions.values()) if s.scoped is not None]
+
+    def _new_unit(self) -> Workspace:
+        """Another of Rose's workspaces (a second controller session), set up like the first."""
+
+        first = self.workspace
+        return Workspace(self._controller, now=first.now, sleep=first.sleep, record=first.record,
+                         on_change=first.on_change, idle_s=first.idle_s, timers=first.timers)
+
+    def _view_unit(self, view: str | None) -> Workspace | None:
+        """The workspace ``view``'s task uses, else the one used last (None: all closed). Never waits."""
+
+        task = self._sessions.get(view) if view is not None else None
+        if task is not None and task._background:
+            unit = self.workspaces.for_view(view)
+            if unit.session is not None or not self.workspaces.multi:
+                return unit
+        units = self.workspaces.open_units()
+        return units[0] if units else None
+
+    def workspace_app(self, view: str | None = None) -> str | None:
+        """The label of the app open in Rose's workspace (``view``'s, else the one used last), or
+        None when it is closed (never waits)."""
+
+        unit = self._view_unit(view)
+        s = unit.session if unit is not None else None
         if s is None:
             return None
-        pkg = s.get("targetPackage") or ""
+        return self._label_of(s.get("targetPackage") or "")
+
+    def workspace_apps(self) -> list[str]:
+        """Every app open in Rose's workspaces, the one used last first (never waits)."""
+
+        return [self._label_of(u.session.get("targetPackage") or "") for u in self.workspaces.open_units()
+                if u.session is not None]
+
+    def _label_of(self, pkg: str) -> str | None:
         return next((str(a.get("label")) for a in self._apps if a.get("packageName") == pkg), pkg or None)
 
     def look_workspace(self) -> Image.Image | None:
@@ -819,7 +902,8 @@ class RealPhone:
         if not self.background_available():
             self.look_status = "Rose's workspace is not available on this phone"
             return None
-        r = self.workspace.screenshot()
+        unit = self._view_unit(None) or self.workspace
+        r = unit.screenshot()
         image, info = self._decode(r)
         if image is None:
             status = info.get("status") or "error"
@@ -836,8 +920,13 @@ class RealPhone:
         """Read-only workspace state for /api/realphone (no phone call)."""
 
         cached = self._bg
-        return {"enabled": self.use_workspace, "available": None if cached is None else cached[0],
-                "app": self.workspace_app(), "idleCloseS": self.workspace.idle_s, **self.workspace.state()}
+        out = {"enabled": self.use_workspace, "available": None if cached is None else cached[0],
+               "app": self.workspace_app(), "idleCloseS": self.workspace.idle_s, **self.workspace.state()}
+        if self.workspaces.multi:
+            out["slots"] = self.workspaces.max
+            out["workspaces"] = [{"app": self._label_of((u.session or {}).get("targetPackage") or "")
+                                  if u.session else None, **u.state()} for u in self.workspaces.units]
+        return out
 
     def _controller(self, operation: str, params: dict) -> dict:
         """One background-controller operation, as ``app_command`` over the link (the phone passes it on)."""
@@ -855,7 +944,8 @@ class RealPhone:
         Runs on the server's event loop, so nothing here waits on the phone."""
 
         self._bg = None
-        self.workspace.forget()
+        for unit in [*self.workspaces.units, *self._scoped()]:
+            unit.forget()
         self._changed("link", {"connected": self.link.connected})
 
     # ----- apps --------------------------------------------------------
@@ -878,10 +968,11 @@ class RealPhone:
 
         return next((str(a.get("label")) for a in list(self._apps) if a.get("packageName") == pkg), None)
 
-    def workspace_session_id(self) -> str | None:
-        """The controller session Rose's workspace holds now, or None (never waits)."""
+    def workspace_session_id(self, view: str | None = None) -> str | None:
+        """The controller session ``view``'s workspace holds now, or None (never waits)."""
 
-        s = self.workspace.session
+        unit = self._view_unit(view)
+        s = unit.session if unit is not None else None
         return s.get("sessionId") if s else None
 
     def app_label(self, pkg: str) -> str:
@@ -962,12 +1053,43 @@ def _why(r: dict) -> str:
             "offline": message or "The phone is not connected."}.get(status, f"Failed ({status}). {message}".strip())
 
 
+def _refused_with(r: dict, details: dict, code: str) -> bool:
+    """Whether this start was refused with ``code``: the controller's reason, or a failed launch's error for this
+    start's own package (a controller keeps its last error, so another app's earlier failure never counts)."""
+
+    if code in (r.get("reason"), details.get("reason")):
+        return True
+    if details.get("status") != "failed":
+        return False
+    package, target = r.get("packageName"), details.get("targetPackage")
+    if package and target and package != target:
+        return False
+    match = re.search(r"\b" + re.escape(code) + r"(?:: (\S+))?\s*$", str(details.get("error") or ""))
+    return bool(match) and (not match.group(1) or not package or match.group(1) == package)
+
+
 def _ws_why(r: dict, label: str | None = None) -> str:
     """A workspace result the agent reads (and Rose repeats): what happened, plainly."""
 
     status = r.get("status") or "error"
     app = label or "that app"
     details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    if r.get("reason") == "target_in_foreground" or details.get("reason") == "target_in_foreground":
+        # A limit of this RoseOS build's platform patch (it refuses any app visible on the main display), not a rule
+        # Rose follows: F06's platform change replaces it with a takeover on the owner's request. No "switch away and
+        # retry": on this build a later Stop may not return a taken-over app with its state.
+        return (f"{app} is open on your phone screen, and this RoseOS build can't take over an app you can see yet; "
+                "nothing was opened.")
+    if _refused_with(r, details, "target_not_standard"):
+        # The controller's refusal (reason) or the platform's backstop (error) for a Home, recents, assistant or dream
+        # task, which Rose never takes over.
+        return (f"Rose can't take over {app} while the phone uses it as the Home screen, recents, assistant or "
+                "screensaver; nothing was opened.")
+    if _refused_with(r, details, "target_in_other_session"):
+        # The platform: the app shows on another display (Rose's other slot, or anyone else's virtual display).
+        return f"{app} is open on another screen or workspace right now, so Rose didn't move it; nothing was opened."
+    if status == "background_unavailable" and _refused_with(r, details, "app_in_other_session"):
+        status = "app_in_other_session"  # the controller's own launch-time check of its other slot
     if status == "locked":
         return LOCKED_SAY
     if status == "background_target_not_allowed":
@@ -978,10 +1100,23 @@ def _ws_why(r: dict, label: str | None = None) -> str:
     if status == "background_blocked":
         return (f"{app} in Rose's workspace is waiting for the owner on the phone (Android blocked it); "
                 "the workspace is kept and continues once that is done.")
+    if status == "background_unavailable" and details.get("startAbandoned"):
+        # Keeps "workspace could not open": the local agent ends its task on that wording (tasks._WORKSPACE_REFUSAL).
+        # No claim about where a moved app went: only builds with F06's platform return hand it back.
+        if details.get("stopStatus") in ("stopped", "idle", "closed"):
+            return f"Rose's workspace could not open {app} in time, so Rose stopped that start."
+        return (f"Rose's workspace could not open {app} in time, and stopping that start wasn't confirmed; check "
+                "the phone before retrying.")
     if status == "background_unavailable":
         if details.get("status") in ("offline", "timeout", "disconnected"):
             return _why(details)
         return f"Rose's workspace could not open {app} ({details.get('status') or 'unavailable'}); nothing was opened."
+    if status == "app_in_other_session":
+        return (f"{app} is open in Rose's workspace for another of her tasks right now; nothing was opened. "
+                "Let that task finish first.")
+    if status in ("session_limit", "multi_session_unavailable"):
+        return (f"Rose's workspace is busy with her other tasks' apps; {app} was not opened. "
+                "Let one of them finish first.")
     if status == "stopped_by_owner":
         return "The owner stopped Rose's workspace; it stays closed for this task."
     if status == "no_background_app":
