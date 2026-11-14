@@ -139,7 +139,7 @@ Android's update path; the revise prompt also requires keeping storage keys
 and schema migrations. The writer's fixed instructions (`app-build.mjs`) say
 so, but instructions are not proof. Acceptance still needs a seeded-data →
 update → read-back test on a stock-Android phone and a RoseOS phone, run
-separately.
+separately, including a schema-changing revision (§5, blocker 5).
 
 ### 2.1 Libraries (pinned pure-Java JARs; source only, enabled nowhere)
 
@@ -1070,7 +1070,30 @@ test, and no model was called.
    to restart it and a deployment is authorized.
 5. **Device proof (device owner handback).** Install, revise and data-retaining
    update must be shown on a stock-Android phone and a RoseOS phone,
-   separately. No harness exists for packages other than Rose Agent.
+   separately. No harness exists for packages other than Rose Agent. One
+   case must be a **schema-changing revision**, run on each phone and
+   recorded as physical acceptance (docs/VERIFY.md):
+   1. Build v1 of an app that keeps data in all three places: a SQLite
+      database at schema version 1, SharedPreferences keys, and a file in
+      its own storage.
+   2. Install it, then seed known values in each place through the app
+      itself.
+   3. Ask for a revision that changes the schema, for example a new column or
+      table. Build it and update in place through the installer (same
+      package and signer, a higher versionCode). No uninstall, and no data
+      cleared.
+   4. Read back in the updated app:
+      - every seeded row and value is unchanged;
+      - the new schema element is present, with its default or migrated
+        value;
+      - the preferences and the file are intact.
+   5. Record the build's versionCodes and source revisions, the phone's
+      model, Android version and SDK level, and the result of each check.
+
+   A crash, lost data or a cleared database on first launch of the update
+   is a failure of this case, never a pass. A build that compiles and signs
+   is not this evidence. This case is a test-plan step only: it has not been
+   run.
 6. **Level 2 (Chariot owner, OS Core).** There is no Chariot code in this
    repository. Hosting, sleep/wake, storage and deploy tools belong to the
    Chariot owner. The one-time code + PIN/passphrase protocol belongs to OS
