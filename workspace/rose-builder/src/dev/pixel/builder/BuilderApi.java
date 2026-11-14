@@ -14,9 +14,15 @@ interface BuilderApi {
  /** §3.3 version: sourceRevision is the immutable id of its source; the APK is fetched by its SHA-256. */
  final class Version {
   final long versionCode, createdAt; final String versionName, jobId, sourceRevision, apkSha256, notes; final long apkSize;
+  /** §3.3 advisory API level summary: never null (absent reads as none), never a pass, never a gate. */
+  final ApiReport apiReport;
   Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes) {
+   this(versionCode, versionName, createdAt, jobId, sourceRevision, apkSha256, apkSize, notes, ApiReport.none());
+  }
+  Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes, ApiReport apiReport) {
    this.versionCode = versionCode; this.versionName = versionName; this.createdAt = createdAt; this.jobId = jobId;
    this.sourceRevision = sourceRevision; this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
+   this.apiReport = apiReport == null ? ApiReport.none() : apiReport;
   }
  }
  /** §3.3 project, re-read from the library on every refresh (signerSha256 is null until the first signed build and

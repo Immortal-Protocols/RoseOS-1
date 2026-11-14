@@ -20,6 +20,12 @@ in `scripts/test-local.sh`):
   `schemaVersion: 1`, and unknown fields are ignored. Times convert from epoch seconds to milliseconds. A 400 shows
   the builder's own sentence, never treated as success or retried. A final 401 asks the owner to pair again, and a non-final one is
   signed afresh once.
+- `ApiReport`: each version's advisory API level summary (`docs/APP-BUILDER.md` §3.3). It's read by §3.3's rule:
+  anything malformed or unknown is "couldn't be read", never clean, and never fails the library. A missing
+  `apiReport` reads as none. The phone shows it as detection in the built app, never as proof that the app runs on a
+  phone. No status, zero count or `highestLevel` at or below the phone's SDK is worded as a pass. Incomplete,
+  unavailable, truncated and unlisted results are stated plainly. It never blocks or changes a build or an install.
+  `tests/ApiReportTest.java` checks it against App Core's shared fixture file.
 - `BuildJob`: build stages, named failure categories, and retry advice only when the server says a retry can help.
   Progress never moves backwards.
 - `InstallPlan`: install, update or open only with the same package, the same signer and a higher version. A changed
