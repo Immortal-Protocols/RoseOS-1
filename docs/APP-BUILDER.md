@@ -276,13 +276,11 @@ API 35, and nothing checks that the app guards calls to APIs newer than 26.
 backported), and no framework API. An app that calls a newer API unguarded
 compiles and is signed, but can fail at runtime on an older phone. The
 writer is told to check `Build.VERSION.SDK_INT`, but that is guidance, not
-enforcement. Nothing checks this yet. It could be closed offline with data
-already pinned: platform 35's `data/api-versions.xml` records the API level
-of every framework and `java.*` member, so a check of the dex's method
-references against it needs no acquisition. Telling a guarded call from an
-unguarded one is the hard part. An API 26 platform jar or Android lint would
-be other ways, and both would need acquisition. Compiling and desugaring is
-not device proof.
+enforcement. The advisory API level report (§2.3) now detects such
+references offline with the pinned `data/api-versions.xml`. It never blocks a
+build, and it can't see across methods, so compatibility stays unresolved.
+An API 26 platform jar or Android lint would be other ways, and both would
+need acquisition. Compiling and desugaring is not device proof.
 
 **Proof level.** `rose/tests/test_app_java17.py` covers:
 - a fixture using records, sealed types, a switch expression, a text block,
@@ -301,6 +299,168 @@ Mutation checks each make a test fail: no inline concatenation, JDK system
 modules instead of Android's, the Java 8 level, an unvalidated cache, a key
 without the recipe and core jar, a JDK API reported as a library, and links
 trusted in the image.
+
+### 2.3 API level report (advisory; source only, enabled nowhere)
+
+After each successful build, `rose/app_builder/apilevel.py` writes an
+**advisory** report of platform API references above minSdk 26 that it
+finds. It goes into the job log as one summary line, and the full report is
+recorded with the delivered version (`Ledger.api_report`). It never fails or
+changes a build, and adds no rule on what an app may do. It does take time:
+`dexdump` runs within the build's tool timeout, and the analysis has a 60 s
+budget.
+
+**What it reads.** It reads the final dex, after `d8`, through the pinned
+`dexdump -d`. Backported methods such as `List.of` and `String.repeat` are
+therefore no longer platform references, and constants such as
+`VERSION_CODES.*` are inlined. Each framework and `java.*` reference is
+looked up in the pinned platform 35 `data/api-versions.xml`, with no
+acquisition. That file gives every class, method and field the level it was
+added, and its supertypes with the level each was added. It covers:
+- invokes, field accesses and type uses;
+- `catch` handler types, each judged over its whole try range: it is
+  `guarded` only if every instruction it covers is;
+- the app's own classes' supertypes and interfaces, including the synthetic
+  classes `d8` makes for lambdas.
+
+A call on the app's own class (for example `setShowWhenLocked` on
+`MainActivity`) is resolved through the app's and the platform's inheritance.
+A member the app's own class declares, such as an override it calls, is the
+app's, not the platform's. An inherited member is available from the
+earliest level it can be reached through the class it's called on: never
+before that class, and never before the supertype that provides it was
+added.
+
+**Statuses.** Every reference above 26 gets one:
+- `guarded`: in its method, a `Build.VERSION.SDK_INT` comparison with a
+  constant dominates it on the branch that guarantees the API's level. This
+  uses a per-method control-flow graph, with exception edges, and respects
+  branch direction. An inverted guard (`SDK_INT < 34`) or a guard that is too
+  low (`>= 30` for a level-34 API) is not a guard.
+- `not_guarded_here`: the method was analysed completely and nothing in it
+  protects the reference. A caller may still guard it: the analysis doesn't
+  look across methods.
+- `unverified`: the analysis can't tell, and the reference is never treated
+  as safe. The causes are:
+  - a branch it didn't recognise, in a method that calls the app's own code
+    or reads an app field. A helper's result or a flag may decide it, through
+    any number of moves, blocks or operations;
+  - an `SDK_INT` value it doesn't follow, for example one kept in a variable
+    and compared later;
+  - an `SDK_INT` result that may reach a branch through a variable;
+  - unreachable code;
+  - an extension-SDK API, whose availability `SDK_INT` alone doesn't decide;
+  - a class's own supertype, which only never loading the class protects;
+  - a method it could not read completely: a `switch` (`dexdump` doesn't
+    print switch targets), a code line or branch target it couldn't parse,
+    instructions that don't exactly cover the method's code, or more than
+    20,000 instructions.
+
+Nothing is dropped silently:
+- a platform reference the pinned database can't place (a class or member
+  it doesn't list, such as some extension-SDK APIs, `sun.misc.Unsafe` or
+  `javax.naming`) is reported `unverified`, "not in the pinned API
+  database";
+- so is a supertype the database doesn't know;
+- so is an interface method, the app's or the platform's, that a class
+  implements only through an inherited platform method above 26. Calls
+  through the interface fail below that level. For example, a class
+  extending `MediaMetadataRetriever` as an `AutoCloseable` gets `close()`
+  only from 29.
+
+A member the database leaves off a class it does know is assumed available
+from that class's own level. These are mostly methods inherited from a
+hidden superclass, such as `StringBuilder.setLength` and `substring`. They
+are named in the report's `unlisted` field (up to 50, with a count) rather
+than as findings, so ordinary code doesn't fill the findings cap.
+
+`invoke-polymorphic` references (`VarHandle`, `MethodHandle`) are read like
+any call. Only the platform's own `android/os/Build$VERSION.SDK_INT` counts
+as a guard, never a look-alike field in the app. The dump is split on newlines
+only, so characters `dexdump` prints raw inside strings (U+2028, U+0085 and
+the like) can't forge dump lines.
+
+**Overall status.** The analysis fails closed. A method it couldn't read
+completely, or methods left unanalysed when the 60 s budget runs out (it is
+checked before each method), make the report `incomplete` with a reason. If the database or `dexdump` is
+missing, or the analysis fails, the report is `unavailable` with a reason
+and no counts, so it never reads as clean. The build continues either way.
+
+**Limits.** This is detection, not device compatibility proof, and an empty
+list is no compatibility claim. These are not covered:
+- reflection, and anything reached without a dex reference;
+- a platform object passed as an interface its class only implements from a
+  later level, which needs type flow;
+- behaviour changes, permissions, OEM differences and hidden APIs;
+- guards in other methods, including library `Api*Impl` classes, and
+  `@RequiresApi`, which `d8` drops;
+- libraries' own code is reported, tagged `origin: library`, under the same
+  rules.
+
+Findings are capped at 200 per report, and the number left out is counted.
+
+**Proof level.** `rose/tests/test_app_apilevel.py` builds one fixture
+through the real pipeline (compiled, never run) and asserts each row:
+- correct `if`, early-return and `VERSION_CODES` guards are `guarded`;
+- inverted and too-low guards are `not_guarded_here`;
+- a helper guard is `unverified`;
+- inherited members, fields and new classes are found;
+- constants, backports and reflection leave no reference;
+- a newer `catch` type is found, and a lambda's newer interface is an
+  `unverified` supertype;
+- an extension API and a `switch` method are `unverified`, and the report is
+  `incomplete`;
+- `flag || SDK_INT >= 34`, `!= 33`, and code reached through a caught throw
+  below 34 are never `guarded`;
+- an int helper, an app field flag, a boolean local and a reused `SDK_INT`
+  value are `unverified`;
+- a call to the app's own override isn't a platform reference.
+
+Unit tests cover these, each `incomplete`, never clean, or never
+`guarded`:
+- `goto/32` edges and wide addresses;
+- unreadable lines and branch targets;
+- strings that would forge lines, and listings that don't cover the code;
+- a look-alike `SDK_INT`, and a helper's value used a block later;
+- the size cap, and the time budget checked between methods;
+- the inheritance levels.
+
+The fixture also has a `catch` whose try range covers unguarded code. Unit
+tests add an `invoke-polymorphic` reference, unplaced classes, members and
+supertypes, and an app interface implemented through a newer platform
+method.
+
+It also covers a missing database and a crashing analysis, which give
+`unavailable` while the build stays `ready`. Unit tests cover every
+comparison form and constant side, and inheritance. Mutation checks each make
+a test fail:
+- branch direction or constant side ignored;
+- no app or platform inheritance;
+- a helper treated as unguarded or as a guard;
+- a switch claimed as analysed;
+- extension SDKs treated as plain;
+- catch handlers or supertypes skipped;
+- an unread `SDK_INT` use trusted;
+- a crash failing the build;
+- an empty dump reading as clean;
+- unreadable targets ignored, `goto/32` not parsed, fixed-width addresses or
+  unparsed lines ignored;
+- no size cap or time budget;
+- an inherited level that ignores the newer class, or takes the first path
+  rather than the earliest;
+- `SDK_INT` reuse, app-value branches or a variable-carried result ignored;
+- the app's own override treated as platform;
+- no exception edges;
+- `splitlines` parsing, or no coverage check;
+- a `catch` judged at its try start only;
+- a look-alike `SDK_INT` accepted, or app values ignored;
+- the budget checked only between classes;
+- a guard memo that drops edge guards;
+- the polymorphic comma kept;
+- unplaced references or supertypes dropped;
+- interface gaps ignored, platform interfaces skipped;
+- app fields not known;
+- unlisted members silently dropped, or flooding the findings.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 

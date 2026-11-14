@@ -9,6 +9,7 @@ on an authorized host) is injected: this module never decides how code is writte
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import shutil
 import stat
@@ -183,6 +184,14 @@ def _snapshot(source: Path, dest: Path):
         raise refuse('The app\'s files changed while they were being checked.') from None
     finally:
         os.close(root)
+
+
+def _api_report(work: Path) -> dict | None:
+    """The build's advisory API level report, if it wrote one (it never decides delivery)."""
+    try:
+        return json.loads((work / 'api-report.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
 
 
 def _note(note, request: str) -> str:
@@ -375,7 +384,7 @@ class Builder:
                 _place(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
             _place(signed, artifacts / f'{receipt["sha256"]}.apk')  # durable before the version row exists
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
-                                       _note(note, job['request']), libraries):
+                                       _note(note, job['request']), libraries, _api_report(work)):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
         except toolchain.StepFailed as failed:
             self._safe_reset(source, project_id)

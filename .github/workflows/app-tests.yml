@@ -274,14 +274,14 @@ jobs:
           "$RUNNER_TEMP/codex-voice-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: \
             $(grep -E '^(numpy|pillow|fastapi|uvicorn|websockets|soundfile|httpx)==' prototypes/voice-phone-demo/requirements.txt) cryptography
           PYTHONPATH="$GITHUB_WORKSPACE/prototypes/voice-phone-demo" \
-            "$RUNNER_TEMP/codex-voice-venv/bin/python" -m unittest rose.tests.test_codex rose.tests.test_tailnet rose.tests.test_vision_phone rose.tests.test_voice_identity rose.tests.test_voice_catalog rose.tests.test_composer rose.tests.test_app_builder rose.tests.test_builder_routes rose.tests.test_workspace_tasks rose.tests.test_app_generator rose.tests.test_app_capabilities rose.tests.test_app_dependencies rose.tests.test_app_java17 rose.tests.test_app_host
+            "$RUNNER_TEMP/codex-voice-venv/bin/python" -m unittest rose.tests.test_codex rose.tests.test_tailnet rose.tests.test_vision_phone rose.tests.test_voice_identity rose.tests.test_voice_catalog rose.tests.test_composer rose.tests.test_app_builder rose.tests.test_builder_routes rose.tests.test_workspace_tasks rose.tests.test_app_generator rose.tests.test_app_capabilities rose.tests.test_app_dependencies rose.tests.test_app_java17 rose.tests.test_app_apilevel rose.tests.test_app_host
       - name: App builder build and sign (pinned SDK, throwaway project keys, nothing installed)
         run: |
           set -euo pipefail
           export ANDROID_SDK_ROOT="$RUNNER_TEMP/android-sdk" ROSE_REQUIRE_APP_BUILD=1
           bash scripts/setup-android-sdk.sh
           PYTHONPATH="$GITHUB_WORKSPACE/prototypes/voice-phone-demo" \
-            "$RUNNER_TEMP/codex-voice-venv/bin/python" -m unittest rose.tests.test_app_builder rose.tests.test_builder_routes rose.tests.test_app_generator rose.tests.test_app_capabilities rose.tests.test_app_dependencies rose.tests.test_app_java17 rose.tests.test_app_host
+            "$RUNNER_TEMP/codex-voice-venv/bin/python" -m unittest rose.tests.test_app_builder rose.tests.test_builder_routes rose.tests.test_app_generator rose.tests.test_app_capabilities rose.tests.test_app_dependencies rose.tests.test_app_java17 rose.tests.test_app_apilevel rose.tests.test_app_host
       - name: Offline suite
         run: bash scripts/test-local.sh
       - name: Models PR288 cases executed, not skipped (only the unpinned jinja2 render case may skip)
