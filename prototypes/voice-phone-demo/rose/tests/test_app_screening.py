@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+from rose.tests.policy_fixtures import approving_policy
 from rose.app_builder import screening, template, toolchain
 from rose.app_builder.service import Builder, Refused
 from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK
@@ -196,7 +197,8 @@ class BuilderScreening(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.calls = []
-        self.b = Builder(Path(self.tmp.name), toolchain.Tools(SDK), generate=lambda *a: self.calls.append(a))
+        self.b = Builder(Path(self.tmp.name), toolchain.Tools(SDK), generate=lambda *a: self.calls.append(a),
+                         policy=approving_policy())
         self.addCleanup(self.b.ledger.close)
 
     def tearDown(self):
@@ -378,7 +380,7 @@ class BuildPolicy(unittest.TestCase):
 
     def run_job(self):
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=True)
-        b = Builder(Path(self.tmp.name) / 'b', tools, self.accessibility)
+        b = Builder(Path(self.tmp.name) / 'b', tools, self.accessibility, policy=approving_policy())
         self.addCleanup(b.ledger.close)
         out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'a stopwatch'})
         b.run_next()

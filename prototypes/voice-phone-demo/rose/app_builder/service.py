@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import screening, template, toolchain
+from . import policy as screening_policy, template, toolchain
 from .ledger import Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -193,12 +193,14 @@ def _note(note, request: str) -> str:
 
 
 class Builder:
-    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None):
+    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, policy=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
-        toolchain.StepFailed."""
+        toolchain.StepFailed. ``policy`` screens every new request (§3.7); the default has no allow-authoritative
+        gate, so this builder accepts nothing until a host configures an authorized one."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         self.tools, self.generate = tools, generate
+        self.policy = policy if policy is not None else screening_policy.default_policy()
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -208,35 +210,47 @@ class Builder:
 
     def create(self, device: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'description': (str, MAX_TEXT)})
-        notes = self._screen(device, b['clientRequestId'], b['description'])
         name = b['description'].splitlines()[0][:40].strip() or 'New app'
+        screened = self._screen(device, b['clientRequestId'], 'create', b['description'], ())
         try:
             out = self.ledger.create(device, b['clientRequestId'], b['description'], name)
         except LedgerError as error:
             raise Refused(str(error)) from None
-        self.wake.set()
-        return {**out, 'notes': notes}
+        return self._accepted(out, screened)
 
     def revise(self, device: str, project: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'request': (str, MAX_TEXT)})
         if self.ledger.project(project) is None:  # reported as such, not as a screening refusal
             raise Refused('unknown project')
-        notes = self._screen(device, b['clientRequestId'], b['request'])
+        screened = self._screen(device, b['clientRequestId'], 'revise', b['request'],
+                                self.ledger.request_history(project))
         try:
             out = self.ledger.revise(device, project, b['clientRequestId'], b['request'])
         except LedgerError as error:
             raise Refused(str(error)) from None
-        self.wake.set()
-        return {**out, 'notes': notes}
+        return self._accepted(out, screened)
 
-    def _screen(self, device: str, client_request_id: str, text: str) -> list[str]:
-        """Request screening (§3.6) before any job row exists; returns the accepted request's notes. A request the
-        ledger already accepted (the same clientRequestId and text) is not refused on a retry, so retries stay
-        idempotent if the rules change; the same clientRequestId with other text is refused by the ledger."""
-        result = screening.screen(text)
-        if not result['ok'] and not self.ledger.known_request(device, client_request_id, text):
-            raise Refused(result['message'], code='out_of_scope', category=result['category'])
-        return result['notes']
+    def _screen(self, device: str, client_request_id: str, kind: str, text: str, prior: tuple):
+        """The screening policy (§3.7) before any job row exists. None for a replay of a request the ledger already
+        accepted (the same clientRequestId and text), which keeps its recorded decision whatever the rules are now;
+        the same clientRequestId with other text is screened afresh and then refused by the ledger. Anything but
+        ``allow`` raises Refused: ``deny`` as ``out_of_scope``, ``review_required`` as ``review_required``."""
+        if self.ledger.known_request(device, client_request_id, text):
+            return None
+        decision, decisions = self.policy.assess(screening_policy.ScreenRequest(kind, text, tuple(prior)))
+        if decision.verdict != screening_policy.ALLOW:
+            code = 'out_of_scope' if decision.verdict == screening_policy.DENY else 'review_required'
+            raise Refused(decision.reason, code=code, category=decision.category)
+        return decision, decisions
+
+    def _accepted(self, out: dict, screened) -> dict:
+        if screened is None:  # a replay: the notes recorded when it was accepted
+            recorded = self.ledger.screening(out['jobId'])
+            return {**out, 'notes': recorded['notes'] if recorded else []}
+        decision, decisions = screened
+        self.ledger.record_screening(out['jobId'], [d.record() for d in decisions], decision.notes)
+        self.wake.set()
+        return {**out, 'notes': list(decision.notes)}
 
     def retry(self, job_id: str, body) -> dict:
         """Run a failed, retryable job again as its next attempt (same jobId, attempt + 1)."""

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from rose.tests.policy_fixtures import approving_policy
 from rose.app_builder import ledger as L, template, toolchain
 from rose.app_builder.service import Builder, Refused
 
@@ -207,7 +208,7 @@ class TemplateTest(Base):
 class ApiTest(Base):
     def setUp(self):
         super().setUp()
-        self.b = Builder(self.root, toolchain.Tools(SDK), generate=lambda *a: None)
+        self.b = Builder(self.root, toolchain.Tools(SDK), generate=lambda *a: None, policy=approving_policy())
         self.addCleanup(self.b.ledger.close)
 
     def test_strict_v1_bodies(self):
@@ -256,7 +257,7 @@ class BuildTest(Base):
 
     def builder(self, generate, key_creation=True):
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=key_creation)
-        b = Builder(self.root, tools, generate)
+        b = Builder(self.root, tools, generate, policy=approving_policy())
         self.addCleanup(b.ledger.close)
         return b
 

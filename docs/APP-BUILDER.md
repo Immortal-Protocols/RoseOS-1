@@ -162,7 +162,7 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 
 | Call | Request | Response |
 |---|---|---|
-| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}`; 400 `{error, code: out_of_scope, category: harm \| platform}` when screening refuses (§3.6) |
+| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}`; 400 `{error, code: out_of_scope, category: harm \| platform}` when screening refuses (§3.6), or 400 `{error, code: review_required, category}` when the policy can't allow it (§3.7) |
 | `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId, notes}`; 400 as above |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
 | `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`; 400 unless the job failed, is retryable, the project has no active job, and no later version has been delivered |
@@ -253,8 +253,11 @@ uses no model. Revise checks the project exists first, so an unknown project
 is reported as `unknown project`. A refused request starts no writer, creates
 no project or job, and returns 400 with these fields:
 
-- `code`: always `out_of_scope`;
-- `category`: `harm` or `platform`;
+- `code`: `out_of_scope` for a phrase-gate refusal (`deny`), or
+  `review_required` when the policy can't allow the request (§3.7). With no
+  allow-authoritative gate configured, that is every request that isn't
+  refused, with category `unavailable`;
+- `category`: `harm` or `platform` for `out_of_scope`;
 - `error`: an owner-facing sentence ending "Nothing was started.", which never
   quotes the request back.
 
@@ -339,10 +342,54 @@ route test in `test_builder_routes.py`). That covers:
 accessibility-service manifest is refused by the source check, and again by
 the built-APK check when the source check is bypassed.
 
-### 3.7 Screening policy interface (proposal, not implemented)
+### 3.7 Screening policy interface (items 1–4 implemented in source; no approving gate)
 
-This answers blocker 0 (§5). It is a design only. It chooses no moderation
-provider, enables nothing and weakens nothing in §3.6.
+This answers blocker 0 (§5). It chooses no moderation provider, enables
+nothing and weakens nothing in §3.6.
+
+**Implemented** (source only):
+
+- `rose/app_builder/policy.py`: `ScreenRequest`, `Decision`, `Chain` (rules
+  1–4) and `PhraseGate`, the §3.6 phrase screen as a deny-only gate. Gates run
+  on one shared pool with a timeout. A gate that hangs, throws or answers
+  malformed, or for another gate or version, counts as unavailable.
+- `Builder(..., policy=None)` gets `policy.default_policy()`, which has no
+  allow-authoritative gate, so every create and revise is refused with
+  `review_required`/`unavailable` and nothing is recorded. No approving gate
+  exists outside tests.
+- A revise is judged with the project's history (`Ledger.request_history`).
+  The decisions that accepted a job (gate, version, verdict, category) and its
+  notes are kept with it (`screenings` table). A replay returns them unchanged
+  whatever the policy is now.
+- `rose/tests/policy_fixtures.py`: test-only `RecordedGate`, which answers
+  from recorded verdicts, and `approving_policy()` for build-path tests.
+- `rose/tests/fixtures/screening/*.jsonl`: 155 recorded cases, all moved from
+  the existing §3.6 tests (121 benign, 13 capability notes, 21 refusals). No
+  new harm phrasings were written.
+
+Proof level: container tests only (`rose/tests/test_app_policy.py`, plus a
+route test). They cover:
+
+- every chain of up to three gates over nine gate behaviours, each gate either
+  allow-authoritative or not (6,175 chains),
+  each checked against an independent oracle, plus the fail-closed invariants;
+- a hanging gate;
+- the default policy across all 155 fixtures, which allows none of them;
+- recorded replay, matching every expected verdict;
+- the default Builder recording nothing;
+- review_required never overridden, and replays keeping their decision.
+
+Each rule has a mutation check: accepting malformed answers, needing no
+allow-authoritative gate, letting an empty chain allow, or letting
+review_required through each makes the tests fail.
+
+Not done:
+
+- any allow-authoritative gate;
+- any reviewer role;
+- any model call;
+- Home/App showing `review_required`. The contract is additive and was sent
+  to them.
 
 **Interface.** A screening policy is an ordered chain of gates. Each gate is
 called with:

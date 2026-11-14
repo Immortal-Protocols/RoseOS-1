@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   request TEXT NOT NULL, client_key TEXT NOT NULL UNIQUE, attempt INTEGER NOT NULL, state TEXT NOT NULL,
   stage TEXT NOT NULL, message TEXT NOT NULL, log_tail TEXT NOT NULL, started REAL NOT NULL, updated REAL NOT NULL,
   failure TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0, version_code INTEGER);
+CREATE TABLE IF NOT EXISTS screenings (
+  job_id TEXT PRIMARY KEY, decisions TEXT NOT NULL, notes TEXT NOT NULL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -78,6 +80,25 @@ class Ledger:
         row = self.db.execute('SELECT job_id, project_id, request FROM jobs WHERE client_key=?',
                               (client_key,)).fetchone()
         return None if row is None else {'jobId': row[0], 'projectId': row[1], 'request': row[2]}
+
+    def record_screening(self, job_id: str, decisions: list, notes) -> None:
+        """The policy decisions that accepted a job (gate, version, verdict, category), kept with it; the first
+        record wins, so a concurrent replay never rewrites it."""
+        with self.lock:
+            self.db.execute('INSERT OR IGNORE INTO screenings VALUES (?,?,?,?)',
+                            (job_id, json.dumps(decisions), json.dumps(list(notes)), self.clock()))
+
+    def screening(self, job_id: str) -> dict | None:
+        with self.lock:
+            row = self.db.execute('SELECT decisions, notes FROM screenings WHERE job_id=?', (job_id,)).fetchone()
+        return None if row is None else {'decisions': json.loads(row[0]), 'notes': json.loads(row[1])}
+
+    def request_history(self, project: str) -> tuple:
+        """The project's description and every request made of it, oldest first: what a revise is judged with."""
+        with self.lock:
+            rows = self.db.execute('SELECT request FROM jobs WHERE project_id=? ORDER BY started, rowid',
+                                   (project,)).fetchall()
+        return tuple(r[0] for r in rows)
 
     def known_request(self, device: str, client_request_id: str, text: str) -> bool:
         """Whether this exact request (same clientRequestId and the same text) was already accepted."""
