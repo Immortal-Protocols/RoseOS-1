@@ -162,7 +162,7 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 
 | Call | Request | Response |
 |---|---|---|
-| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}`; 400 `{error, code: out_of_scope, category}` when screening refuses (§3.6) |
+| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}`; 400 `{error, code: out_of_scope, category: harm \| platform}` when screening refuses (§3.6) |
 | `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId, notes}`; 400 as above |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
 | `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`; 400 unless the job failed, is retryable, the project has no active job, and no later version has been delivered |
@@ -249,30 +249,41 @@ alone.
 
 Create and revise screen the request text before any job exists
 (`rose/app_builder/screening.py`). The screen is offline, deterministic and
-uses no model. A refused request starts no writer, creates no project or job,
-and returns 400 with these fields:
+uses no model. Revise checks the project exists first, so an unknown project
+is reported as `unknown project`. A refused request starts no writer, creates
+no project or job, and returns 400 with these fields:
 
 - `code`: always `out_of_scope`;
-- `category`: one of `platform`, `capability` or `harm`;
+- `category`: `harm` or `platform`;
 - `error`: an owner-facing sentence ending "Nothing was started.", which never
   quotes the request back.
 
-The categories cover:
+It refuses only what it can name precisely:
 
-- `platform`: not an Android phone app (iPhone or iPad, a website or web app,
-  a browser extension, a desktop program, a watch or TV).
-- `capability`: powers generated apps never get. These are accessibility
-  services, device admin, SMS, the call log or call recording, VPN, drawing
-  over or reading other apps' notifications, a keyboard, controlling or
-  installing other apps, and root or system access.
-- `harm`: covert surveillance of another person, collecting credentials or
-  imitating a sign-in, and malware.
+- `harm`: covert surveillance of another person, such as "spy on my wife",
+  spyware, or tracking someone "without them knowing". Also stealing passwords,
+  phishing, imitating a named brand's sign-in, and malware.
+- `platform`: a request whose subject is an app for another platform, such as
+  "make me a website" or "an iPhone app for …". A request that mentions
+  Android is never refused this way.
 
 Everything else is accepted. `notes` (a list of sentences, often empty) says
-what happens instead when the request names a library or needs a server:
-framework APIs only, and nothing is hosted online. A retry of a request the
-ledger already accepted is never refused, so idempotency holds if the rules
-change.
+what happens instead in three cases:
+
+- a power generated apps never get, such as SMS or the call log, an
+  accessibility service, device admin, a VPN, a keyboard, drawing over or
+  blocking other apps, or root;
+- a library;
+- anything that needs a server.
+
+Those are notes, not refusals. The words are ambiguous, as in "a piano keyboard
+app" or "remind me to send texts". The policy below refuses the powers
+themselves whatever the request said. A retry of a request the ledger already
+accepted is never refused, so idempotency holds if the rules change.
+
+The first version (82830ea0) also hard-refused capability words. Review found
+47 of 112 ordinary requests refused. That corpus is now a test, and none of
+its requests is refused.
 
 The screen is a courtesy that reads English phrases. A reworded request can
 pass it, and the writer can add things the request never asked for. What
@@ -286,25 +297,32 @@ by attribute id (`toolchain.binary_permission_problem`):
     contacts and calendar;
   - or the app's own `<package>.*` permissions.
 
-  Refused: SMS, call log, phone state, overlays, querying or installing
-  packages, background location, settings, and every system, signature or
-  binding permission.
+  Refused: SMS, call log, phone state, overlays, querying all packages,
+  installing packages, background location, settings, and every system,
+  signature or binding permission. `<queries>` for named packages or intents
+  (ordinary package visibility) stays allowed.
 - `android:permission`, `readPermission` and `writePermission` on any
   element: only `BIND_JOB_SERVICE`, `BIND_QUICK_SETTINGS_TILE` or the app's
   own. That refuses the binding permissions that make a component an
   accessibility service, device admin, VPN, notification listener or
   keyboard.
-- `<permission>` declarations only in the app's own namespace. No permission
-  name may come from a resource reference.
+- `<permission>` declarations only in the app's own namespace, checked on the
+  source and on the built APK. No permission name may come from a resource
+  reference.
 
 A failure is category `compile` with the policy's sentence as the summary.
 This allowlist is App Core's proposed default. Widening it is Nathan's
 decision.
 
 Proof level: container tests only (`rose/tests/test_app_screening.py`, a
-route test in `test_builder_routes.py`). That covers the screen's categories
-and near-misses, a refusal recording nothing, retry idempotency, and the
-source check alone. It also includes real builds where an
+route test in `test_builder_routes.py`). That covers:
+
+- refusals by category, and capability words as notes;
+- the more-than-100-request near-miss corpus;
+- normalization, and worst-case speed;
+- a refusal recording nothing, and retry idempotency;
+- an unknown project on revise;
+- the source check alone. It also includes real builds where an
 accessibility-service manifest is refused by the source check, and again by
 the built-APK check when the source check is bypassed.
 

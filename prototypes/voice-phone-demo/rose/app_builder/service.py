@@ -219,6 +219,8 @@ class Builder:
 
     def revise(self, device: str, project: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'request': (str, MAX_TEXT)})
+        if self.ledger.project(project) is None:  # reported as such, not as a screening refusal
+            raise Refused('unknown project')
         notes = self._screen(device, b['clientRequestId'], b['request'])
         try:
             out = self.ledger.revise(device, project, b['clientRequestId'], b['request'])

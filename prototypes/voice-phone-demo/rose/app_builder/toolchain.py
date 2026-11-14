@@ -191,6 +191,11 @@ def binary_permission_problem(tree: str, package: str) -> str | None:
         if not attribute:
             continue
         attr_id, raw = attribute.groups()
+        if element == 'permission' and attr_id == '0x01010003':  # declarations only in the app's own namespace
+            value = re.match(r'"([^"]*)"', raw)
+            if not value or not value.group(1).startswith(package + '.'):
+                return f'An app may declare only its own permissions ({package}.*).'
+            continue
         requested = element in ('uses-permission', 'uses-permission-sdk-23', 'uses-permission-sdk-m') \
             and attr_id == '0x01010003'
         if not requested and attr_id not in PERMISSION_IDS:
