@@ -75,12 +75,15 @@ class Ledger:
     # Projects and jobs.
 
     def _existing(self, client_key):
-        row = self.db.execute('SELECT job_id, project_id FROM jobs WHERE client_key=?', (client_key,)).fetchone()
-        return None if row is None else {'jobId': row[0], 'projectId': row[1]}
+        row = self.db.execute('SELECT job_id, project_id, request FROM jobs WHERE client_key=?',
+                              (client_key,)).fetchone()
+        return None if row is None else {'jobId': row[0], 'projectId': row[1], 'request': row[2]}
 
-    def known_request(self, device: str, client_request_id: str) -> bool:
+    def known_request(self, device: str, client_request_id: str, text: str) -> bool:
+        """Whether this exact request (same clientRequestId and the same text) was already accepted."""
         with self.lock:
-            return self._existing(f'{device}\n{client_request_id}') is not None
+            existing = self._existing(f'{device}\n{client_request_id}')
+            return existing is not None and existing['request'] == text
 
     def create(self, device: str, client_request_id: str, description: str, name: str) -> dict:
         """A new project and its first job; retrying the same request returns the same ids."""
@@ -88,9 +91,9 @@ class Ledger:
         with self.lock:
             existing = self._existing(key)
             if existing:
-                if self.job(existing['jobId'])['kind'] != 'create':
+                if self.job(existing['jobId'])['kind'] != 'create' or existing['request'] != description:
                     raise LedgerError('clientRequestId was used for another request')
-                return existing
+                return {'projectId': existing['projectId'], 'jobId': existing['jobId']}
             project, job, now = _id(), _id(), self.clock()
             self.db.execute('BEGIN IMMEDIATE')
             try:
@@ -108,7 +111,8 @@ class Ledger:
         with self.lock:
             existing = self._existing(key)
             if existing:
-                if existing['projectId'] != project or self.job(existing['jobId'])['kind'] != 'revise':
+                if (existing['projectId'] != project or self.job(existing['jobId'])['kind'] != 'revise'
+                        or existing['request'] != request):
                     raise LedgerError('clientRequestId was used for another request')
                 return {'jobId': existing['jobId']}
             if self.project(project) is None:

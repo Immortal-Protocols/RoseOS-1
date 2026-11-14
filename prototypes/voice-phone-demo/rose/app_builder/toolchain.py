@@ -186,6 +186,8 @@ def binary_permission_problem(tree: str, package: str) -> str | None:
         opened = re.match(r'\s*E: (\S+)', line)
         if opened:
             element = opened.group(1)
+            if ':' in element:  # fail closed on an element form the policy does not know
+                return 'Manifest elements may not use a namespace.'
             continue
         attribute = re.match(r'\s*A: [^(]*\((0x[0-9a-f]{8})\)=(.*)$', line)
         if not attribute:

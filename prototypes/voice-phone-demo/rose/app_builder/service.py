@@ -231,9 +231,10 @@ class Builder:
 
     def _screen(self, device: str, client_request_id: str, text: str) -> list[str]:
         """Request screening (§3.6) before any job row exists; returns the accepted request's notes. A request the
-        ledger already accepted is not refused on a retry, so retries stay idempotent if the rules change."""
+        ledger already accepted (the same clientRequestId and text) is not refused on a retry, so retries stay
+        idempotent if the rules change; the same clientRequestId with other text is refused by the ledger."""
         result = screening.screen(text)
-        if not result['ok'] and not self.ledger.known_request(device, client_request_id):
+        if not result['ok'] and not self.ledger.known_request(device, client_request_id, text):
             raise Refused(result['message'], code='out_of_scope', category=result['category'])
         return result['notes']
 

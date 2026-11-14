@@ -199,6 +199,8 @@ def check(source: Path, package: str) -> None:
     except ET.ParseError:
         raise TemplateRefused('AndroidManifest.xml is not valid XML.') from None
     for element in root.iter():
+        if not isinstance(element.tag, str) or element.tag.startswith('{'):  # elements carry no namespace in Android
+            raise TemplateRefused('Manifest elements may not use a namespace.')
         for key in element.attrib:
             if key.startswith('{') and not key.startswith(ANDROID):
                 raise TemplateRefused('The manifest may use only the android namespace.')

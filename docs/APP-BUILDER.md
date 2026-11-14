@@ -278,16 +278,27 @@ what happens instead in three cases:
 
 Those are notes, not refusals. The words are ambiguous, as in "a piano keyboard
 app" or "remind me to send texts". The policy below refuses the powers
-themselves whatever the request said. A retry of a request the ledger already
-accepted is never refused, so idempotency holds if the rules change.
+themselves whatever the request said. A replay of a request the ledger
+already accepted is never refused, so idempotency holds if the rules change. A
+replay means the same clientRequestId and the same text. The same
+clientRequestId with other text is refused (`clientRequestId was used for
+another request`); before 2026-11-14 it returned the original ids.
 
 The first version (82830ea0) also hard-refused capability words. Review found
 47 of 112 ordinary requests refused. That corpus is now a test, and none of
 its requests is refused.
 
 The screen is a courtesy that reads English phrases. A reworded request can
-pass it, and the writer can add things the request never asked for. What
-holds is the manifest policy, checked on the source snapshot
+pass it, and the writer can add things the request never asked for. For
+capabilities, what holds is the manifest policy below.
+
+For harm, nothing after the screen holds. An app with only allowed
+permissions (location, microphone, camera, network) can still be put to a
+harmful purpose, and the manifest policy does not judge purpose. So for harm
+the text screen is the only gate in source, and review found that it misses
+common rewordings. That is an open item (§5).
+
+The manifest policy is checked on the source snapshot
 (`template.check_capabilities`) and again on the built APK's compiled manifest
 by attribute id (`toolchain.binary_permission_problem`):
 
@@ -306,6 +317,8 @@ by attribute id (`toolchain.binary_permission_problem`):
   own. That refuses the binding permissions that make a component an
   accessibility service, device admin, VPN, notification listener or
   keyboard.
+- Manifest elements with a namespace prefix are refused, on the source and on
+  the built APK, so an element form the policy doesn't know fails closed.
 - `<permission>` declarations only in the app's own namespace, checked on the
   source and on the built APK. No permission name may come from a resource
   reference.
@@ -578,6 +591,15 @@ Proof levels:
 
 ## 5. Blockers (exact) and owners
 
+
+0. **Harm screening quality (decision: Chief or Nathan).** The phrase-list
+   screen (§3.6) catches only some phrasings of the harm it names. Review of
+   1809f85b confirmed two problems. Rewordings of an imitated sign-in pass,
+   and bare security words refuse education requests. App Core has stopped
+   hand-extending harm phrase lists. A dependable second gate needs a
+   decision on its form: a moderation model, an owner-confirmed review step,
+   or narrower harm rules owned by whoever owns content policy. Until then the
+   builder must stay disabled, which it is.
 1. **Signing identity for generated apps (decision: Nathan).** Choose:
    - per-project keys (recommended, because sharing one key makes every
      generated app the same signer) or one shared generated-apps key;

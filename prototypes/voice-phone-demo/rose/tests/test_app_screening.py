@@ -219,8 +219,27 @@ class BuilderScreening(unittest.TestCase):
             self.b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2',
                                                   'request': 'make an iPhone app instead'})
         self.assertEqual(cm.exception.details['category'], 'platform')
-        self.assertFalse(self.b.ledger.known_request('d', 'r2'))
+        self.assertFalse(self.b.ledger.known_request('d', 'r2', 'make an iPhone app instead'))
         self.assertIsNone(self.b.projects()[0]['activeJob'])
+
+    def test_a_reused_client_request_id_with_other_text_is_never_a_replay(self):
+        first = self.b.create('d', {'schemaVersion': 1, 'clientRequestId': 'x', 'description': 'a stopwatch'})
+        for text in ('an iPhone app for lists', 'chess with Firebase'):
+            with self.assertRaises(Refused):  # screening refusal, or the ledger's reuse refusal
+                self.b.create('d', {'schemaVersion': 1, 'clientRequestId': 'x', 'description': text})
+        self.assertEqual(len(self.b.projects()), 1)
+        self.b.ledger.finish_failed(first['jobId'], 'internal', 'x', True)
+        rev = self.b.revise('d', first['projectId'], {'schemaVersion': 1, 'clientRequestId': 'y',
+                                                      'request': 'add laps'})
+        with self.assertRaises(Refused) as cm:
+            self.b.revise('d', first['projectId'], {'schemaVersion': 1, 'clientRequestId': 'y',
+                                                    'request': 'add a dark theme'})
+        self.assertIn('another request', str(cm.exception))
+        again = self.b.revise('d', first['projectId'], {'schemaVersion': 1, 'clientRequestId': 'y',
+                                                        'request': 'add laps'})
+        self.assertEqual(again['jobId'], rev['jobId'])
+        self.assertFalse(self.b.ledger.known_request('d', 'x', 'chess with Firebase'))
+        self.assertTrue(self.b.ledger.known_request('d', 'x', 'a stopwatch'))
 
     def test_revise_of_an_unknown_project_is_reported_as_such(self):
         with self.assertRaises(Refused) as cm:
@@ -282,6 +301,22 @@ class Capabilities(unittest.TestCase):
         for inner, application in cases:
             with self.assertRaises(template.TemplateRefused, msg=inner + application):
                 self.check(inner, application)
+
+    def test_namespaced_elements_fail_closed(self):
+        root = ET.fromstring(f'<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                             f'xmlns:x="http://example.com/x" package="{self.P}"><application>'
+                             '<x:uses-permission android:name="android.permission.READ_SMS"/></application></manifest>')
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'source'
+            for rel, text in template.skeleton(self.P, 'x').items():
+                (source / rel).parent.mkdir(parents=True, exist_ok=True)
+                (source / rel).write_text(text)
+            os.chmod(source, 0o700)
+            ET.ElementTree(root).write(source / 'AndroidManifest.xml')
+            with self.assertRaises(template.TemplateRefused):
+                template.check(source, self.P)
+        tree = '  E: manifest (line=1)\n    E: x:uses-permission (line=2)\n      A: android:name(0x01010003)="a" (Raw: "a")\n'
+        self.assertIsNotNone(toolchain.binary_permission_problem(tree, self.P))
 
     def test_template_check_applies_the_policy_before_any_build(self):
         with tempfile.TemporaryDirectory() as tmp:
