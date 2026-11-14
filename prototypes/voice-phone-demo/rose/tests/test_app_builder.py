@@ -11,7 +11,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rose.tests.policy_fixtures import approving_policy
 from rose.app_builder import ledger as L, template, toolchain
 from rose.app_builder.service import Builder, Refused
 
@@ -208,8 +207,17 @@ class TemplateTest(Base):
 class ApiTest(Base):
     def setUp(self):
         super().setUp()
-        self.b = Builder(self.root, toolchain.Tools(SDK), generate=lambda *a: None, policy=approving_policy())
+        self.b = Builder(self.root, toolchain.Tools(SDK), generate=lambda *a: None)
         self.addCleanup(self.b.ledger.close)
+
+
+    def test_a_default_builder_accepts_and_runs_an_ordinary_request(self):
+        calls = []
+        self.b.generate = lambda source, kind, request, cancelled: calls.append((kind, request))
+        out = self.b.create('d', {'schemaVersion': 1, 'clientRequestId': 'any', 'description': 'an iPhone app'})
+        self.assertEqual(out['notes'], [])
+        self.assertTrue(self.b.run_next())  # it runs (and fails later here without the SDK), never "unscreened"
+        self.assertEqual(calls, [('create', 'an iPhone app')])
 
     def test_strict_v1_bodies(self):
         for body in (None, {}, {'schemaVersion': 2, 'clientRequestId': 'r', 'description': 'x'},
@@ -257,7 +265,7 @@ class BuildTest(Base):
 
     def builder(self, generate, key_creation=True):
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=key_creation)
-        b = Builder(self.root, tools, generate, policy=approving_policy())
+        b = Builder(self.root, tools, generate)
         self.addCleanup(b.ledger.close)
         return b
 

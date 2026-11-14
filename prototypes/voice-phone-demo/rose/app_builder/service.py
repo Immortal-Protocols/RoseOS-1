@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import policy as screening_policy, template, toolchain
+from . import template, toolchain
 from .ledger import Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -25,8 +25,7 @@ INSTALL_STATUSES = ('installed', 'updated', 'refused_signer', 'refused_version',
 
 
 class Refused(ValueError):
-    """A request that does not match API v1, or one screening refused; nothing changed (HTTP 400). ``details`` are
-    extra response fields (a screening refusal's ``code`` and ``category``)."""
+    """A request that does not match API v1; nothing changed (HTTP 400). ``details`` are extra response fields."""
 
     def __init__(self, message: str, **details):
         super().__init__(message)
@@ -110,7 +109,6 @@ def _place(src: Path, dst: Path):
     toolchain.fsync_path(dst.parent)
 
 
-NOT_SCREENED = 'This request was never screened, so it was not built. Ask for it again.'
 SNAPSHOT_MAX_ENTRIES = 5000
 SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
 SNAPSHOT_MAX_DEPTH = 32
@@ -194,14 +192,12 @@ def _note(note, request: str) -> str:
 
 
 class Builder:
-    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, policy=None):
+    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
-        toolchain.StepFailed. ``policy`` screens every new request (§3.7); the default has no allow-authoritative
-        gate, so this builder accepts nothing until a host configures an authorized one."""
+        toolchain.StepFailed."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         self.tools, self.generate = tools, generate
-        self.policy = policy if policy is not None else screening_policy.default_policy()
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -212,58 +208,25 @@ class Builder:
     def create(self, device: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'description': (str, MAX_TEXT)})
         name = b['description'].splitlines()[0][:40].strip() or 'New app'
-        screened = self._screen(device, b['clientRequestId'], 'create', b['description'], ())
         try:
-            out = self.ledger.create(device, b['clientRequestId'], b['description'], name, self._record(screened))
+            out = self.ledger.create(device, b['clientRequestId'], b['description'], name)
         except LedgerError as error:
             raise Refused(str(error)) from None
-        return self._accepted(out, screened)
+        self.wake.set()
+        return {**out, 'notes': []}
 
     def revise(self, device: str, project: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'request': (str, MAX_TEXT)})
-        if self.ledger.project(project) is None:  # reported as such, not as a screening refusal
-            raise Refused('unknown project')
-        screened = self._screen(device, b['clientRequestId'], 'revise', b['request'],
-                                self.ledger.request_history(project))
         try:
-            out = self.ledger.revise(device, project, b['clientRequestId'], b['request'], self._record(screened))
+            out = self.ledger.revise(device, project, b['clientRequestId'], b['request'])
         except LedgerError as error:
             raise Refused(str(error)) from None
-        return self._accepted(out, screened)
-
-    def _screen(self, device: str, client_request_id: str, kind: str, text: str, prior: tuple):
-        """The screening policy (§3.7) before any job row exists. None for a replay of a request the ledger already
-        accepted (the same clientRequestId and text), which keeps its recorded decision whatever the rules are now;
-        the same clientRequestId with other text is screened afresh and then refused by the ledger. Anything but
-        ``allow`` raises Refused: ``deny`` as ``out_of_scope``, ``review_required`` as ``review_required``."""
-        if self.ledger.known_request(device, client_request_id, text):
-            return None
-        decision, decisions = self.policy.assess(screening_policy.ScreenRequest(kind, text, tuple(prior)))
-        if decision.verdict != screening_policy.ALLOW:
-            code = 'out_of_scope' if decision.verdict == screening_policy.DENY else 'review_required'
-            raise Refused(decision.reason, code=code, category=decision.category)
-        return decision, decisions
-
-    @staticmethod
-    def _record(screened):
-        if screened is None:
-            return None
-        decision, decisions = screened
-        return [d.record() for d in decisions], decision.notes
-
-    def _accepted(self, out: dict, screened) -> dict:
-        # The ledger wrote the job and its screening in one transaction; a replay (or a concurrent duplicate that
-        # lost the race) answers with what was recorded.
-        recorded = self.ledger.screening(out['jobId'])
-        if screened is not None:
-            self.wake.set()
-        return {**out, 'notes': recorded['notes'] if recorded else []}
+        self.wake.set()
+        return {**out, 'notes': []}
 
     def retry(self, job_id: str, body) -> dict:
         """Run a failed, retryable job again as its next attempt (same jobId, attempt + 1)."""
         _body(body, {})
-        if self.ledger.job(job_id) is not None and self.ledger.screening(job_id) is None:
-            raise Refused(NOT_SCREENED)
         try:
             job = self.ledger.retry(job_id)
         except LedgerError as error:
@@ -340,9 +303,6 @@ class Builder:
         job = self.ledger.next_queued()
         if job is None:
             return False
-        if self.ledger.screening(job['jobId']) is None:  # written before screening existed, or by hand
-            self._record_failure(job['jobId'], 'internal', NOT_SCREENED, False)
-            return True
         self._run(job)
         return True
 

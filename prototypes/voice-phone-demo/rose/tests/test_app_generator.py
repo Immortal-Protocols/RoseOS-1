@@ -11,7 +11,6 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from rose.tests.policy_fixtures import approving_policy
 from rose.app_builder import toolchain
 from rose.app_builder.generator import CodexGenerator, prompt
 from rose.app_builder.service import Builder
@@ -301,7 +300,7 @@ class BuilderWithWriter(RealBridge):
 
     def builder(self):
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=True)  # throwaway keys in a temp dir
-        b = Builder(Path(self.tmp.name) / 'builder', tools, CodexGenerator(timeout_s=60), policy=approving_policy())
+        b = Builder(Path(self.tmp.name) / 'builder', tools, CodexGenerator(timeout_s=60))
         self.addCleanup(b.ledger.close)
         return b
 

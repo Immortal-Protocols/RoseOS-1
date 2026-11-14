@@ -13,7 +13,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
-from rose.tests.policy_fixtures import approving_policy
 from rose.app_builder import toolchain
 from rose.app_builder.service import Builder
 from rose.remote import Remote, build_remote_app
@@ -57,7 +56,7 @@ class Routes(unittest.TestCase):
         self.device = Device()
         self.remote.devices.enroll(self.device.spki, 'phone', 'Pixel', '100.64.0.2')
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=True)
-        self.builder = Builder(root / 'builder', tools, label, policy=approving_policy())
+        self.builder = Builder(root / 'builder', tools, label)
         self.addCleanup(self.builder.ledger.close)
         self.server = server(app_builder=self.builder)
         self.client = TestClient(build_remote_app(self.server, self.remote))
@@ -69,29 +68,28 @@ class Routes(unittest.TestCase):
         h = self.device.headers(method, path, self.remote.identity.pin)
         return self.client.request(method, path, json=json, headers=h)
 
-    def test_screening_refusal_and_notes(self):
-        r = self.signed('POST', '/builder/v1/projects', {'schemaVersion': 1, 'clientRequestId': 's1',
-                                                         'description': 'an iPhone app for my lists'})
-        self.assertEqual(r.status_code, 400)
-        body = r.json()
-        self.assertEqual((body['schemaVersion'], body['code'], body['category']), (1, 'out_of_scope', 'platform'))
-        self.assertTrue(body['error'].endswith('Nothing was started.'))
-        self.assertEqual(self.signed('GET', '/builder/v1/projects').json()['projects'], [])
-        r = self.signed('POST', '/builder/v1/projects', {'schemaVersion': 1, 'clientRequestId': 's2',
-                                                         'description': 'chess with a leaderboard'})
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.json()['notes']), 1)
+    def test_requests_are_not_screened(self):
+        # Requests an earlier text screen refused (other platforms, capabilities) are ordinary requests: accepted.
+        for i, text in enumerate(('an iPhone app for my lists', 'make a website for my bakery',
+                                  'a VPN app that blocks trackers', 'a custom keyboard')):
+            r = self.signed('POST', '/builder/v1/projects', {'schemaVersion': 1, 'clientRequestId': f'n{i}',
+                                                             'description': text})
+            self.assertEqual(r.status_code, 200, text)
+            self.assertEqual((set(r.json()) - {'schemaVersion'}, r.json()['notes']), ({'projectId', 'jobId', 'notes'}, []))
+        self.assertEqual(len(self.signed('GET', '/builder/v1/projects').json()['projects']), 4)
 
-    def test_the_default_policy_answers_review_required(self):
-        from rose.app_builder import policy
-        self.builder.policy = policy.default_policy()
-        r = self.signed('POST', '/builder/v1/projects', {'schemaVersion': 1, 'clientRequestId': 'p1',
-                                                         'description': 'a stopwatch'})
+    def test_validation_idempotency_and_signing_still_refuse(self):
+        ok = {'schemaVersion': 1, 'clientRequestId': 'v1', 'description': 'a stopwatch'}
+        for bad in ({**ok, 'schemaVersion': 2}, {**ok, 'extra': 1}, {**ok, 'description': ''},
+                    {**ok, 'description': 'x' * 4001}, {**ok, 'clientRequestId': 'x' * 65}):
+            r = self.signed('POST', '/builder/v1/projects', bad)
+            self.assertEqual((r.status_code, r.json()['schemaVersion']), (400, 1), bad)
+        first = self.signed('POST', '/builder/v1/projects', ok).json()
+        self.assertEqual(self.signed('POST', '/builder/v1/projects', ok).json()['jobId'], first['jobId'])
+        r = self.signed('POST', '/builder/v1/projects', {**ok, 'description': 'a timer'})  # same id, other text
         self.assertEqual(r.status_code, 400)
-        body = r.json()
-        self.assertEqual((body['schemaVersion'], body['code'], body['category']), (1, 'review_required', 'unavailable'))
-        self.assertTrue(body['error'].endswith('Nothing was started.'))
-        self.assertEqual(self.signed('GET', '/builder/v1/projects').json()['projects'], [])
+        self.assertEqual(self.client.post('/builder/v1/projects', json=ok).status_code, 401)  # unsigned
+        self.assertEqual(len(self.signed('GET', '/builder/v1/projects').json()['projects']), 1)
 
     def test_not_mounted_without_a_builder(self):
         bare = TestClient(build_remote_app(server(), self.remote))

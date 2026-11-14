@@ -162,8 +162,8 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 
 | Call | Request | Response |
 |---|---|---|
-| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}`; 400 `{error, code: out_of_scope, category: harm \| platform}` when screening refuses (§3.6), or 400 `{error, code: review_required, category}` when the policy can't allow it (§3.7) |
-| `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId, notes}`; 400 as above |
+| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}` (`notes` is always `[]`, kept for client compatibility) |
+| `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId, notes}` |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
 | `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`; 400 unless the job failed, is retryable, the project has no active job, and no later version has been delivered |
 | `GET /builder/v1/jobs/<jobId>` | | job (§3.2) |
@@ -245,291 +245,48 @@ failed, detail}`
 The server reports "installed" only from this receipt, never from publishing
 alone.
 
-### 3.6 Request screening and what generated apps may declare
+### 3.6 No rules on what is asked for or built
 
-Create and revise screen the request text before any job exists
-(`rose/app_builder/screening.py`). The screen is offline, deterministic and
-uses no model. Revise checks the project exists first, so an unknown project
-is reported as `unknown project`. A refused request starts no writer, creates
-no project or job, and returns 400 with these fields:
+Nathan, 2026-11-14: "we don't want to impose any rules on what people can ask
+to build or be built". The builder doesn't screen request text, and it puts no
+limit on what a generated app declares: permissions, services, roles. Android
+and the phone's owner decide what an installed app is granted. Requests are
+refused only for technical reasons:
 
-- `code`: `out_of_scope` for a phrase-gate refusal (`deny`), or
-  `review_required` when the policy can't allow the request (§3.7). With no
-  allow-authoritative gate configured, that is every request that isn't
-  refused, with category `unavailable`;
-- `category`: `harm` or `platform` for `out_of_scope`;
-- `error`: an owner-facing sentence ending "Nothing was started.", which never
-  quotes the request back.
+- **API v1 request checks:** schema, field sizes, unknown fields, and
+  clientRequestId idempotency. The same ID with other text is refused. Every
+  route needs a paired device's signed request.
+- **Identity and update integrity**, on the builder's private source snapshot
+  and on the built APK:
+  - the package is fixed;
+  - versionCode and versionName are set by the builder;
+  - the manifest can't set a sharedUserId, split, key-set, original-package,
+    adopt-permissions, instrumentation or uses-sdk;
+  - the manifest can't use namespaced elements, which those checks couldn't
+    see;
+  - the app can't be debuggable;
+  - Java must be in the app's package;
+  - no git metadata, links or special files.
+- **Toolchain facts:** framework Java at source level 8 only, because there's
+  no Gradle, Kotlin or native toolchain. A library is a `dependency` failure.
+- **Isolation:** each project has its own source, git history and signing key.
+  The writer runs in its own process group, and the build reads only a
+  snapshot.
 
-It refuses only what it can name precisely:
+Removed at Nathan's direction, 2026-11-14:
+- the request text screen (`screening.py`, 82830ea0 to 8c72bfc5);
+- the screening policy chain and its accept-nothing default (`policy.py`,
+  c8bf8a6c and 64aaabb9);
+- the manifest permission allowlist (82830ea0).
 
-- `harm`: covert surveillance of another person, such as "spy on my wife",
-  spyware, or tracking someone "without them knowing". Also stealing passwords,
-  phishing, imitating a named brand's sign-in, and malware.
-- `platform`: a request whose subject is an app for another platform, such as
-  "make me a website" or "an iPhone app for …". A request that mentions
-  Android is never refused this way.
+Those were App Core additions. No plan or owner requirement asked for them.
+Proof level: container tests (`rose/tests/test_app_capabilities.py`,
+`test_builder_routes.py`, `test_app_builder.py`). They show:
 
-Everything else is accepted. `notes` (a list of sentences, often empty) says
-what happens instead in three cases:
-
-- a power generated apps never get, such as SMS or the call log, an
-  accessibility service, device admin, a VPN, a keyboard, drawing over or
-  blocking other apps, or root;
-- a library;
-- anything that needs a server.
-
-Those are notes, not refusals. The words are ambiguous, as in "a piano keyboard
-app" or "remind me to send texts". The policy below refuses the powers
-themselves whatever the request said. A replay of a request the ledger
-already accepted is never refused, so idempotency holds if the rules change. A
-replay means the same clientRequestId and the same text. The same
-clientRequestId with other text is refused (`clientRequestId was used for
-another request`); before 2026-11-14 it returned the original ids.
-
-The first version (82830ea0) also hard-refused capability words. Review found
-47 of 112 ordinary requests refused. That corpus is now a test, and none of
-its requests is refused.
-
-The screen is a courtesy that reads English phrases. A reworded request can
-pass it, and the writer can add things the request never asked for. For
-capabilities, what holds is the manifest policy below.
-
-For harm, nothing after the screen holds. An app with only allowed
-permissions (location, microphone, camera, network) can still be put to a
-harmful purpose, and the manifest policy does not judge purpose. So for harm
-the text screen is the only gate in source, and review found that it misses
-common rewordings. That is an open item (§5).
-
-The manifest policy is checked on the source snapshot
-(`template.check_capabilities`) and again on the built APK's compiled manifest
-by attribute id (`toolchain.binary_permission_problem`):
-
-- `uses-permission` only from an allowlist (`template.ALLOWED_PERMISSIONS`):
-  - network, notifications, alarms, foreground services, camera, microphone,
-    location without background, media, Bluetooth, NFC, biometrics, activity,
-    contacts and calendar;
-  - or the app's own `<package>.*` permissions.
-
-  Refused: SMS, call log, phone state, overlays, querying all packages,
-  installing packages, background location, settings, and every system,
-  signature or binding permission. `<queries>` for named packages or intents
-  (ordinary package visibility) stays allowed.
-- `android:permission`, `readPermission` and `writePermission` on any
-  element: only `BIND_JOB_SERVICE`, `BIND_QUICK_SETTINGS_TILE` or the app's
-  own. That refuses the binding permissions that make a component an
-  accessibility service, device admin, VPN, notification listener or
-  keyboard.
-- Manifest elements with a namespace prefix are refused, on the source and on
-  the built APK, so an element form the policy doesn't know fails closed.
-- `<permission>` declarations only in the app's own namespace, checked on the
-  source and on the built APK. No permission name may come from a resource
-  reference.
-
-A failure is category `compile` with the policy's sentence as the summary.
-This allowlist is App Core's proposed default. Widening it is Nathan's
-decision.
-
-Proof level: container tests only (`rose/tests/test_app_screening.py`, a
-route test in `test_builder_routes.py`). That covers:
-
-- refusals by category, and capability words as notes;
-- the more-than-100-request near-miss corpus;
-- normalization, and worst-case speed;
-- a refusal recording nothing, and retry idempotency;
-- an unknown project on revise;
-- the source check alone. It also includes real builds where an
-accessibility-service manifest is refused by the source check, and again by
-the built-APK check when the source check is bypassed.
-
-### 3.7 Screening policy interface (items 1–4 implemented in source; no approving gate)
-
-This answers blocker 0 (§5). It chooses no moderation provider, enables
-nothing and weakens nothing in §3.6.
-
-**Implemented** (source only):
-
-- `rose/app_builder/policy.py`: `ScreenRequest`, `Decision`, `Chain` (rules
-  1–4) and `PhraseGate`, the §3.6 phrase screen as a deny-only gate. Gates run
-  on one shared pool with a timeout. A gate that hangs, throws or answers
-  malformed, or for another gate or version, counts as unavailable.
-- `Builder(..., policy=None)` gets `policy.default_policy()`, which has no
-  allow-authoritative gate, so every create and revise is refused with
-  `review_required`/`unavailable` and nothing is recorded. No approving gate
-  exists outside tests.
-- A revise is judged with the project's history in submission order
-  (`Ledger.request_history`). A retry doesn't reorder it.
-- The decisions that accepted a job (gate, version, verdict, category) and its
-  notes are written in the same transaction as the job (`screenings` table),
-  so no job exists without them. A replay returns them unchanged whatever the
-  policy is now.
-- The worker never runs, and `retry` never re-queues, a job that has no
-  recorded decision, for example one written before screening existed. Such a
-  job fails as "never screened".
-- `rose/tests/policy_fixtures.py`: test-only `RecordedGate`, which answers
-  from recorded verdicts, and `approving_policy()` for build-path tests.
-- `rose/tests/fixtures/screening/*.jsonl`: 155 recorded cases, all moved from
-  the existing §3.6 tests (121 benign, 13 capability notes, 21 refusals). No
-  new harm phrasings were written.
-
-Proof level: container tests only (`rose/tests/test_app_policy.py`, plus a
-route test). They cover:
-
-- every chain of up to three gates over nine gate behaviours, each gate either
-  allow-authoritative or not (6,175 chains),
-  each checked against an independent oracle, plus the fail-closed invariants;
-- a hanging gate;
-- the default policy across all 155 fixtures, which allows none of them;
-- recorded replay, matching every expected verdict;
-- the default Builder recording nothing;
-- review_required never overridden, and replays keeping their decision;
-- after review of c8bf8a6c, these added cases:
-  - `BaseException`, unreadable attributes, look-alike verdicts and a
-    truthy non-bool `can_allow`;
-  - a queued timed-out call is dropped;
-  - history order after a retry;
-  - a job and its screening written together;
-  - unscreened jobs never run or retry;
-  - an empty chain is `unavailable`.
-
-Each rule has a mutation check. Each of these breakages makes the tests fail:
-- accepting malformed answers;
-- needing no allow-authoritative gate;
-- letting an empty chain allow;
-- letting review_required through;
-- ordering history by `started`;
-- writing the screening after the job's commit;
-- running unscreened jobs;
-- catching only `Exception`;
-- not cancelling a timed-out call.
-
-Not done:
-
-- any allow-authoritative gate;
-- any reviewer role;
-- any model call;
-- Home/App showing `review_required`. The contract is additive and was sent
-  to them.
-
-**Interface.** A screening policy is an ordered chain of gates. Each gate is
-called with:
-
-```
-assess(request) -> Decision
-request  = {kind: create | revise, text, priorText, locale}
-Decision = {verdict: allow | review_required | deny, category, reason,
-            gate, gateVersion}
-```
-
-- `priorText` is the project's accepted description and earlier revisions. A
-  revise is judged with its context, so harm can't be built up step by step.
-- `reason` is owner-facing text. It never echoes the request.
-- `gate` and `gateVersion` are recorded with the job, so every decision is
-  traceable to the policy that made it.
-
-**Fail-closed rules** (property-tested, independent of any gate):
-
-1. `allow` only when every gate in the chain returns `allow`. An empty chain
-   is a misconfiguration, so it gives `review_required`/`unavailable`. It is
-   never `allow`, and it is never reported as `out_of_scope`.
-2. Any `deny` gives `deny`. Otherwise any `review_required` gives
-   `review_required`.
-3. Each of these counts as `review_required`, with category `unavailable`:
-   - a gate that throws anything, `BaseException` included;
-   - a gate that times out. A call still queued is cancelled;
-   - a gate whose attributes can't be read as plain values;
-   - an unknown verdict, a malformed or look-alike object (not exactly a
-     `Decision` with plain `str` fields), or the wrong gate name or version.
-
-   That is never `allow`, and no job is written.
-4. A gate may be deny-only. The §3.6 phrase screen becomes such a gate: it
-   returns `deny`, or `allow` meaning "no objection". It can never be the
-   chain's only allow-capable gate. So the builder accepts no job until a
-   second, allow-authoritative gate is configured.
-5. Replays keep their recorded decision, as in §3.6. The same
-   clientRequestId with the same text replays it; anything else is screened
-   afresh.
-
-**`review_required`** means no job exists. The response is 400 with `code`
-`review_required` and `category`. The owner-facing reason is in `error`, as for
-`out_of_scope`. It can be resolved only in
-these ways:
-
-- the owner rewords, and the new request is screened from scratch;
-- someone in a reviewer role, who is not the requester, decides. The reviewer
-  can only find a request not harmful. A reviewer can't approve harmful
-  functionality, and no code path turns `deny` into `allow`.
-
-The owner's confirmation alone never changes a verdict. It can add context,
-for example that "track" means the owner's own runs. That arrives as new
-request text and is screened again.
-
-**Second gate: semantic moderation versus owner review**
-
-| | Semantic moderation (a model judges the request) | Owner review (the requester confirms) |
-|---|---|---|
-| Catches rewordings and other languages | yes, within the model's quality | no |
-| Can authorize harm | no, if fail-closed | it must not: the requester is not an independent check |
-| Data and cost | request text goes to a model; a provider and data-use decision | none |
-| Availability | an outage blocks builds (fail-closed) | always available |
-| Proof | offline eval on fixtures, then a recorded-verdict regression | none possible for safety |
-
-Recommendation: semantic moderation as the allow-authoritative second gate.
-The phrase screen stays as a cheap deny-only first gate. Owner review is a
-clarification step, never a safety gate. One option keeps data where it
-already goes. The request text is sent to the Codex account the writer
-already uses (§4A), so a separate ephemeral, tool-less classification thread
-with a structured verdict adds no new recipient. Choosing that, or any other
-provider, is Nathan's decision (below).
-
-**Adversarial fixtures.** These are JSONL files of
-`{id, kind, text, priorText, expected, category, source}`:
-
-- **Benign near-misses:** the 112-request review corpus and the review-4
-  lists, with expected `allow` overall and the phrase gate returning no
-  objection.
-- **Harm and other-platform sets:** expected `deny` or `review_required`.
-  Their content belongs to whoever owns content policy. App Core keeps the
-  current §3.6 examples and supplies the harness, but does not author new
-  harmful phrasings.
-- **Context sets:** a benign create followed by revises whose combination
-  should be `review_required`.
-- **Gate-failure cases** (code, not text): throw, timeout, unknown verdict,
-  malformed result, version mismatch and an empty chain. Each must give no
-  job.
-
-CI replays recorded verdicts and never calls a model. A semantic gate's real
-evaluation is a separate, explicitly authorized offline run.
-
-**Proof bar before any enabling:**
-
-- zero `allow` on the deny set;
-- the false-`deny` rate on the benign corpus below a threshold Nathan sets;
-- every gate-failure case non-`allow`;
-- the eval run recorded with the gate version and fixture hashes.
-
-**Source work that can proceed now** (container tests only, no model calls):
-
-1. `rose/app_builder/policy.py`: the `Decision` and gate types, the chain with
-   rules 1–5, and property tests for rule 3.
-2. The §3.6 phrase screen wrapped as the deny-only gate.
-3. `Builder` takes a chain. The default chain has no allow-authoritative gate,
-   so it accepts nothing. That preserves the disabled state even if routes
-   were mounted. Tests inject a recorded-verdict gate.
-4. The fixture format, the harness and the failure-mode fixtures, plus the
-   existing benign corpus.
-5. The `review_required` 400 body, shared with Home/App as an additive v1
-   field before they show it.
-
-**Decisions for Nathan:**
-
-1. Which allow-authoritative second gate, and whether request text may go to
-   it. That includes whether the writer's existing Codex account counts as
-   already-approved data use.
-2. Who holds the reviewer role, confirming that the requesting owner can't
-   self-approve.
-3. Who owns the harm and platform content policy and its fixtures, and the
-   acceptance thresholds.
+- requests that used to be refused are accepted and run;
+- an app declaring SMS, overlay, background location, accessibility, VPN and
+  device-admin services is built and signed;
+- the identity checks still refuse.
 
 ## 4. Project 2: composer intent/result contract v1
 
@@ -784,14 +541,6 @@ Proof levels:
 ## 5. Blockers (exact) and owners
 
 
-0. **Harm screening quality (decision: Chief or Nathan).** The phrase-list
-   screen (§3.6) catches only some phrasings of the harm it names. Review of
-   1809f85b confirmed two problems. Rewordings of an imitated sign-in pass,
-   and bare security words refuse education requests. App Core has stopped
-   hand-extending harm phrase lists. A dependable second gate needs a
-   decision on its form: a moderation model, an owner-confirmed review step,
-   or narrower harm rules owned by whoever owns content policy. Until then the
-   builder must stay disabled, which it is. Proposal: §3.7.
 1. **Signing identity for generated apps (decision: Nathan).** Choose:
    - per-project keys (recommended, because sharing one key makes every
      generated app the same signer) or one shared generated-apps key;
