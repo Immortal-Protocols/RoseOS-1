@@ -29,8 +29,8 @@ impl fmt::Debug for Secret {
 
 /// Seals authenticator secrets before they are stored, and opens them to verify a code. Authenticator secrets must be
 /// recoverable server-side (they are symmetric), so they are encrypted at rest under a key that lives outside the
-/// database. rose-auth-v1 ships no production sealer: the key's home on a Chariot is an open infrastructure decision
-/// (docs/ROSE-AUTH-V1.md, decision D9), and an `Authenticator` cannot be built without a sealer.
+/// database. rose-signin-v1 ships no production sealer: the key's home on a Chariot is an open infrastructure decision
+/// (docs/ROSE-SIGNIN-V1.md, decision D9), and an `Authenticator` cannot be built without a sealer.
 pub trait Sealer {
     fn seal(&self, plaintext: &Secret) -> Vec<u8>;
     fn open(&self, sealed: &[u8]) -> Option<Secret>;

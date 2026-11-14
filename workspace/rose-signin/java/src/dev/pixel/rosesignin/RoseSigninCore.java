@@ -1,4 +1,4 @@
-package dev.pixel.roseauth;
+package dev.pixel.rosesignin;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
@@ -11,16 +11,16 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * rose-auth-v1 client core (docs/ROSE-AUTH-V1.md). Pure Java (no android.*), shared by the RoseOS-native flow and the
+ * rose-signin-v1 client core (docs/ROSE-SIGNIN-V1.md). Pure Java (no android.*), shared by the RoseOS-native flow and the
  * stock-Android flow of generated apps, and checked against the Rust server library through
- * workspace/rose-auth/vectors/rose-auth-v1.txt.
+ * workspace/rose-signin/vectors/rose-signin-v1.txt.
  *
  * <p>It parses and validates enrollment URIs, generates codes (for a device that acts as the authenticator, decision
  * D3) and applies the knowledge-factor length policy so users learn early. It never stores the PIN/passphrase: the
  * server verifies it (decision D1), so it travels only inside the sign-in request.
  */
-public final class RoseAuthCore {
-    private RoseAuthCore() {}
+public final class RoseSigninCore {
+    private RoseSigninCore() {}
 
     /** The v1 profile: HMAC-SHA-1, 6 digits, 30 s steps, one step of skew. */
     public static final int DIGITS = 6;

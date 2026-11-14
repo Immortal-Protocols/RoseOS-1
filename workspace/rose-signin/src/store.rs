@@ -1,5 +1,5 @@
 //! What the flow persists, behind a trait so a generated server backs it with SQLite (schema in
-//! docs/ROSE-AUTH-V1.md) and tests use memory. Every account key is (app, account): accounts of different apps, or
+//! docs/ROSE-SIGNIN-V1.md) and tests use memory. Every account key is (app, account): accounts of different apps, or
 //! different accounts of one app, never share a row.
 
 use std::collections::HashMap;

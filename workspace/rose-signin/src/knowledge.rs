@@ -1,5 +1,5 @@
 //! The knowledge factor (PIN/passphrase), verified server-side against an Argon2id hash (decision D1's recommended
-//! option; docs/ROSE-AUTH-V1.md). The plaintext is never stored, logged or returned. Clients send it only inside the
+//! option; docs/ROSE-SIGNIN-V1.md). The plaintext is never stored, logged or returned. Clients send it only inside the
 //! TLS sign-in request; nothing on the device stores or autofills it.
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};

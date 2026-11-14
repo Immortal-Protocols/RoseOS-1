@@ -1,10 +1,10 @@
-//! The rose-auth-v1 server flow and its security properties.
+//! The rose-signin-v1 server flow and its security properties.
 
-use rose_auth::flow::{Authenticator, EnrollError, PENDING_SECONDS, SignIn};
-use rose_auth::secret::{Sealer, Secret};
-use rose_auth::session::Principal;
-use rose_auth::store::{Memory, Store};
-use rose_auth::{base32, knowledge, otp, rate, recovery};
+use rose_signin::flow::{Authenticator, EnrollError, PENDING_SECONDS, SignIn};
+use rose_signin::secret::{Sealer, Secret};
+use rose_signin::session::Principal;
+use rose_signin::store::{Memory, Store};
+use rose_signin::{base32, knowledge, otp, rate, recovery};
 
 /// Test-only sealer (XOR with a fixed pad plus a marker). Production sealing is decision D9.
 struct TestSealer;
