@@ -120,7 +120,9 @@ final class BuilderWire {
   String sha = str(apk, "sha256").toLowerCase(Locale.ROOT);
   if (!sha.matches("[0-9a-f]{64}") || size <= 0) throw new Malformed("bad apk");
   return new BuilderApi.Version(integer(v, "versionCode"), optStr(v, "versionName", String.valueOf(integer(v, "versionCode"))),
-    millis(v, "createdAt"), optStr(v, "jobId", null), optStr(v, "sourceRevision", null), sha, size, optStr(v, "notes", null));
+    millis(v, "createdAt"), optStr(v, "jobId", null), optStr(v, "sourceRevision", null), sha, size, optStr(v, "notes", null),
+    // §3.3: a bad summary is read as unavailable on its own; it never fails the version or the library.
+    ApiReport.parse(v.get("apiReport")));
  }
 
  static BuildJob job(String body) throws Malformed {

@@ -49,6 +49,18 @@ public final class BuilderWireTest {
         malformed("{\"schemaVersion\":1,\"projects\":[{\"projectId\":\"p\",\"packageName\":\"x\",\"versions\":[{\"versionCode\":1.5,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":1}}]}]}", "a fractional versionCode");
         malformed("{\"schemaVersion\":1,\"projects\":[{\"projectId\":\"p\",\"packageName\":\"x\",\"activeJob\":{\"jobId\":\"j\",\"state\":\"dreaming\"},\"versions\":[]}]}", "an unknown state");
 
+        // apiReport (§3.3): absent reads as none; a bad summary is unavailable on its own and never fails the library.
+        expect(p.latest().apiReport.status == ApiReport.Status.NONE && p.versions.get(0).apiReport.status == ApiReport.Status.NONE, "no apiReport: none");
+        String withReports = "{\"schemaVersion\":1,\"projects\":[{\"projectId\":\"p2\",\"packageName\":\"app.rose.gen.pp2\",\"activeJob\":null,\"versions\":["
+            + "{\"versionCode\":1,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"apiReport\":{\"schemaVersion\":1,\"advisory\":true,\"deviceProof\":true,\"status\":\"complete\",\"note\":\"x\"}},"
+            + "{\"versionCode\":2,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"apiReport\":\"clean\"},"
+            + "{\"versionCode\":3,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"apiReport\":{\"schemaVersion\":1,\"advisory\":true,\"deviceProof\":false,\"status\":\"complete\",\"note\":\"n\","
+            + "\"minSdk\":26,\"counts\":{\"notGuardedHere\":2,\"unverified\":0,\"guarded\":1},\"highestLevel\":33,\"truncated\":0,\"unlistedCount\":0}}]}]}";
+        List<BuilderApi.Version> rv = BuilderWire.library(withReports).get(0).project.versions;
+        expect(rv.size() == 3, "the library still loads with bad summaries");
+        expect(rv.get(0).apiReport.unreadable && rv.get(1).apiReport.unreadable, "deviceProof true, or not an object: read as unavailable");
+        expect(rv.get(2).apiReport.status == ApiReport.Status.COMPLETE && rv.get(2).apiReport.notGuardedHere == 2 && rv.get(2).apiReport.highestLevel == 33L, "a good summary is read");
+
         // Job (§3.2), with a failure.
         BuildJob j = BuilderWire.job("{\"schemaVersion\":1,\"jobId\":\"j3\",\"projectId\":\"p1\",\"attempt\":2,\"state\":\"failed\",\"stage\":\"compile\",\"message\":\"m\",\"logTail\":\"...\","
             + "\"startedAt\":1794608705.5,\"updatedAt\":1794608710.0,\"failure\":{\"category\":\"dependency\",\"summary\":\"Kotlin\",\"retryable\":false}}");

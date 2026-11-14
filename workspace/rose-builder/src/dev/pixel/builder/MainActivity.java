@@ -267,6 +267,8 @@ public final class MainActivity extends Activity {
    BuilderApi.Version v = p.versions.get(i);
    InstallPlan offer = InstallPlan.offer(new InstallPlan.Apk(p.packageName, p.signerSha256, v.apkSha256, v.versionCode), installed);
    if (v.notes != null) body("Version " + v.versionName + ": " + ShareMessage.clean(v.notes, ""));
+   // The advisory API check: information only. It never decides what is offered below.
+   for (String line : ApiReport.lines(v.apiReport, android.os.Build.VERSION.SDK_INT)) small(line);
    if (offer.action == InstallPlan.Action.REFUSE) { body("Version " + v.versionName + ": " + offer.reason); continue; }
    if (offer.action == InstallPlan.Action.OPEN) { button("Open version " + v.versionName, x -> open(p.packageName)); continue; }
    if (v.apkSha256 == null) { body("Version " + v.versionName + " isn't downloadable yet."); continue; }
@@ -380,6 +382,7 @@ public final class MainActivity extends Activity {
  }
 
  void title(String s) { TextView t = text(s, 24); t.setPadding(0, 0, 0, dp(12)); }
+ void small(String s) { TextView t = text(s, 13); t.setPadding(dp(8), 0, 0, dp(2)); }
  void body(String s) { TextView t = text(s, 16); t.setPadding(0, dp(4), 0, dp(8)); }
  TextView text(String s, int sp) { TextView t = new TextView(this); t.setText(s); t.setTextSize(sp); root.addView(t); return t; }
  EditText input(String hint) {
