@@ -12,7 +12,7 @@ Each reference above minSdk gets one status:
 - ``not_guarded_here``: its method was analysed completely and no such guard protects it there. A caller may still
   guard it (this check does not look across methods);
 - ``unverified``: the analysis cannot tell, and never calls it safe: a value from the app's own code (a helper's
-  result, an app field) or an ``SDK_INT`` value it does not follow decides a branch, the method could not be read
+  result, an app field) may decide a branch it did not recognise, an ``SDK_INT`` value it does not follow is used, the method could not be read
   completely (a switch, a line or branch target it could not parse, too many instructions, the time budget), the
   code is unreachable, the API is on an extension SDK (its availability is not decided by ``SDK_INT``), or the
   reference is a class's own supertype (only never loading the class protects it).
@@ -41,11 +41,22 @@ NOTE = ('Advisory: references above minSdk found in the built dex. This is detec
         'proof; an empty list does not mean the app works on every supported phone.')
 SDK_INT = 'Landroid/os/Build$VERSION;.SDK_INT:I'
 CODE_LINE = re.compile(r'^[0-9a-f]{6,}: ')
-INSN = re.compile(r'^[0-9a-f]{6,}: [0-9a-f .]+\|([0-9a-f]{4,}): (\S+)(?: (.*))?$')
+INSN = re.compile(r'^[0-9a-f]{6,}: ([0-9a-f .]+)\|([0-9a-f]{4,}): (\S+)(?: (.*))?$')
+PAYLOAD_UNITS = re.compile(r'\((\d+) units\)')
 MEMBER = re.compile(r'L([^;\s]+);\.([^:\s]+):(\S+)')
 TYPE = re.compile(r'\[*L([^;\s]+);')
 TARGET = re.compile(r'(?:^|, )([0-9a-f]{4,8}) // [+-]')
 TARGET32 = re.compile(r'^#([0-9a-f]{8})$')
+DESCRIPTOR = re.compile(r"  Class descriptor  : 'L([^;]+);'")
+SUPERCLASS = re.compile(r"  Superclass        : 'L([^;]+);'")
+SECTION = re.compile(r'  (Interfaces|Static fields|Instance fields|Direct methods|Virtual methods) ')
+INTERFACE = re.compile(r"    #\d+ +: 'L([^;]+);'")
+METHOD = re.compile(r'    #\d+ +: \(in L')
+NAME_TYPE = re.compile(r"      (name|type)          : '(.*)'$")
+SIZE = re.compile(r'      insns size    : (\d+) ')
+TRY_RANGE = re.compile(r'        0x([0-9a-f]+) - 0x([0-9a-f]+)$')
+HANDLER = re.compile(r'          (?:L([^;]+);|<any>) -> 0x([0-9a-f]+)$')
+HEX_UNIT = re.compile(r'[0-9a-f]{4}')
 TYPE_OPS = ('new-instance', 'const-class', 'check-cast', 'instance-of', 'new-array', 'filled-new-array')
 FIELD_OPS = ('sget', 'sput', 'iget', 'iput')
 SWITCHES = ('packed-switch', 'sparse-switch')
@@ -114,6 +125,7 @@ class Method:
     proto: str
     size: int = 0  # code units, as dexdump states them
     insns: list = field(default_factory=list)  # (address, op, args)
+    widths: list = field(default_factory=list)  # (code units shown, whether dexdump cut the hex column short)
     tries: list = field(default_factory=list)  # (start, end, [(type or None, handler address)])
     unparsed: int = 0  # code lines this parser could not read
 
@@ -134,50 +146,56 @@ def parse_dexdump(text: str) -> dict:
     """Classes from ``dexdump -d`` output: supertypes, and each method's instructions and try ranges. A code line it
     cannot read is counted on its method, so that method is never analysed as if it were complete."""
     classes, cls, method, section, tries = {}, None, None, None, None
-    for line in text.splitlines():
+    # Lines end at '\n' only: dexdump prints some characters raw inside string constants (U+2028, U+0085, ...)
+    # that str.splitlines() would also break on, letting a string forge dump lines.
+    for line in text.split('\n'):
         if line.startswith('Class #'):
             cls, method, section = None, None, None
             continue
-        m = re.match(r"  Class descriptor  : 'L([^;]+);'", line)
+        m = DESCRIPTOR.match(line)
         if m:
             cls = classes.setdefault(m.group(1), Klass(m.group(1)))
             continue
         if cls is None:
             continue
-        m = re.match(r"  Superclass        : 'L([^;]+);'", line)
+        m = SUPERCLASS.match(line)
         if m:
             cls.superclass = m.group(1)
             continue
-        m = re.match(r'  (Interfaces|Static fields|Instance fields|Direct methods|Virtual methods) ', line)
+        m = SECTION.match(line)
         if m:
             section, method = m.group(1), None
             continue
         if section == 'Interfaces':
-            m = re.match(r"    #\d+ +: 'L([^;]+);'", line)
+            m = INTERFACE.match(line)
             if m:
                 cls.interfaces.append(m.group(1))
             continue
         if section not in ('Direct methods', 'Virtual methods'):
             continue
-        if re.match(r'    #\d+ +: \(in L', line):
+        if METHOD.match(line):
             method = Method(cls.name, '', '')
             cls.methods.append(method)
             tries = None
             continue
         if method is None:
             continue
-        m = re.match(r"      (name|type)          : '(.*)'$", line)
+        m = NAME_TYPE.match(line)
         if m:
             setattr(method, 'name' if m.group(1) == 'name' else 'proto', m.group(2))
             continue
-        m = re.match(r'      insns size    : (\d+) ', line)
+        m = SIZE.match(line)
         if m:
             method.size = int(m.group(1))
             continue
         if CODE_LINE.match(line):
             m = INSN.match(line)
             if m:
-                method.insns.append((int(m.group(1), 16), m.group(2), m.group(3) or ''))
+                method.insns.append((int(m.group(2), 16), m.group(3), m.group(4) or ''))
+                hexes = m.group(1)
+                payload = PAYLOAD_UNITS.search(m.group(4) or '') if m.group(3).endswith('-data') else None
+                method.widths.append((int(payload.group(1)) if payload else len(HEX_UNIT.findall(hexes)),
+                                      '...' in hexes and not payload))
             elif '|[' not in line:  # the method's own header line is the only other code line
                 method.unparsed += 1
             continue
@@ -188,11 +206,11 @@ def parse_dexdump(text: str) -> dict:
             tries = None  # the next method field (positions, locals) ends the catches
             continue
         if tries is not None:
-            m = re.match(r'        0x([0-9a-f]+) - 0x([0-9a-f]+)$', line)
+            m = TRY_RANGE.match(line)
             if m:
                 method.tries.append((int(m.group(1), 16), int(m.group(2), 16), []))
                 continue
-            m = re.match(r'          (?:L([^;]+);|<any>) -> 0x([0-9a-f]+)$', line)
+            m = HANDLER.match(line)
             if m and method.tries:
                 method.tries[-1][2].append((m.group(1), int(m.group(2), 16)))
             elif line.strip():
@@ -251,7 +269,7 @@ class Flow:
         if self.problem or not insns:
             return
         self.addresses = [a for a, _, _ in insns]
-        if self.addresses != sorted(set(self.addresses)) or (method.size and self.addresses[-1] >= method.size):
+        if not self._covers():
             self.problem = 'code this analysis could not read'
             return
         index = {a: i for i, a in enumerate(self.addresses)}
@@ -283,6 +301,13 @@ class Flow:
                        for b, s in enumerate(self.starts)]
         self.recognised_ifs = set()  # instruction indexes of recognised SDK_INT comparisons
         edges = {b: [] for b in range(blocks)}  # (successor, guard level given on that edge)
+        protected = {b: [] for b in range(blocks)}  # handlers a block's instructions may jump to
+        for start, end, handlers in method.tries:
+            lo = bisect.bisect_left(self.addresses, start)
+            hi = bisect.bisect_left(self.addresses, end)
+            if lo < hi:
+                for b in range(self.block_at(lo), self.block_at(hi - 1) + 1):
+                    protected[b] += [self.block_at(index[h]) for _, h in handlers]
         for b, body in enumerate(self.bodies):
             last = body[-1]
             addr, op, args = insns[last]
@@ -296,18 +321,30 @@ class Flow:
                 edges[b].append((self.block_at(branch_target[last]), None))
             elif not op.startswith(('return', 'throw')) and nxt is not None:
                 edges[b].append((nxt, None))
-            first, end_addr = self.addresses[body[0]], self.addresses[body[-1]]
-            for start, end, handlers in method.tries:  # a protected instruction may jump to its handlers
-                if start <= end_addr and first < end:
-                    for _, h in handlers:
-                        edges[b].append((self.block_at(index[h]), None))
+            edges[b] += [(h, None) for h in protected[b]]  # a protected instruction may jump to its handlers
         self.edges = edges
         self.unrecognised = self._unrecognised_sdk_use()
-        self.sdk_read = any(op.startswith('sget') and SDK_INT in a for _, op, a in insns)
+        self.sdk_read = any(_is_sdk(op, a) for _, op, a in insns)
         self.other_branches = any(op.startswith('if-') and i not in self.recognised_ifs
                                   for i, (_, op, _) in enumerate(insns))
-        self.app_value = self._app_value_branches(app_classes)
+        # A branch this analysis did not recognise, in a method that uses the app's own code (a call, an app field):
+        # an app helper or flag may decide it, through any number of moves, blocks or operations.
+        self.app_value = self.other_branches and any(
+            (op.startswith(('invoke', 'sget', 'iget')) and (m := MEMBER.search(a)) and m.group(1) in app_classes)
+            for _, op, a in insns)
         self._dominators()
+
+    def _covers(self) -> bool:
+        """Whether the parsed instructions tile the method's code exactly: from 0, each one where the previous one
+        ends (at least where a cut-short hex column allows), the last one ending at the stated size."""
+        a, method = self.addresses, self.method
+        if not a or a[0] != 0 or len(method.widths) != len(a):
+            return False
+        for i, (units, cut) in enumerate(method.widths):
+            end = a[i + 1] if i + 1 < len(a) else method.size
+            if units < 1 or (end - a[i] < units if cut else end - a[i] != units):
+                return False
+        return True
 
     def _guard(self, body):
         """(guard on the true branch, on the false branch) of the comparison ending this block, or (None, None)."""
@@ -321,7 +358,7 @@ class Flow:
             dest = _writes(o, _regs(a))
             if dest is None:
                 continue
-            if o.startswith('sget') and SDK_INT in a:
+            if _is_sdk(o, a):
                 defs[dest] = 'sdk'
             elif o.startswith('const') and not o.startswith(('const-string', 'const-class', 'const-wide')):
                 value = re.search(r'#int (-?\d+)', a)
@@ -348,7 +385,7 @@ class Flow:
         for b, body in enumerate(self.bodies):
             for pos, i in enumerate(body):
                 _, op, args = insns[i]
-                if not (op.startswith('sget') and SDK_INT in args):
+                if not _is_sdk(op, args):
                     continue
                 reg = _writes(op, _regs(args))
                 live = True
@@ -380,30 +417,6 @@ class Flow:
                     break
             else:
                 todo += [t for t, _ in self.edges[b]]
-        return False
-
-    def _app_value_branches(self, app_classes: dict) -> bool:
-        """Whether a branch reads a value from the app's own code: a method's result or a field of an app class
-        (a helper guard may hide there)."""
-        insns = self.method.insns
-        for body in self.bodies:
-            app_regs, pending = set(), False
-            for i in body:
-                _, op, args = insns[i]
-                r = _regs(args)
-                m = MEMBER.search(args)
-                if op.startswith('invoke'):
-                    pending = bool(m and m.group(1) in app_classes)
-                    continue
-                if op.startswith('move-result') and r:
-                    (app_regs.add if pending else app_regs.discard)(r[0])
-                elif op.startswith(('sget', 'iget')) and m and m.group(1) in app_classes and r:
-                    app_regs.add(r[0])
-                elif op.startswith('if-') and any(x in app_regs for x in r):
-                    return True
-                elif _writes(op, r) is not None:
-                    app_regs.discard(r[0])
-                pending = False
         return False
 
     def _dominators(self):
@@ -464,12 +477,22 @@ class Flow:
         n = self.block_at(index)
         if n not in self.idom:
             return None
-        best = 0
-        while True:
-            best = max(best, self.guard_of.get(n, 0))
-            if n == 0:
-                return best
+        memo = self.__dict__.setdefault('_levels', {0: self.guard_of.get(0, 0)})
+        chain = []
+        while n not in memo:
+            chain.append(n)
             n = self.idom[n]
+        best = memo[n]
+        for node in reversed(chain):
+            best = max(best, self.guard_of.get(node, 0))
+            memo[node] = best
+        return memo[self.block_at(index)]
+
+
+def _is_sdk(op: str, args: str) -> bool:
+    """Whether an instruction reads the platform's Build.VERSION.SDK_INT (and not a look-alike in the app)."""
+    m = MEMBER.search(args) if op.startswith('sget') else None
+    return bool(m) and m.groups() == ('android/os/Build$VERSION', 'SDK_INT', 'I')
 
 
 def _reference(op: str, args: str):
@@ -494,6 +517,7 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
         raise ValueError('no classes in the dex')
     own = package.replace('.', '/') + '/'
     deadline = time.monotonic() + budget_s
+    declared = {name: k.declared for name, k in classes.items()}
 
     def resolve(cls, member):
         """The platform answer for a reference, walking the app's own (and its libraries') classes up first. A member
@@ -505,7 +529,7 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
                 continue
             seen.add(c)
             if c in classes:
-                if member is None or member in classes[c].declared:
+                if member is None or member in declared[c]:
                     return None
                 todo += [x for x in [classes[c].superclass, *classes[c].interfaces] if x]
                 continue
@@ -517,7 +541,7 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
     findings, problems, skipped = [], [], 0
     for k in classes.values():
         if time.monotonic() > deadline:
-            skipped += 1
+            skipped += 1 + len(k.methods)
             continue
         origin = 'app' if k.name.startswith(own) else 'library'
         for sup in [k.superclass, *k.interfaces]:
@@ -531,21 +555,26 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
         for method in k.methods:
             if not method.insns and not method.size and not method.unparsed:
                 continue  # abstract or native: no code
+            if time.monotonic() > deadline:
+                skipped += 1
+                continue
             flow = Flow(method, classes)
             if flow.problem:
                 problems.append(f'{k.name}.{method.name}: {flow.problem}')
-            refs = [(i, *r) for i, (addr, op, args) in enumerate(method.insns) if (r := _reference(op, args))]
-            address = {a: i for i, (a, _, _) in enumerate(method.insns)}
-            refs += [(address.get(start), t, None, 'catch') for start, end, handlers in method.tries
-                     for t, _ in handlers if t]
-            for i, cls, member, kind in refs:
+            refs = [((i,), *r) for i, (addr, op, args) in enumerate(method.insns) if (r := _reference(op, args))]
+            # A catch type matters wherever its try range can throw: it is guarded only if every instruction is.
+            addresses = [a for a, _, _ in method.insns]
+            refs += [(tuple(range(bisect.bisect_left(addresses, start), bisect.bisect_left(addresses, end))),
+                      t, None, 'catch') for start, end, handlers in method.tries for t, _ in handlers if t]
+            for where, cls, member, kind in refs:
                 found = resolve(cls, member)
                 if found is None:
                     continue
                 platform, (level, extension) = found
                 if level <= min_sdk:
                     continue
-                guard = flow.guard_level(i) if not flow.problem and i is not None else None
+                levels = [flow.guard_level(i) for i in where] if not flow.problem and where else [None]
+                guard = None if None in levels else min(levels)
                 if extension:
                     status, reason = 'unverified', 'an extension SDK API: SDK_INT alone does not decide it'
                 elif flow.problem:
@@ -572,7 +601,7 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
     if problems:
         reasons.append(f'{len(problems)} method(s) not fully analysed (for example {problems[0]})')
     if skipped:
-        reasons.append(f'{skipped} class(es) not analysed: the {budget_s:g} s analysis budget ran out')
+        reasons.append(f'{skipped} method(s) not analysed: the {budget_s:g} s analysis budget ran out')
     return {'schemaVersion': 1, 'advisory': True, 'minSdk': min_sdk,
             'status': 'incomplete' if reasons else 'complete', **({'reason': '; '.join(reasons)} if reasons else {}),
             'database': {'file': Path(DATABASE).name, 'sha256': db.sha256}, 'counts': counts,

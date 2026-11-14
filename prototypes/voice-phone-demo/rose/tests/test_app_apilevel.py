@@ -69,6 +69,11 @@ public final class MainActivity extends Activity {{
         try {{ if (Build.VERSION.SDK_INT < 34) throw new IllegalStateException(); }} catch (IllegalStateException e) {{ }}
         return "p %s".formatted(16);  // the throw below 34 is caught and lands here
     }}
+    void catchRange(android.content.Intent i) {{
+        int s = Build.VERSION.SDK_INT;
+        try {{ if (s >= 31) startForegroundService(i); startService(i); }}
+        catch (android.app.ForegroundServiceStartNotAllowedException e) {{ }}  // startService throws below 31 too
+    }}
     @Override public void onTopResumedActivityChanged(boolean top) {{ }}
     void ownOverride() {{ onTopResumedActivityChanged(true); }}
     @Override protected void onCreate(Bundle state) {{ super.onCreate(state); }}
@@ -139,6 +144,8 @@ class Matrix(unittest.TestCase):
         self.assertEqual(self.status('notEqual'), ('not_guarded_here', 34))  # != 33 lets 26 through
         self.assertEqual(self.status('inFinally'), ('guarded', 34))
         self.assertEqual(self.status('afterCatch'), ('not_guarded_here', 34))  # reached through the exception edge
+        catch = self.status('catchRange', 'android/app/ForegroundServiceStartNotAllowedException')
+        self.assertNotEqual(catch[0], 'guarded')  # its try range also covers unguarded code
         for f in self.report['findings']:
             if f['status'] == 'guarded':
                 self.assertIn(f['where'].split('.')[-1].split('(')[0],
@@ -214,14 +221,22 @@ DB = '''<?xml version="1.0" encoding="utf-8"?>
 '''
 
 
-def dump(body: str, cls: str = 'app/x/A', superclass: str = 'java/lang/Object') -> str:
+def dump(body, cls: str = 'app/x/A', superclass: str = 'java/lang/Object') -> str:
+    if isinstance(body, list):  # several methods in one class
+        return dump(body[0], cls, superclass) + ''.join(
+            dump(b, cls, superclass).split('  Direct methods    -\n', 1)[1].replace("'m'", f"'m{n}'", 1)
+            for n, b in enumerate(body[1:], 1))
     lines = [f"Class #0            -\n  Class descriptor  : 'L{cls};'\n  Access flags      : 0x0001 (PUBLIC)\n"
              f"  Superclass        : 'L{superclass};'\n  Interfaces        -\n  Static fields     -\n"
              f"  Instance fields   -\n  Direct methods    -\n    #0              : (in L{cls};)\n"
              f"      name          : 'm'\n      type          : '()V'\n      code          -"]
-    for i, insn in enumerate(body.strip().splitlines()):
-        addr, rest = insn.split(':', 1)
-        lines.append(f'{0x100 + 2 * i:06x}: 0000                                   |{addr.strip()}:{rest}')
+    insns = [insn.split(':', 1) for insn in body.strip().split('\n')]
+    addresses = [int(a, 16) for a, _ in insns] + [int(insns[-1][0], 16) + 1]
+    lines.append(f'      insns size    : {addresses[-1]} 16-bit code units')
+    for i, (addr, rest) in enumerate(insns):  # each hex column as wide as the instruction it stands for
+        units = addresses[i + 1] - addresses[i]
+        hexes = ' '.join(['0000'] * min(units, 8)) + (' ...' if units > 8 else '')  # dexdump cuts long ones short
+        lines.append(f'{0x100 + 2 * addresses[i]:06x}: {hexes:<38} |{addr.strip()}:{rest}')
     lines.append('      catches       : (none)\n      positions     :')
     return '\n'.join(lines) + '\n'
 
@@ -291,7 +306,7 @@ class Units(unittest.TestCase):
                 '0002: const/16 v1, #int 34 // #0\n0004: if-ge v0, v1, 0009 // +0005\n'
                 '0006: goto/32 #00000006\n0009: nop // spacer\n000c: ' + CALL + '\n000f: return-void')
         self.assertEqual(self.statuses(dump(body)), [('not_guarded_here', 34)])
-        wide = f'10000: {CALL}\n10003: return-void'  # five-digit addresses are read, not dropped
+        wide = f'0000: nop // padding\n10000: {CALL}\n10003: return-void'  # five-digit addresses are read
         self.assertEqual(self.statuses(dump(wide)), [('not_guarded_here', 34)])
         for broken in (f'0000: {CALL}\n0003: goto zzzz\n0004: return-void',  # a target that cannot be read
                        f'0000: {CALL}\n0003: if-eqz v0, 0099 // +0096\n0005: return-void'):  # outside the method
@@ -302,6 +317,34 @@ class Units(unittest.TestCase):
         text = dump(f'0000: {CALL}\n0003: return-void').replace('      catches', '000200: what is this\n      catches')
         report = apilevel.analyse([text], self.db, 'app.x', 26)  # a code line it could not read
         self.assertEqual((report['status'], report['findings'][0]['status']), ('incomplete', 'unverified'))
+
+    def test_a_string_or_a_mismatched_listing_cannot_forge_or_hide_code(self):
+        # dexdump prints U+2028 and friends raw inside strings: they must not start new dump lines.
+        for sep in ('\u2028', '\u2029', '\u0085'):
+            with self.subTest(sep=repr(sep)):
+                body = (f'0000: const-string v0, "x{sep}Class #99" // string@0000\n0002: {CALL}\n0005: return-void')
+                self.assertEqual(self.statuses(dump(body)), [('not_guarded_here', 34)])
+        text = dump(f'0000: {CALL}\n0003: return-void').replace('0000 0000 0000', '0000 0000', 1)  # a gap
+        report = apilevel.analyse([text], self.db, 'app.x', 26)
+        self.assertEqual((report['status'], report['findings'][0]['status']), ('incomplete', 'unverified'))
+
+    def test_a_look_alike_sdk_field_or_a_helper_value_carried_on_is_not_a_guard(self):
+        fake = ('0000: sget v0, Lapp/x/Landroid/os/Build$VERSION;.SDK_INT:I // field@0000\n'
+                '0002: const/16 v1, #int 34 // #0\n0004: if-lt v0, v1, 0009 // +0005\n'
+                f'0006: {CALL}\n0009: return-void')
+        self.assertNotEqual(self.statuses(dump(fake))[0][0], 'guarded')
+        carried = ('0000: invoke-static {}, Lapp/x/A;.ok:()Z // method@0002\n0003: move-result v0\n'
+                   '0004: if-eqz v3, 0007 // +0003\n0006: nop // other work\n'
+                   f'0007: if-eqz v0, 000c // +0005\n0009: {CALL}\n000c: return-void')
+        self.assertEqual(self.statuses(dump(carried)), [('unverified', 34)])  # the helper's value, a block later
+
+    def test_the_budget_is_checked_between_methods(self):
+        import itertools
+        text = dump([f'0000: {CALL}\n0003: return-void', f'0000: {CALL}\n0003: return-void'])
+        with mock.patch.object(apilevel.time, 'monotonic', side_effect=itertools.chain([0, 0, 0], itertools.repeat(100))):
+            report = apilevel.analyse([text], self.db, 'app.x', 26)
+        self.assertEqual((report['status'], len(report['findings'])), ('incomplete', 1))
+        self.assertIn('1 method(s) not analysed', report['reason'])
 
     def test_size_and_time_limits_are_reported_not_hidden(self):
         text = dump(f'0000: {CALL}\n0003: return-void')

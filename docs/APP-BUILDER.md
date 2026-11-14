@@ -318,7 +318,8 @@ looked up in the pinned platform 35 `data/api-versions.xml`, with no
 acquisition. That file gives every class, method and field the level it was
 added, and its supertypes with the level each was added. It covers:
 - invokes, field accesses and type uses;
-- `catch` handler types;
+- `catch` handler types, each judged over its whole try range: it is
+  `guarded` only if every instruction it covers is;
 - the app's own classes' supertypes and interfaces, including the synthetic
   classes `d8` makes for lambdas.
 
@@ -341,8 +342,9 @@ added.
   look across methods.
 - `unverified`: the analysis can't tell, and the reference is never treated
   as safe. The causes are:
-  - a branch reads a value from the app's own code (a helper's result, of
-    any type, or an app field), which may be its guard;
+  - a branch it didn't recognise, in a method that calls the app's own code
+    or reads an app field. A helper's result or a flag may decide it, through
+    any number of moves, blocks or operations;
   - an `SDK_INT` value it doesn't follow, for example one kept in a variable
     and compared later;
   - an `SDK_INT` result that may reach a branch through a variable;
@@ -351,11 +353,17 @@ added.
   - a class's own supertype, which only never loading the class protects;
   - a method it could not read completely: a `switch` (`dexdump` doesn't
     print switch targets), a code line or branch target it couldn't parse,
-    or more than 20,000 instructions.
+    instructions that don't exactly cover the method's code, or more than
+    20,000 instructions.
+
+Only the platform's own `android/os/Build$VERSION.SDK_INT` counts as a
+guard, never a look-alike field in the app. The dump is split on newlines
+only, so characters `dexdump` prints raw inside strings (U+2028, U+0085 and
+the like) can't forge dump lines.
 
 **Overall status.** The analysis fails closed. A method it couldn't read
-completely, or classes left unanalysed when the 60 s budget runs out, make
-the report `incomplete` with a reason. If the database or `dexdump` is
+completely, or methods left unanalysed when the 60 s budget runs out (it is
+checked before each method), make the report `incomplete` with a reason. If the database or `dexdump` is
 missing, or the analysis fails, the report is `unavailable` with a reason
 and no counts, so it never reads as clean. The build continues either way.
 
@@ -387,9 +395,16 @@ through the real pipeline (compiled, never run) and asserts each row:
   value are `unverified`;
 - a call to the app's own override isn't a platform reference.
 
-Unit tests add `goto/32` edges, wide addresses, unreadable lines and branch
-targets, the size cap and the time budget (each `incomplete`, never clean),
-and the inheritance levels.
+Unit tests cover these, each `incomplete`, never clean, or never
+`guarded`:
+- `goto/32` edges and wide addresses;
+- unreadable lines and branch targets;
+- strings that would forge lines, and listings that don't cover the code;
+- a look-alike `SDK_INT`, and a helper's value used a block later;
+- the size cap, and the time budget checked between methods;
+- the inheritance levels.
+
+The fixture also has a `catch` whose try range covers unguarded code.
 
 It also covers a missing database and a crashing analysis, which give
 `unavailable` while the build stays `ready`. Unit tests cover every
@@ -411,7 +426,12 @@ a test fail:
   rather than the earliest;
 - `SDK_INT` reuse, app-value branches or a variable-carried result ignored;
 - the app's own override treated as platform;
-- no exception edges.
+- no exception edges;
+- `splitlines` parsing, or no coverage check;
+- a `catch` judged at its try start only;
+- a look-alike `SDK_INT` accepted, or app values ignored;
+- the budget checked only between classes;
+- a guard memo that drops edge guards.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 
