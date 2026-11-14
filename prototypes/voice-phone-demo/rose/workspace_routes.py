@@ -1,4 +1,5 @@
-"""``POST /workspace/v1/tasks`` on the remote TLS listener (docs/APP-BUILDER.md §4.3).
+"""``POST /workspace/v1/tasks`` and ``GET /workspace/v1/tasks/<taskId>`` on the remote TLS listener
+(docs/APP-BUILDER.md §4.3).
 
 Mounted only when the server has workspace tasks enabled; a signed rose-auth-v1 request from a paired device,
 checked like ``/hello``. Bodies are small JSON objects (integrity from the pinned TLS link).
@@ -43,3 +44,15 @@ def add_routes(app: FastAPI, remote: Any, tasks: WorkspaceTasks, peer: Callable[
         reply = await asyncio.to_thread(tasks.submit, auth.device.id, body)
         status = 400 if reply['status'] == 'refused' else 503 if reply['status'] == 'unavailable' else 200
         return JSONResponse(reply, status, headers=headers)
+
+    @app.get('/workspace/v1/tasks/{task_id}')
+    async def status(task_id: str, request: Request):
+        """A page task's authoritative state (docs/APP-BUILDER.md §4.3): 200 with the state, 404 when unknown."""
+        auth = remote.authenticate('GET', request_path(request.scope), request.headers, peer(request))
+        if auth.device is None:
+            return JSONResponse({'schemaVersion': 1, 'error': auth.reason, 'final': auth.final}, 401,
+                                headers=refusal_headers(auth))
+        task = await asyncio.to_thread(tasks.get, task_id, auth.device.id)  # only this device's own tasks
+        if task is None:
+            return JSONResponse({'schemaVersion': 1, 'status': 'unknown'}, 404, headers=headers)
+        return JSONResponse(task, headers=headers)

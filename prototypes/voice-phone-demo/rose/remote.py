@@ -793,6 +793,7 @@ def build_remote_app(server: Any, remote: Remote, voice: bool = True) -> FastAPI
             if auth.device is None:
                 await refuse(ws, auth)
                 return
+            ws.scope['rose_device'] = auth.device.id  # for per-device events (page tasks, APP-BUILDER.md §4.3)
             with remote.track(auth.device, ws, peer(ws)):
                 await handler(ws)
         return route

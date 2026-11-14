@@ -352,7 +352,7 @@ mere submission.
 - Rose Agent relays `app_command` only to same-signer or allowlisted packages,
   so the composer provider must be one of those.
 
-### 4.3 Agent tasks chosen on the page (workspace task handoff v1, proposal)
+### 4.3 Agent tasks chosen on the page (workspace task handoff v1)
 
 The approved HiFi R2 prototype (`prototypes/rose-hifi`, source `6fcf8c9b`)
 separates two kinds of page action. A **direct** action (launch an app, open a
@@ -378,6 +378,10 @@ one.
   enabled, like `/builder/v1`.
 - **Reply:** `{schemaVersion: 1, status: accepted | duplicate | refused |
   unavailable, taskId?, reason?}`.
+  - `accepted` and `duplicate` always carry `taskId: "wt-<16 hex>"`. The
+    server mints it at acceptance and stores it durably; a duplicate returns
+    the first one. `refused` and `unavailable` carry none, and nothing is
+    recorded for them.
   - `accepted` means started, never done.
   - A repeated `requestId` from the same device returns the first reply and
     starts nothing.
@@ -398,15 +402,89 @@ one.
   (`rose/tests/test_workspace_tasks.py`). They are mounted only when the server
   has `workspace_tasks` set, and `rose.app` sets none.
 - **Conversation hand-off (source, tests only):**
-  `workspace_tasks.conversation_starter(conductor)`. A confirmed task becomes
-  the owner's own request in the conversation, marked as confirmed on the
+  `workspace_tasks.connect(conductor, tasks)`. A confirmed task becomes the
+  owner's own request in the conversation, marked as confirmed on the
   workspace page, so it runs with exactly the conversation's tools and policy.
   While Rose is replying, it is `unavailable` (503) rather than cutting her
-  off. `taskId` is `null`, because the conversation decides what phone work to
-  start; the page follows the task events.
+  off. The conversation turn is bound to the page task's `taskId`. The
+  conductor reports how that turn ends, and the phone tasks it starts or
+  updates (`phone_task`, `update_task`).
+- **Page-task state v1 (agreed with OS Product's #799 receipt):**
+
+  ```
+  {schemaVersion: 1, taskId, requestId, actionId, state, detail,
+   phoneTasks: [{id, status}], createdAt, updatedAt}
+  ```
+
+  Times are epoch seconds. `detail` is owner-facing text of at most 200
+  characters, possibly empty. `phoneTasks` holds the Mac's own task ids. An id
+  is a non-negative JSON integer (the Mac's ids), or else a string of 1 to 128
+  characters; clients accept both. The
+  `state` values:
+  - `running`: the turn hasn't ended, or a phone task it started is running.
+  - `done`: the turn completed and every phone task it started finished done,
+    or it started none.
+  - `failed`: the turn failed, or any of its phone tasks failed.
+  - `cancelled`: the turn was interrupted, and nothing failed. That covers a
+    turn superseded by a newer request or by the owner speaking, a voice hold,
+    a conversation reset, a shutdown, or a cancelled phone task.
+  - `uncertain`: the server restarted before an end was recorded.
+
+  Phone work is counted for the turn that asked for it. A `phone_task` or
+  `update_task` call is bound to its own turn's page task when the call
+  arrives. While the call is in flight, the page task stays `running`, even if
+  its turn ends or is superseded first. The phone task it starts is attached
+  to that page task, never to a later one.
+
+  Every state except `running` is final, so a late report can't turn
+  `uncertain` into `done`.
+
+  OS Product's amendments, agreed:
+  - **A.** `updatedAt` never decreases for a `taskId`.
+  - **B.** `phoneTasks` shows at most the 8 newest entries, though every one
+    still counts toward `state`. `detail` is at most 200 characters, and an
+    `id` at most 128.
+  - **C.** A page task is visible only to the device that asked for it, in the
+    GET, the live events and the reconnect replay. Another device's `taskId`
+    is 404 `unknown`.
+  - **D.** A reply lost after acceptance is matched by `requestId` from the
+    reconnect replay. No new endpoint is needed.
+- **Delivery and recovery:**
+  - **Live:** `{kind: "workspace_task", t, task}` on `/ws/events` at every
+    change.
+  - **Reconnect:** after the existing task snapshots, one `workspace_task`
+    event for each of this device's 20 most recent page tasks. A change
+    already included in that snapshot is not sent again after it, so a card
+    never steps back to an older state. Changes go out in the order they were
+    made.
+  - **Authoritative read:** signed `GET /workspace/v1/tasks/<taskId>` returns
+    200 with the state, or 404 `{schemaVersion: 1, status: "unknown"}`.
+
+  The card follows its `taskId` through these, not through the local phone
+  stream's `current.id`. The client side is OS Product's (#800).
 - **Proof levels.** Source tests drive the real conductor with the simulated
-  Codex fixtures. There is no live end-to-end proof: no phone, no real Codex
-  turn, and the server is not enabled or running.
+  Codex and phone fixtures. They cover:
+  - a turn that starts phone work, then a completed phone task, giving `done`;
+  - a reply-only turn, giving `done`;
+  - a superseded turn, a voice hold and a reset, each giving `cancelled`;
+  - phone work whose call returns after its turn ended or was superseded,
+    which stays with its own page task;
+  - a stale queued change after the reconnect snapshot, which is not sent;
+  - a phone task that fails before it is attached, giving `failed`;
+  - a page task accepted during a reset, which runs on the new conversation;
+  - a failed turn, giving `failed`;
+  - a restart, giving `uncertain`;
+  - a stable `taskId` across duplicates and restarts;
+  - the signed GET route.
+
+  Mutation checks each make them fail: no attach, ignoring phone tasks, no
+  restart recovery, no supersede, a final state that can change, a null
+  `taskId`, no in-flight hold, attaching to the session's current page task
+  instead of the call's own, a hold that doesn't end the page task, no
+  reconnect filter, no rollback after a failed insert, a phone status read
+  outside the store's lock, a turn kept on a conversation that a reset
+  replaced, and a hold not released when its call never starts. There is no live end-to-end proof: no phone, no real Codex turn,
+  and the server is not enabled or running.
 
 ### 4.4 App Core's answers to `rose-layout-v1` (Models Core, #781)
 
