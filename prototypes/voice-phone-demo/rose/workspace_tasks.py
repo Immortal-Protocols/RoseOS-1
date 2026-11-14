@@ -233,6 +233,18 @@ class WorkspaceTasks:
             return None
         return found[0]
 
+    def by_request(self, device: str, request_id) -> dict | None:
+        """The state of the task this device's ``requestId`` started, read only (docs/APP-BUILDER.md §4.3): for a
+        reply the phone lost, when the reconnect snapshot no longer holds it. None when this device never had that
+        request accepted (never received, unavailable, or another device's). Starts and changes nothing."""
+        if not _text(request_id, LIMITS['requestId']):
+            return None
+        with self.lock:  # a request still starting is decided first, so this sees it accepted or gone
+            row = self.db.execute('SELECT reply FROM requests WHERE key=?', (f'{device}\n{request_id}',)).fetchone()
+            if row is None:
+                return None
+            return self.get(json.loads(row[0]).get('taskId'), device)
+
     def _get(self, task_id):
         if not isinstance(task_id, str) or not re.fullmatch(r'wt-[0-9a-f]{16}', task_id):
             return None

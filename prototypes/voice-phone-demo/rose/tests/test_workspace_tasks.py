@@ -469,6 +469,81 @@ class PageTaskFlow(unittest.TestCase):
         self.assertEqual([t['taskId'] for t in self.tasks.recent()], [task_id])
 
 
+class LostReply(unittest.TestCase):
+    """A reply the phone lost, after its task fell out of the reconnect snapshot: the read by requestId finds it, for
+    this device only, and starts and changes nothing (docs/APP-BUILDER.md §4.3)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.now = [1000.0]
+        self.start = Starter()
+        self.tasks = WorkspaceTasks(Path(self.tmp.name), self.start, clock=lambda: self.now[0])
+        self.addCleanup(self.tasks.close)
+
+    def count(self):
+        return self.tasks.db.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
+
+    def test_a_task_the_snapshot_no_longer_holds_is_found_by_its_request(self):
+        lost = self.tasks.submit('phone', {**GOOD, 'requestId': 'rq-lost'})['taskId']  # the phone never got this
+        self.now[0] += 5
+        self.tasks.turn_ended(lost, 'completed')  # it ends while the phone's event link is down
+        for n in range(20):  # newer page tasks of this device, of another action
+            self.now[0] += 1
+            self.tasks.submit('phone', {**GOOD, 'actionId': 'task:reply', 'requestId': f'rq-{n}'})
+        self.assertNotIn('rq-lost', [t['requestId'] for t in self.tasks.recent('phone')])
+        found = self.tasks.by_request('phone', 'rq-lost')
+        self.assertEqual(found, self.tasks.get(lost, 'phone'))
+        self.assertEqual((found['taskId'], found['state'], found['requestId']), (lost, 'done', 'rq-lost'))
+
+    def test_another_device_a_request_never_received_or_unavailable_is_unknown_and_starts_nothing(self):
+        self.tasks.submit('phone', GOOD)
+        self.tasks.start = Starter(fail=True)
+        self.assertEqual(self.tasks.submit('phone', {**GOOD, 'requestId': 'rq-busy'})['status'], 'unavailable')
+        before, calls = self.count(), len(self.start.calls)
+        for device, request_id in (('tablet', 'r1'), ('phone', 'rq-never'), ('phone', 'rq-busy'), ('phone', ''),
+                                   ('phone', 'x' * 65), ('phone', None), ('phone', 7), ('phone', ' ')):
+            with self.subTest(device=device, request_id=request_id):
+                self.assertIsNone(self.tasks.by_request(device, request_id))
+        self.assertEqual((self.count(), len(self.start.calls)), (before, calls))
+        self.assertEqual(self.tasks.submit('phone', {**GOOD, 'requestId': 'rq-never'})['status'], 'unavailable')
+
+    def test_a_read_changes_nothing_and_waits_for_a_request_still_starting(self):
+        import threading
+        events = []
+        self.tasks.emit = lambda task, device: events.append(task)
+        done = self.tasks.submit('phone', GOOD)['taskId']
+        rows = lambda: (self.tasks.db.execute('SELECT * FROM requests ORDER BY key').fetchall(),
+                        self.tasks.db.execute('SELECT * FROM tasks ORDER BY task_id').fetchall())
+        before, revision, emitted = rows(), self.tasks.revision, len(events)
+        self.now[0] += 60
+        for _ in range(3):
+            self.assertEqual(self.tasks.by_request('phone', 'r1')['taskId'], done)
+        self.assertEqual((rows(), self.tasks.revision, len(events)), (before, revision, emitted))
+        for fail, expected in ((False, 'running'), (True, None)):
+            with self.subTest(unavailable=fail):
+                gate, entered, seen = threading.Event(), threading.Event(), {}
+
+                def start(*args, fail=fail):
+                    entered.set()
+                    gate.wait(5)
+                    if fail:
+                        raise Unavailable()
+                self.tasks.start = start
+                request_id = 'rq-slow-' + str(fail)
+                poster = threading.Thread(target=lambda: self.tasks.submit('phone', {**GOOD, 'requestId': request_id}))
+                poster.start()
+                self.assertTrue(entered.wait(2))
+                reader = threading.Thread(target=lambda: seen.update(r=self.tasks.by_request('phone', request_id)))
+                reader.start()
+                reader.join(0.2)
+                self.assertTrue(reader.is_alive())  # it waits until the request is decided
+                gate.set()
+                poster.join(5)
+                reader.join(5)
+                self.assertEqual(seen['r'] and seen['r']['state'], expected)
+
+
 class Events(unittest.TestCase):
     """/ws/events (rose.app's Server.serve_events) shows a phone only its own page tasks (amendment C), without the
     internal device field, in the replay, the reconnect snapshot and live."""
@@ -594,6 +669,41 @@ class Route(unittest.TestCase):
         path = '/workspace/v1/tasks/' + task_id
         r = self.client.get(path, headers=other.headers('GET', path, self.remote.identity.pin))
         self.assertEqual((r.status_code, r.json()), (404, {'schemaVersion': 1, 'status': 'unknown'}))
+
+    def lookup(self, query, device=None):
+        path = '/workspace/v1/tasks' + query
+        return self.client.get(path, headers=(device or self.device).headers('GET', path, self.remote.identity.pin))
+
+    def test_the_signed_read_by_request_id(self):
+        task_id = self.post({**GOOD, 'requestId': 'tap 1/2?'}).json()['taskId']
+        r = self.lookup('?requestId=tap%201%2F2%3F')  # percent-encoded; the signature covers the query
+        by_id = '/workspace/v1/tasks/' + task_id
+        same = self.client.get(by_id, headers=self.device.headers('GET', by_id, self.remote.identity.pin)).json()
+        self.assertEqual((r.status_code, r.json()), (200, same))
+        self.assertEqual(r.headers['cache-control'], 'no-store')
+        self.assertEqual(self.client.get('/workspace/v1/tasks?requestId=tap%201%2F2%3F').status_code, 401)
+        other = Device()
+        self.remote.devices.enroll(other.spki, 'tablet', 'Pixel Tablet', '100.64.0.3')
+        unknown = {'schemaVersion': 1, 'status': 'unknown'}
+        self.assertEqual((lambda r: (r.status_code, r.json()))(self.lookup('?requestId=tap%201%2F2%3F', other)),
+                         (404, unknown))  # another device's request
+        self.assertEqual((lambda r: (r.status_code, r.json()))(self.lookup('?requestId=never')), (404, unknown))
+        self.assertEqual(len(self.start.calls), 1)  # a read starts nothing
+        plus = self.post({**GOOD, 'requestId': 'a+b'}).json()['taskId']  # percent-encoding: a '+' is a '+'
+        self.assertEqual(self.lookup('?requestId=a+b').json()['taskId'], plus)
+        self.assertEqual(self.lookup('?requestId=a%2Bb').json()['taskId'], plus)
+        self.tasks.start = Starter(fail=True)
+        self.assertEqual(self.post({**GOOD, 'requestId': 'busy'}).status_code, 503)
+        self.assertEqual((lambda r: (r.status_code, r.json()))(self.lookup('?requestId=busy')), (404, unknown))
+
+    def test_a_bad_lookup_query_is_refused(self):
+        self.post(GOOD)
+        for query in ('', '?requestId=', '?requestId=r1&requestId=r1', '?requestId=r1&taskId=x',
+                      '?requestId=' + 'x' * 65, '?other=1', '?requestId=%FF', '?requestId=r1&'):
+            with self.subTest(query=query):
+                r = self.lookup(query)
+                self.assertEqual((r.status_code, r.json()['status']), (400, 'refused'))
+        self.assertEqual(len(self.start.calls), 1)
 
     def test_signed_status_read(self):
         task_id = self.post(GOOD).json()['taskId']
