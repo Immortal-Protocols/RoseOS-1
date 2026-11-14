@@ -133,6 +133,19 @@ final class WorkspaceTaskClient {
   catch(Exception e){return null;}
  }
 
+ /**
+  * App Core's read by requestId, for a tap whose reply was lost and which the reconnect snapshot no longer
+  * holds: a signed GET /workspace/v1/tasks?requestId=&lt;id&gt; (the signature covers the query), one attempt,
+  * behind the same gate. Read only: it never re-sends the POST, so a request that never arrived is never
+  * started. Returns null on 404 unknown, any failure or anything malformed; that is no change.
+  */
+ WorkspaceTaskTracker.State lookupRequest(String requestId){
+  if(!gate.enabled()||requestId==null||!WorkspaceTaskTracker.REQUEST_LOOKUP.matcher(requestId).matches())return null;
+  String path=PATH+"?requestId="+requestId;
+  try{return WorkspaceTaskTracker.readByRequest(transport.get(path,new LinkedHashMap<>(signer.headers("GET",path))),requestId);}
+  catch(Exception e){return null;}
+ }
+
  private final Gate gate;private final Transport transport;private final Signer signer;
  WorkspaceTaskClient(Gate gate,Transport transport,Signer signer){this.gate=gate;this.transport=transport;this.signer=signer;}
 

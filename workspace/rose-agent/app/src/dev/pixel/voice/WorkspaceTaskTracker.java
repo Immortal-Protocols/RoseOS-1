@@ -30,6 +30,8 @@ import java.util.regex.Pattern;
  */
 final class WorkspaceTaskTracker {
  static final Pattern TASK_ID=Pattern.compile("wt-[0-9a-f]{16}");
+ /** A requestId the phone may put in a lookup's query: its own "tap-&lt;uuid&gt;" ids need no percent-encoding. */
+ static final Pattern REQUEST_LOOKUP=Pattern.compile("[A-Za-z0-9._-]{1,64}");
  static final int KEEP=20,PHONE_TASKS=8,PHONE_TASK_ID=128,DETAIL=200;
  static final String RUNNING="running",DONE="done",FAILED="failed",CANCELLED="cancelled",UNCERTAIN="uncertain";
  private static final List<String> STATES=java.util.Arrays.asList(RUNNING,DONE,FAILED,CANCELLED,UNCERTAIN);
@@ -125,6 +127,13 @@ final class WorkspaceTaskTracker {
   return r!=null&&r.taskId==null&&r.state==null&&"UNCERTAIN".equals(r.sent);
  }
 
+ /**
+  * Taps whose POST was sent but whose reply never came (UNCERTAIN), with no taskId and no state yet: App Core's
+  * read by requestId answers these when the reconnect snapshot no longer holds them (it keeps the device's 20
+  * most recently updated tasks; this phone keeps one record per action).
+  */
+ List<String> lostReplies(){List<String> ids=new ArrayList<>();for(Record r:records)if("UNCERTAIN".equals(r.sent)&&r.taskId==null&&r.state==null&&REQUEST_LOOKUP.matcher(r.requestId).matches())ids.add(r.requestId);return ids;}
+
  /** Records whose taskId is known but whose end is not: the GET answers these after a restart or a gap. */
  List<String> openTaskIds(){List<String> ids=new ArrayList<>();for(Record r:records)if(r.taskId!=null&&!r.finalState())ids.add(r.taskId);return ids;}
  Record byAction(String actionId){for(int i=records.size()-1;i>=0;i--)if(records.get(i).actionId.equals(actionId))return records.get(i);return null;}
@@ -171,6 +180,12 @@ final class WorkspaceTaskTracker {
  static State read(WorkspaceTaskClient.Response r,String taskId){
   if(r==null||r.status!=200)return null;
   try{State s=state(MiniJson.parse(r.body));return s!=null&&s.taskId.equals(taskId)?s:null;}catch(RuntimeException e){return null;}
+ }
+
+ /** The read by requestId: the state on 200 for exactly that requestId, nothing on 404 unknown or anything else. */
+ static State readByRequest(WorkspaceTaskClient.Response r,String requestId){
+  if(r==null||r.status!=200||requestId==null)return null;
+  try{State s=state(MiniJson.parse(r.body));return s!=null&&s.requestId.equals(requestId)?s:null;}catch(RuntimeException e){return null;}
  }
 
  private static String str(Object v){return v instanceof String?(String)v:null;}
