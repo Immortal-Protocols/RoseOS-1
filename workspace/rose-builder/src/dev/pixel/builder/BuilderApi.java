@@ -16,13 +16,17 @@ interface BuilderApi {
   final long versionCode, createdAt; final String versionName, jobId, sourceRevision, apkSha256, notes; final long apkSize;
   /** §3.3 advisory API level summary: never null (absent reads as none), never a pass, never a gate. */
   final ApiReport apiReport;
+  /** Level 3: the public links the builder recorded for this version; never null (absent reads as unpublished). */
+  final ShareState share;
   Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes) {
-   this(versionCode, versionName, createdAt, jobId, sourceRevision, apkSha256, apkSize, notes, ApiReport.none());
+   this(versionCode, versionName, createdAt, jobId, sourceRevision, apkSha256, apkSize, notes, ApiReport.none(), ShareState.unpublished());
   }
-  Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes, ApiReport apiReport) {
+  Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes,
+    ApiReport apiReport, ShareState share) {
    this.versionCode = versionCode; this.versionName = versionName; this.createdAt = createdAt; this.jobId = jobId;
    this.sourceRevision = sourceRevision; this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
    this.apiReport = apiReport == null ? ApiReport.none() : apiReport;
+   this.share = share == null ? ShareState.unpublished() : share;
   }
  }
  /** §3.3 project, re-read from the library on every refresh (signerSha256 is null until the first signed build and
@@ -89,7 +93,4 @@ interface BuilderApi {
   * refused by the builder. Returns the job's new attempt. */
  int retry(String jobId) throws Unreachable, Refused;
  void reportInstall(InstallReceipt receipt) throws Unreachable;
- /** Public download link for sharing (Level 3, the Chariot owner's hosting; not part of builder API v1): one
-  * immutable per version, or the latest when versionCode is null. Null until hosting exists. */
- String shareUrl(String projectId, Long versionCode) throws Unreachable;
 }

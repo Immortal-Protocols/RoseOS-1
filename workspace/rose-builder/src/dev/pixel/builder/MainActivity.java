@@ -269,6 +269,9 @@ public final class MainActivity extends Activity {
    if (v.notes != null) body("Version " + v.versionName + ": " + ShareMessage.clean(v.notes, ""));
    // The advisory API check: information only. It never decides what is offered below.
    for (String line : ApiReport.lines(v.apiReport, android.os.Build.VERSION.SDK_INT)) small(line);
+   // Level 3: this exact version's immutable link, or why it can't be shared.
+   if (v.share.published()) button("Share version " + v.versionName, x -> shareLink(p, v, v.share.versionUrl, false));
+   else small(ShareState.line(v.share));
    if (offer.action == InstallPlan.Action.REFUSE) { body("Version " + v.versionName + ": " + offer.reason); continue; }
    if (offer.action == InstallPlan.Action.OPEN) { button("Open version " + v.versionName, x -> open(p.packageName)); continue; }
    if (v.apkSha256 == null) { body("Version " + v.versionName + " isn't downloadable yet."); continue; }
@@ -299,7 +302,9 @@ public final class MainActivity extends Activity {
     });
    });
   }
-  if (p.latest() != null) button("Share", x -> share(p));
+  // Level 3: only links the builder recorded. The newest version's latest link always serves the newest version.
+  BuilderApi.Version newest = p.latest();
+  if (newest != null && newest.share.published()) button("Share latest version", x -> shareLink(p, newest, newest.share.latestUrl, true));
   button("All apps", x -> showLibrary());
  }
 
@@ -342,15 +347,9 @@ public final class MainActivity extends Activity {
  }
 
  /** The owner picks recipients in Android's share sheet or SMS composer; nothing is sent from here. */
- void share(BuilderApi.Project p) {
-  act(() -> { String u = api.shareUrl(p.projectId, null); return u == null ? "" : u; }, url -> {
-   if (url.isEmpty()) toast("Sharing needs a download link, which isn't available yet");
-   else shareLink(p, url);
-  }, e -> toast("Can't reach your builder"));
- }
-
- void shareLink(BuilderApi.Project p, String url) {
-  String text = ShareMessage.text(p.name, p.latest().versionName, url, true);
+ /** Opens Android's share sheet (SMS first) with one recorded link; the owner picks recipients and sends. */
+ void shareLink(BuilderApi.Project p, BuilderApi.Version v, String url, boolean latest) {
+  String text = ShareMessage.text(p.name, v.versionName, url, latest);
   Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
   Intent sms = new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")).putExtra("sms_body", text);
   Intent chooser = Intent.createChooser(send, "Share " + p.name);

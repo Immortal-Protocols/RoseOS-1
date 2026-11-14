@@ -143,8 +143,6 @@ final class HttpsBuilderApi implements BuilderApi {
   throw new Unreachable("unreachable");
  }
 
- /** Level 3 share links come from the Chariot owner's hosting, not builder API v1. */
- @Override public String shareUrl(String projectId, Long versionCode) { return null; }
 
  // ---- plumbing --------------------------------------------------------------------------------------------------
 

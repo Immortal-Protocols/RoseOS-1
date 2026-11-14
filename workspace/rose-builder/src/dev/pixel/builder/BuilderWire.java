@@ -122,7 +122,9 @@ final class BuilderWire {
   return new BuilderApi.Version(integer(v, "versionCode"), optStr(v, "versionName", String.valueOf(integer(v, "versionCode"))),
     millis(v, "createdAt"), optStr(v, "jobId", null), optStr(v, "sourceRevision", null), sha, size, optStr(v, "notes", null),
     // §3.3: a bad summary is read as unavailable on its own; it never fails the version or the library.
-    ApiReport.parse(v.get("apiReport")));
+    ApiReport.parse(v.get("apiReport")),
+    // Level 3: the recorded public links, read strictly; a bad share state is never a link and never fails the version.
+    ShareState.parse(v.get("share")));
  }
 
  static BuildJob job(String body) throws Malformed {

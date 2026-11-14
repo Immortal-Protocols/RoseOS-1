@@ -363,19 +363,27 @@ java -cp "$JAVA_TESTS/RequestIds" dev.pixel.builder.RequestIdsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderWire" \
  workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
  workspace/rose-builder/src/dev/pixel/builder/Json.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
- workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ApiReport.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ShareState.java workspace/rose-builder/src/dev/pixel/builder/ApiReport.java \
  workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/tests/BuilderWireTest.java
 java -cp "$JAVA_TESTS/BuilderWire" dev.pixel.builder.BuilderWireTest
 # Project 1: the advisory API level summary (§3.3) against App Core's shared fixtures; no status is ever worded as a pass.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ApiReport" \
  workspace/rose-builder/src/dev/pixel/builder/ApiReport.java workspace/rose-builder/src/dev/pixel/builder/Json.java \
  workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
- workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/BuildJob.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ShareState.java workspace/rose-builder/src/dev/pixel/builder/BuildJob.java \
  workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java workspace/rose-builder/tests/ApiReportTest.java
 java -cp "$JAVA_TESTS/ApiReport" dev.pixel.builder.ApiReportTest prototypes/voice-phone-demo/rose/tests/fixtures/api-report-summary-v1.json
+# Project 1, Level 3: a version's recorded share links, read strictly; anything off-spec is never a link.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ShareState" \
+ workspace/rose-builder/src/dev/pixel/builder/ShareState.java workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java workspace/rose-builder/src/dev/pixel/builder/Json.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ApiReport.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/tests/ShareStateTest.java
+java -cp "$JAVA_TESTS/ShareState" dev.pixel.builder.ShareStateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/FakeBuilderApi" \
  workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
- workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java \
+ workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ShareState.java \
  workspace/rose-builder/src/dev/pixel/builder/ApiReport.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
  workspace/rose-builder/src/dev/pixel/builder/Json.java \
  workspace/rose-builder/src/dev/pixel/builder/FakeBuilderApi.java workspace/rose-builder/tests/FakeBuilderApiTest.java
