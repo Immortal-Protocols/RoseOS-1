@@ -48,6 +48,22 @@ class VectorsTest(unittest.TestCase):
             self.assertNotIn('Rose will', text)                          # the confirm-sheet `ask`
 
 
+class ManifestTest(unittest.TestCase):
+    def test_manifest_is_preparation_only_and_matches_the_matrix(self):
+        with open(os.path.join(ROOT, 'runtime', 'acquisition-manifest.json'), encoding='utf-8') as f:
+            m = json.load(f)
+        self.assertTrue(m['proposedCommands']['notRun'])
+        self.assertEqual(m['runtime']['llama.cpp']['commit'], 'UNBOUND')
+        p = m['models']['primary']
+        self.assertEqual((p['repo'], p['revision'][:8], p['bytes']), ('Qwen/Qwen3-0.6B-GGUF', '23749fef', 639446688))
+        self.assertRegex(p['sha256'], r'^[0-9a-f]{64}$')
+        with open(os.path.join(ROOT, 'README.md'), encoding='utf-8') as f:
+            readme = f.read()
+        for e in [p] + m['models']['comparison'][:3]:
+            self.assertIn(f"{e['repo']}@{e['revision'][:8]}", readme)       # same pins as the candidate matrix
+        self.assertEqual([o['http'] for o in m['runtimeMetadataDenial']['operations']], [403, 403, 403])
+
+
 @unittest.skipUnless(shutil.which('javac') and shutil.which('java'), 'no JDK on PATH: Java parity not run')
 class JavaParityTest(unittest.TestCase):
     def test_java_core_reproduces_every_vector(self):
