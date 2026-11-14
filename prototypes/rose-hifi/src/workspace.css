@@ -84,3 +84,15 @@
 #device[data-theme] .ws-act.agent{grid-template-columns:auto 1fr;row-gap:2px;padding:8px 12px}
 #device[data-theme] .ws-act.agent>span.ws-pearl{grid-column:1;grid-row:1 / span 2}
 #device[data-theme] .ws-act.agent>span:not(.ws-pearl),#device[data-theme] .ws-act.agent>small{grid-column:2}
+/* r2: workspace mark before Home's page dots — a four-point star, distinct from the round dots. */
+#device[data-theme] .page-dots .ws-mark{width:22px;display:grid;place-items:center}
+#device[data-theme] .page-dots .ws-mark svg{width:10px;height:10px;fill:none;stroke:rgba(235,238,244,.55);stroke-width:1.2;stroke-linejoin:round;transition:all 200ms}
+#device[data-theme] .page-dots .ws-mark[aria-current=true] svg{width:12px;height:12px;fill:var(--sys-ink);stroke:var(--sys-ink);filter:drop-shadow(0 0 3px var(--sys-accent-hi))}
+/* r2: background preparation offer — never navigates by itself. */
+#device[data-theme] .ws-offer{position:absolute;left:12px;right:12px;top:52px;z-index:91;display:flex;align-items:center;gap:8px;min-height:52px;padding:4px 4px 4px 14px;border-radius:16px;background:var(--sys-surface-2);color:var(--sys-ink);box-shadow:0 10px 28px rgba(0,0,0,.45),inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ws-offer[hidden]{display:none}
+#device[data-theme] .ws-offer p{flex:1;margin:0;font-size:13.5px;font-weight:500;line-height:1.3}
+#device[data-theme] .ws-offer p em{font-style:normal;color:var(--sys-ink-3);font-weight:400}
+#device[data-theme] .ws-offer[data-phase=failed] p{color:var(--sys-warm)}
+#device[data-theme] .ws-offer .ws-btn{flex:none}
+#device[data-theme] .ws-offer-x{flex:none;width:44px;height:44px;border-radius:12px;color:var(--sys-ink-2);font-size:14px}

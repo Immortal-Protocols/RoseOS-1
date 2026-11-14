@@ -19,6 +19,50 @@ Classic has no workspace page.
 **Overlap.** Codex WebGL built a separate Project 2 prototype. It is on hold and its artifact cannot be
 reached (a Library 401 error). This build does not use that work, recreate it or replace it.
 
+## Revisions
+
+| Revision | Source | Status |
+| --- | --- | --- |
+| r1 | `8edd8181` (evidence `a55ebbe2`) | Delivered first. Kept unchanged for Nathan's review. |
+| r2 | This revision (see `evidence/workspace-<commit>/`) | Answers the Designer source review of r1. |
+
+r2 changes, one per review item:
+
+1. **Reload persistence.** The layout, arrangement, pins, undo history (last 20), recent layouts, the
+   echoed request and direct-action states are saved after every change and restored on reload.
+   - Browser `localStorage` stands in for on-device storage.
+   - Rose tasks belong to the task model and are not persisted, so after a reload they read as not
+     started.
+   - If storage is unavailable, the page still works and the harness says "not saved".
+   - Harness → **Reset workspace** clears the saved state.
+2. **Pins keep their position.** On Regenerate or a new request, a pinned card stays at the same index;
+   only the unpinned cards around it move.
+3. **Exact task identity.**
+   - "Add missing items to grocery list" starts its own sample task with that exact title. Its windows
+     are a Notes grocery list and a Firefox recipe.
+   - "Summarise prep notes" likewise starts its own task, with prep notes and review files.
+   - "Draft a reply to Jamie" and "Plan a quiet Saturday" use the existing tasks of the same names.
+   - The two new tasks join the task registry only when the person confirms them (`registerTask`), so
+     existing flows are unchanged.
+   - The card's state is read from the task model: "Rose is working", "needs your choice" or
+     "finished · in Rose's work". Tapping a started task opens Rose's work.
+4. **Workspace navigation mark.** A four-point star sits before Home's round dots. It lights on the
+   workspace while every Home dot is off. On Home it is outlined and unlit.
+5. **"Show workspace" offer.** A request made from inside an app shows a status card at the top:
+   - "Preparing workspace: … simulated" while it composes.
+   - Then "Workspace ready: …" with **Show workspace** and Dismiss.
+   - "Couldn't prepare workspace · kept your last layout" if it fails.
+
+   It never leaves the app by itself. The card disappears once you reach the workspace.
+
+r2 also fixes three things the new checks exposed:
+
+- A newly registered task crashed the task announcer.
+- The running timer replaced every card once a second, so a tap could land on a card as it was
+  replaced. Now only the timer's label changes.
+- The work view showed generic app content inside the new tasks' windows. They now show their own
+  sample content.
+
 ## How to try it
 
 1. Open either HTML file in a desktop browser. A phone frame and the review harness appear.
@@ -43,8 +87,11 @@ reached (a Library 401 error). This build does not use that work, recreate it or
 6. Harness → Workspace:
    - Simulated generation time: 0.3 s, 0.8 s or 2.5 s.
    - **Next generation fails.**
-   - **From an app: ask Rose for cooking.** Open an app first: the cooking page prepares in the
-     background, a toast appears and the app stays in front.
+   - **From an app: ask Rose for cooking.** Open an app first. The cooking page prepares in the
+     background, the "Preparing… / Workspace ready · Show workspace" card appears, and the app stays in
+     front.
+   - **Reset workspace (clear saved state).**
+7. Reload the page, then swipe right from Home: the workspace is exactly as you left it.
 
 ## Behaviour contracts
 
@@ -66,7 +113,8 @@ reached (a Library 401 error). This build does not use that work, recreate it or
 - **Voice.** The chin mic is the only mute. While muted, the workspace mic refuses to listen, and both
   a toast and its label say why.
 - **Retention.**
-  - The layout, pins, undo history and recent layouts survive opening apps and coming back.
+  - The layout, pins, undo history and recent layouts survive opening apps, coming back and a full
+    reload (r2).
   - The page never rearranges itself while you are away, unless you asked from a conversation.
 - **Accessibility.**
   - Every control has a hit area of at least 44 pt.
@@ -104,10 +152,10 @@ The same commit passes the existing suites: `verify.cjs`, `browser-check` (Oxblo
 
 ## Open for Designer and Nathan
 
-- **Page indicator.** On the workspace, none of Home's page dots is lit. Choose between a dedicated
-  workspace mark and no indicator.
+- **Workspace mark (r2).** Is the star the right glyph and weight beside Home's dots?
 - **Card vocabulary.** The cards are apps, actions, carousel, checklist and notification. Is this the
   set for native, and is the outline-plus-pearl treatment of Rose tasks the right distinction?
 - **Request wording.** The status line echoes the request in quotes.
-- **Conversational preparation.** A conversational request prepares the page with a toast. Should it
-  also offer a direct "Show me" action?
+- **Offer card (r2).** It stays until it is acted on or dismissed. Should it time out?
+- **Persisting Rose tasks.** Should Rose tasks also survive a restart in native? That is outside this
+  prototype.

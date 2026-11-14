@@ -211,6 +211,11 @@ function transition(previous, event) {
       break;
     }
 
+    case 'registerTask':
+      // Project 2 workspace: a sample Rose task named exactly like its workspace action joins the
+      // registry (TASKS/WINDOWS) only when the person confirms it, so existing flows are unchanged.
+      if (TASKS[event.id] && !s.tasks[event.id]) s.tasks[event.id] = { state: 'idle', step: 0 };
+      break;
     case 'startTask':
       if (task && ['idle', 'stopped', 'done'].includes(task.state)) { task.state = 'running'; task.step = 1; }
       break;

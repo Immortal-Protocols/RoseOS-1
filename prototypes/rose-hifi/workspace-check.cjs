@@ -4,6 +4,8 @@
 // 390×600 short screen. Glacier at all four sizes, Oxblood at design and 390.
 // Headless Chromium + SwiftShader: browser-emulated interaction/layout evidence, not a phone or native build.
 // Generation and all data are simulated in the prototype; this suite checks the prototype's behaviour only.
+// r2 (Designer source review of 8edd8181): reload persistence, pinned positions, exact task identity,
+// workspace navigation mark, and an explicit “Show workspace” offer after background preparation.
 'use strict';
 const path = require('path'), fs = require('fs'), crypto = require('crypto');
 const { execSync } = require('child_process');
@@ -44,6 +46,8 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   const home0 = await R(() => ({ pages: document.querySelectorAll('#home-track > .home-page').length, icons: document.querySelectorAll('#home-track > .home-page button').length }));
   const dock0 = await box('#home-tray'), chin0 = await box('#home-bar');
   check(P('starts on Home page 1 with no workspace layout'), (await W()).page === 0 && !(await W()).key);
+  const m0 = await R(() => { const m = document.getElementById('ws-mark'), d = [...document.querySelectorAll('#page-dots button')]; return { first: d[0] === m, mark: m && m.getAttribute('aria-current'), home1: d[1] && d[1].getAttribute('aria-current') }; });
+  check(P('workspace mark sits before Home’s dots, unlit on Home page 1 (Home dot 1 lit)'), m0.first && m0.mark === 'false' && m0.home1 === 'true', m0);
   await hswipe(L, Rr, MY);
   let w = await W();
   check(P('swipe right from Home reaches the workspace page (left of Home)'), w.page === -1 && w.view === 'home', w);
@@ -56,6 +60,9 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   check(P('page is labelled “Simulated generation · sample data”'), lbl === 'Simulated generation · sample data', lbl);
   const nc = await R(() => { const c = document.getElementById('ws-canvas').getBoundingClientRect(), d = document.getElementById('page-dots').getBoundingClientRect(), t = document.getElementById('home-tray').getBoundingClientRect(); return { c: c.bottom, d: d.top, t: t.top }; });
   check(P('canvas ends above the page dots and dock'), nc.c <= nc.d + 1 && nc.c <= nc.t, nc);
+  const mk = () => R(() => { const m = document.getElementById('ws-mark'); return { mark: m ? m.getAttribute('aria-current') : null, svg: !!(m && m.querySelector('svg path')), dots: [...document.querySelectorAll('#page-dots button:not(.ws-mark)')].map((d) => d.getAttribute('aria-current')) }; });
+  let m1 = await mk();
+  check(P('workspace mark (star, not a dot) is lit on the workspace; Home dots are not'), m1.mark === 'true' && m1.svg && m1.dots.every((d) => d === 'false'), m1);
   await hswipe(L, Rr, MY); w = await W();
   check(P('further right swipe resists and stays on the workspace (no wrap)'), w.page === -1, w);
   await shot('01-empty', 'Workspace, empty state');
@@ -114,17 +121,22 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   } else check(P('carousel present'), false);
 
   // ---------- Pin, Regenerate keeps pins, Undo ----------
-  const pinId = (await W()).cards[1];
+  const pinIdx = 2, pinId = (await W()).cards[pinIdx];
   await tap('#ws-canvas [data-pin="' + pinId + '"]'); await wait(250);
   w = await W(); check(P('Pin marks a card (aria-pressed, outline)'), w.pins.includes(pinId) && (await R((id) => document.querySelector('[data-pin="' + id + '"]').getAttribute('aria-pressed'), pinId)) === 'true', w);
   const beforeRegen = await W();
   await tap('#ws-regen'); await wait(700);
   w = await W();
-  check(P('Regenerate → another arrangement of the same intent; pinned card kept and first'), w.key === 'cooking' && w.variant !== beforeRegen.variant && w.cards[0] === pinId && w.pins.includes(pinId) && JSON.stringify(w.cards) !== JSON.stringify(beforeRegen.cards), { beforeRegen, w });
+  check(P('Regenerate → another arrangement of the same intent; pinned card keeps its exact position (index ' + pinIdx + ')'), w.key === 'cooking' && w.variant !== beforeRegen.variant && w.cards[pinIdx] === pinId && w.pins.includes(pinId) && JSON.stringify(w.cards) !== JSON.stringify(beforeRegen.cards), { beforeRegen, w });
+  const pinTop = await R((id) => { const c = document.querySelector('#ws-canvas [data-card="' + id + '"]'); return [...c.parentNode.querySelectorAll(':scope > .ws-card')].indexOf(c); }, pinId);
+  check(P('pinned card is rendered at the same slot on the page'), pinTop === pinIdx, pinTop);
+  await tap('#ws-regen'); await wait(700);
+  w = await W(); check(P('a second Regenerate still keeps the pin in place'), w.cards[pinIdx] === pinId, w);
+  await tap('#ws-undo'); await wait(300);
   await shot('06-regenerated-pinned', 'Regenerate with a pinned card');
   await tap('#ws-undo'); await wait(300);
   w = await W();
-  check(P('Undo restores the previous arrangement exactly'), JSON.stringify(w.cards) === JSON.stringify(beforeRegen.cards) && w.variant === beforeRegen.variant, { w, beforeRegen });
+  check(P('Undo (twice) restores the earlier arrangement exactly'), JSON.stringify(w.cards) === JSON.stringify(beforeRegen.cards) && w.variant === beforeRegen.variant, { w, beforeRegen });
 
   // ---------- Materially different compositions ----------
   const comps = {};
@@ -164,7 +176,16 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   w = await W();
   const aAfter = await R((s) => document.querySelector('#ws-canvas ' + s + ' small').textContent, aSel);
   const started = Object.keys(w.tasks).some((k) => w.tasks[k] !== t0[k]) || Object.values(w.tasks).some((v) => v === 'running');
-  check(P('“Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace'), aAfter === 'Rose is working' && started && w.page === -1 && w.view === 'home', { aAfter, t0, tasks: w.tasks });
+  check(P('“Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace'), /^Rose is working/.test(aAfter) && started && w.page === -1 && w.view === 'home', { aAfter, t0, tasks: w.tasks });
+  const ident = await R((s) => { const b = document.querySelector('#ws-canvas ' + s), id = b.dataset.task, M = window.RoseModel; return { id, label: b.querySelector('span:not(.ws-pearl)').textContent, title: M.TASKS[id] && M.TASKS[id].title, state: window.__rose.getState().tasks[id] && window.__rose.getState().tasks[id].state, sat: window.__rose.getState().tasks.saturday.state }; }, aSel);
+  check(P('grocery action starts its own sample task, titled exactly like the action (not “Plan a quiet Saturday”)'), ident.id === 'ws-grocery' && ident.title === ident.label && ident.state === 'running' && ident.sat === 'idle', ident);
+  await D({ type: 'agents' }); await wait(700);
+  const work = await R(() => { const ws = [...document.querySelectorAll('#v-agents [data-window^="ws-w-"]')]; return { n: ws.length, labels: ws.map((w) => w.querySelector('.wopen').getAttribute('aria-label')), text: ws.map((w) => w.innerText).join(' | '), sat: [...document.querySelectorAll('#v-agents [data-window]')].filter((w) => /Plan a quiet Saturday/.test(w.querySelector('.wopen').getAttribute('aria-label'))).length }; });
+  check(P('Rose’s work shows the task under the same title, with grocery/recipe sample windows (no Saturday content)'), work.n === 2 && work.labels.every((l) => l.includes('Add missing items to grocery list')) && /Grocery list/.test(work.text) && /Lemon herb pasta/.test(work.text) && !/Saturday|Garden/.test(work.text) && work.sat === 0, work);
+  if (full) await shot('09b-work-view-task', 'Rose’s work: the grocery task under its own title');
+  await D({ type: 'home' }); await wait(400);
+  if ((await W()).page !== -1) await hswipe(L, Rr, MY);
+  check(P('tapping a running Rose task opens Rose’s work'), await (async () => { await page.locator('#ws-canvas ' + aSel).scrollIntoViewIfNeeded(); await tap('#ws-canvas ' + aSel); await wait(600); const v = (await W()).view; await D({ type: 'home' }); await wait(400); if ((await W()).page !== -1) await hswipe(L, Rr, MY); return v === 'agents'; })());
 
   // ---------- Failure keeps the last layout; Retry ----------
   const pre = await W();
@@ -204,23 +225,67 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   w = await W();
   check(P('layout retained after leaving to an app and returning'), w.page === -1 && JSON.stringify(w.cards) === JSON.stringify(kept.cards) && w.key === kept.key, { kept, w });
 
+  // ---------- Reload persistence (browser storage stands in for on-device storage) ----------
+  const pinsBefore = (await W()).pins;
+  if (!pinsBefore.length) { const pid = (await W()).cards[1]; await tap('#ws-canvas [data-pin="' + pid + '"]'); await wait(250); }
+  const snap = await R(() => { const w = window.RoseWorkspace.state(); return { key: w.layout.key, variant: w.layout.variant, cards: w.layout.cards.map((c) => c.id), pins: [...w.pins].sort(), hist: w.history.length, recent: w.recent.slice(), status: document.getElementById('ws-status').textContent, effects: Object.keys(w.effects).filter((k) => !/^agent-/.test(k)).sort() }; });
+  await page.reload(); await page.waitForTimeout(1200);
+  check(P('after reload the phone opens on Home (page 1)'), (await W()).page === 0);
+  await R(() => { window.RoseWorkspace.state().latency = 300; });
+  await hswipe(L, Rr, MY);
+  const after = await R(() => { const w = window.RoseWorkspace.state(); return { key: w.layout && w.layout.key, variant: w.layout && w.layout.variant, cards: w.layout ? w.layout.cards.map((c) => c.id) : [], pins: [...w.pins].sort(), hist: w.history.length, recent: w.recent.slice(), status: document.getElementById('ws-status').textContent, effects: Object.keys(w.effects).sort(), store: w.store }; });
+  check(P('RELOAD: layout, arrangement, pins and recent layouts restored exactly'), after.key === snap.key && after.variant === snap.variant && JSON.stringify(after.cards) === JSON.stringify(snap.cards) && JSON.stringify(after.pins) === JSON.stringify(snap.pins) && JSON.stringify(after.recent) === JSON.stringify(snap.recent), { snap, after });
+  check(P('RELOAD: undo history and status line restored; direct-action state kept'), after.hist === Math.min(snap.hist, 20) && after.status === snap.status && JSON.stringify(after.effects) === JSON.stringify(snap.effects), { snap, after });
+  check(P('RELOAD: harness reports the restore source'), /restored from this device/.test(after.store) && /restored from this device/.test(await R(() => document.getElementById('h-wsstate').textContent)), after.store);
+  const pinnedOk = await R((ids) => ids.every((id) => document.querySelector('#ws-canvas [data-pin="' + id + '"]').getAttribute('aria-pressed') === 'true'), snap.pins);
+  check(P('RELOAD: pinned cards render as pinned'), pinnedOk);
+  await tap('#ws-undo'); await wait(300);
+  check(P('RELOAD: Undo still works on the restored history'), (await W()).hist === after.hist - 1);
+  await tap('#ws-regen'); await wait(700);
+  if (full) await shot('11b-after-reload', 'After a full page reload: workspace restored');
+  // Rose tasks are model state and are not persisted by this prototype: after reload they read as not started.
+  // Restore to a known state for the following checks.
+  await R(() => window.RoseWorkspace.submit('dinner')); await wait(700);
+
   // ---------- Conversational request from another app prepares the page in the background ----------
   await D({ type: 'openApp', value: 'notes' }); await wait(500);
   const inApp = await W();
   await R(() => window.RoseWorkspace.prepareFromConversation('work')); await wait(150);
   const mid = await W();
-  const tst = await R(() => document.getElementById('sys-toast').textContent);
-  await wait(700); const done = await W();
-  check(P('conversational request inside an app prepares the workspace without interrupting it'), inApp.view === 'app' && mid.view === 'app' && mid.app === inApp.app && done.view === 'app' && done.key === 'work' && /swipe right from Home/.test(tst), { inApp, mid, done, tst });
-  if (full) await shot('12-prepared-in-app', 'Prepared from a conversation while in an app (toast)');
+  const off = () => R(() => { const o = document.getElementById('ws-offer'); return { hidden: o.hidden, phase: o.dataset.phase, text: o.innerText, show: !!document.getElementById('ws-offer-show') }; });
+  const o1 = await off();
+  check(P('while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app'), mid.view === 'app' && mid.app === inApp.app && !o1.hidden && o1.phase === 'preparing' && /Preparing workspace: Work/.test(o1.text) && /simulated/.test(o1.text) && !o1.show, { mid, o1 });
+  if (full) await shot('12a-preparing-in-app', 'Preparing from a conversation while in an app');
+  await wait(700); const done = await W(); const o2 = await off();
+  check(P('when ready: “Workspace ready: Work” offers Show workspace; the app stays in front'), done.view === 'app' && done.app === inApp.app && done.key === 'work' && o2.phase === 'ready' && o2.show && /Workspace ready: Work/.test(o2.text), { done, o2 });
+  if (full) await shot('12b-ready-offer-in-app', 'Ready: Show workspace offered; the app stays in front');
+  await wait(1500);
+  check(P('the offer never leaves the app by itself'), (await W()).view === 'app' && !(await off()).hidden);
+  const K = await R(() => { const s = document.getElementById('screen'); return s.getBoundingClientRect().height / s.offsetHeight; });
+  const ob = await box('#ws-offer-show'), oh = await box('#ws-offer-x');
+  check(P('offer controls are at least 44 pt (device units)'), ob[3] / K >= 43.5 && oh[2] / K >= 43.5 && oh[3] / K >= 43.5, { ob, oh, K });
+  await tap('#ws-offer-show'); await wait(700);
+  w = await W();
+  check(P('Show workspace (explicit tap) goes to the workspace with the prepared layout; offer gone'), w.view === 'home' && w.page === -1 && w.key === 'work' && (await off()).hidden, w);
+  // Dismiss path: offer closes, app stays, layout still prepared.
+  await D({ type: 'openApp', value: 'notes' }); await wait(500);
+  await R(() => window.RoseWorkspace.prepareFromConversation('unwinding')); await wait(800);
+  await tap('#ws-offer-x'); await wait(300);
+  w = await W();
+  check(P('Dismiss closes the offer and stays in the app; the layout is still prepared'), w.view === 'app' && (await off()).hidden && w.key === 'unwinding', w);
+  // Failure path is truthful.
+  await R(() => { window.RoseWorkspace.state().failNext = true; window.RoseWorkspace.prepareFromConversation('work'); }); await wait(800);
+  const o3 = await off();
+  check(P('failed preparation says so and keeps the last layout; no Show button'), o3.phase === 'failed' && /Couldn’t prepare workspace/.test(o3.text) && !o3.show && (await W()).key === 'unwinding' && (await W()).view === 'app', o3);
+  await tap('#ws-offer-x'); await wait(200);
   await D({ type: 'home' }); await wait(400);
   if ((await W()).page !== -1) await hswipe(L, Rr, MY);
-  check(P('the prepared work layout is waiting on the workspace'), (await W()).key === 'work');
 
   // ---------- Back to Home with an ordinary swipe ----------
   const hb = await page.locator('#ws-page .ws-head').boundingBox();
   await hswipe(Rr, L, hb.y + hb.height / 2);
   w = await W(); check(P('swipe left (outside a carousel) returns to Home page 1'), w.page === 0, w);
+  m1 = await mk(); check(P('back on Home the workspace mark is unlit'), m1.mark === 'false' && m1.dots[0] === 'true', m1);
   check(P('dock and chin unchanged back on Home'), JSON.stringify(dock0) === JSON.stringify(await box('#home-tray')) && JSON.stringify(chin0) === JSON.stringify(await box('#home-bar')));
   await hswipe(Rr, L, MY);
   check(P('Home paging to the right still works (page 2)'), (await W()).page === 1);

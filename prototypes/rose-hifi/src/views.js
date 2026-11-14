@@ -54,12 +54,13 @@
   function content(kind, step, opts) {
     const live = opts && opts.live;
     const caret = live ? '<b class="caret" aria-hidden="true"></b>' : '';
+    const sm = (opts && opts.sample) || {};   // per-window sample content (Project 2 workspace tasks)
     switch (kind) {
       case 'browser': {
-        const q = 'botanic garden opening hours';
+        const q = sm.query || 'botanic garden opening hours';
         return '<div class="c-browser"><div class="url">' + (step ? typed(q, step, 6) + caret : 'Search or enter address') + '</div>' +
-          photo(0, 'hero') + '<h4>' + (step < 3 ? 'Search' : 'Botanic Garden') + '</h4>' +
-          (step >= 3 ? '<p>Open daily · 9:00 – 17:00</p>' : '') + (step >= 5 ? '<p>Rose garden · lakeside path</p>' : '') +
+          photo(0, 'hero') + '<h4>' + (step < 3 ? 'Search' : esc(sm.heading || 'Botanic Garden')) + '</h4>' +
+          (step >= 3 ? '<p>' + esc((sm.info || [])[0] || 'Open daily · 9:00 – 17:00') + '</p>' : '') + (step >= 5 ? '<p>' + esc((sm.info || [])[1] || 'Rose garden · lakeside path') + '</p>' : '') +
           (live && step < 8 ? '<span class="pointer" style="left:' + (30 + (step % 3) * 18) + '%;top:' + (54 + (step % 2) * 14) + '%"></span>' : '') + '</div>';
       }
       case 'maps': {
@@ -75,8 +76,8 @@
           '<span class="pill">' + (step >= 4 ? '12 min walk' : 'Finding route') + '</span></div>';
       }
       case 'notes': {
-        const lines = ['Garden at 9:00', 'Riverside walk', 'Bring a book', 'Leave the afternoon open'];
-        return '<div class="c-notes"><h4>Saturday</h4>' + lines.map((l, i) => '<p><i class="box"></i>' + typed(l, step - i * 1.5, 7) + (live && Math.floor(step - i * 1.5) > 0 && step - i * 1.5 < 4 ? caret : '') + '</p>').join('') + '</div>';
+        const lines = sm.lines || ['Garden at 9:00', 'Riverside walk', 'Bring a book', 'Leave the afternoon open'];
+        return '<div class="c-notes"><h4>' + esc(sm.title || 'Saturday') + '</h4>' + lines.map((l, i) => '<p><i class="box"></i>' + typed(l, step - i * 1.5, 7) + (live && Math.floor(step - i * 1.5) > 0 && step - i * 1.5 < 4 ? caret : '') + '</p>').join('') + '</div>';
       }
       case 'calendar': {
         const blocks = [[1, 1, 2, '#c9dbff'], [2, 3, 1, '#d4f0d8'], [1, 4, 2, '#c9dbff'], [3, 2, 1, '#fde7b0'], [2, 5, 1, '#d4f0d8']];
@@ -88,7 +89,7 @@
         return '<div class="c-mail"><p class="to"><span>To</span> Jamie</p><p class="subj">Re: Saturday</p><p class="body">' + typed(body, step, 15) + caret + '</p><span class="pill">Draft · not sent</span></div>';
       }
       case 'files': {
-        const f = ['Weekend ideas.md', 'Places.md', 'Garden map.pdf', 'Café notes.md'];
+        const f = sm.files || ['Weekend ideas.md', 'Places.md', 'Garden map.pdf', 'Café notes.md'];
         return '<div class="c-files">' + f.map((n, i) => '<p class="' + (i < Math.ceil(step / 2) ? 'hit' : '') + '"><i></i>' + esc(n) + '</p>').join('') + '</div>';
       }
       case 'editor': {
@@ -112,7 +113,7 @@
   const kindOf = (appId) => ctx.M.APPS[appId].kind;
   const windowContent = (wid, s, live) => {
     const w = ctx.M.WINDOWS[wid], t = s.tasks[w.task];
-    return content(kindOf(w.app), t.state === 'idle' ? 0 : t.step, { live: live && t.state === 'running' && !ctx.reduced() });
+    return content(kindOf(w.app), t.state === 'idle' ? 0 : t.step, { live: live && t.state === 'running' && !ctx.reduced(), sample: w.sample });
   };
 
   // ---------- Shared pieces ----------

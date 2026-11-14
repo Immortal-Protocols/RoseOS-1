@@ -324,7 +324,7 @@
     const wsp = $('ws-page'); if (wsp) { wsp.inert = state.homePage !== -1; wsp.setAttribute('aria-hidden', String(state.homePage !== -1)); }
     if (window.RoseWorkspace) window.RoseWorkspace.render(state);
     const oxDots = device.dataset.theme === 'oxblood';
-    [...$('page-dots').children].forEach((d, i) => { d.setAttribute('aria-current', String(i === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
+    [...$('page-dots').children].forEach((d) => { d.setAttribute('aria-current', String(+d.dataset.page === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
     $('page-dots').setAttribute('aria-hidden', String(oxDots));
     const callLive = state.connection !== 'disconnected';
     $('tray-rose').setAttribute('aria-label', callLive ? 'Return to Rose call' : 'Open Rose');
@@ -430,7 +430,7 @@
     }
     // Task status announcements (not conversation cues).
     for (const id of Object.keys(state.tasks)) {
-      const a = before.tasks[id].state, b = state.tasks[id].state;
+      const a = before.tasks[id] ? before.tasks[id].state : 'idle', b = state.tasks[id].state;   // a task may be registered by this event
       if (a === b) continue;
       const words = { stopping: 'stopping', stopped: 'stopped', running: a === 'attention' ? 'working again' : a === 'idle' ? 'started' : '' }[b];
       if (words) $('announcer').textContent = M.TASKS[id].title + ': ' + words + '.';

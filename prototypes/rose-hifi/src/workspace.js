@@ -19,7 +19,7 @@
         { id: 'c-timer', type: 'actions', title: 'Quick actions', items: [
           { id: 'timer12', label: 'Start 12-min timer', kind: 'direct', effect: 'timer' },
           { id: 'playlist', label: 'Play “Slow Supper”', kind: 'direct', effect: 'play' },
-          { id: 'grocery', label: 'Add missing items to grocery list', kind: 'agent', task: 'saturday', ask: 'Rose will compare the recipe with your Notes list and add what’s missing.' }] },
+          { id: 'grocery', label: 'Add missing items to grocery list', kind: 'agent', task: 'ws-grocery', ask: 'Rose will compare the recipe with your Notes list and add what’s missing.' }] },
         { id: 'c-recipes', type: 'carousel', title: 'Tonight’s recipes', items: [
           { t: 'Lemon herb pasta', s: '25 min · pantry' }, { t: 'Miso salmon', s: '30 min · 2 servings' }, { t: 'Roasted squash soup', s: '45 min · batch' }, { t: 'Green shakshuka', s: '20 min · eggs' }] },
         { id: 'c-ingr', type: 'list', title: 'Ingredients · Lemon herb pasta', check: true, items: ['Spaghetti 200 g', 'Lemon (zest + juice)', 'Parsley', 'Garlic, 2 cloves', 'Parmesan', 'Olive oil', 'Chilli flakes', 'Black pepper'] },
@@ -31,7 +31,7 @@
       cards: [
         { id: 'w-cal', type: 'notif', app: 'calendar', title: 'Design review in 20 min', body: 'Rose HiFi · Room 3 / video', actions: [
           { id: 'join', label: 'Open invite', kind: 'direct', effect: 'open', app: 'calendar' },
-          { id: 'prep', label: 'Summarise prep notes', kind: 'agent', task: 'compare', ask: 'Rose will read your notes and files for the review and write a short summary.' }] },
+          { id: 'prep', label: 'Summarise prep notes', kind: 'agent', task: 'ws-prep', ask: 'Rose will read your notes and files for the review and write a short summary.' }] },
         { id: 'w-apps', type: 'apps', title: 'Work apps', apps: ['mail', 'calendar', 'notes', 'files', 'editor'] },
         { id: 'w-focus', type: 'actions', title: 'Focus', items: [
           { id: 'focus25', label: 'Focus 25 min (Do not disturb)', kind: 'direct', effect: 'focus' },
@@ -55,6 +55,27 @@
       ],
     },
   };
+  // Sample Rose tasks for workspace actions that have no existing task. Each is named exactly like its
+  // action, so the same title appears on the card, the confirm sheet and in Rose's work. They join the
+  // task registry only when the person confirms (see registerTask in model.js).
+  const WS_TASKS = {
+    'ws-grocery': { title: 'Add missing items to grocery list', windows: {
+      'ws-w-grocery': { app: 'notes', label: 'Grocery list', sample: { title: 'Grocery list', lines: ['Spaghetti 200 g', 'Lemons ×2', 'Parsley', 'Parmesan'] } },
+      'ws-w-recipe': { app: 'firefox', label: 'Lemon herb pasta', sample: { query: 'lemon herb pasta recipe', heading: 'Lemon herb pasta', info: ['25 min · serves 2', '8 ingredients · 4 missing'] } } } },
+    'ws-prep': { title: 'Summarise prep notes', windows: {
+      'ws-w-prep': { app: 'notes', label: 'Design review prep', sample: { title: 'Design review prep', lines: ['Workspace page left of Home', 'Pins keep their place', 'Open: page indicator', 'Summary for 3 pm'] } },
+      'ws-w-prepfiles': { app: 'files', label: 'Review files', sample: { files: ['Review agenda.md', 'Workspace notes.md', 'Captures.pdf', 'Open questions.md'] } } } },
+  };
+  function ensureTask(id) {
+    const M = window.RoseModel, d = WS_TASKS[id];
+    if (d && !M.TASKS[id]) {
+      M.TASKS[id] = { title: d.title, windows: Object.keys(d.windows) };
+      for (const [w, v] of Object.entries(d.windows)) { M.WINDOWS[w] = { app: v.app, task: id, label: v.label, sample: v.sample }; M.WINDOW_ORDER.push(w); }
+    }
+    if (d) R.dispatch({ type: 'registerTask', id });
+  }
+  const taskOf = (a) => { const s = R && R.getState(); return s && s.tasks[a.task]; };
+
   // Best guess: what the (simulated) composer proposes from time of day and recent context.
   COMPOSITIONS.guess = { title: 'Best guess', why: 'Thursday 6:40 pm · Jamie messaged · dinner time', cards: [
     COMPOSITIONS.cooking.cards[4], COMPOSITIONS.cooking.cards[1], COMPOSITIONS.unwinding.cards[0], COMPOSITIONS.cooking.cards[2], COMPOSITIONS.work.cards[3]] };
@@ -66,17 +87,20 @@
 
   // ---------- State ----------
   const ws = { layout: null, variant: 0, pins: new Set(), history: [], recent: [], phase: 'idle', error: null, req: 0,
-    latency: 800, failNext: false, effects: {}, listening: false, sheet: null, interpreted: null };
+    latency: 800, failNext: false, effects: {}, listening: false, sheet: null, interpreted: null, offer: null, store: '' };
 
   function compose(key, variant) {
-    // Deterministic "regeneration": a different arrangement of the same intent; pinned cards stay first.
+    // Deterministic "regeneration": a different arrangement of the same intent. Pinned cards keep the
+    // exact position they had; only the unpinned cards around them are rearranged.
     const base = COMPOSITIONS[key];
     let cards = base.cards.slice();
     if (variant % 2 === 1) cards = cards.slice(1).concat(cards[0]);
     if (variant % 3 === 2) cards.reverse();
-    const pinned = ws.layout ? ws.layout.cards.filter((c) => ws.pins.has(c.id)) : [];
-    const rest = cards.filter((c) => !pinned.some((p) => p.id === c.id));
-    return { key, title: base.title, why: base.why, variant, cards: pinned.concat(rest), at: Date.now() };
+    const prev = ws.layout ? ws.layout.cards : [];
+    const pinned = prev.map((c, i) => [i, c]).filter(([, c]) => ws.pins.has(c.id));
+    const out = cards.filter((c) => !pinned.some(([, p]) => p.id === c.id));
+    for (const [i, c] of pinned) out.splice(Math.min(i, out.length), 0, c);
+    return { key, title: base.title, why: base.why, variant, cards: out, at: Date.now() };
   }
 
   // Simulated on-device generation: delay + optional failure. The last layout stays until success.
@@ -86,13 +110,14 @@
     const delay = ws.latency, fail = ws.failNext;
     setTimeout(() => {
       if (id !== ws.req) return;                    // superseded by a newer request
-      if (fail) { ws.failNext = false; syncHarness(); ws.phase = 'failed'; ws.error = { key, how }; note('workspace: generation failed (kept last layout)'); render(); return; }
+      if (fail) { ws.failNext = false; syncHarness(); ws.phase = 'failed'; ws.error = { key, how }; if (ws.offer && ws.offer.req === id) ws.offer.phase = 'failed'; note('workspace: generation failed (kept last layout)'); render(); return; }
       const next = compose(key, how === 'regenerate' ? ws.variant + 1 : 0);
       if (ws.layout) ws.history.push({ layout: ws.layout, pins: new Set(ws.pins) });
       ws.layout = next; ws.variant = next.variant; ws.phase = 'idle';
       ws.recent = [key].concat(ws.recent.filter((k) => k !== key)).slice(0, 3);
+      if (ws.offer && ws.offer.req === id) ws.offer.phase = 'ready';
       note('workspace: ' + how + ' → ' + next.title + ' (variant ' + next.variant + ')');
-      render();
+      save(); render();
     }, delay);
   }
   function intentOf(text) { for (const [re, k] of INTENTS) if (re.test(text)) return k; return 'guess'; }
@@ -102,12 +127,12 @@
   function undo() {
     const h = ws.history.pop(); if (!h) return;
     ws.layout = h.layout; ws.pins = h.pins; ws.variant = h.layout.variant; ws.phase = 'idle'; ws.error = null;
-    note('workspace: undo → ' + h.layout.title); render();
+    note('workspace: undo → ' + h.layout.title); save(); render();
   }
   function togglePin(id) {
     if (ws.layout) ws.history.push({ layout: ws.layout, pins: new Set(ws.pins) });
     if (ws.pins.has(id)) ws.pins.delete(id); else ws.pins.add(id);
-    note('workspace: ' + (ws.pins.has(id) ? 'pinned ' : 'unpinned ') + id); render();
+    note('workspace: ' + (ws.pins.has(id) ? 'pinned ' : 'unpinned ') + id); save(); render();
   }
 
   // ---------- Actions: direct (immediate, sample data) vs Rose tasks (confirm → Rose work) ----------
@@ -120,15 +145,15 @@
     else if (item.effect === 'dnd') { fx.dnd = !fx.dnd; toast(fx.dnd ? 'Do not disturb until 8 am (sample)' : 'Do not disturb off'); }
     else if (item.effect === 'dim') { fx.dim = !fx.dim; toast(fx.dim ? 'Warm, dim screen on (sample)' : 'Screen back to normal'); }
     else if (item.effect === 'reply') { fx.reply = true; toast('Replied “See you then” (sample)'); }
-    note('direct action: ' + item.label); render();
+    note('direct action: ' + item.label); save(); render();
   }
   function askAgent(item) { ws.sheet = item; render(); const b = $('ws-sheet-go'); if (b) b.focus({ preventScroll: true }); }
   function confirmAgent() {
     const item = ws.sheet; ws.sheet = null;
-    const s = R.getState(), t = s.tasks[item.task];
+    ensureTask(item.task);
+    const t = R.getState().tasks[item.task];
     if (t && ['idle', 'stopped', 'done'].includes(t.state)) R.dispatch({ type: 'startTask', id: item.task });
-    ws.effects['agent-' + item.id] = true;
-    note('Rose task started: ' + item.label); toast('Rose is on it · see Rose’s work'); render();
+    note('Rose task started: ' + window.RoseModel.TASKS[item.task].title + ' (' + item.task + ')'); toast('Rose is on it · see Rose’s work'); render();
   }
 
   // ---------- Rendering ----------
@@ -146,15 +171,20 @@
   }
   function actionHtml(a) {
     const fx = ws.effects;
-    const on = (a.effect === 'timer' && fx.timer) || (a.effect === 'play' && fx.play) || (a.effect === 'focus' && fx.focus) || (a.effect === 'dnd' && fx.dnd) || (a.effect === 'dim' && fx.dim) || (a.effect === 'reply' && fx.reply) || fx['agent-' + a.id];
-    if (a.kind === 'agent') return '<button class="ws-act agent" data-agent="' + a.id + '"' + (on ? ' data-on="true"' : '') + '>' + pearl + '<span>' + esc(a.label) + '</span><small>' + (on ? 'Rose is working' : 'Rose task · asks first') + '</small></button>';
+    if (a.kind === 'agent') {
+      // State comes from the task model itself, so the card and Rose's work never disagree.
+      const t = taskOf(a), st = t ? t.state : 'idle';
+      const sub = st === 'running' ? 'Rose is working · in Rose’s work' : st === 'attention' ? 'Rose needs your choice · in Rose’s work' : st === 'done' ? 'Rose finished · in Rose’s work' : 'Rose task · asks first';
+      return '<button class="ws-act agent" data-agent="' + a.id + '" data-task="' + a.task + '" data-state="' + st + '"' + (st !== 'idle' && st !== 'stopped' ? ' data-on="true"' : '') + '>' + pearl + '<span>' + esc(a.label) + '</span><small>' + sub + '</small></button>';
+    }
+    const on = (a.effect === 'timer' && fx.timer) || (a.effect === 'play' && fx.play) || (a.effect === 'focus' && fx.focus) || (a.effect === 'dnd' && fx.dnd) || (a.effect === 'dim' && fx.dim) || (a.effect === 'reply' && fx.reply);
     let label = a.label;
     if (a.effect === 'timer' && fx.timer) { const left = Math.max(0, fx.timer.end - Date.now()); label = 'Timer · ' + Math.floor(left / 60000) + ':' + String(Math.floor(left / 1000) % 60).padStart(2, '0'); }
     return '<button class="ws-act" data-direct="' + a.id + '" aria-pressed="' + !!on + '"><span>' + esc(label) + '</span><small>' + (on ? 'On' : 'Direct') + '</small></button>';
   }
   function skeleton() { return '<div class="ws-skel" aria-hidden="true">' + [96, 120, 150, 110].map((h) => '<i style="height:' + h + 'px"></i>').join('') + '</div>'; }
   function render() {
-    const page = $('ws-page'); if (!page) return;
+    const page = $('ws-page'); if (!page) { renderOffer(); return; }
     const s = R ? R.getState() : null;
     // Controls never move: the bar and status line have fixed geometry; only their state changes.
     const loading = ws.phase === 'loading', failed = ws.phase === 'failed';
@@ -166,7 +196,8 @@
       : ws.layout ? esc(ws.layout.title) + ' · ' + esc(ws.interpreted ? '“' + ws.interpreted.text + '”' : ws.layout.why) + (ws.layout.variant ? ' · arrangement ' + (ws.layout.variant + 1) : '')
       : 'Ask for a workspace, or tap Arrange for me.';
     const canvas = $('ws-canvas');
-    const key = JSON.stringify([ws.layout && ws.layout.at, ws.layout && ws.layout.cards.map((c) => c.id), [...ws.pins], ws.effects, ws.phase === 'loading']);
+    const tstate = s ? Object.entries(s.tasks).map(([k, v]) => k + ':' + v.state).join('|') : '';
+    const key = JSON.stringify([ws.layout && ws.layout.at, ws.layout && ws.layout.cards.map((c) => c.id), [...ws.pins], ws.effects, ws.phase === 'loading', tstate]);
     if (canvas.dataset.key !== key) {
       const top = canvas.scrollTop, scrolls = [...canvas.querySelectorAll('.ws-carousel,.ws-list')].map((el) => [el.closest('.ws-card').dataset.card, el.scrollLeft, el.scrollTop]);
       canvas.dataset.key = key;
@@ -183,7 +214,9 @@
     sh.hidden = !ws.sheet;
     if (ws.sheet) { $('ws-sheet-title').textContent = 'Ask Rose to ' + ws.sheet.label.charAt(0).toLowerCase() + ws.sheet.label.slice(1) + '?'; $('ws-sheet-body').textContent = ws.sheet.ask + ' Rose keeps working in the background; you can stop it from Rose’s work.'; }
     if (s && R && window.RoseSystem) { const k = window.RoseSystem.kbState(); if (k.open && k.target === 'ws' && (s.view !== 'home' || s.homePage !== -1)) window.RoseSystem.hideKb('left workspace'); }
-    const h = $('h-wsstate'); if (h) h.textContent = 'Workspace: ' + (ws.layout ? ws.layout.title + ' v' + (ws.layout.variant + 1) : 'empty') + ' · ' + ws.phase + ' · pins ' + ws.pins.size + ' · undo ' + ws.history.length;
+    const mk = $('ws-mark'); if (mk && s) mk.setAttribute('aria-current', String(s.view === 'home' && s.homePage === -1));
+    renderOffer();
+    const h = $('h-wsstate'); if (h) h.textContent = 'Workspace: ' + (ws.layout ? ws.layout.title + ' v' + (ws.layout.variant + 1) : 'empty') + ' · ' + ws.phase + ' · pins ' + ws.pins.size + ' · undo ' + ws.history.length + ' · ' + (ws.store || '');
   }
   function voice() {
     const s = R.getState();
@@ -197,7 +230,11 @@
   function mount(track, on) {
     enabled = on;
     const old = $('ws-page'); if (old) old.remove();
+    const oldMark = $('ws-mark'); if (oldMark) oldMark.remove();
     if (!on || !track) return;
+    // A distinct workspace mark sits before Home's page dots and lights only on the workspace.
+    const dots = $('page-dots');
+    if (dots) dots.insertAdjacentHTML('afterbegin', '<button class="ws-mark" id="ws-mark" data-page="-1" aria-label="Workspace"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 .8 7.3 4.7 11.2 6 7.3 7.3 6 11.2 4.7 7.3.8 6 4.7 4.7Z"/></svg></button>');
     track.insertAdjacentHTML('afterbegin',
       '<section class="ws-page" id="ws-page" aria-label="Workspace">' +
       '<header class="ws-head"><h2>Workspace</h2><span class="ws-sim">Simulated generation · sample data</span></header>' +
@@ -226,9 +263,14 @@
       if (b.dataset.openApp) { R.dispatch({ type: 'openApp', value: b.dataset.openApp }); return; }
       const all = ws.layout ? ws.layout.cards.flatMap((c) => (c.items || []).concat(c.actions || [])) : [];
       if (b.dataset.direct) { const it = all.find((x) => x.id === b.dataset.direct); if (it) doDirect(it); return; }
-      if (b.dataset.agent) { const it = all.find((x) => x.id === b.dataset.agent); if (it && !ws.effects['agent-' + it.id]) askAgent(it); }
+      if (b.dataset.agent) {
+        const it = all.find((x) => x.id === b.dataset.agent); if (!it) return;
+        const t = taskOf(it);
+        if (t && !['idle', 'stopped'].includes(t.state)) { R.dispatch({ type: 'agents' }); return; }   // already Rose's work: show it
+        askAgent(it);
+      }
     });
-    page.addEventListener('change', (e) => { const c = e.target.dataset.check; if (c) { ws.effects['chk-' + c] = e.target.checked; } });
+    page.addEventListener('change', (e) => { const c = e.target.dataset.check; if (c) { ws.effects['chk-' + c] = e.target.checked; save(); } });
     render();
   }
   function fieldChanged() {}
@@ -237,22 +279,98 @@
   function syncHarness() { const f = $('h-wsfail'); if (f) f.checked = ws.failNext; }
 
   // A conversational request while another app is in front: the page prepares in the background.
+  // It never leaves the current app: when the layout is ready it offers “Show workspace”.
   function prepareFromConversation(key) {
     ws.interpreted = { text: 'Rose, set up my workspace for ' + COMPOSITIONS[key].title.toLowerCase(), key };
     generate(key, 'request');
-    toast('Workspace ready soon: ' + COMPOSITIONS[key].title + ' · swipe right from Home');
-    note('conversation: prepared ' + key + ' without leaving ' + R.getState().view);
+    ws.offer = { key, req: ws.req, phase: 'preparing' };
+    note('conversation: preparing ' + key + ' without leaving ' + R.getState().view);
+    render();
+  }
+  function onWorkspace() { const s = R && R.getState(); return !!s && s.view === 'home' && s.homePage === -1; }
+  function renderOffer() {
+    const el = $('ws-offer'); if (!el) return;
+    if (ws.offer && onWorkspace()) ws.offer = null;            // reached the page: nothing left to offer
+    const o = enabled ? ws.offer : null;
+    el.hidden = !o;
+    if (!o) { el.dataset.k = ''; return; }
+    const k = o.phase + o.key; if (el.dataset.k === k) return; el.dataset.k = k;
+    const title = esc(COMPOSITIONS[o.key].title);
+    el.dataset.phase = o.phase;
+    el.innerHTML = o.phase === 'preparing'
+      ? '<span class="ws-spin" aria-hidden="true"></span><p>Preparing workspace: ' + title + ' <em>simulated</em></p><button class="ws-offer-x" id="ws-offer-x" aria-label="Dismiss">✕</button>'
+      : o.phase === 'ready'
+        ? '<p>Workspace ready: ' + title + '</p><button class="ws-btn primary" id="ws-offer-show">Show workspace</button><button class="ws-offer-x" id="ws-offer-x" aria-label="Dismiss">✕</button>'
+        : '<p>Couldn’t prepare workspace · kept your last layout</p><button class="ws-offer-x" id="ws-offer-x" aria-label="Dismiss">✕</button>';
+  }
+  function showWorkspace() {
+    ws.offer = null;
+    R.dispatch({ type: 'home' }); R.dispatch({ type: 'homePage', value: -1, min: -1, max: 3 });
+    note('offer: Show workspace (explicit)');
+  }
+
+  // ---------- Persistence (browser localStorage, standing in for on-device storage) ----------
+  const STORE = 'rose.workspace.v1';
+  const cardById = () => { const m = {}; for (const c of Object.values(COMPOSITIONS)) for (const x of c.cards) m[x.id] = x; return m; };
+  const ser = (l) => l && { key: l.key, variant: l.variant, cards: l.cards.map((c) => c.id), at: l.at };
+  function de(o, by) {
+    if (!o || !COMPOSITIONS[o.key]) return null;
+    const cards = (o.cards || []).map((id) => by[id]).filter(Boolean); if (!cards.length) return null;
+    const b = COMPOSITIONS[o.key]; return { key: o.key, title: b.title, why: b.why, variant: o.variant | 0, cards, at: o.at || 0 };
+  }
+  function save() {
+    const fx = {}; for (const [k, v] of Object.entries(ws.effects)) if (/^(timer|play|focus|dnd|dim|reply|chk-.*)$/.test(k) && v) fx[k] = v;
+    try {
+      localStorage.setItem(STORE, JSON.stringify({ v: 1, layout: ser(ws.layout), pins: [...ws.pins], recent: ws.recent, interpreted: ws.interpreted, effects: fx,
+        history: ws.history.slice(-20).map((h) => ({ layout: ser(h.layout), pins: [...h.pins] })) }));
+      ws.store = 'saved on this device (browser storage)';
+    } catch (e) { ws.store = 'not saved: browser storage unavailable'; }
+  }
+  function load() {
+    let o = null;
+    try { const raw = localStorage.getItem(STORE); if (!raw) { ws.store = 'nothing saved yet'; return false; } o = JSON.parse(raw); } catch (e) { ws.store = 'not restored: browser storage unavailable'; return false; }
+    if (!o || o.v !== 1) return false;
+    const by = cardById();
+    ws.layout = de(o.layout, by); ws.variant = ws.layout ? ws.layout.variant : 0;
+    ws.pins = new Set((o.pins || []).filter((id) => by[id]));
+    ws.history = (o.history || []).map((h) => ({ layout: de(h.layout, by), pins: new Set(h.pins || []) })).filter((h) => h.layout);
+    ws.recent = (o.recent || []).filter((k) => COMPOSITIONS[k]);
+    ws.interpreted = o.interpreted && COMPOSITIONS[o.interpreted.key] ? o.interpreted : null;
+    ws.effects = o.effects || {}; if (ws.effects.timer && ws.effects.timer.end < Date.now()) delete ws.effects.timer;
+    ws.store = 'restored from this device (browser storage)';
+    note('workspace: restored after reload → ' + (ws.layout ? ws.layout.title : 'empty'));
+    return true;
+  }
+  function reset() {
+    try { localStorage.removeItem(STORE); } catch (e) {}
+    Object.assign(ws, { layout: null, variant: 0, pins: new Set(), history: [], recent: [], phase: 'idle', error: null, effects: {}, sheet: null, interpreted: null, offer: null, store: 'cleared' });
+    ws.req++; const c = $('ws-canvas'); if (c) delete c.dataset.key; note('workspace: reset (storage cleared)'); render();
   }
 
   function init(rose) {
     R = rose; I = window.RoseIcons;
+    load();
+    const scr = $('screen');
+    if (scr && !$('ws-offer')) {
+      scr.insertAdjacentHTML('beforeend', '<div class="ws-offer" id="ws-offer" role="status" aria-live="polite" hidden></div>');
+      $('ws-offer').addEventListener('click', (e) => {
+        if (e.target.closest('#ws-offer-show')) showWorkspace();
+        else if (e.target.closest('#ws-offer-x')) { ws.offer = null; note('offer dismissed'); render(); }
+      });
+    }
     mount(document.getElementById('home-track'), document.getElementById('device').dataset.theme === 'oxblood');
-    setInterval(() => { if (ws.effects.timer && mounted && R.getState().homePage === -1) { const c = $('ws-canvas'); delete c.dataset.key; render(); } }, 1000);
+    // The timer ticks in place: only its label changes, so cards are never replaced under a finger.
+    setInterval(() => {
+      const t = ws.effects.timer; if (!t || !mounted) return;
+      const left = Math.max(0, t.end - Date.now());
+      document.querySelectorAll('#ws-canvas .ws-act[data-direct][aria-pressed=true] > span').forEach((sp) => { if (/^Timer · /.test(sp.textContent)) sp.textContent = 'Timer · ' + Math.floor(left / 60000) + ':' + String(Math.floor(left / 1000) % 60).padStart(2, '0'); });
+    }, 1000);
     const lat = $('h-wslat'); if (lat) lat.onchange = (e) => { ws.latency = +e.target.value; };
     const fail = $('h-wsfail'); if (fail) fail.onchange = (e) => { ws.failNext = e.target.checked; };
     const prep = $('h-wsprep'); if (prep) prep.onclick = () => prepareFromConversation('cooking');
+    const rs = $('h-wsreset'); if (rs) rs.onclick = reset;
     const go = $('h-wsgo'); if (go) go.onclick = () => R.dispatch({ type: 'homePage', value: -1, min: -1, max: 3 });
   }
-  window.RoseWorkspace = { mount, render: () => render(), submit, arrange, regenerate, undo, fieldChanged, state: () => ws, prepareFromConversation, COMPOSITIONS };
+  window.RoseWorkspace = { mount, render: () => render(), submit, arrange, regenerate, undo, fieldChanged, state: () => ws, prepareFromConversation, showWorkspace, reset, COMPOSITIONS, WS_TASKS };
   if (window.__rose) init(window.__rose);
 })();
