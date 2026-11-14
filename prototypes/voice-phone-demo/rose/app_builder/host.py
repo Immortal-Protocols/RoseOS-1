@@ -29,12 +29,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import toolchain
+from . import dependencies, toolchain
 from .service import Builder
 
 SCHEMA_VERSION = 1
 KEYS = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk', 'javaHome',
-        'buildTimeoutS', 'keyCreation', 'writer', 'backup'}
+        'buildTimeoutS', 'keyCreation', 'writer', 'backup', 'libraryStore'}
 REQUIRED = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk'}
 RECEIPT_MAX = 200
 NO_WRITER = 'No app writer is set up on this builder host, so nothing was written.'
@@ -64,6 +64,7 @@ class HostConfig:
     key_creation: bool = False
     writer: Command | None = None
     backup: Command | None = None
+    library_store: Path | None = None
 
 
 def _path(value, name: str) -> Path:
@@ -133,7 +134,8 @@ def parse_config(data) -> HostConfig:
         hosts=tuple(hosts), sdk=_path(data['sdk'], 'sdk'),
         java_home=None if data.get('javaHome') is None else _path(data['javaHome'], 'javaHome'),
         build_timeout_s=_seconds(data.get('buildTimeoutS'), 'buildTimeoutS', 600.0), key_creation=key_creation,
-        writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0))
+        writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
+        library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'))
 
 
 def load_config(path: Path) -> HostConfig:
@@ -146,6 +148,35 @@ def load_config(path: Path) -> HostConfig:
 
 def no_writer(source, kind, request, cancelled):
     raise toolchain.StepFailed('internal', NO_WRITER, retryable=True)
+
+
+def library_store(path: Path | None) -> dependencies.RecordedStore | None:
+    """Validate a configured offline catalog before constructing the writer or listener.
+
+    Artifact digests and JAR contents are still verified for each job by the existing resolver.
+    An omitted store preserves framework-only builds; a broken configured store is never silently disabled.
+    """
+    if path is None:
+        return None
+    try:
+        index = path / 'index.json'
+        if path.is_symlink() or not path.is_dir() or index.is_symlink() or not index.is_file():
+            raise ValueError
+        data = json.loads(index.read_text(encoding='utf-8'))
+        if (not isinstance(data, dict) or type(data.get('schemaVersion')) is not int
+                or data['schemaVersion'] != 1 or not isinstance(data.get('artifacts'), dict)):
+            raise ValueError
+        for coordinate, digest in data['artifacts'].items():
+            if (not dependencies.COORDINATE.fullmatch(coordinate) or not isinstance(digest, str)
+                    or not dependencies.SHA256.fullmatch(digest)):
+                raise ValueError
+            jar = path / f'{digest}.jar'
+            if jar.is_symlink() or not jar.is_file():
+                raise ValueError
+    except (OSError, ValueError, RecursionError):
+        raise ConfigError('libraryStore must contain a readable schemaVersion 1 index with valid coordinates, '
+                          'SHA-256 digests and available plain JAR files') from None
+    return dependencies.RecordedStore(path)
 
 
 def valid_receipt(receipt) -> bool:
@@ -231,6 +262,7 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
 
     from ..remote import Remote, add_pairing_api, build_remote_app
 
+    resolver = library_store(config.library_store)
     for directory in (config.root, config.remote_dir):
         if directory.is_symlink():
             raise ConfigError(f'{directory} must not be a symbolic link')
@@ -242,14 +274,15 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
     if generate is None:
         if config.writer is not None:
             from .generator import CodexGenerator
-            generate = CodexGenerator(timeout_s=config.writer.timeout_s, command=list(config.writer.argv))
+            generate = CodexGenerator(timeout_s=config.writer.timeout_s, command=list(config.writer.argv),
+                                      libraries=resolver.available if resolver is not None else None)
         else:
             generate = no_writer
     if backup is None and config.backup is not None:
         backup = CommandBackup(config.backup)
     tools = toolchain.Tools(config.sdk, config.java_home, timeout_s=config.build_timeout_s,
                             key_creation=config.key_creation)
-    builder = Builder(config.root, tools, generate, backup=backup)
+    builder = Builder(config.root, tools, generate, backup=backup, resolver=resolver)
     remote = Remote(directory=config.remote_dir, port=config.port, name=config.name,
                     hosts=lambda: list(config.hosts))
     remote_app = build_remote_app(SimpleNamespace(app_builder=builder, phone=None), remote, voice=False)
