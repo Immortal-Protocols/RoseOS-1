@@ -51,6 +51,26 @@ public final class MainActivity extends Activity {{
             default: return 0;
         }}
     }}
+    static boolean flag;
+    static int sdkLevel() {{ return Build.VERSION.SDK_INT; }}
+    String boolLocal() {{ boolean ok = Build.VERSION.SDK_INT >= 34; return ok ? "i %s".formatted(9) : ""; }}
+    String orGuard() {{ if (flag || Build.VERSION.SDK_INT >= 34) return "j %s".formatted(10); return ""; }}
+    String notEqual() {{ if (Build.VERSION.SDK_INT != 33) return "k %s".formatted(11); return ""; }}
+    String reused() {{
+        int v = Build.VERSION.SDK_INT;
+        if (v < 30) return "";
+        if (v >= 34) return "l %s".formatted(12);
+        return "";
+    }}
+    String intHelper() {{ if (sdkLevel() >= 34) return "m %s".formatted(13); return ""; }}
+    String fieldFlag() {{ if (flag) return "n %s".formatted(14); return ""; }}
+    String inFinally() {{ try {{ if (Build.VERSION.SDK_INT >= 34) return "o %s".formatted(15); }} finally {{ flag = !flag; }} return ""; }}
+    String afterCatch() {{
+        try {{ if (Build.VERSION.SDK_INT < 34) throw new IllegalStateException(); }} catch (IllegalStateException e) {{ }}
+        return "p %s".formatted(16);  // the throw below 34 is caught and lands here
+    }}
+    @Override public void onTopResumedActivityChanged(boolean top) {{ }}
+    void ownOverride() {{ onTopResumedActivityChanged(true); }}
     @Override protected void onCreate(Bundle state) {{ super.onCreate(state); }}
 }}
 '''
@@ -110,6 +130,22 @@ class Matrix(unittest.TestCase):
     def test_a_helper_guard_is_unverified_never_safe(self):
         status, _ = self.status('guardedHelper')
         self.assertEqual(status, 'unverified')
+        for method in ('intHelper', 'fieldFlag', 'boolLocal', 'reused'):  # app values or an SDK_INT kept in a variable
+            with self.subTest(method=method):
+                self.assertEqual(self.status(method)[0], 'unverified')
+
+    def test_no_branch_that_can_run_below_the_level_is_called_guarded(self):
+        self.assertEqual(self.status('orGuard')[0], 'unverified')  # flag || SDK_INT >= 34: flag alone reaches it
+        self.assertEqual(self.status('notEqual'), ('not_guarded_here', 34))  # != 33 lets 26 through
+        self.assertEqual(self.status('inFinally'), ('guarded', 34))
+        self.assertEqual(self.status('afterCatch'), ('not_guarded_here', 34))  # reached through the exception edge
+        for f in self.report['findings']:
+            if f['status'] == 'guarded':
+                self.assertIn(f['where'].split('.')[-1].split('(')[0],
+                              {'guardedIf', 'guardedReturn', 'guardedCodes', 'inFinally'}, f)
+
+    def test_a_call_to_the_apps_own_override_is_not_a_platform_reference(self):
+        self.assertNotIn('ownOverride', self.by_method)
 
     def test_inherited_members_fields_and_types_resolve_to_the_platform(self):
         self.assertEqual(self.status('inherited', 'android/app/Activity.setShowWhenLocked(Z)V'),
@@ -248,6 +284,42 @@ class Units(unittest.TestCase):
         report = apilevel.analyse([dump('0000: return-void', superclass='android/x/New')], self.db, 'app.x', 26)
         self.assertEqual([(f['kind'], f['status'], f['level']) for f in report['findings']],
                          [('supertype', 'unverified', 30)])
+
+    def test_goto32_wide_addresses_and_unreadable_code_fail_closed(self):
+        # goto/32 prints a relative offset: the edge to the else side must exist, so the join is not guarded.
+        body = ('0000: sget v0, Landroid/os/Build$VERSION;.SDK_INT:I // field@0000\n'
+                '0002: const/16 v1, #int 34 // #0\n0004: if-ge v0, v1, 0009 // +0005\n'
+                '0006: goto/32 #00000006\n0009: nop // spacer\n000c: ' + CALL + '\n000f: return-void')
+        self.assertEqual(self.statuses(dump(body)), [('not_guarded_here', 34)])
+        wide = f'10000: {CALL}\n10003: return-void'  # five-digit addresses are read, not dropped
+        self.assertEqual(self.statuses(dump(wide)), [('not_guarded_here', 34)])
+        for broken in (f'0000: {CALL}\n0003: goto zzzz\n0004: return-void',  # a target that cannot be read
+                       f'0000: {CALL}\n0003: if-eqz v0, 0099 // +0096\n0005: return-void'):  # outside the method
+            with self.subTest(broken=broken):
+                report = apilevel.analyse([dump(broken)], self.db, 'app.x', 26)
+                self.assertEqual(report['status'], 'incomplete')
+                self.assertEqual([f['status'] for f in report['findings']], ['unverified'])
+        text = dump(f'0000: {CALL}\n0003: return-void').replace('      catches', '000200: what is this\n      catches')
+        report = apilevel.analyse([text], self.db, 'app.x', 26)  # a code line it could not read
+        self.assertEqual((report['status'], report['findings'][0]['status']), ('incomplete', 'unverified'))
+
+    def test_size_and_time_limits_are_reported_not_hidden(self):
+        text = dump(f'0000: {CALL}\n0003: return-void')
+        with mock.patch.object(apilevel, 'MAX_INSNS', 1):
+            report = apilevel.analyse([text], self.db, 'app.x', 26)
+        self.assertEqual((report['status'], report['findings'][0]['status']), ('incomplete', 'unverified'))
+        report = apilevel.analyse([text], self.db, 'app.x', 26, budget_s=-1)
+        self.assertEqual((report['status'], report['findings']), ('incomplete', []))
+        self.assertIn('budget', report['reason'])
+
+    def test_inherited_members_take_the_level_of_the_newer_class_and_the_earliest_path(self):
+        self.assertEqual(self.db.level('android/x/New', 'toString()Ljava/lang/String;'), (30, False))
+        path = Path(self.tmp.name) / 'two.xml'
+        path.write_text('<api version="3"><class name="java/lang/Object" since="1"><method name="m()V"/></class>'
+                        '<class name="a/Late" since="1"><extends name="java/lang/Object"/></class>'
+                        '<class name="a/C" since="1"><implements name="a/Late" since="35"/>'
+                        '<implements name="java/lang/Object"/></class></api>')
+        self.assertEqual(apilevel.Database(path).level('a/C', 'm()V'), (1, False))  # reachable since 1, not 35
 
     def test_a_dump_without_classes_is_an_error_not_a_clean_report(self):
         with self.assertRaises(ValueError):

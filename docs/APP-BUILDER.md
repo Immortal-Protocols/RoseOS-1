@@ -305,8 +305,10 @@ trusted in the image.
 After each successful build, `rose/app_builder/apilevel.py` writes an
 **advisory** report of platform API references above minSdk 26 that it
 finds. It goes into the job log as one summary line, and the full report is
-recorded with the delivered version (`Ledger.api_report`). It never fails,
-changes or delays a build, and adds no rule on what an app may do.
+recorded with the delivered version (`Ledger.api_report`). It never fails or
+changes a build, and adds no rule on what an app may do. It does take time:
+`dexdump` runs within the build's tool timeout, and the analysis has a 60 s
+budget.
 
 **What it reads.** It reads the final dex, after `d8`, through the pinned
 `dexdump -d`. Backported methods such as `List.of` and `String.repeat` are
@@ -322,6 +324,11 @@ added, and its supertypes with the level each was added. It covers:
 
 A call on the app's own class (for example `setShowWhenLocked` on
 `MainActivity`) is resolved through the app's and the platform's inheritance.
+A member the app's own class declares, such as an override it calls, is the
+app's, not the platform's. An inherited member is available from the
+earliest level it can be reached through the class it's called on: never
+before that class, and never before the supertype that provides it was
+added.
 
 **Statuses.** Every reference above 26 gets one:
 - `guarded`: in its method, a `Build.VERSION.SDK_INT` comparison with a
@@ -334,15 +341,21 @@ A call on the app's own class (for example `setShowWhenLocked` on
   look across methods.
 - `unverified`: the analysis can't tell, and the reference is never treated
   as safe. The causes are:
-  - the method calls a boolean method of the app, which may be its guard;
-  - an `SDK_INT` use it doesn't read;
-  - a `switch` (`dexdump` doesn't print switch targets);
+  - a branch reads a value from the app's own code (a helper's result, of
+    any type, or an app field), which may be its guard;
+  - an `SDK_INT` value it doesn't follow, for example one kept in a variable
+    and compared later;
+  - an `SDK_INT` result that may reach a branch through a variable;
   - unreachable code;
   - an extension-SDK API, whose availability `SDK_INT` alone doesn't decide;
-  - a class's own supertype, which only never loading the class protects.
+  - a class's own supertype, which only never loading the class protects;
+  - a method it could not read completely: a `switch` (`dexdump` doesn't
+    print switch targets), a code line or branch target it couldn't parse,
+    or more than 20,000 instructions.
 
-**Overall status.** The report is `complete`, or `incomplete` with a reason
-when a method could not be fully analysed. If the database or `dexdump` is
+**Overall status.** The analysis fails closed. A method it couldn't read
+completely, or classes left unanalysed when the 60 s budget runs out, make
+the report `incomplete` with a reason. If the database or `dexdump` is
 missing, or the analysis fails, the report is `unavailable` with a reason
 and no counts, so it never reads as clean. The build continues either way.
 
@@ -367,7 +380,16 @@ through the real pipeline (compiled, never run) and asserts each row:
 - a newer `catch` type is found, and a lambda's newer interface is an
   `unverified` supertype;
 - an extension API and a `switch` method are `unverified`, and the report is
-  `incomplete`.
+  `incomplete`;
+- `flag || SDK_INT >= 34`, `!= 33`, and code reached through a caught throw
+  below 34 are never `guarded`;
+- an int helper, an app field flag, a boolean local and a reused `SDK_INT`
+  value are `unverified`;
+- a call to the app's own override isn't a platform reference.
+
+Unit tests add `goto/32` edges, wide addresses, unreadable lines and branch
+targets, the size cap and the time budget (each `incomplete`, never clean),
+and the inheritance levels.
 
 It also covers a missing database and a crashing analysis, which give
 `unavailable` while the build stays `ready`. Unit tests cover every
@@ -381,7 +403,15 @@ a test fail:
 - catch handlers or supertypes skipped;
 - an unread `SDK_INT` use trusted;
 - a crash failing the build;
-- an empty dump reading as clean.
+- an empty dump reading as clean;
+- unreadable targets ignored, `goto/32` not parsed, fixed-width addresses or
+  unparsed lines ignored;
+- no size cap or time budget;
+- an inherited level that ignores the newer class, or takes the first path
+  rather than the earliest;
+- `SDK_INT` reuse, app-value branches or a variable-carried result ignored;
+- the app's own override treated as platform;
+- no exception edges.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 
