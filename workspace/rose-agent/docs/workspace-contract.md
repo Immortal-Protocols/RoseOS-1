@@ -112,12 +112,58 @@ layout is never reshuffled.
 | `WorkspacePage` | The native page, at `HomePages.WORKSPACE` (0), left of Home (1). Its geometry is fixed: the field, Arrange, Regenerate and Undo, the status line (20dp), the recent row (28dp) and the canvas never move. Each section has a Pin control. While composing, the old sections stay dimmed under a veil and the buttons are disabled in place. Apps are drawn and opened exactly as Home draws and opens them. Shortcuts open through `LauncherApps`, and intent templates open their app. A drag that starts on the field or a carousel belongs to it, not to the pager, and the page is inert while off screen. Its state is saved in the app's own preferences after every change. |
 | `WorkspaceSources` | Reads the phone into a snapshot on the page's worker thread: launchable apps without Rose Agent, launcher shortcuts (only while Rose Agent holds the HOME role, up to 2 per app), and the timer and alarms templates. |
 | `WorkspaceEngine` | One composer call through Models' core (`workspace/models/local-composer/java`, `Catalog.cat1()`), now packaged in the app by `build.sh`; its scripted test double is not packaged. It never throws: anything unexpected is a rose-layout-v1 failure. |
-| `WorkspaceStarter` | The only inference on the phone today, and **not a model**. It ignores the request's words. It answers with the apps it is offered as a grid, and up to 4 direct actions as a button row. It never offers a Rose task. The page labels it "Starter layout · no on-phone model yet". Models' runtime replaces it behind the same `LocalInference` seam. |
+| `WorkspaceStarter` | The only inference on the phone today, and **not a model**. It ignores the request's words. It answers with the apps it is offered as a grid, and up to 4 direct actions as a button row. It never offers a Rose task. The page labels it "Starter layout · no on-phone model yet". An on-phone model replaces it through the model slot (`WorkspaceModels`), behind the same `LocalInference` seam. |
+| `WorkspaceModels` | The model slot. See "The model slot" below. |
 | `WorkspaceTiming` | Request-to-render timing, the renderer half of rose-layout-v1's timing. See below. |
 
 These pieces are checked by `app/tests/WorkspaceTest.java`, `WorkspaceSnapshotTest.java`,
-`WorkspaceEngineTest.java` and `HomePagesTest.java`, and by `tests/home-launcher.test.mjs`. `scripts/test-local.sh`
+`WorkspaceEngineTest.java`, `WorkspaceModelsTest.java` and `HomePagesTest.java`, and by `tests/home-launcher.test.mjs`. `scripts/test-local.sh`
 runs them all.
+
+## The model slot
+
+`WorkspaceModels` is where an on-phone model plugs in. The model and its runtime binding (a `LocalInference`)
+belong to the model worker. The page, composer, provider and timing don't change when a binding is added.
+
+- **None in source.** `WorkspaceModels.LOADERS` is empty, so the slot uses `WorkspaceStarter`, which is not a
+  model. A binding is added as one `Loader` in `LOADERS`.
+- **Loaded once, off the main thread.** `WorkspaceHub` loads the slot on its own `workspace-model` thread when the
+  hub is created. Until a model is ready, the starter composes. Loading never blocks composing or Home, and the
+  engine for a request is chosen when it starts.
+- **Fails closed.** A loader is never used as the model if it:
+  - throws, including an `Error`;
+  - returns nothing;
+  - reports no `id`, or the starter's or `scripted`'s `id`.
+
+  The slot then tries the next loader, or falls back to the starter. It records only the loader's name and the
+  exception's class, never its message.
+- **Labelled.** The label under the title names the composer in use, not the layout on screen:
+
+  | Slot | Label |
+  | --- | --- |
+  | starter | "Starter layout · no on-phone model yet" |
+  | loading | "Starter layout · on-phone model loading" |
+  | failed | "Starter layout · on-phone model unavailable" |
+  | ready | "Arranged with the on-phone model" |
+
+  Each layout's own composer stays in its `WorkspaceTiming` record (`modelId`, `model`).
+- **Prompt only with a model.** `capabilities` lists `prompt` only once the slot is ready with a real model,
+  because `WorkspaceHub.model()` reads the slot.
+
+**What a binding must provide**, the handoff from the model worker:
+- **The seam.** A `LocalInference` that runs on the phone: `info()` and `generate(Request)`.
+  - `info()` gives `id`, `revision`, `quantization`, `runtime` and its version. The `id` must not be `starter`
+    or `scripted`.
+  - `generate()` honours `deadlineMs` and the `Cancellation`, and throws `Refused` with `timeout` or
+    `cancelled`. Its output is untrusted, because the composer and `WorkspaceLayout.check` check it again.
+- **Its loader.** A `Loader` whose `load()` reads the weights, which may be slow. It runs on the slot's thread
+  and may throw.
+- **Where its weights come from.** Bundled in the APK, or anything else. Any download needs its own approval;
+  the slot never fetches anything.
+- **Its limits.** Load time, memory, and whether one call at a time is enough. The workspace makes one call at a
+  time, with a 4 s deadline (`WorkspaceEngine.DEADLINE_MS`).
+
+`app/tests/WorkspaceModelsTest.java` checks the slot with fake loaders. No model is loaded.
 
 ## Request-to-render timing (for Models)
 

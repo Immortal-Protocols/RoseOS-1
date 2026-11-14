@@ -48,7 +48,8 @@ import java.util.Set;
  *   <li>WorkspaceEngine runs Models' composer over it.</li>
  *   <li>WorkspaceComposer checks the result on the main thread, and WorkspaceState saves it.</li>
  * </ol>
- * There is no on-phone model yet, so the composer's inference is WorkspaceStarter, and the page says so.
+ * The composer's inference comes from the model slot (WorkspaceModels). There is no on-phone model in source yet,
+ * so it is WorkspaceStarter, and the label under the title names the composer in use.
  *
  * <p><b>Rendering.</b> Rendering shows only what is still on the phone (WorkspaceLayout.available). It never
  * reshuffles the saved layout. The first draw of a committed layout on screen is timed (WorkspaceTiming).
@@ -83,7 +84,7 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
 
   LinearLayout column=new LinearLayout(activity);column.setOrientation(LinearLayout.VERTICAL);
   TextView title=text("Workspace",22,ink);title.setTypeface(Typeface.DEFAULT_BOLD);column.addView(title);
-  label=text(WorkspaceStarter.ID.equals(hub.engine.modelId())?WorkspaceStarter.LABEL:"Composed on this phone",12,muted);
+  label=text(hub.models.label(),12,muted);
   column.addView(label,new LinearLayout.LayoutParams(-1,dp(18)));
 
   LinearLayout ask=new LinearLayout(activity);ask.setGravity(Gravity.CENTER_VERTICAL);
@@ -158,7 +159,7 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
  }
  private void draw(String timedRequest){
   veil.setVisibility(View.GONE);sections.setAlpha(1f);
-  status.setText(composer.status());
+  status.setText(composer.status());label.setText(hub.models.label());
   arrange.setEnabled(true);regenerate.setEnabled(state.request()!=null);undo.setEnabled(state.canUndo());
   renderRecents();
   sections.removeAllViews();carousels.clear();

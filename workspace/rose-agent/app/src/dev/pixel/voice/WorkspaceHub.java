@@ -46,7 +46,8 @@ final class WorkspaceHub {
  final WorkspaceState state;
  final WorkspaceComposer composer;
  final WorkspaceRequests requests;
- final WorkspaceEngine engine=new WorkspaceEngine(new WorkspaceStarter());
+ /** The model slot: the starter until an on-phone model's binding loads (WorkspaceModels; none in source today). */
+ final WorkspaceModels.Slot models=new WorkspaceModels.Slot(new WorkspaceStarter(),WorkspaceModels.LOADERS);
  final WorkspaceTiming timing=new WorkspaceTiming();
  private final ExecutorService worker=Executors.newSingleThreadExecutor();
  /** Rose task requests (up to 3 attempts of 10 s) never hold up composing. */
@@ -65,10 +66,21 @@ final class WorkspaceHub {
   composer=new WorkspaceComposer(state);
   requests=new WorkspaceRequests(state,composer);
   tasks=WorkspaceTaskTracker.fromJson(prefs().getString(TASKS,null));
+  loadModel();
+ }
+
+ /** Loads the model slot on its own thread, once, so a slow load never holds up composing or Home. */
+ private void loadModel(){
+  if(WorkspaceModels.LOADERS.isEmpty())return;
+  Thread t=new Thread(()->{
+   try{models.load();}catch(Throwable ignored){/* the slot fails closed to the starter */}
+   main.post(()->{if(listener!=null)listener.changed(null);});
+  },"workspace-model");
+  t.setDaemon(true);t.start();
  }
 
  /** True only with a real model on the phone: today the starter, so prompt is not offered (WorkspaceAgent.kinds). */
- boolean model(){return WorkspaceTiming.isModel(engine.modelId());}
+ boolean model(){return WorkspaceTiming.isModel(models.engine().modelId());}
 
  // ---------- the page ----------
 
@@ -199,6 +211,8 @@ final class WorkspaceHub {
   final String requestId=composer.requestId(),trigger=composer.trigger(),prompt=composer.prompt();
   final List<String> avoid=composer.avoid();
   final Set<String> pinned=pinnedIds();
+  // The engine for this request is chosen now: a model that becomes ready later serves the next request.
+  final WorkspaceEngine engine=models.engine();
   timing.requested(requestId,trigger,System.nanoTime());
   if(listener!=null)listener.busy();
   worker.execute(()->{
