@@ -4983,10 +4983,12 @@ void main(){
     const id = ++ws.req;
     ws.phase = 'loading'; ws.error = null; render();
     const delay = ws.latency, fail = ws.failNext;
+    // The request text belongs to the layout it produced, so Undo and reload show the right words.
+    const ask = how === 'regenerate' ? (ws.layout && ws.layout.ask) || null : ws.interpreted ? ws.interpreted.text : null;
     setTimeout(() => {
       if (id !== ws.req) return;                    // superseded by a newer request
       if (fail) { ws.failNext = false; syncHarness(); ws.phase = 'failed'; ws.error = { key, how }; if (ws.offer && ws.offer.req === id) ws.offer.phase = 'failed'; note('workspace: generation failed (kept last layout)'); render(); return; }
-      const next = compose(key, how === 'regenerate' ? ws.variant + 1 : 0);
+      const next = compose(key, how === 'regenerate' ? ws.variant + 1 : 0); next.ask = ask;
       if (ws.layout) ws.history.push({ layout: ws.layout, pins: new Set(ws.pins) });
       ws.layout = next; ws.variant = next.variant; ws.phase = 'idle';
       ws.recent = [key].concat(ws.recent.filter((k) => k !== key)).slice(0, 3);
@@ -5068,7 +5070,7 @@ void main(){
     st.dataset.state = ws.phase;
     st.innerHTML = loading ? '<span class="ws-spin" aria-hidden="true"></span>Composing on this phone… <em>simulated</em>'
       : failed ? 'Couldn’t arrange · kept your last layout <button class="ws-link" id="ws-retry">Retry</button>'
-      : ws.layout ? esc(ws.layout.title) + ' · ' + esc(ws.interpreted ? '“' + ws.interpreted.text + '”' : ws.layout.why) + (ws.layout.variant ? ' · arrangement ' + (ws.layout.variant + 1) : '')
+      : ws.layout ? esc(ws.layout.title) + ' · ' + esc(ws.layout.ask ? '“' + ws.layout.ask + '”' : ws.layout.why) + (ws.layout.variant ? ' · arrangement ' + (ws.layout.variant + 1) : '')
       : 'Ask for a workspace, or tap Arrange for me.';
     const canvas = $('ws-canvas');
     const tstate = s ? Object.entries(s.tasks).map(([k, v]) => k + ':' + v.state).join('|') : '';
@@ -5187,11 +5189,11 @@ void main(){
   // ---------- Persistence (browser localStorage, standing in for on-device storage) ----------
   const STORE = 'rose.workspace.v1';
   const cardById = () => { const m = {}; for (const c of Object.values(COMPOSITIONS)) for (const x of c.cards) m[x.id] = x; return m; };
-  const ser = (l) => l && { key: l.key, variant: l.variant, cards: l.cards.map((c) => c.id), at: l.at };
+  const ser = (l) => l && { key: l.key, variant: l.variant, cards: l.cards.map((c) => c.id), at: l.at, ask: l.ask || null };
   function de(o, by) {
     if (!o || !COMPOSITIONS[o.key]) return null;
     const cards = (o.cards || []).map((id) => by[id]).filter(Boolean); if (!cards.length) return null;
-    const b = COMPOSITIONS[o.key]; return { key: o.key, title: b.title, why: b.why, variant: o.variant | 0, cards, at: o.at || 0 };
+    const b = COMPOSITIONS[o.key]; return { key: o.key, title: b.title, why: b.why, variant: o.variant | 0, cards, at: o.at || 0, ask: typeof o.ask === 'string' ? o.ask : null };
   }
   function save() {
     const fx = {}; for (const [k, v] of Object.entries(ws.effects)) if (/^(timer|play|focus|dnd|dim|reply|chk-.*)$/.test(k) && v) fx[k] = v;

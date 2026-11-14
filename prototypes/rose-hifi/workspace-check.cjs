@@ -124,6 +124,8 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   const pinIdx = 2, pinId = (await W()).cards[pinIdx];
   await tap('#ws-canvas [data-pin="' + pinId + '"]'); await wait(250);
   w = await W(); check(P('Pin marks a card (aria-pressed, outline)'), w.pins.includes(pinId) && (await R((id) => document.querySelector('[data-pin="' + id + '"]').getAttribute('aria-pressed'), pinId)) === 'true', w);
+  await R(() => { document.getElementById('ws-canvas').scrollTop = 0; }); 
+  if (full) await shot('05b-pinned', 'Card 3 pinned (before Regenerate), canvas at top');
   const beforeRegen = await W();
   await tap('#ws-regen'); await wait(700);
   w = await W();
@@ -133,7 +135,8 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   await tap('#ws-regen'); await wait(700);
   w = await W(); check(P('a second Regenerate still keeps the pin in place'), w.cards[pinIdx] === pinId, w);
   await tap('#ws-undo'); await wait(300);
-  await shot('06-regenerated-pinned', 'Regenerate with a pinned card');
+  await R(() => { document.getElementById('ws-canvas').scrollTop = 0; });
+  await shot('06-regenerated-pinned', 'After Regenerate: the pinned card keeps slot 3, canvas at top');
   await tap('#ws-undo'); await wait(300);
   w = await W();
   check(P('Undo (twice) restores the earlier arrangement exactly'), JSON.stringify(w.cards) === JSON.stringify(beforeRegen.cards) && w.variant === beforeRegen.variant, { w, beforeRegen });
@@ -241,6 +244,9 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   check(P('RELOAD: pinned cards render as pinned'), pinnedOk);
   await tap('#ws-undo'); await wait(300);
   check(P('RELOAD: Undo still works on the restored history'), (await W()).hist === after.hist - 1);
+  const uw = await R(() => { const w = window.RoseWorkspace.state(); return { key: w.layout.key, ask: w.layout.ask, status: document.getElementById('ws-status').textContent }; });
+  const intentOk = !uw.ask || ({ cooking: /dinner|cook/i, work: /work/i, unwinding: /relax|unwind/i, guess: /./ }[uw.key]).test(uw.ask);
+  check(P('Undo shows the request that produced that layout (no stale echo)'), intentOk && (!uw.ask || uw.status.includes(uw.ask)), uw);
   await tap('#ws-regen'); await wait(700);
   if (full) await shot('11b-after-reload', 'After a full page reload: workspace restored');
   // Rose tasks are model state and are not persisted by this prototype: after reload they read as not started.
@@ -250,13 +256,15 @@ async function run(browser, name, file, ctxOpts, phone, full) {
   // ---------- Conversational request from another app prepares the page in the background ----------
   await D({ type: 'openApp', value: 'notes' }); await wait(500);
   const inApp = await W();
-  await R(() => window.RoseWorkspace.prepareFromConversation('work')); await wait(150);
+  await R(() => { window.RoseWorkspace.state().latency = 1600; window.RoseWorkspace.prepareFromConversation('work'); }); await wait(150);
   const mid = await W();
   const off = () => R(() => { const o = document.getElementById('ws-offer'); return { hidden: o.hidden, phase: o.dataset.phase, text: o.innerText, show: !!document.getElementById('ws-offer-show') }; });
   const o1 = await off();
   check(P('while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app'), mid.view === 'app' && mid.app === inApp.app && !o1.hidden && o1.phase === 'preparing' && /Preparing workspace: Work/.test(o1.text) && /simulated/.test(o1.text) && !o1.show, { mid, o1 });
   if (full) await shot('12a-preparing-in-app', 'Preparing from a conversation while in an app');
-  await wait(700); const done = await W(); const o2 = await off();
+  await page.waitForFunction(() => window.RoseWorkspace.state().phase === 'idle', null, { timeout: 4000 }); await wait(200);
+  await R(() => { window.RoseWorkspace.state().latency = 300; });
+  const done = await W(); const o2 = await off();
   check(P('when ready: “Workspace ready: Work” offers Show workspace; the app stays in front'), done.view === 'app' && done.app === inApp.app && done.key === 'work' && o2.phase === 'ready' && o2.show && /Workspace ready: Work/.test(o2.text), { done, o2 });
   if (full) await shot('12b-ready-offer-in-app', 'Ready: Show workspace offered; the app stays in front');
   await wait(1500);
