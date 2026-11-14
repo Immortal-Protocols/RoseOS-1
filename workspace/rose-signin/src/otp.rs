@@ -1,11 +1,11 @@
-//! HOTP (RFC 4226) and TOTP (RFC 6238) with the rose-auth-v1 profile: HMAC-SHA-1, 6 digits, 30 s steps, one step of
+//! HOTP (RFC 4226) and TOTP (RFC 6238) with the rose-signin-v1 profile: HMAC-SHA-1, 6 digits, 30 s steps, one step of
 //! skew either way, and each accepted step usable once per account (replay rejection).
 
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use subtle::ConstantTimeEq;
 
-/// The rose-auth-v1 profile. SHA-1/6/30 is what standard authenticator apps generate; see docs/ROSE-AUTH-V1.md.
+/// The rose-signin-v1 profile. SHA-1/6/30 is what standard authenticator apps generate; see docs/ROSE-SIGNIN-V1.md.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Profile {
     pub digits: u32,

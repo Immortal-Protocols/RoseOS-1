@@ -1,6 +1,6 @@
-//! Every line of vectors/rose-auth-v1.txt (shared with the Java client core).
+//! Every line of vectors/rose-signin-v1.txt (shared with the Java client core).
 
-use rose_auth::{base32, otp};
+use rose_signin::{base32, otp};
 
 fn hex(s: &str) -> Vec<u8> {
     if s == "-" {
@@ -16,7 +16,7 @@ fn hex(s: &str) -> Vec<u8> {
 fn shared_vectors() {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/vectors/rose-auth-v1.txt"
+        "/vectors/rose-signin-v1.txt"
     ))
     .unwrap();
     let mut n = 0;

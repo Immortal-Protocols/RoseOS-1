@@ -1,4 +1,4 @@
-# rose-auth-v1 shared test vectors. Rust (workspace/rose-auth/tests) and Java (workspace/rose-auth/java) both run
+# rose-signin-v1 shared test vectors. Rust (workspace/rose-signin/tests) and Java (workspace/rose-signin/java) both run
 # every line. hotp/totp lines are RFC 4226 Appendix D and RFC 6238 Appendix B (SHA-1); 6-digit codes are the same
 # truncation modulo 10^6. verify/base32 lines were computed by an independent Python HMAC implementation.
 #   hotp   SECRET_HEX COUNTER DIGITS CODE

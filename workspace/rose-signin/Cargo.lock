@@ -131,7 +131,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rose-auth"
+name = "rose-signin"
 version = "0.1.0"
 dependencies = [
  "argon2",
