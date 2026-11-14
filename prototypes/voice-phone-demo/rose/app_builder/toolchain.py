@@ -78,7 +78,7 @@ class Tools:
 def _redact(text: str, *paths: Path) -> str:
     for path in paths:
         text = text.replace(str(path), '<' + path.name + '>')
-    return text[-4000:]
+    return text  # whole: the identity checks parse it; the ledger keeps only a tail for display
 
 
 def run(args: list, cwd: Path, home: Path, tools: Tools, cancelled, category: str, redact=()) -> str:
@@ -213,8 +213,9 @@ def ensure_key(keys: Path, package: str, tools: Tools, cancelled=lambda: False, 
          '-dname', f'CN={package}'], keys, keys, tools, cancelled, 'signing', (keys,))
     os.chmod(keys / 'app.p12', 0o600)
     fsync_path(keys / 'app.p12')
-    _private(config, json.dumps({'keyAlias': 'app', 'storePasswordFile': str(password),
-                                 'keyPasswordFile': str(password)}))
+    # Names relative to the key directory, so a moved or restored config directory still signs.
+    _private(config, json.dumps({'keyAlias': 'app', 'storePasswordFile': password.name,
+                                 'keyPasswordFile': password.name}))
     fsync_path(keys)  # the key is on disk before any build signed with it can be delivered
     fsync_path(keys.parent)
     return config
@@ -223,8 +224,11 @@ def ensure_key(keys: Path, package: str, tools: Tools, cancelled=lambda: False, 
 def sign(unsigned: Path, output: Path, keys: Path, expected_signer: str | None, tools: Tools) -> dict:
     """Sign with the project's key; the certificate must equal expected_signer when the project already has one."""
     config = keys / 'config.json'
+    names = json.loads(config.read_text())
+    store = keys / Path(names['storePasswordFile']).name
+    key = keys / Path(names['keyPasswordFile']).name
     args = [sys.executable, SIGN_APK, unsigned, '--keystore', keys / 'app.p12', '--config', config,
-            '--output', output]
+            '--store-password-file', store, '--key-password-file', key, '--output', output]
     if expected_signer:
         args += ['--expected-cert-sha256', expected_signer]
     env = {'PATH': tools.path(), 'ANDROID_SDK_ROOT': str(tools.sdk), 'LANG': 'C.UTF-8'}

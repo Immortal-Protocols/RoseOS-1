@@ -110,11 +110,17 @@ def write_skeleton(source: Path, package: str, label: str):
 def check(source: Path, package: str) -> None:
     """Refuse generated source that could change the app's identity or escape the framework-only toolchain."""
     source = Path(source)
+    if os.lstat(source).st_mode & 0o700 != 0o700:
+        raise TemplateRefused('The app\'s source folder is not readable and writable by the builder.')
     for entry in source.iterdir():
         if entry.name not in ALLOWED_TOP:
             raise TemplateRefused(f'Unexpected top-level entry {entry.name!r}; only the app skeleton is built.')
     for path in source.rglob('*'):
         mode = os.lstat(path).st_mode  # never follow or open anything that is not a plain file or directory
+        try:
+            str(path.relative_to(source)).encode('utf-8')
+        except UnicodeEncodeError:
+            raise TemplateRefused(f'A file name in the app is not valid UTF-8 ({str(path.name)!r}).') from None
         name = path.relative_to(source)
         if git_name(path.name):
             raise TemplateRefused(f'{name} is not allowed; the builder keeps the project history itself.')

@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS installs (
 """
 
 
+def _text(value: str) -> str:
+    """Text sqlite can store: anything undecodable (a generated file name, tool output) is escaped, not dropped."""
+    return value.encode('utf-8', 'backslashreplace').decode('utf-8')
+
+
 class LedgerError(ValueError):
     """A request the ledger refuses; nothing changed."""
 
@@ -162,12 +167,14 @@ class Ledger:
             cur = self.db.execute("UPDATE jobs SET state=?, stage=?, message=?, log_tail=substr(log_tail || ?, -?), "
                                   "updated=? WHERE job_id=? AND cancel_requested=0 AND state IN (%s)"
                                   % ','.join('?' * len(ACTIVE)),
-                                  (state, stage, message, log, LOG_TAIL, self.clock(), job_id, *ACTIVE))
+                                  (state, stage, _text(message), _text(log), LOG_TAIL, self.clock(), job_id,
+                                   *ACTIVE))
             return cur.rowcount == 1
 
     def finish_failed(self, job_id: str, category: str, summary: str, retryable: bool, log: str = ''):
         if category not in CATEGORIES:
             raise ValueError(category)
+        summary, log = _text(summary), _text(log)
         failure = json.dumps({'category': category, 'summary': summary[:500], 'retryable': bool(retryable)})
         state = 'cancelled' if category == 'cancelled' else 'failed'
         with self.lock:

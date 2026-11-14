@@ -117,8 +117,10 @@ Proof levels:
 - **Container:** create, revise and a refused key change were built, signed and
   verified with throwaway keys. CI repeats this with a freshly fetched pinned
   SDK.
-- **Container:** the signed routes, from pairing to a signed artifact
-  download, are covered by tests against the real listener app.
+- **Container:** the signed routes, from an enrolled device's signed request
+  to a signed artifact download, are covered by tests against the real listener
+  app. Pairing itself (`POST /pair`) is covered by the existing remote-link
+  test, not by these.
 - **Not done:** enabling the builder on a host, the Codex generator, and
   Home/App's install client against the real API. Nothing has been installed.
 

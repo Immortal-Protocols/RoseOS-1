@@ -471,6 +471,63 @@ class BuildTest(Base):
         self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
         self.assertFalse((self.root / 'projects' / out['projectId'] / 'source/res/values-de').exists())
 
+    def test_generated_names_and_modes_never_wedge_a_project(self):
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        hostile = [lambda source, *a: open(os.path.join(os.fsencode(source), b'src/\xff.sh'), 'w').close(),
+                   lambda source, *a: os.chmod(source, 0)]
+        for i, generate in enumerate(hostile):
+            b.generate = generate
+            rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': f'h{i}', 'request': 'x'})
+            b.run_next()
+            self.assertEqual(b.job(rev['jobId'])['state'], 'failed', b.job(rev['jobId']))  # recorded, not stuck
+            b.generate = self.label_generator(f'ok{i}')
+            rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': f'g{i}', 'request': 'y'})
+            b.run_next()
+            self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+
+    def test_a_large_manifest_keeps_its_identity_checks(self):
+        def many(source, *a):
+            m = source / 'AndroidManifest.xml'
+            perms = ''.join(f'<uses-permission android:name="android.permission.X{i}"/>' for i in range(300))
+            acts = ''.join(f'<activity android:name=".A{i}" android:exported="false"/>' for i in range(80))
+            m.write_text(m.read_text().replace('<application', perms + '<application')
+                         .replace('</application>', acts + '</application>'))
+        b = self.builder(many)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready', b.job(out['jobId']))
+
+    def test_a_moved_builder_directory_still_signs(self):
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        b.ledger.close()
+        moved = self.root.parent / 'moved'
+        shutil.move(str(self.root), moved)
+        self.root = moved
+        b = self.builder(self.label_generator('two'))
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+
+    def test_a_failure_write_that_fails_once_is_retried(self):
+        def broken(source, *a):
+            raise toolchain.StepFailed('compile', 'nope')
+        b = self.builder(broken)
+        real, calls = b.ledger.finish_failed, []
+
+        def flaky(*a, **k):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError('database or disk is full')
+            return real(*a, **k)
+        b.ledger.finish_failed = flaky
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'failed')
+
     def test_a_stale_git_lock_from_a_crash_is_cleared(self):
         b = self.builder(self.label_generator('one'))
         out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'Save 50% of 100% spend'})

@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from . import template, toolchain
@@ -76,6 +77,9 @@ def _git(source: Path, *args) -> str:
 
 def _owner_access(root: Path):
     """Give the builder (owner) rwx on directories and rw on files, without following links."""
+    mode = os.lstat(root).st_mode
+    if stat.S_ISDIR(mode):  # the folder itself first: a generator can chmod its own working directory
+        os.chmod(root, stat.S_IMODE(mode) | 0o700)
     for top, dirs, files in os.walk(root, followlinks=False):
         for name in dirs + files:
             path = os.path.join(top, name)
@@ -107,6 +111,7 @@ class Builder:
         self.ledger = ledger or Ledger(self.root)
         self.tools, self.generate = tools, generate
         self.wake = threading.Event()
+        self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
         self.ledger.recover()
 
@@ -200,6 +205,13 @@ class Builder:
         self.wake.set()
 
     def run_next(self) -> bool:
+        for job_id in list(self.unrecorded):  # never start new work while a failure is still unwritten
+            try:
+                self.ledger.finish_failed(job_id, 'internal', 'The builder could not record this build\'s outcome; '
+                                          'outcome unknown.', True)
+                self.unrecorded.discard(job_id)
+            except Exception:
+                return False
         job = self.ledger.next_queued()
         if job is None:
             return False
@@ -268,10 +280,22 @@ class Builder:
             if category == 'cancelled' and not self.ledger.cancel_requested(job_id):
                 # Stopped by a server shutdown, not by the owner: the outcome is unknown and it can be retried.
                 category, summary, retryable = 'internal', 'Stopped by a server shutdown; outcome unknown.', True
-            self.ledger.finish_failed(job_id, category, summary, retryable, failed.log)
+            self._record_failure(job_id, category, summary, retryable, failed.log)
         except Exception as error:  # never leave a job running; the summary carries no paths or tool output
             self._safe_reset(source, project_id)
-            self.ledger.finish_failed(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
+            self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
+
+    def _record_failure(self, job_id, category, summary, retryable, log=''):
+        """Record a failure, retrying a failed write (a full disk often caused the failure itself). If it still
+        cannot be written, the job is failed by recover() at the next start, never left to look running for good."""
+        for delay in (0, 0.5, 2.0, 5.0):
+            time.sleep(delay)
+            try:
+                self.ledger.finish_failed(job_id, category, summary, retryable, log)
+                return
+            except Exception:
+                continue
+        self.unrecorded.add(job_id)
 
     def _prepare(self, source: Path, project: dict, job: dict):
         gitdir = source.parent / 'repo.git'
