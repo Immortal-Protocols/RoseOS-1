@@ -56,7 +56,7 @@ final class WorkspaceTaskClient {
  /** The four rose-auth-v1 headers for one POST, from LocalRoseAuth.headers with this phone's key. */
  interface Signer { Map<String,String> headers(String method,String path)throws Exception; }
 
- enum Kind { STARTED, ALREADY_STARTED, REFUSED, UNAVAILABLE, NOT_AUTHORIZED, UNCERTAIN, NOT_SENT }
+ enum Kind { STARTED, ALREADY_STARTED, REFUSED, UNAVAILABLE, NOT_AUTHORIZED, UNCERTAIN, NOT_SENT, SENDING }
 
  /** What the page shows for the tap. started is never shown as done; the task's own events say that. */
  static final class Outcome {
@@ -71,6 +71,7 @@ final class WorkspaceTaskClient {
     case UNCERTAIN:return "Not sure it started · check Rose's work";
     case NOT_AUTHORIZED:return "Couldn't start · this phone isn't paired";
     case NOT_SENT:return "Rose tasks aren't available on this phone yet";
+    case SENDING:return "Asking Rose…";
     default:return "Couldn't start";
    }
   }

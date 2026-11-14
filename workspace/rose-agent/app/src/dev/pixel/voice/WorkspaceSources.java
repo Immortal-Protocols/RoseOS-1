@@ -60,7 +60,7 @@ final class WorkspaceSources {
 
  static Read read(Context context,Set<String> pinned){
   PackageManager pm=context.getPackageManager();
-  Map<String,ResolveInfo> resolved=new LinkedHashMap<>();
+  Map<String,ResolveInfo> resolved=new LinkedHashMap<>();ResolveInfo rose=null;
   List<WorkspaceSnapshot.App> apps=new ArrayList<>();Map<String,WorkspaceSnapshot.App> byKey=new HashMap<>(),byPackage=new HashMap<>();
   List<ResolveInfo> launchable=pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),0);
   final Map<ResolveInfo,String> labels=new HashMap<>();
@@ -69,7 +69,7 @@ final class WorkspaceSources {
   Collections.sort(sorted,(a,b)->labels.get(a).compareToIgnoreCase(labels.get(b)));
   for(ResolveInfo r:sorted){
    String pkg=r.activityInfo.packageName,activity=r.activityInfo.name;
-   if(pkg.equals(context.getPackageName()))continue;
+   if(pkg.equals(context.getPackageName())){if(rose==null)rose=r;continue;}
    WorkspaceSnapshot.App app=new WorkspaceSnapshot.App(pkg,activity,labels.get(r),category(r.activityInfo.applicationInfo),0);
    String key=pkg+"/"+activity;if(byKey.containsKey(key))continue;
    apps.add(app);byKey.put(key,app);if(!byPackage.containsKey(pkg))byPackage.put(pkg,app);
@@ -105,7 +105,16 @@ final class WorkspaceSources {
    if(app!=null)templates.add(new WorkspaceSnapshot.Template(t.getKey(),t.getValue(),app));
   }
 
-  WorkspaceSnapshot snapshot=WorkspaceSnapshot.build(apps,shortcuts,templates,Collections.<WorkspaceSnapshot.Task>emptyList(),pinned,System.currentTimeMillis(),Calendar.getInstance());
+  // Rose tasks only through WorkspaceTaskGate: none unless explicitly enabled, and no template exists today.
+  // A task's target is Rose Agent's own entry, offered only when there is a task to target it.
+  List<WorkspaceSnapshot.Task> tasks=new ArrayList<>();
+  List<WorkspaceSnapshot.Task> offered=WorkspaceTaskGate.offered(context);
+  if(!offered.isEmpty()&&rose!=null){
+   WorkspaceSnapshot.App self=new WorkspaceSnapshot.App(rose.activityInfo.packageName,rose.activityInfo.name,"Rose Agent",null,0);
+   apps.add(self);resolved.put(WorkspaceSnapshot.appId(self),rose);
+   for(WorkspaceSnapshot.Task t:offered)tasks.add(new WorkspaceSnapshot.Task(t.templateId,t.label,t.ask,t.goal,self));
+  }
+  WorkspaceSnapshot snapshot=WorkspaceSnapshot.build(apps,shortcuts,templates,tasks,pinned,System.currentTimeMillis(),Calendar.getInstance());
   return new Read(snapshot,resolved,shortcutInfo);
  }
 

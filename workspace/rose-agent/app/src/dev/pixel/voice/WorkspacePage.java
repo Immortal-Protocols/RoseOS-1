@@ -205,9 +205,9 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   switch(c.component){
    case "grid":box.addView(grid(c.items));break;
    case "carousel":{HorizontalScrollView s=new HorizontalScrollView(activity);s.setHorizontalScrollBarEnabled(false);LinearLayout row=new LinearLayout(activity);for(String id:c.items)row.addView(tile(id),new LinearLayout.LayoutParams(dp(84),-2));s.addView(row);carousels.add(s);box.addView(s);break;}
-   case "button":{LinearLayout row=new LinearLayout(activity);row.setGravity(Gravity.CENTER_VERTICAL);for(String id:c.items)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,dp(HIT_DP),1),0,0,6,0));box.addView(row);break;}
+   case "button":{LinearLayout row=new LinearLayout(activity);row.setGravity(Gravity.CENTER_VERTICAL);for(String id:c.items)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,-2,1),0,0,6,0));box.addView(row);break;}
    default:{for(String id:c.items)box.addView(text(labelOf(id),14,RoseThemeNow.c(0xfff4ede0)),new LinearLayout.LayoutParams(-1,dp(HIT_DP)));
-    if(!c.actions.isEmpty()){LinearLayout row=new LinearLayout(activity);for(String id:c.actions)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,dp(HIT_DP),1),0,0,6,0));box.addView(row);}}
+    if(!c.actions.isEmpty()){LinearLayout row=new LinearLayout(activity);for(String id:c.actions)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,-2,1),0,0,6,0));box.addView(row);}}
   }
   return box;
  }
@@ -233,8 +233,39 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   boolean task=id.startsWith("task:");
   Button b=button(labelOf(id),()->act(id));
   b.setContentDescription(labelOf(id)+(task?", Rose task, asks first":""));
-  if(task)b.setBackground(pill(0,0x99f4ede0));
-  return b;
+  if(!task)return b;
+  // A Rose task: outlined, with its line beneath (WorkspaceTaskCard): "Rose task · asks first" until tapped, then
+  // only what the reply and the task stream say.
+  b.setBackground(pill(0,0x99f4ede0));
+  LinearLayout box=new LinearLayout(activity);box.setOrientation(LinearLayout.VERTICAL);
+  box.addView(b,new LinearLayout.LayoutParams(-1,dp(HIT_DP)));
+  VoiceService voice=VoiceService.instance;
+  String line=WorkspaceTaskCard.line(hub.taskOutcome(id),voice==null?null:voice.taskStateJson,voice!=null&&voice.taskStateAvailable);
+  TextView under=text(line,11,RoseThemeNow.c(0xb3f4ede0));under.setSingleLine(true);
+  box.addView(under,new LinearLayout.LayoutParams(-1,-2));
+  return box;
+ }
+
+ /**
+  * A Rose task always asks first: its own ask on a sheet, with "Ask Rose" and "Not now". "Not now" starts
+  * nothing. "Ask Rose" sends that one task (WorkspaceHub.startTask). With the gate off (the default) the
+  * sheet only says tasks are not available, and nothing is sent.
+  */
+ private void confirmTask(String id){
+  WorkspaceSnapshot.Task task=hub.lastRead==null?null:hub.lastRead.snapshot.task(id);
+  if(!hub.tasksEnabled()||task==null){
+   new AlertDialog.Builder(activity).setTitle(labelOf(id)).setMessage("Rose tasks aren't available on this phone yet.").setPositiveButton("OK",null).show();
+   return;
+  }
+  WorkspaceTaskClient.Outcome last=hub.taskOutcome(id);
+  if(last!=null&&(last.started()||last.kind==WorkspaceTaskClient.Kind.SENDING)){
+   // Already asked: show where it is rather than asking twice.
+   new AlertDialog.Builder(activity).setTitle(task.label).setMessage(last.status()).setPositiveButton("OK",null).show();
+   return;
+  }
+  new AlertDialog.Builder(activity).setTitle(task.label).setMessage(task.ask)
+   .setPositiveButton("Ask Rose",(d,w)->hub.startTask(id))
+   .setNegativeButton("Not now",null).show();
  }
 
  private String labelOf(String id){
@@ -255,12 +286,7 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
     if(s!=null&&launcher!=null){launcher.startShortcut(s.getPackage(),s.getId(),null,null,Process.myUserHandle());hub.actionResult(id,"opened");}
    }
    else if(id.startsWith("intent:")){Intent i=WorkspaceSources.template(id.substring("intent:".length()));if(i!=null){activity.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));hub.actionResult(id,"opened");}}
-   else if(id.startsWith("task:")){
-    // Rose tasks need App Core's route, which no server enables yet, so none are offered in the snapshot. If
-    // one is ever shown, it still asks first and then says it can't start.
-    new AlertDialog.Builder(activity).setTitle(labelOf(id)).setMessage("Rose tasks aren't available on this phone yet.")
-     .setPositiveButton("OK",null).show();
-   }
+   else if(id.startsWith("task:"))confirmTask(id);
   }catch(ActivityNotFoundException|SecurityException|IllegalStateException e){
    hub.actionResult(id,"failed");status.setText("Couldn't open "+labelOf(id));
   }

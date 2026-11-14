@@ -241,8 +241,35 @@ mounted only when the server enables it, which nothing does yet. The phone treat
 - **The card says "started", never "done".** `accepted` and `duplicate` read "Started · in Rose's work", and
   the task's own events say the rest.
 
-**Not yet:** the Android transport over the paired, pinned link, and the confirm-sheet wiring. Both are a
-later slice, behind the same gate.
+**On Android (source only, behind the same gate):**
+- **Gate and templates.** `WorkspaceTaskGate` is off unless the `tasks-route-enabled` preference is set, and
+  nothing in source sets it. Its `TEMPLATES` list is empty, so no task is invented. With no template there is
+  no Rose task in the snapshot, and the confirm sheet only says tasks are not available. Rose Agent's own app
+  entry is added to the snapshot only when there is a task to target it.
+- **Confirm sheet.** It shows the task's label and its ask, with "Ask Rose" and "Not now". "Not now" starts
+  nothing. A task already asked shows where it is instead of asking twice.
+- **Sending.** `WorkspaceHub.startTask` sends one request per tap, with a fresh `requestId` that every retry
+  reuses. It runs on its own worker, so it never holds up composing.
+- **Transport.** `WorkspaceTaskTransport` uses only the trust the phone already has:
+  - the paired addresses, port and pin (`LocalRoseConnection.paired`);
+  - TLS that accepts only the pinned certificate (`LocalRoseConnection.tls`);
+  - the pairing key (`LocalRoseKey`, through `LocalRoseAuth.headers`).
+
+  It moves to the next address only when TLS fails. Once the request is written, that attempt is final, so a
+  signed nonce is never sent twice.
+- **HTTP framing.** `WorkspaceHttp` writes HTTP/1.1 and refuses CR or LF in any header. It reads a bounded reply
+  (head at most 8 KiB, body at most 16 KiB, no chunked encoding). Anything truncated or malformed is no
+  answer, which the page shows as uncertain. h11, the HTTP parser behind uvicorn, reads its request, and it
+  reads an h11-framed reply.
+- **The card's line.** `WorkspaceTaskCard` builds it from the reply and the phone's own task stream
+  (`VoiceService.taskStateJson`, the snapshot Home's `TaskStatusCard` shows).
+  - It follows the stream only when the reply named a `taskId` and the stream's current task is that one, as
+    "Rose is working", "Finished", "Failed" or "Stopped".
+  - With no `taskId`, which is App Core's usual case, it stays "Started · in Rose's work" and never claims
+    finished.
+  - A stale or unreadable stream is not believed.
+
+**Not proven:** none of this has run on Android, sent a request, or started a task.
 ## Open decisions
 
 | # | Decision | Status |
