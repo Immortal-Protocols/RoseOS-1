@@ -238,57 +238,64 @@ failed, detail}`
 The server reports "installed" only from this receipt, never from publishing
 alone.
 
-## 4. Project 2: the conversational route to the workspace page
+## 4. Project 2: composer intent/result contract v1
 
 Purpose: route the owner's explicit conversational requests for the
-one-page-left-of-Home workspace to the **phone-local** composer, and start Rose
-tasks the owner explicitly confirms there through the existing server. The
-server never generates layouts.
+one-page-left-of-Home workspace to the **phone-local** composer, and route
+agent tasks the owner explicitly selects there through the existing server. The
+server never generates layouts. Native UI and the composer belong to OS
+Product, after Nathan approves the prototype. Until a phone composer provider
+reports this contract, the conversation tool is not offered, so Rose never
+claims a page change she cannot make.
 
-Owners:
-- OS Product: the page, registry, snapshot, validator, rendering and
-  persistence (`workspace/rose-agent/docs/workspace-contract.md`, #787).
-- Models: the on-phone composer (#781).
-- App Core: this route and the task handoff.
+### 4.1 Server → phone (`app_command` over the existing phone link)
 
-The conversation tool is not offered until the phone side exists, so Rose
-never claims a page change she cannot make. The carrier is OS Product's,
-agreed 2026-11-14.
+`{action: "app_command", packageName: <composer provider>, operation:
+"workspace_compose", params: {schemaVersion: 1, requestId, kind, text?}}`
 
-### 4.1 Server → phone: `workspace_prepare` over the existing /ws/phone link
+- `kind`: `prompt` (the owner's words, required non-empty `text`, ≤ 500
+  chars) | `arrange` (best guess, no text) | `regenerate` | `undo`.
+- `requestId`: opaque, ≤ 64 chars. A repeated `requestId` returns the first
+  outcome and composes nothing new.
+- The provider's `capabilities` operation must report
+  `{status: "ok", schemaVersion: 1, kinds: [...]}`. A kind it does not list is
+  refused before sending.
 
-`{action: "workspace_prepare", requestId, request: {kind: arrange | text, text?}}`
+### 4.2 Phone → server result
 
-- `text`: the owner's words, required and non-empty with `text`, at most 500
-  characters. `arrange` is a best guess with no text.
-- Regenerate and undo stay on the page itself in v1. The conversation does not
-  send them.
-- `requestId`: opaque, at most 64 characters. The phone runs a repeated
-  `requestId` exactly once, through PhoneCommandGate, and returns the first
-  outcome.
-- The phone composes locally. The app in front stays in front, and the person
-  sees the "Workspace ready · Show workspace" offer.
+`{schemaVersion: 1, requestId, status, revision?, reason?}`, with `status` one
+of:
 
-### 4.2 Phone → server reply
+`revision` is a non-negative integer that grows with each composition. It is
+required with `shown` and `prepared`; a result without one is treated as
+`uncertain`.
 
-`{status: committed | rejected | busy, layout_revision, shown?, reason?}`
+- `shown`: the page drew exactly `revision`.
+- `prepared`: composed and saved as `revision`, but not on screen (the owner is
+  in another app; nothing interrupted them).
+- `rejected`: refused, with `reason`; nothing changed.
+- `unavailable`: no composer or model on this phone; nothing changed.
+- `uncertain`: no definite answer.
 
-- `committed` with a non-negative integer `layout_revision` is the only
-  success. It reads as **shown** when `shown: true`, meaning the workspace
-  itself is on screen and drew that revision. Otherwise it is **prepared**
-  (the offer).
-- `committed` without a valid revision is `uncertain`.
-- `rejected` means nothing changed, and its `reason` is reported.
-  `unavailable` or `model_unavailable` (no composer or model on this phone) is
-  reported as not available.
-- `busy`: the phone did not take it, so nothing changed.
-- Anything else is `uncertain`, and is reported and never re-sent: a lost link
-  after sending, Rose Agent's `running` (it waits 20 s), or an unknown status.
-  Only the link's own `offline`, given before sending, or an older Rose
-  Agent's "Unsupported phone action" means nothing was sent.
-- The server waits 25 s, longer than Rose Agent's 20 s. Rose Agent runs phone
-  commands one at a time, so a command queued behind another can still come
-  back late, and then it is `uncertain`.
+The conversation's `ok` is true only for `shown` and `prepared`, never for a
+mere submission.
+
+- A link that drops after the request was sent, or a late answer, is
+  `uncertain`. It is reported and never re-sent; v1 has no read operation, so
+  the owner asks again if they want to. Only a link that reports the request
+  was never sent (`offline`) means nothing changed.
+- The server waits 25 s, longer than Rose Agent's 20 s `app_command` wait, so
+  Rose Agent's own reply normally arrives. Rose Agent runs phone commands one
+  at a time and starts its 20 s wait only when it reaches this one, so a
+  command queued behind another can still come back late and be reported as
+  `uncertain`. A composition slower than 20 s comes
+  back as Rose Agent's `running` and is reported as `uncertain`; v1 does not
+  fetch it later.
+- A busy or transient reply to the capabilities check (`routine_busy`,
+  `running`, `expired`, `error`) is reported as busy. Nothing was sent, so
+  nothing changed.
+- Rose Agent relays `app_command` only to same-signer or allowlisted packages,
+  so the composer provider must be one of those.
 
 ### 4.3 Agent tasks chosen on the page (workspace task handoff v1, proposal)
 
@@ -331,11 +338,8 @@ one.
 
 ### 4.4 App Core's answers to `rose-layout-v1` (Models Core, #781)
 
-- **Mapping.** App Core's outer contract is now OS Product's
-  `workspace_prepare` carrier (§4.1–4.2). The conversation sends only
-  `arrange` or `text`, so it does not depend on which layout reply format OS
-  Product and Models settle on. The two formats still differ:
-  `rose-layout-v1` (#781) versus `workspace-v1` (#787).
+- **Mapping.** The mapping in `rose-layout-v1` "Relation to App Core" is
+  confirmed as written. This outer contract stays as §4.1–4.2.
 - **Q5.** A conversational request needs only `trigger: conversational`,
   `prompt` and `requestId`. App Core adds nothing else.
 - **Q6.** Agreed: only the provider decides `shown` versus `prepared`, and the
