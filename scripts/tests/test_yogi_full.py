@@ -231,10 +231,14 @@ class CompilerTest(unittest.TestCase):
 
     def test_cache_uses_yogi_disk_and_never_imports_an_old_out_dir(self):
         cfg = yogi.config()
+        for build in ('2026111401', '2026111402'):
+            self.assertEqual(yogi_compile.output_dir(cfg, build), 'out-yogi-cache')
+        uncached = copy.deepcopy(cfg); uncached['builder'].pop('compilerCache')
+        self.assertEqual(yogi_compile.output_dir(uncached, '2026111401'), 'out/yogi-2026111401')
         with mock.patch.object(yogi_compile.cache, 'prepare_at', return_value={'enabled': True}) as prepare:
-            yogi_compile.prepare_cache(cfg, yogi.ROOT, 'out/yogi-2026111401')
+            yogi_compile.prepare_cache(cfg, yogi.ROOT, yogi_compile.output_dir(cfg, '2026111401'))
         self.assertEqual(prepare.call_args.args, (Path('/srv/rose-yogi/compiler-cache-v1'),))
-        self.assertEqual(prepare.call_args.kwargs['out_dir'], 'out/yogi-2026111401')
+        self.assertEqual(prepare.call_args.kwargs['out_dir'], 'out-yogi-cache')
 
     def test_failed_compiler_streams_both_channels_and_retains_exact_log(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as output:
@@ -255,6 +259,15 @@ class CompilerTest(unittest.TestCase):
                     sample=.02, free=free)
                 self.assertEqual(result['stopped'], reason)
                 self.assertNotEqual(result['returncode'], 0)
+
+    def test_failed_parent_cannot_leave_a_child_holding_the_log_pipe(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()):
+            command = ('import subprocess,sys; subprocess.Popen([sys.executable,"-c",'
+                       '"import time; time.sleep(60)"]); print("parent failed",flush=True); sys.exit(7)')
+            result = yogi_compile.stream([sys.executable, '-c', command], temp, {'PATH': '/usr/bin:/bin'},
+                                        Path(temp)/'compile.log', timeout=15, reserve=0, sample=.05)
+            self.assertEqual(result['returncode'], 7)
+            self.assertIsNone(result['stopped'])
 
 
 class QueueTest(unittest.TestCase):
