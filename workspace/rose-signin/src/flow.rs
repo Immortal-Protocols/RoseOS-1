@@ -1,9 +1,9 @@
-//! The rose-auth-v1 server flow: enrollment, sign-in with both factors, session validation and revocation.
+//! The rose-signin-v1 server flow: enrollment, sign-in with both factors, session validation and revocation.
 //!
 //! Both factors are always checked, and a failure never says which one failed. Who may enroll an account (open
 //! sign-up or creator invite, decision D7) is the generated app's admission check before `begin_enrollment`; the
 //! app owner's deployment authority never passes through this module. `Authenticator` methods take `&mut self`: a
-//! store backed by SQLite runs each call in one transaction (docs/ROSE-AUTH-V1.md, Storage).
+//! store backed by SQLite runs each call in one transaction (docs/ROSE-SIGNIN-V1.md, Storage).
 
 use crate::otp;
 use crate::rate;

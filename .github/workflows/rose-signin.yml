@@ -1,36 +1,36 @@
-name: rose-auth (Project 1 authentication)
+name: rose-signin (Project 1 sign-in)
 
-# Builds and tests workspace/rose-auth: the Rust server library and the pure-Java client core, both against
-# vectors/rose-auth-v1.txt. Proves library behaviour on the host only: no server, endpoint, phone, secrets, cloud
+# Builds and tests workspace/rose-signin: the Rust server library and the pure-Java client core, both against
+# vectors/rose-signin-v1.txt. Proves library behaviour on the host only: no server, endpoint, phone, secrets, cloud
 # access, deployment or release interaction.
 on:
   pull_request:
     paths:
-      - 'workspace/rose-auth/**'
-      - 'docs/ROSE-AUTH-V1.md'
-      - '.github/workflows/rose-auth.yml'
+      - 'workspace/rose-signin/**'
+      - 'docs/ROSE-SIGNIN-V1.md'
+      - '.github/workflows/rose-signin.yml'
   push:
     branches: [main]
     paths:
-      - 'workspace/rose-auth/**'
-      - 'docs/ROSE-AUTH-V1.md'
-      - '.github/workflows/rose-auth.yml'
+      - 'workspace/rose-signin/**'
+      - 'docs/ROSE-SIGNIN-V1.md'
+      - '.github/workflows/rose-signin.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rose-auth-${{ github.ref }}
+  group: rose-signin-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  rose-auth:
+  rose-signin:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: workspace/rose-auth
+        working-directory: workspace/rose-signin
     env:
       CARGO_TERM_COLOR: never
     steps:

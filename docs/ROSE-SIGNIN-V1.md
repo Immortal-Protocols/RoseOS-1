@@ -1,12 +1,14 @@
-# rose-auth-v1: sign-in for servers that Rose generates
+# rose-signin-v1: sign-in for servers that Rose generates
 
 **Status: draft contract, held for Nathan's decisions.**
 
-- OS Core owns this text and `workspace/rose-auth/`.
+- OS Core owns this text and `workspace/rose-signin/`.
 - App Core owns integrating it into generated apps.
 - Chariot's existing owner owns the hosting it runs on.
 
 This document is source only. Nothing here is built into RoseOS, deployed to a Chariot or exercised on a phone.
+
+**Name.** `rose-signin-v1` is the sign-in protocol for apps Rose generates. It is unrelated to `rose-auth-v1`, the existing phone↔server request-signature wire prefix (`AUTH_PREFIX` in `prototypes/voice-phone-demo/rose/remote.py`, `REMOTE.md`, `LocalRoseAuth.VERSION`, `workspace/models/rose_cloud/rose_cloud/contract.py`). That prefix is installed on phones and stays byte-for-byte unchanged; nothing here renames or migrates it. `workspace/rose-signin/java/test.sh` checks both: the new code never uses the old prefix, and the old prefix is still present where it is defined.
 
 Project 1 Level 2 needs per-user sign-in for the client/server apps Rose generates. Nathan confirmed the factors: **an authenticator-style one-time code plus a PIN/passphrase**. This contract defines them precisely enough that:
 
@@ -58,12 +60,12 @@ All requests go over HTTPS to the generated app's Chariot endpoint.
 | Step | Request | Server behaviour |
 |---|---|---|
 | Admission | App-specific (D7) | The app decides whether this account may be created (open sign-up or creator invite) before enrollment starts. |
-| Enroll 1 | `POST /auth/v1/enroll {account, passphrase, handle?}` | Checks the name and length policies and hashes the passphrase. Creates a 160-bit secret, 10 recovery codes and a 256-bit **enrollment handle**. Returns all three **once**, with the `otpauth://` URI. The account stays unconfirmed. For 15 minutes the pending enrollment belongs to whoever began it: a restart without its handle gets `enrollment_pending`, so a second caller cannot swap in their own secret. A confirmed account cannot be re-enrolled this way. |
-| Enroll 2 | `POST /auth/v1/enroll/confirm {account, handle, code}` | Needs the enrollment handle. A valid code proves the authenticator holds the secret, consumes that step, and confirms the account. Every failure, including a confirmed or unknown account, is `not_confirmed`. Attempts are rate-limited per account. |
-| Sign in | `POST /auth/v1/session {account, code, passphrase}` | Applies rate limits, checks both factors, and on success returns `{token, account}`. The token is 256 random bits, base32 encoded. |
+| Enroll 1 | `POST /signin/v1/enroll {account, passphrase, handle?}` | Checks the name and length policies and hashes the passphrase. Creates a 160-bit secret, 10 recovery codes and a 256-bit **enrollment handle**. Returns all three **once**, with the `otpauth://` URI. The account stays unconfirmed. For 15 minutes the pending enrollment belongs to whoever began it: a restart without its handle gets `enrollment_pending`, so a second caller cannot swap in their own secret. A confirmed account cannot be re-enrolled this way. |
+| Enroll 2 | `POST /signin/v1/enroll/confirm {account, handle, code}` | Needs the enrollment handle. A valid code proves the authenticator holds the secret, consumes that step, and confirms the account. Every failure, including a confirmed or unknown account, is `not_confirmed`. Attempts are rate-limited per account. |
+| Sign in | `POST /signin/v1/session {account, code, passphrase}` | Applies rate limits, checks both factors, and on success returns `{token, account}`. The token is 256 random bits, base32 encoded. |
 | Use | `Authorization: Bearer <token>` | The server looks up SHA-256(token) and checks absolute and idle expiry. |
-| Sign out | `DELETE /auth/v1/session` | Revokes this session. |
-| Sign out everywhere | `DELETE /auth/v1/sessions` | Revokes every session of the principal. It also runs after any factor change. |
+| Sign out | `DELETE /signin/v1/session` | Revokes this session. |
+| Sign out everywhere | `DELETE /signin/v1/sessions` | Revokes every session of the principal. It also runs after any factor change. |
 | Recover | D5 | One-time recovery codes exist; what they may reset is open. |
 
 **Errors.**
@@ -73,7 +75,7 @@ All requests go over HTTPS to the generated app's Chariot endpoint.
 - Enrollment errors: `passphrase_too_short`, `passphrase_too_long`, `invalid_name`, `enrollment_pending`, `already_enrolled`, `not_confirmed`, and `try_later` (confirmation rate limit).
 - `already_enrolled` tells a would-be enroller that the name is taken. That is unavoidable under open sign-up; invite-only admission (D7) hides it from anyone without an invite.
 
-The HTTP shape above is the contract. The library (`rose_auth::flow::Authenticator`) implements the behaviour behind it, and App Core's generated server maps routes to it.
+The HTTP shape above is the contract. The library (`rose_signin::flow::Authenticator`) implements the behaviour behind it, and App Core's generated server maps routes to it.
 
 ## Limits and sessions
 
@@ -91,7 +93,7 @@ The HTTP shape above is the contract. The library (`rose_auth::flow::Authenticat
 
 ## Stock Android and RoseOS
 
-**Every phone.** The same server protocol and the same pure-Java client core (`workspace/rose-auth/java`, no `android.*`). On every phone the generated app:
+**Every phone.** The same server protocol and the same pure-Java client core (`workspace/rose-signin/java`, no `android.*`). On every phone the generated app:
 - shows the enrollment URI as a QR and as copyable text, so any standard authenticator app can enroll it;
 - asks the user to type the code and the passphrase.
 
@@ -147,9 +149,9 @@ Updates to `last_used_step` must be atomic with the check: one transaction per s
 
 | Layer | State |
 |---|---|
-| Source + host tests | `workspace/rose-auth`: Rust library, `cargo test` (shared vectors, flow and security properties, including regression tests from an adversarial review); Java client core, `java/test.sh` (the same vectors). Workflow: `.github/workflows/rose-auth.yml`. The Java core also runs in `scripts/test-local.sh`. |
+| Source + host tests | `workspace/rose-signin`: Rust library, `cargo test` (shared vectors, flow and security properties, including regression tests from an adversarial review); Java client core, `java/test.sh` (the same vectors). Workflow: `.github/workflows/rose-signin.yml`. The Java core also runs in `scripts/test-local.sh`. |
 | Build into RoseOS | Not started (D8). Needs the authorized OS build route. |
 | Deployment | None. No Chariot endpoint exists for it, and the Rose server stays stopped. |
 | Phone proof | None. |
 
-The test vectors (`workspace/rose-auth/vectors/rose-auth-v1.txt`) include RFC 4226 Appendix D, RFC 6238 Appendix B (SHA-1), and skew, replay and base32 cases computed by an independent Python HMAC implementation.
+The test vectors (`workspace/rose-signin/vectors/rose-signin-v1.txt`) include RFC 4226 Appendix D, RFC 6238 Appendix B (SHA-1), and skew, replay and base32 cases computed by an independent Python HMAC implementation.

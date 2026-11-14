@@ -1,10 +1,10 @@
 [package]
-name = "rose-auth"
+name = "rose-signin"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
-description = "rose-auth-v1: authenticator one-time codes plus a knowledge factor, sessions, rate limits and recovery for Rose-generated servers."
+description = "rose-signin-v1: authenticator one-time codes plus a knowledge factor, sessions, rate limits and recovery for Rose-generated servers."
 
 [dependencies]
 hmac = "0.12"
