@@ -80,6 +80,13 @@
   <div class="row"><button class="hbtn" id="h-tasks">Start 3 tasks</button><button class="hbtn" id="h-attn">Needs choice</button><button class="hbtn" id="h-done">Finish one</button></div>
   <div class="tasklist hstatus" id="h-tasklist"></div>
  </fieldset>
+ <fieldset id="h-workspace"><legend>Workspace (Project 2 · simulated)</legend>
+  <div class="row"><button class="hbtn" id="h-wsgo">Show workspace</button><button class="hbtn" id="h-wsprep">From an app: ask Rose for cooking</button></div>
+  <label class="hcheck" for="h-wslat">Simulated generation time</label>
+  <select id="h-wslat" class="hbtn" aria-label="Simulated generation time"><option value="300">Fast (0.3 s)</option><option value="800" selected>Typical (0.8 s)</option><option value="2500">Slow (2.5 s)</option></select>
+  <label class="hcheck"><input type="checkbox" id="h-wsfail">Next generation fails</label>
+  <p class="hstatus" id="h-wsstate"></p>
+ </fieldset>
  <fieldset id="h-system"><legend>System surfaces</legend>
   <div class="row"><button class="hbtn" id="h-shade">Notifications</button><button class="hbtn" id="h-empty">Empty / refill</button></div>
   <label class="hcheck"><input type="checkbox" id="h-fail">Next reply fails to send</label>

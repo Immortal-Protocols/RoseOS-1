@@ -21,8 +21,8 @@
   // Keyboard
   // =====================================================================================
   const kb = { open: false, target: null, editHold: false, keysKey: '' };
-  const fields = { msg: K.initial(), reply: K.initial() };
-  const fieldEl = (t) => (t === 'reply' ? $('f-reply') : $('f-msg'));
+  const fields = { msg: K.initial(), reply: K.initial(), ws: K.initial() };
+  const fieldEl = (t) => (t === 'reply' ? $('f-reply') : t === 'ws' ? $('f-ws') : $('f-msg'));
   const svg = (body, fill) => '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" fill="' + (fill || 'none') + '" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>';
   const IC = {
     shift: (st) => svg('<path d="M12 4 L20 12 H15.5 V18 H8.5 V12 H4 Z"/>' + (st === 'lock' ? '<path d="M8.5 21 H15.5"/>' : ''), st === 'off' ? 'none' : 'currentColor'),
@@ -113,6 +113,8 @@
     const k = $('kb'); k.setAttribute('aria-hidden', String(!kb.open)); k.inert = !kb.open;
     renderField($('f-msg'), fields.msg, kb.open && kb.target === 'msg');
     renderField($('f-reply'), fields.reply, kb.open && kb.target === 'reply');
+    renderField($('f-ws'), fields.ws, kb.open && kb.target === 'ws');
+    if (window.RoseWorkspace) window.RoseWorkspace.fieldChanged(fields.ws.text);
     const send = $('ab-send'); if (send) send.disabled = !fields.msg.text.trim();
     const rs = $('reply-send'); if (rs) rs.disabled = !fields.reply.text.trim() || shade.reply.state === 'sending';
     if (kb.open) { buildKeys(); renderStrip(); }
@@ -136,6 +138,7 @@
     note('sent “' + t.slice(0, 20) + '”');
   }
   function doAction() {
+    if (kb.target === 'ws') { const t = fields.ws.text.trim(); if (t && window.RoseWorkspace) { hideKb('workspace request'); window.RoseWorkspace.submit(t); } return; }
     if (kb.target === 'msg') sendMsg();
     else if (kb.target === 'reply') { replySend(); return; }
     renderKb();
@@ -261,7 +264,7 @@
   // Hardware keys only while an editor itself has focus; focused controls keep Enter/Space.
   function onKey(e) {
     if (e.target.closest && e.target.closest('.harness')) return;
-    const a = document.activeElement, target = a && a.id === 'f-msg' ? 'msg' : a && a.id === 'f-reply' ? 'reply' : null;
+    const a = document.activeElement, target = a && a.id === 'f-msg' ? 'msg' : a && a.id === 'f-reply' ? 'reply' : a && a.id === 'f-ws' ? 'ws' : null;
     if (!target || e.key === 'Escape') return;
     const s = fields[target], mod = e.metaKey || e.ctrlKey;
     if (!kb.open || kb.target !== target) { if (e.key.length === 1 && !mod) showKb(target); else return; }
@@ -617,6 +620,7 @@
         if (ret.origin) note('return cleared'); ret.origin = null; ret.phase = 'idle';
       }
       if (kb.open && kb.target === 'msg' && s.view !== 'app') { kb.open = false; kb.editHold = false; note('keyboard hidden (leaving app)'); }
+      if (kb.open && kb.target === 'ws' && s.view !== 'home') { kb.open = false; kb.editHold = false; note('keyboard hidden (leaving workspace)'); }
     }
   }
   function afterRender(s) {
@@ -669,6 +673,6 @@
     }
     afterRender(R.getState());
   }
-  window.RoseSystem = { init, beforeRender, afterRender, escape, kbOpen: () => kb.open, state: () => ({ kb: { ...kb }, fields, shade, ret, follow: { ...follow } }), openShade, closeShade, hideKb, showKb };
+  window.RoseSystem = { init, beforeRender, afterRender, escape, kbOpen: () => kb.open, bindField: (el, t) => bindField(el, t), fields, kbState: () => ({ open: kb.open, target: kb.target }), state: () => ({ kb: { ...kb }, fields, shade, ret, follow: { ...follow } }), openShade, closeShade, hideKb, showKb };
   if (window.__rose) init(window.__rose);
 })();

@@ -2006,6 +2006,93 @@ html.phone-mode.harness-open .harness-toggle span{background:#233247;color:#fff}
 /* F09: compact, left-aligned action buttons (not full-width bars). */
 #device[data-theme] .shade .sh-acts .sh-btn,#device[data-theme] .shade .sh-reply-row .sh-btn{width:auto;flex:none;display:inline-grid;place-items:center}
 
+/* ---------- Project 2: adaptive workspace page (Home page −1) ----------
+   Shares the system's semantic tokens, so it follows Oxblood and Glacier. Fixed control geometry:
+   the composer, bar, status line and recent row never move while content loads or changes. */
+#device[data-theme] .home-track{position:relative}
+#device[data-theme] .ws-page{position:absolute;top:0;bottom:0;left:-100%;width:100%;display:flex;flex-direction:column;padding:44px 14px 146px;color:var(--sys-ink);gap:8px}
+#device[data-theme] .ws-head{display:flex;align-items:center;gap:8px;padding:0 4px;flex:none}
+#device[data-theme] .ws-head h2{margin:0;font-size:22px;font-weight:500;letter-spacing:-.02em;flex:1}
+#device[data-theme] .ws-sim{font-size:11px;font-weight:600;letter-spacing:.02em;padding:4px 8px;border-radius:10px;color:var(--sys-ink-2);background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line);white-space:nowrap}
+#device[data-theme] .ws-composer{display:flex;gap:8px;align-items:center;flex:none}
+#device[data-theme] .ws-field{flex:1;max-height:40px;background:var(--sys-surface)}
+#device[data-theme] .ws-voice{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:var(--sys-ink);background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ws-voice svg{width:20px;height:20px}
+#device[data-theme] .ws-voice[data-muted=true]{color:var(--sys-warm);box-shadow:inset 0 0 0 1.2px var(--sys-warm-line)}
+#device[data-theme] .ws-voice[data-muted=true] svg{opacity:.75}
+#device[data-theme] .ws-voice[data-listening=true]{background:var(--sys-tile-on);color:var(--sys-on-accent);box-shadow:none}
+#device[data-theme] .ws-bar{display:flex;gap:6px;flex:none}
+#device[data-theme] .ws-btn{flex:1 1 auto;min-height:44px;padding:0 10px;border-radius:12px;font-size:13px;font-weight:600;color:var(--sys-ink);background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line);white-space:nowrap}
+#device[data-theme] .ws-btn.primary{background:var(--sys-accent);color:var(--sys-on-accent);box-shadow:none}
+#device[data-theme] .ws-btn:disabled{color:var(--sys-ink-3);opacity:.7}
+#device[data-theme] .ws-btn.primary:disabled{opacity:.6}
+#device[data-theme] .ws-status{flex:none;height:20px;margin:0;padding:0 4px;font-size:12.5px;line-height:20px;color:var(--sys-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#device[data-theme] .ws-status[data-state=failed]{color:var(--sys-warm)}
+#device[data-theme] .ws-status em{font-style:normal;color:var(--sys-ink-3)}
+#device[data-theme] .ws-link{color:inherit;text-decoration:underline;font-weight:600;min-height:20px}
+#device[data-theme] .ws-spin{display:inline-block;width:10px;height:10px;margin-right:6px;border-radius:50%;border:2px solid var(--sys-ink-3);border-top-color:var(--sys-ink);animation:ws-spin .8s linear infinite;vertical-align:-1px}
+@keyframes ws-spin{to{transform:rotate(360deg)}}
+#device[data-theme] .ws-recent{flex:none;height:28px;display:flex;gap:6px;overflow:hidden}
+#device[data-theme] .ws-chip{height:28px;padding:0 10px;border-radius:14px;font-size:12px;color:var(--sys-ink-2);box-shadow:inset 0 0 0 1px var(--sys-line);position:relative}
+#device[data-theme] .ws-chip::after{content:'';position:absolute;left:0;right:0;top:-8px;bottom:-8px}
+#device[data-theme] .ws-chip[aria-current=true]{color:var(--sys-ink);background:var(--sys-surface)}
+#device[data-theme] .ws-canvas{flex:1 1 0;min-height:0;overflow:auto;scrollbar-width:none;display:flex;flex-direction:column;gap:8px;position:relative;padding-bottom:6px;overscroll-behavior:contain}
+#device[data-theme] .ws-canvas.loading>.ws-card{opacity:.35}
+#device[data-theme] .ws-skel{position:absolute;inset:0;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+#device[data-theme] .ws-skel i{display:block;border-radius:16px;background:linear-gradient(90deg,var(--sys-surface) 0,var(--sys-surface-2) 50%,var(--sys-surface) 100%);background-size:200% 100%;animation:ws-shimmer 1.2s linear infinite;opacity:.9}
+@keyframes ws-shimmer{to{background-position:-200% 0}}
+.static-motion .ws-skel i,.static-motion .ws-spin{animation:none}
+#device[data-theme] .ws-empty{display:grid;gap:6px;place-content:center;text-align:center;flex:1;padding:24px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-empty b{color:var(--sys-ink);font-size:17px;font-weight:500}
+#device[data-theme] .ws-card{flex:none;border-radius:16px;background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line);padding:8px 10px 10px}
+#device[data-theme] .ws-card[data-pinned=true]{box-shadow:inset 0 0 0 1.4px var(--sys-accent-hi)}
+#device[data-theme] .ws-card header{display:flex;align-items:center;gap:8px;min-height:30px}
+#device[data-theme] .ws-card header b{flex:1;font-size:13.5px;font-weight:600}
+#device[data-theme] .ws-pin{min-width:44px;height:28px;padding:0 8px;border-radius:9px;font-size:11.5px;font-weight:600;color:var(--sys-ink-2);box-shadow:inset 0 0 0 1px var(--sys-line);position:relative}
+#device[data-theme] .ws-pin::after{content:'';position:absolute;left:0;right:0;top:-8px;bottom:-8px}
+#device[data-theme] .ws-pin[aria-pressed=true]{color:var(--sys-on-accent);background:var(--sys-accent);box-shadow:none}
+#device[data-theme] .ws-apps{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+#device[data-theme] .ws-app{display:grid;justify-items:center;gap:4px;min-height:64px;font-size:11px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-app .tile{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--sys-surface-2);overflow:hidden}
+#device[data-theme] .ws-app .tile svg,#device[data-theme] .ws-app .tile img{width:26px;height:26px}
+#device[data-theme] .ws-actions{display:flex;flex-direction:column;gap:6px}
+#device[data-theme] .ws-act{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;min-height:44px;padding:0 12px;border-radius:12px;text-align:left;font-size:13.5px;color:var(--sys-ink);background:var(--sys-surface-2)}
+#device[data-theme] .ws-act span{grid-column:1 / 3}
+#device[data-theme] .ws-act small{font-size:11px;color:var(--sys-ink-3)}
+#device[data-theme] .ws-act[aria-pressed=true]{background:var(--sys-tile-on);color:var(--sys-on-accent)}
+#device[data-theme] .ws-act[aria-pressed=true] small{color:var(--sys-on-accent)}
+/* Rose tasks look different from direct actions: pearl, outline, “asks first”. */
+#device[data-theme] .ws-act.agent{background:none;box-shadow:inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ws-act.agent[data-on=true] small{color:var(--sys-ink-2)}
+#device[data-theme] .ws-pearl{width:14px;height:14px;border-radius:50%;flex:none;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%)}
+#device[data-palette=glacier][data-theme] .ws-pearl{background:radial-gradient(circle at 34% 30%,#fff 0,#d6e8f8 18%,#7fb2e0 50%,#2c5680 100%)}
+#device[data-theme] .ws-carousel{display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;scrollbar-width:none;touch-action:pan-x;overscroll-behavior-x:contain;padding-bottom:2px}
+#device[data-theme] .ws-slide{flex:0 0 132px;scroll-snap-align:start;display:grid;gap:3px;padding:8px;border-radius:12px;background:var(--sys-surface-2);font-size:11.5px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-slide b{font-size:12.5px;color:var(--sys-ink);font-weight:600}
+#device[data-theme] .ws-thumb{display:block;height:54px;border-radius:9px;background:linear-gradient(135deg,var(--sys-tile-on),var(--sys-surface))}
+#device[data-theme] .ws-thumb[data-i="1"]{background:linear-gradient(200deg,var(--sys-accent-hi),var(--sys-surface))}
+#device[data-theme] .ws-thumb[data-i="2"]{background:linear-gradient(90deg,var(--sys-surface-2),var(--sys-tile-on))}
+#device[data-theme] .ws-thumb[data-i="3"]{background:linear-gradient(160deg,var(--sys-surface),var(--sys-accent))}
+#device[data-theme] .ws-list{max-height:120px;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain}
+#device[data-theme] .ws-li{display:flex;align-items:center;gap:8px;min-height:32px;font-size:13px;color:var(--sys-ink-2);border-top:1px solid var(--sys-line)}
+#device[data-theme] .ws-li:first-child{border-top:0}
+#device[data-theme] .ws-li input{width:18px;height:18px;accent-color:var(--sys-accent-hi)}
+#device[data-theme] .ws-notif{display:flex;gap:10px;align-items:flex-start;padding:2px 0 8px}
+#device[data-theme] .ws-notif>div{display:grid;gap:2px}
+#device[data-theme] .ws-notif b{font-size:14px;font-weight:600}
+#device[data-theme] .ws-notif span{font-size:13px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-nicon{width:28px;height:28px;flex:none;border-radius:8px;display:grid;place-items:center;background:var(--sys-surface-2)}
+#device[data-theme] .ws-nicon svg{width:18px;height:18px}
+#device[data-theme] .ws-sheet{position:absolute;inset:0;z-index:5;display:grid;align-items:end;background:rgba(0,0,0,.45);padding:0 0 110px}
+#device[data-theme] .ws-sheet-card{display:grid;gap:8px;padding:16px;border-radius:18px;background:var(--sys-surface-2);box-shadow:0 18px 40px rgba(0,0,0,.55),inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ws-sheet-card h3{margin:0;font-size:16px;font-weight:600}
+#device[data-theme] .ws-sheet-card p{margin:0;font-size:13.5px;color:var(--sys-ink-2);line-height:1.4}
+#device[data-theme] .ws-sheet-card>div{display:flex;gap:8px}
+#device[data-theme] .ws-page button:focus-visible,#device[data-theme] .ws-carousel:focus-visible,#device[data-theme] .ws-list:focus-visible{outline:2px solid var(--sys-focus);outline-offset:2px}
+#device[data-theme] .ws-act.agent{grid-template-columns:auto 1fr;row-gap:2px;padding:8px 12px}
+#device[data-theme] .ws-act.agent>span.ws-pearl{grid-column:1;grid-row:1 / span 2}
+#device[data-theme] .ws-act.agent>span:not(.ws-pearl),#device[data-theme] .ws-act.agent>small{grid-column:2}
+
 </style></head>
 <body>
 <noscript><div class="noscript"><b>This viewer isn’t running the prototype.</b> It shows the page without JavaScript, so nothing can move. Open the file in a browser instead: on Android, open it with Chrome from the Files app; on a computer, open it in Chrome, Safari, Edge or Firefox.</div></noscript>
@@ -2081,6 +2168,13 @@ html.phone-mode.harness-open .harness-toggle span{background:#233247;color:#fff}
  <fieldset><legend>Tasks</legend>
   <div class="row"><button class="hbtn" id="h-tasks">Start 3 tasks</button><button class="hbtn" id="h-attn">Needs choice</button><button class="hbtn" id="h-done">Finish one</button></div>
   <div class="tasklist hstatus" id="h-tasklist"></div>
+ </fieldset>
+ <fieldset id="h-workspace"><legend>Workspace (Project 2 · simulated)</legend>
+  <div class="row"><button class="hbtn" id="h-wsgo">Show workspace</button><button class="hbtn" id="h-wsprep">From an app: ask Rose for cooking</button></div>
+  <label class="hcheck" for="h-wslat">Simulated generation time</label>
+  <select id="h-wslat" class="hbtn" aria-label="Simulated generation time"><option value="300">Fast (0.3 s)</option><option value="800" selected>Typical (0.8 s)</option><option value="2500">Slow (2.5 s)</option></select>
+  <label class="hcheck"><input type="checkbox" id="h-wsfail">Next generation fails</label>
+  <p class="hstatus" id="h-wsstate"></p>
  </fieldset>
  <fieldset id="h-system"><legend>System surfaces</legend>
   <div class="row"><button class="hbtn" id="h-shade">Notifications</button><button class="hbtn" id="h-empty">Empty / refill</button></div>
@@ -2276,7 +2370,7 @@ function transition(previous, event) {
     case 'layout': if (['folded', 'unfolded'].includes(event.value)) s.layout = event.value; break;
     case 'lock': s.locked = true; break;
     case 'unlock': s.locked = false; break;
-    case 'homePage': s.homePage = Math.max(0, Math.min((event.max || HOME_PAGES.length) - 1, event.value | 0)); break;
+    case 'homePage': s.homePage = Math.max(event.min === -1 ? -1 : 0, Math.min((event.max || HOME_PAGES.length) - 1, event.value | 0)); break;
 
     case 'openRose':
       go('rose', { app: null, window: null });
@@ -3221,13 +3315,23 @@ void main(){
       d.setAttribute('aria-label', 'Home page ' + (i + 1)); d.dataset.page = i; d.innerHTML = '<i></i>';
       dots.appendChild(d);
     });
+    mountWorkspace();
+    if (!ox && state.homePage < 0) state = M.transition(state, { type: 'homePage', value: 0 }).state;
   }
 
+  function mountWorkspace() { if (window.RoseWorkspace) window.RoseWorkspace.mount($('home-track'), device.dataset.theme === 'oxblood'); }
   let drag = null, suppressClick = false;
+  // Project 2: an adaptive workspace page sits one page left of Home (page -1), Oxblood system only.
+  const homePages = () => [...$('home-track').querySelectorAll(':scope > .home-page')];
+  const wsMin = () => (device.dataset.theme === 'oxblood' && window.RoseWorkspace ? -1 : 0);
   function bindHomeGestures() {
     const pages = $('home-pages'), track = $('home-track');
     pages.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      // A touch swipe produces no click, so a stale suppression must never swallow the next real tap.
+      suppressClick = false;
+      // Horizontal scrollers inside the workspace own their drags; the page does not move under them.
+      if (e.target.closest && e.target.closest('.ws-carousel,.ws-field,.ws-sheet')) return;
       drag = { x: e.clientX, y: e.clientY, id: e.pointerId, moved: false, w: pages.clientWidth };
     });
     pages.addEventListener('pointermove', (e) => {
@@ -3235,19 +3339,21 @@ void main(){
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) { drag.moved = true; pages.setPointerCapture(drag.id); track.classList.add('dragging'); }
       if (drag.moved) {
-        const max = $('home-track').children.length - 1, p = state.homePage;
-        const resist = (p === 0 && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
+        const max = homePages().length - 1, p = state.homePage;
+        const resist = (p === wsMin() && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
         track.style.transform = 'translateX(' + (-p * drag.w + dx * resist) + 'px)';
       }
     });
     const end = (e) => {
       if (!drag || (e && e.pointerId !== drag.id)) return;
       const moved = drag.moved, dx = e ? e.clientX - drag.x : 0, w = drag.w; drag = null;
-      track.classList.remove('dragging'); track.style.transform = '';
+      track.classList.remove('dragging');
+      // A tap (no drag) must not disturb the track's position; only a real drag hands back to render().
       if (moved) {
+        track.style.transform = '';
         suppressClick = true;
         const next = Math.abs(dx) > w * 0.18 ? state.homePage + (dx < 0 ? 1 : -1) : state.homePage;
-        dispatch({ type: 'homePage', value: next, max: $('home-track').children.length });
+        dispatch({ type: 'homePage', value: next, max: homePages().length, min: wsMin() });
         render();
       }
     };
@@ -3257,8 +3363,9 @@ void main(){
     pages.addEventListener('dragstart', (e) => e.preventDefault());
     pages.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: $('home-track').children.length });
-      const first = $('home-track').children[state.homePage].querySelector('.app'); if (first) first.focus({ preventScroll: true });
+      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: homePages().length, min: wsMin() });
+      const pg = state.homePage < 0 ? $('ws-page') : homePages()[state.homePage];
+      const first = pg && pg.querySelector('.app,button'); if (first) first.focus({ preventScroll: true });
     });
   }
 
@@ -3446,7 +3553,9 @@ void main(){
 
     // Home
     $('home-track').style.transform = 'translateX(' + (-state.homePage * 100) + '%)';
-    [...$('home-track').children].forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
+    homePages().forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
+    const wsp = $('ws-page'); if (wsp) { wsp.inert = state.homePage !== -1; wsp.setAttribute('aria-hidden', String(state.homePage !== -1)); }
+    if (window.RoseWorkspace) window.RoseWorkspace.render(state);
     const oxDots = device.dataset.theme === 'oxblood';
     [...$('page-dots').children].forEach((d, i) => { d.setAttribute('aria-current', String(i === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
     $('page-dots').setAttribute('aria-hidden', String(oxDots));
@@ -3575,7 +3684,7 @@ void main(){
     const app = e.target.closest('.app[data-app]');
     if (app) { dispatch({ type: 'openApp', value: app.dataset.app }); return; }
     const dot = e.target.closest('#page-dots button');
-    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: $('home-track').children.length }); return; }
+    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: homePages().length, min: wsMin() }); return; }
   });
   $('tray-rose').addEventListener('click', () => dispatch({ type: 'openRose' }));
   $('tray-overview').addEventListener('click', () => dispatch({ type: 'switcher' }));
@@ -4089,8 +4198,8 @@ void main(){
   // Keyboard
   // =====================================================================================
   const kb = { open: false, target: null, editHold: false, keysKey: '' };
-  const fields = { msg: K.initial(), reply: K.initial() };
-  const fieldEl = (t) => (t === 'reply' ? $('f-reply') : $('f-msg'));
+  const fields = { msg: K.initial(), reply: K.initial(), ws: K.initial() };
+  const fieldEl = (t) => (t === 'reply' ? $('f-reply') : t === 'ws' ? $('f-ws') : $('f-msg'));
   const svg = (body, fill) => '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" fill="' + (fill || 'none') + '" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>';
   const IC = {
     shift: (st) => svg('<path d="M12 4 L20 12 H15.5 V18 H8.5 V12 H4 Z"/>' + (st === 'lock' ? '<path d="M8.5 21 H15.5"/>' : ''), st === 'off' ? 'none' : 'currentColor'),
@@ -4181,6 +4290,8 @@ void main(){
     const k = $('kb'); k.setAttribute('aria-hidden', String(!kb.open)); k.inert = !kb.open;
     renderField($('f-msg'), fields.msg, kb.open && kb.target === 'msg');
     renderField($('f-reply'), fields.reply, kb.open && kb.target === 'reply');
+    renderField($('f-ws'), fields.ws, kb.open && kb.target === 'ws');
+    if (window.RoseWorkspace) window.RoseWorkspace.fieldChanged(fields.ws.text);
     const send = $('ab-send'); if (send) send.disabled = !fields.msg.text.trim();
     const rs = $('reply-send'); if (rs) rs.disabled = !fields.reply.text.trim() || shade.reply.state === 'sending';
     if (kb.open) { buildKeys(); renderStrip(); }
@@ -4204,6 +4315,7 @@ void main(){
     note('sent “' + t.slice(0, 20) + '”');
   }
   function doAction() {
+    if (kb.target === 'ws') { const t = fields.ws.text.trim(); if (t && window.RoseWorkspace) { hideKb('workspace request'); window.RoseWorkspace.submit(t); } return; }
     if (kb.target === 'msg') sendMsg();
     else if (kb.target === 'reply') { replySend(); return; }
     renderKb();
@@ -4329,7 +4441,7 @@ void main(){
   // Hardware keys only while an editor itself has focus; focused controls keep Enter/Space.
   function onKey(e) {
     if (e.target.closest && e.target.closest('.harness')) return;
-    const a = document.activeElement, target = a && a.id === 'f-msg' ? 'msg' : a && a.id === 'f-reply' ? 'reply' : null;
+    const a = document.activeElement, target = a && a.id === 'f-msg' ? 'msg' : a && a.id === 'f-reply' ? 'reply' : a && a.id === 'f-ws' ? 'ws' : null;
     if (!target || e.key === 'Escape') return;
     const s = fields[target], mod = e.metaKey || e.ctrlKey;
     if (!kb.open || kb.target !== target) { if (e.key.length === 1 && !mod) showKb(target); else return; }
@@ -4685,6 +4797,7 @@ void main(){
         if (ret.origin) note('return cleared'); ret.origin = null; ret.phase = 'idle';
       }
       if (kb.open && kb.target === 'msg' && s.view !== 'app') { kb.open = false; kb.editHold = false; note('keyboard hidden (leaving app)'); }
+      if (kb.open && kb.target === 'ws' && s.view !== 'home') { kb.open = false; kb.editHold = false; note('keyboard hidden (leaving workspace)'); }
     }
   }
   function afterRender(s) {
@@ -4737,7 +4850,266 @@ void main(){
     }
     afterRender(R.getState());
   }
-  window.RoseSystem = { init, beforeRender, afterRender, escape, kbOpen: () => kb.open, state: () => ({ kb: { ...kb }, fields, shade, ret, follow: { ...follow } }), openShade, closeShade, hideKb, showKb };
+  window.RoseSystem = { init, beforeRender, afterRender, escape, kbOpen: () => kb.open, bindField: (el, t) => bindField(el, t), fields, kbState: () => ({ open: kb.open, target: kb.target }), state: () => ({ kb: { ...kb }, fields, shade, ret, follow: { ...follow } }), openShade, closeShade, hideKb, showKb };
+  if (window.__rose) init(window.__rose);
+})();
+
+// Rose HiFi — Project 2: an adaptive workspace page one page left of Home (Home page −1).
+// Prototype only. Generation is SIMULATED (a scripted local "composer" with a configurable delay
+// and failure switch in the review harness) over SAMPLE data; every surface says so. Home, the dock
+// and the Rose chin are unchanged. Direct actions act at once on sample data; Rose tasks always ask
+// first and then run as Rose work (the existing task model), never silently.
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const now = () => performance.now();
+  let R = null, I = null, mounted = null, enabled = false;
+
+  // ---------- Sample compositions (simulated output of a local layout model) ----------
+  const COMPOSITIONS = {
+    cooking: {
+      title: 'Cooking', why: 'Dinner prep · Thursday evening',
+      cards: [
+        { id: 'c-apps', type: 'apps', title: 'Kitchen apps', apps: ['clock', 'notes', 'music', 'firefox'] },
+        { id: 'c-timer', type: 'actions', title: 'Quick actions', items: [
+          { id: 'timer12', label: 'Start 12-min timer', kind: 'direct', effect: 'timer' },
+          { id: 'playlist', label: 'Play “Slow Supper”', kind: 'direct', effect: 'play' },
+          { id: 'grocery', label: 'Add missing items to grocery list', kind: 'agent', task: 'saturday', ask: 'Rose will compare the recipe with your Notes list and add what’s missing.' }] },
+        { id: 'c-recipes', type: 'carousel', title: 'Tonight’s recipes', items: [
+          { t: 'Lemon herb pasta', s: '25 min · pantry' }, { t: 'Miso salmon', s: '30 min · 2 servings' }, { t: 'Roasted squash soup', s: '45 min · batch' }, { t: 'Green shakshuka', s: '20 min · eggs' }] },
+        { id: 'c-ingr', type: 'list', title: 'Ingredients · Lemon herb pasta', check: true, items: ['Spaghetti 200 g', 'Lemon (zest + juice)', 'Parsley', 'Garlic, 2 cloves', 'Parmesan', 'Olive oil', 'Chilli flakes', 'Black pepper'] },
+        { id: 'c-msg', type: 'notif', app: 'messages', title: 'Jamie', body: 'Running late — arriving at 7:15', actions: [{ id: 'reply-ok', label: 'Reply “See you then”', kind: 'direct', effect: 'reply' }] },
+      ],
+    },
+    work: {
+      title: 'Work', why: 'Focus block before your 3 pm',
+      cards: [
+        { id: 'w-cal', type: 'notif', app: 'calendar', title: 'Design review in 20 min', body: 'Rose HiFi · Room 3 / video', actions: [
+          { id: 'join', label: 'Open invite', kind: 'direct', effect: 'open', app: 'calendar' },
+          { id: 'prep', label: 'Summarise prep notes', kind: 'agent', task: 'compare', ask: 'Rose will read your notes and files for the review and write a short summary.' }] },
+        { id: 'w-apps', type: 'apps', title: 'Work apps', apps: ['mail', 'calendar', 'notes', 'files', 'editor'] },
+        { id: 'w-focus', type: 'actions', title: 'Focus', items: [
+          { id: 'focus25', label: 'Focus 25 min (Do not disturb)', kind: 'direct', effect: 'focus' },
+          { id: 'draft', label: 'Draft a reply to Jamie', kind: 'agent', task: 'reply', ask: 'Rose will draft a reply in Mail. Nothing is sent without you.' }] },
+        { id: 'w-today', type: 'list', title: 'Today', items: ['10:00 Stand-up', '11:30 Write handoff', '15:00 Design review', '16:30 1:1 with Sam', '17:30 Wrap up'] },
+        { id: 'w-docs', type: 'carousel', title: 'Recent documents', items: [
+          { t: 'HANDOFF-GLACIER.md', s: 'Edited 1 h ago' }, { t: 'Weekend ideas.md', s: 'Files' }, { t: 'Comparison', s: 'Editor' }, { t: 'Garden map.pdf', s: 'Files' }] },
+      ],
+    },
+    unwinding: {
+      title: 'Unwinding', why: 'Quiet evening · nothing scheduled',
+      cards: [
+        { id: 'u-listen', type: 'carousel', title: 'Listen', items: [
+          { t: 'Morning Walk', s: 'Quiet Tracks' }, { t: 'Rain on Glass', s: 'Ambient' }, { t: 'Late Piano', s: 'Calm' }, { t: 'River Sounds', s: 'Nature' }] },
+        { id: 'u-apps', type: 'apps', title: 'For tonight', apps: ['music', 'photos', 'weather', 'vlc'] },
+        { id: 'u-act', type: 'actions', title: 'Wind down', items: [
+          { id: 'dnd8', label: 'Do not disturb until 8 am', kind: 'direct', effect: 'dnd' },
+          { id: 'dim', label: 'Warm, dim screen', kind: 'direct', effect: 'dim' },
+          { id: 'sat', label: 'Plan a quiet Saturday', kind: 'agent', task: 'saturday', ask: 'Rose will check the garden hours, a walking route and your calendar.' }] },
+        { id: 'u-read', type: 'list', title: 'Saved to read', items: ['The slow art of bread', 'Walking the river path', 'Notes on rest', 'A short history of gardens', 'Letters from the coast'] },
+      ],
+    },
+  };
+  // Best guess: what the (simulated) composer proposes from time of day and recent context.
+  COMPOSITIONS.guess = { title: 'Best guess', why: 'Thursday 6:40 pm · Jamie messaged · dinner time', cards: [
+    COMPOSITIONS.cooking.cards[4], COMPOSITIONS.cooking.cards[1], COMPOSITIONS.unwinding.cards[0], COMPOSITIONS.cooking.cards[2], COMPOSITIONS.work.cards[3]] };
+  const INTENTS = [
+    [/cook|dinner|recipe|kitchen|food|meal/i, 'cooking'],
+    [/work|meeting|focus|email|mail|docs?|review/i, 'work'],
+    [/relax|unwind|calm|music|evening|quiet|rest|wind/i, 'unwinding'],
+  ];
+
+  // ---------- State ----------
+  const ws = { layout: null, variant: 0, pins: new Set(), history: [], recent: [], phase: 'idle', error: null, req: 0,
+    latency: 800, failNext: false, effects: {}, listening: false, sheet: null, interpreted: null };
+
+  function compose(key, variant) {
+    // Deterministic "regeneration": a different arrangement of the same intent; pinned cards stay first.
+    const base = COMPOSITIONS[key];
+    let cards = base.cards.slice();
+    if (variant % 2 === 1) cards = cards.slice(1).concat(cards[0]);
+    if (variant % 3 === 2) cards.reverse();
+    const pinned = ws.layout ? ws.layout.cards.filter((c) => ws.pins.has(c.id)) : [];
+    const rest = cards.filter((c) => !pinned.some((p) => p.id === c.id));
+    return { key, title: base.title, why: base.why, variant, cards: pinned.concat(rest), at: Date.now() };
+  }
+
+  // Simulated on-device generation: delay + optional failure. The last layout stays until success.
+  function generate(key, how) {
+    const id = ++ws.req;
+    ws.phase = 'loading'; ws.error = null; render();
+    const delay = ws.latency, fail = ws.failNext;
+    setTimeout(() => {
+      if (id !== ws.req) return;                    // superseded by a newer request
+      if (fail) { ws.failNext = false; syncHarness(); ws.phase = 'failed'; ws.error = { key, how }; note('workspace: generation failed (kept last layout)'); render(); return; }
+      const next = compose(key, how === 'regenerate' ? ws.variant + 1 : 0);
+      if (ws.layout) ws.history.push({ layout: ws.layout, pins: new Set(ws.pins) });
+      ws.layout = next; ws.variant = next.variant; ws.phase = 'idle';
+      ws.recent = [key].concat(ws.recent.filter((k) => k !== key)).slice(0, 3);
+      note('workspace: ' + how + ' → ' + next.title + ' (variant ' + next.variant + ')');
+      render();
+    }, delay);
+  }
+  function intentOf(text) { for (const [re, k] of INTENTS) if (re.test(text)) return k; return 'guess'; }
+  function submit(text) { const k = intentOf(text); ws.interpreted = { text, key: k }; generate(k, 'request'); }
+  function arrange() { ws.interpreted = null; generate('guess', 'arrange'); }
+  function regenerate() { if (ws.layout) generate(ws.layout.key, 'regenerate'); }
+  function undo() {
+    const h = ws.history.pop(); if (!h) return;
+    ws.layout = h.layout; ws.pins = h.pins; ws.variant = h.layout.variant; ws.phase = 'idle'; ws.error = null;
+    note('workspace: undo → ' + h.layout.title); render();
+  }
+  function togglePin(id) {
+    if (ws.layout) ws.history.push({ layout: ws.layout, pins: new Set(ws.pins) });
+    if (ws.pins.has(id)) ws.pins.delete(id); else ws.pins.add(id);
+    note('workspace: ' + (ws.pins.has(id) ? 'pinned ' : 'unpinned ') + id); render();
+  }
+
+  // ---------- Actions: direct (immediate, sample data) vs Rose tasks (confirm → Rose work) ----------
+  function doDirect(item) {
+    const fx = ws.effects;
+    if (item.effect === 'open' && item.app) { R.dispatch({ type: 'openApp', value: item.app }); return; }
+    if (item.effect === 'timer') { fx.timer = { end: Date.now() + 12 * 60 * 1000 }; toast('Timer started · 12:00 (sample)'); }
+    else if (item.effect === 'play') { fx.play = !fx.play; toast(fx.play ? 'Playing “Slow Supper” (sample)' : 'Paused'); }
+    else if (item.effect === 'focus') { fx.focus = !fx.focus; toast(fx.focus ? 'Focus on · 25 min (sample)' : 'Focus off'); }
+    else if (item.effect === 'dnd') { fx.dnd = !fx.dnd; toast(fx.dnd ? 'Do not disturb until 8 am (sample)' : 'Do not disturb off'); }
+    else if (item.effect === 'dim') { fx.dim = !fx.dim; toast(fx.dim ? 'Warm, dim screen on (sample)' : 'Screen back to normal'); }
+    else if (item.effect === 'reply') { fx.reply = true; toast('Replied “See you then” (sample)'); }
+    note('direct action: ' + item.label); render();
+  }
+  function askAgent(item) { ws.sheet = item; render(); const b = $('ws-sheet-go'); if (b) b.focus({ preventScroll: true }); }
+  function confirmAgent() {
+    const item = ws.sheet; ws.sheet = null;
+    const s = R.getState(), t = s.tasks[item.task];
+    if (t && ['idle', 'stopped', 'done'].includes(t.state)) R.dispatch({ type: 'startTask', id: item.task });
+    ws.effects['agent-' + item.id] = true;
+    note('Rose task started: ' + item.label); toast('Rose is on it · see Rose’s work'); render();
+  }
+
+  // ---------- Rendering ----------
+  const pearl = '<span class="ws-pearl" aria-hidden="true"></span>';
+  function cardHtml(c) {
+    const pinned = ws.pins.has(c.id);
+    const head = '<header><b>' + esc(c.title) + '</b><button class="ws-pin" data-pin="' + c.id + '" aria-pressed="' + pinned + '" aria-label="' + (pinned ? 'Unpin ' : 'Pin ') + esc(c.title) + '">' + (pinned ? 'Pinned' : 'Pin') + '</button></header>';
+    let body = '';
+    if (c.type === 'apps') body = '<div class="ws-apps">' + c.apps.map((a) => '<button class="ws-app" data-open-app="' + a + '" aria-label="Open ' + esc(window.RoseModel.APPS[a].name) + '"><span class="tile">' + I.appArt(a, window.RoseModel.MONO_APPS.includes(a) ? 'mono' : '') + '</span><span>' + esc(window.RoseModel.APPS[a].name) + '</span></button>').join('') + '</div>';
+    else if (c.type === 'actions') body = '<div class="ws-actions">' + c.items.map(actionHtml).join('') + '</div>';
+    else if (c.type === 'carousel') body = '<div class="ws-carousel" role="list" aria-label="' + esc(c.title) + ' (scroll sideways)" tabindex="0">' + c.items.map((x, i) => '<div class="ws-slide" role="listitem"><span class="ws-thumb" data-i="' + (i % 4) + '"></span><b>' + esc(x.t) + '</b><span>' + esc(x.s) + '</span></div>').join('') + '</div>';
+    else if (c.type === 'list') body = '<div class="ws-list" tabindex="0" aria-label="' + esc(c.title) + '">' + c.items.map((x, i) => c.check ? '<label class="ws-li"><input type="checkbox" data-check="' + c.id + ':' + i + '"' + (ws.effects['chk-' + c.id + ':' + i] ? ' checked' : '') + '> ' + esc(x) + '</label>' : '<div class="ws-li">' + esc(x) + '</div>').join('') + '</div>';
+    else if (c.type === 'notif') body = '<div class="ws-notif"><span class="ws-nicon">' + I.appArt(c.app, 'mono') + '</span><div><b>' + esc(c.title) + '</b><span>' + esc(c.body) + '</span></div></div><div class="ws-actions">' + c.actions.map(actionHtml).join('') + '</div>';
+    return '<article class="ws-card" data-card="' + c.id + '" data-type="' + c.type + '" data-pinned="' + pinned + '">' + head + body + '</article>';
+  }
+  function actionHtml(a) {
+    const fx = ws.effects;
+    const on = (a.effect === 'timer' && fx.timer) || (a.effect === 'play' && fx.play) || (a.effect === 'focus' && fx.focus) || (a.effect === 'dnd' && fx.dnd) || (a.effect === 'dim' && fx.dim) || (a.effect === 'reply' && fx.reply) || fx['agent-' + a.id];
+    if (a.kind === 'agent') return '<button class="ws-act agent" data-agent="' + a.id + '"' + (on ? ' data-on="true"' : '') + '>' + pearl + '<span>' + esc(a.label) + '</span><small>' + (on ? 'Rose is working' : 'Rose task · asks first') + '</small></button>';
+    let label = a.label;
+    if (a.effect === 'timer' && fx.timer) { const left = Math.max(0, fx.timer.end - Date.now()); label = 'Timer · ' + Math.floor(left / 60000) + ':' + String(Math.floor(left / 1000) % 60).padStart(2, '0'); }
+    return '<button class="ws-act" data-direct="' + a.id + '" aria-pressed="' + !!on + '"><span>' + esc(label) + '</span><small>' + (on ? 'On' : 'Direct') + '</small></button>';
+  }
+  function skeleton() { return '<div class="ws-skel" aria-hidden="true">' + [96, 120, 150, 110].map((h) => '<i style="height:' + h + 'px"></i>').join('') + '</div>'; }
+  function render() {
+    const page = $('ws-page'); if (!page) return;
+    const s = R ? R.getState() : null;
+    // Controls never move: the bar and status line have fixed geometry; only their state changes.
+    const loading = ws.phase === 'loading', failed = ws.phase === 'failed';
+    $('ws-arrange').disabled = loading; $('ws-regen').disabled = loading || !ws.layout; $('ws-undo').disabled = loading || !ws.history.length;
+    const st = $('ws-status');
+    st.dataset.state = ws.phase;
+    st.innerHTML = loading ? '<span class="ws-spin" aria-hidden="true"></span>Composing on this phone… <em>simulated</em>'
+      : failed ? 'Couldn’t arrange · kept your last layout <button class="ws-link" id="ws-retry">Retry</button>'
+      : ws.layout ? esc(ws.layout.title) + ' · ' + esc(ws.interpreted ? '“' + ws.interpreted.text + '”' : ws.layout.why) + (ws.layout.variant ? ' · arrangement ' + (ws.layout.variant + 1) : '')
+      : 'Ask for a workspace, or tap Arrange for me.';
+    const canvas = $('ws-canvas');
+    const key = JSON.stringify([ws.layout && ws.layout.at, ws.layout && ws.layout.cards.map((c) => c.id), [...ws.pins], ws.effects, ws.phase === 'loading']);
+    if (canvas.dataset.key !== key) {
+      const top = canvas.scrollTop, scrolls = [...canvas.querySelectorAll('.ws-carousel,.ws-list')].map((el) => [el.closest('.ws-card').dataset.card, el.scrollLeft, el.scrollTop]);
+      canvas.dataset.key = key;
+      canvas.innerHTML = (ws.layout ? ws.layout.cards.map(cardHtml).join('') : '<div class="ws-empty"><b>Your workspace</b><span>Rose composes this page from your apps, notifications and actions. Nothing here changes your Home.</span></div>') + (loading ? skeleton() : '');
+      canvas.classList.toggle('loading', loading);
+      canvas.scrollTop = top;
+      for (const [id, l, t] of scrolls) { const el = canvas.querySelector('[data-card="' + id + '"] .ws-carousel,[data-card="' + id + '"] .ws-list'); if (el) { el.scrollLeft = l; el.scrollTop = t; } }
+    }
+    $('ws-recent').innerHTML = ws.recent.map((k) => '<button class="ws-chip" data-recent="' + k + '"' + (ws.layout && ws.layout.key === k ? ' aria-current="true"' : '') + '>' + esc(COMPOSITIONS[k].title) + '</button>').join('');
+    const mic = $('ws-voice'), muted = s && s.muted;
+    mic.dataset.muted = String(!!muted); mic.dataset.listening = String(ws.listening);
+    mic.setAttribute('aria-label', muted ? 'Voice input unavailable: microphone muted from the chin' : ws.listening ? 'Listening (simulated)' : 'Ask by voice (simulated)');
+    const sh = $('ws-sheet');
+    sh.hidden = !ws.sheet;
+    if (ws.sheet) { $('ws-sheet-title').textContent = 'Ask Rose to ' + ws.sheet.label.charAt(0).toLowerCase() + ws.sheet.label.slice(1) + '?'; $('ws-sheet-body').textContent = ws.sheet.ask + ' Rose keeps working in the background; you can stop it from Rose’s work.'; }
+    if (s && R && window.RoseSystem) { const k = window.RoseSystem.kbState(); if (k.open && k.target === 'ws' && (s.view !== 'home' || s.homePage !== -1)) window.RoseSystem.hideKb('left workspace'); }
+    const h = $('h-wsstate'); if (h) h.textContent = 'Workspace: ' + (ws.layout ? ws.layout.title + ' v' + (ws.layout.variant + 1) : 'empty') + ' · ' + ws.phase + ' · pins ' + ws.pins.size + ' · undo ' + ws.history.length;
+  }
+  function voice() {
+    const s = R.getState();
+    if (s.muted) { toast('Microphone muted · unmute from the chin to speak'); note('voice: refused, mic muted'); return; }
+    if (ws.listening) return;
+    ws.listening = true; render(); note('voice: listening (simulated)');
+    setTimeout(() => { ws.listening = false; const said = 'Something relaxing for tonight'; window.RoseSystem.fields.ws = window.RoseKeys.initial({ text: said }); render(); submit(said); }, 1200);
+  }
+
+  // ---------- Mount / bind ----------
+  function mount(track, on) {
+    enabled = on;
+    const old = $('ws-page'); if (old) old.remove();
+    if (!on || !track) return;
+    track.insertAdjacentHTML('afterbegin',
+      '<section class="ws-page" id="ws-page" aria-label="Workspace">' +
+      '<header class="ws-head"><h2>Workspace</h2><span class="ws-sim">Simulated generation · sample data</span></header>' +
+      '<div class="ws-composer"><div class="field ws-field" id="f-ws" role="textbox" aria-label="Ask for a workspace" tabindex="0" data-placeholder="Ask for a workspace…"></div>' +
+      '<button class="ws-voice" id="ws-voice" aria-label="Ask by voice (simulated)"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></button></div>' +
+      '<div class="ws-bar" role="toolbar" aria-label="Workspace controls"><button class="ws-btn primary" id="ws-arrange">Arrange for me</button><button class="ws-btn" id="ws-regen" disabled>Regenerate</button><button class="ws-btn" id="ws-undo" disabled>Undo</button></div>' +
+      '<p class="ws-status" id="ws-status" role="status" aria-live="polite"></p>' +
+      '<div class="ws-recent" id="ws-recent" aria-label="Recent layouts"></div>' +
+      '<div class="ws-canvas" id="ws-canvas"></div>' +
+      '<div class="ws-sheet" id="ws-sheet" role="dialog" aria-modal="true" aria-labelledby="ws-sheet-title" hidden><div class="ws-sheet-card">' + pearl + '<h3 id="ws-sheet-title"></h3><p id="ws-sheet-body"></p><div><button class="ws-btn" id="ws-sheet-cancel">Not now</button><button class="ws-btn primary" id="ws-sheet-go">Ask Rose</button></div></div></div>' +
+      '</section>');
+    mounted = $('ws-page');
+    if (window.RoseSystem) window.RoseSystem.bindField($('f-ws'), 'ws');
+    const page = mounted;
+    page.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.id === 'ws-arrange') return arrange();
+      if (b.id === 'ws-regen') return regenerate();
+      if (b.id === 'ws-undo') return undo();
+      if (b.id === 'ws-retry' && ws.error) return generate(ws.error.key, ws.error.how);
+      if (b.id === 'ws-voice') return voice();
+      if (b.id === 'ws-sheet-cancel') { ws.sheet = null; note('Rose task not started'); render(); return; }
+      if (b.id === 'ws-sheet-go') return confirmAgent();
+      if (b.dataset.pin) return togglePin(b.dataset.pin);
+      if (b.dataset.recent) { const k = b.dataset.recent; if (ws.layout && ws.layout.key === k) return; ws.interpreted = null; return generate(k, 'recent'); }
+      if (b.dataset.openApp) { R.dispatch({ type: 'openApp', value: b.dataset.openApp }); return; }
+      const all = ws.layout ? ws.layout.cards.flatMap((c) => (c.items || []).concat(c.actions || [])) : [];
+      if (b.dataset.direct) { const it = all.find((x) => x.id === b.dataset.direct); if (it) doDirect(it); return; }
+      if (b.dataset.agent) { const it = all.find((x) => x.id === b.dataset.agent); if (it && !ws.effects['agent-' + it.id]) askAgent(it); }
+    });
+    page.addEventListener('change', (e) => { const c = e.target.dataset.check; if (c) { ws.effects['chk-' + c] = e.target.checked; } });
+    render();
+  }
+  function fieldChanged() {}
+  function toast(t) { const el = $('sys-toast'); if (!el) return; el.textContent = t; el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('on'), 2200); }
+  function note(t) { const el = $('h-syslog'); if (el) { const li = document.createElement('li'); li.textContent = t; el.prepend(li); while (el.children.length > 8) el.lastChild.remove(); } }
+  function syncHarness() { const f = $('h-wsfail'); if (f) f.checked = ws.failNext; }
+
+  // A conversational request while another app is in front: the page prepares in the background.
+  function prepareFromConversation(key) {
+    ws.interpreted = { text: 'Rose, set up my workspace for ' + COMPOSITIONS[key].title.toLowerCase(), key };
+    generate(key, 'request');
+    toast('Workspace ready soon: ' + COMPOSITIONS[key].title + ' · swipe right from Home');
+    note('conversation: prepared ' + key + ' without leaving ' + R.getState().view);
+  }
+
+  function init(rose) {
+    R = rose; I = window.RoseIcons;
+    mount(document.getElementById('home-track'), document.getElementById('device').dataset.theme === 'oxblood');
+    setInterval(() => { if (ws.effects.timer && mounted && R.getState().homePage === -1) { const c = $('ws-canvas'); delete c.dataset.key; render(); } }, 1000);
+    const lat = $('h-wslat'); if (lat) lat.onchange = (e) => { ws.latency = +e.target.value; };
+    const fail = $('h-wsfail'); if (fail) fail.onchange = (e) => { ws.failNext = e.target.checked; };
+    const prep = $('h-wsprep'); if (prep) prep.onclick = () => prepareFromConversation('cooking');
+    const go = $('h-wsgo'); if (go) go.onclick = () => R.dispatch({ type: 'homePage', value: -1, min: -1, max: 3 });
+  }
+  window.RoseWorkspace = { mount, render: () => render(), submit, arrange, regenerate, undo, fieldChanged, state: () => ws, prepareFromConversation, COMPOSITIONS };
   if (window.__rose) init(window.__rose);
 })();
 </script>

@@ -1,0 +1,86 @@
+/* ---------- Project 2: adaptive workspace page (Home page −1) ----------
+   Shares the system's semantic tokens, so it follows Oxblood and Glacier. Fixed control geometry:
+   the composer, bar, status line and recent row never move while content loads or changes. */
+#device[data-theme] .home-track{position:relative}
+#device[data-theme] .ws-page{position:absolute;top:0;bottom:0;left:-100%;width:100%;display:flex;flex-direction:column;padding:44px 14px 146px;color:var(--sys-ink);gap:8px}
+#device[data-theme] .ws-head{display:flex;align-items:center;gap:8px;padding:0 4px;flex:none}
+#device[data-theme] .ws-head h2{margin:0;font-size:22px;font-weight:500;letter-spacing:-.02em;flex:1}
+#device[data-theme] .ws-sim{font-size:11px;font-weight:600;letter-spacing:.02em;padding:4px 8px;border-radius:10px;color:var(--sys-ink-2);background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line);white-space:nowrap}
+#device[data-theme] .ws-composer{display:flex;gap:8px;align-items:center;flex:none}
+#device[data-theme] .ws-field{flex:1;max-height:40px;background:var(--sys-surface)}
+#device[data-theme] .ws-voice{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:var(--sys-ink);background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ws-voice svg{width:20px;height:20px}
+#device[data-theme] .ws-voice[data-muted=true]{color:var(--sys-warm);box-shadow:inset 0 0 0 1.2px var(--sys-warm-line)}
+#device[data-theme] .ws-voice[data-muted=true] svg{opacity:.75}
+#device[data-theme] .ws-voice[data-listening=true]{background:var(--sys-tile-on);color:var(--sys-on-accent);box-shadow:none}
+#device[data-theme] .ws-bar{display:flex;gap:6px;flex:none}
+#device[data-theme] .ws-btn{flex:1 1 auto;min-height:44px;padding:0 10px;border-radius:12px;font-size:13px;font-weight:600;color:var(--sys-ink);background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line);white-space:nowrap}
+#device[data-theme] .ws-btn.primary{background:var(--sys-accent);color:var(--sys-on-accent);box-shadow:none}
+#device[data-theme] .ws-btn:disabled{color:var(--sys-ink-3);opacity:.7}
+#device[data-theme] .ws-btn.primary:disabled{opacity:.6}
+#device[data-theme] .ws-status{flex:none;height:20px;margin:0;padding:0 4px;font-size:12.5px;line-height:20px;color:var(--sys-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#device[data-theme] .ws-status[data-state=failed]{color:var(--sys-warm)}
+#device[data-theme] .ws-status em{font-style:normal;color:var(--sys-ink-3)}
+#device[data-theme] .ws-link{color:inherit;text-decoration:underline;font-weight:600;min-height:20px}
+#device[data-theme] .ws-spin{display:inline-block;width:10px;height:10px;margin-right:6px;border-radius:50%;border:2px solid var(--sys-ink-3);border-top-color:var(--sys-ink);animation:ws-spin .8s linear infinite;vertical-align:-1px}
+@keyframes ws-spin{to{transform:rotate(360deg)}}
+#device[data-theme] .ws-recent{flex:none;height:28px;display:flex;gap:6px;overflow:hidden}
+#device[data-theme] .ws-chip{height:28px;padding:0 10px;border-radius:14px;font-size:12px;color:var(--sys-ink-2);box-shadow:inset 0 0 0 1px var(--sys-line);position:relative}
+#device[data-theme] .ws-chip::after{content:'';position:absolute;left:0;right:0;top:-8px;bottom:-8px}
+#device[data-theme] .ws-chip[aria-current=true]{color:var(--sys-ink);background:var(--sys-surface)}
+#device[data-theme] .ws-canvas{flex:1 1 0;min-height:0;overflow:auto;scrollbar-width:none;display:flex;flex-direction:column;gap:8px;position:relative;padding-bottom:6px;overscroll-behavior:contain}
+#device[data-theme] .ws-canvas.loading>.ws-card{opacity:.35}
+#device[data-theme] .ws-skel{position:absolute;inset:0;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+#device[data-theme] .ws-skel i{display:block;border-radius:16px;background:linear-gradient(90deg,var(--sys-surface) 0,var(--sys-surface-2) 50%,var(--sys-surface) 100%);background-size:200% 100%;animation:ws-shimmer 1.2s linear infinite;opacity:.9}
+@keyframes ws-shimmer{to{background-position:-200% 0}}
+.static-motion .ws-skel i,.static-motion .ws-spin{animation:none}
+#device[data-theme] .ws-empty{display:grid;gap:6px;place-content:center;text-align:center;flex:1;padding:24px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-empty b{color:var(--sys-ink);font-size:17px;font-weight:500}
+#device[data-theme] .ws-card{flex:none;border-radius:16px;background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line);padding:8px 10px 10px}
+#device[data-theme] .ws-card[data-pinned=true]{box-shadow:inset 0 0 0 1.4px var(--sys-accent-hi)}
+#device[data-theme] .ws-card header{display:flex;align-items:center;gap:8px;min-height:30px}
+#device[data-theme] .ws-card header b{flex:1;font-size:13.5px;font-weight:600}
+#device[data-theme] .ws-pin{min-width:44px;height:28px;padding:0 8px;border-radius:9px;font-size:11.5px;font-weight:600;color:var(--sys-ink-2);box-shadow:inset 0 0 0 1px var(--sys-line);position:relative}
+#device[data-theme] .ws-pin::after{content:'';position:absolute;left:0;right:0;top:-8px;bottom:-8px}
+#device[data-theme] .ws-pin[aria-pressed=true]{color:var(--sys-on-accent);background:var(--sys-accent);box-shadow:none}
+#device[data-theme] .ws-apps{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+#device[data-theme] .ws-app{display:grid;justify-items:center;gap:4px;min-height:64px;font-size:11px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-app .tile{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--sys-surface-2);overflow:hidden}
+#device[data-theme] .ws-app .tile svg,#device[data-theme] .ws-app .tile img{width:26px;height:26px}
+#device[data-theme] .ws-actions{display:flex;flex-direction:column;gap:6px}
+#device[data-theme] .ws-act{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;min-height:44px;padding:0 12px;border-radius:12px;text-align:left;font-size:13.5px;color:var(--sys-ink);background:var(--sys-surface-2)}
+#device[data-theme] .ws-act span{grid-column:1 / 3}
+#device[data-theme] .ws-act small{font-size:11px;color:var(--sys-ink-3)}
+#device[data-theme] .ws-act[aria-pressed=true]{background:var(--sys-tile-on);color:var(--sys-on-accent)}
+#device[data-theme] .ws-act[aria-pressed=true] small{color:var(--sys-on-accent)}
+/* Rose tasks look different from direct actions: pearl, outline, “asks first”. */
+#device[data-theme] .ws-act.agent{background:none;box-shadow:inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ws-act.agent[data-on=true] small{color:var(--sys-ink-2)}
+#device[data-theme] .ws-pearl{width:14px;height:14px;border-radius:50%;flex:none;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%)}
+#device[data-palette=glacier][data-theme] .ws-pearl{background:radial-gradient(circle at 34% 30%,#fff 0,#d6e8f8 18%,#7fb2e0 50%,#2c5680 100%)}
+#device[data-theme] .ws-carousel{display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;scrollbar-width:none;touch-action:pan-x;overscroll-behavior-x:contain;padding-bottom:2px}
+#device[data-theme] .ws-slide{flex:0 0 132px;scroll-snap-align:start;display:grid;gap:3px;padding:8px;border-radius:12px;background:var(--sys-surface-2);font-size:11.5px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-slide b{font-size:12.5px;color:var(--sys-ink);font-weight:600}
+#device[data-theme] .ws-thumb{display:block;height:54px;border-radius:9px;background:linear-gradient(135deg,var(--sys-tile-on),var(--sys-surface))}
+#device[data-theme] .ws-thumb[data-i="1"]{background:linear-gradient(200deg,var(--sys-accent-hi),var(--sys-surface))}
+#device[data-theme] .ws-thumb[data-i="2"]{background:linear-gradient(90deg,var(--sys-surface-2),var(--sys-tile-on))}
+#device[data-theme] .ws-thumb[data-i="3"]{background:linear-gradient(160deg,var(--sys-surface),var(--sys-accent))}
+#device[data-theme] .ws-list{max-height:120px;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain}
+#device[data-theme] .ws-li{display:flex;align-items:center;gap:8px;min-height:32px;font-size:13px;color:var(--sys-ink-2);border-top:1px solid var(--sys-line)}
+#device[data-theme] .ws-li:first-child{border-top:0}
+#device[data-theme] .ws-li input{width:18px;height:18px;accent-color:var(--sys-accent-hi)}
+#device[data-theme] .ws-notif{display:flex;gap:10px;align-items:flex-start;padding:2px 0 8px}
+#device[data-theme] .ws-notif>div{display:grid;gap:2px}
+#device[data-theme] .ws-notif b{font-size:14px;font-weight:600}
+#device[data-theme] .ws-notif span{font-size:13px;color:var(--sys-ink-2)}
+#device[data-theme] .ws-nicon{width:28px;height:28px;flex:none;border-radius:8px;display:grid;place-items:center;background:var(--sys-surface-2)}
+#device[data-theme] .ws-nicon svg{width:18px;height:18px}
+#device[data-theme] .ws-sheet{position:absolute;inset:0;z-index:5;display:grid;align-items:end;background:rgba(0,0,0,.45);padding:0 0 110px}
+#device[data-theme] .ws-sheet-card{display:grid;gap:8px;padding:16px;border-radius:18px;background:var(--sys-surface-2);box-shadow:0 18px 40px rgba(0,0,0,.55),inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ws-sheet-card h3{margin:0;font-size:16px;font-weight:600}
+#device[data-theme] .ws-sheet-card p{margin:0;font-size:13.5px;color:var(--sys-ink-2);line-height:1.4}
+#device[data-theme] .ws-sheet-card>div{display:flex;gap:8px}
+#device[data-theme] .ws-page button:focus-visible,#device[data-theme] .ws-carousel:focus-visible,#device[data-theme] .ws-list:focus-visible{outline:2px solid var(--sys-focus);outline-offset:2px}
+#device[data-theme] .ws-act.agent{grid-template-columns:auto 1fr;row-gap:2px;padding:8px 12px}
+#device[data-theme] .ws-act.agent>span.ws-pearl{grid-column:1;grid-row:1 / span 2}
+#device[data-theme] .ws-act.agent>span:not(.ws-pearl),#device[data-theme] .ws-act.agent>small{grid-column:2}

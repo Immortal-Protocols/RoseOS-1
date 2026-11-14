@@ -147,7 +147,7 @@ function transition(previous, event) {
     case 'layout': if (['folded', 'unfolded'].includes(event.value)) s.layout = event.value; break;
     case 'lock': s.locked = true; break;
     case 'unlock': s.locked = false; break;
-    case 'homePage': s.homePage = Math.max(0, Math.min((event.max || HOME_PAGES.length) - 1, event.value | 0)); break;
+    case 'homePage': s.homePage = Math.max(event.min === -1 ? -1 : 0, Math.min((event.max || HOME_PAGES.length) - 1, event.value | 0)); break;
 
     case 'openRose':
       go('rose', { app: null, window: null });

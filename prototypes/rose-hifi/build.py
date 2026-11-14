@@ -36,11 +36,11 @@ def build():
     js = {k: (SRC / f).read_text() for k, f in {'MODEL': 'model.js', 'RENDERER': 'renderer.js', 'APP': 'icons.js'}.items()}
     # The F10 keyboard text model is consumed read-only from the keyboard study (818a032 source).
     keys = (ROOT.parent / 'rose-keyboard' / 'src' / 'keyboard.js').read_text()
-    js['APP'] = js['APP'] + '\n' + (SRC / 'views.js').read_text() + '\n' + (SRC / 'app.js').read_text() + '\n' + keys + '\n' + (SRC / 'system.js').read_text()
+    js['APP'] = js['APP'] + '\n' + (SRC / 'views.js').read_text() + '\n' + (SRC / 'app.js').read_text() + '\n' + keys + '\n' + (SRC / 'system.js').read_text() + '\n' + (SRC / 'workspace.js').read_text()
     # Tray options are opt-in (data-tray on #screen) and appended after the default styles.
     ox = (SRC / 'oxblood.css').read_text()
     html = html.replace('/*%%CSS%%*/', (SRC / 'style.css').read_text() + '\n' + (SRC / 'tray-variants.css').read_text() + '\n' + ox +
-                        '\n' + glacier.derive_css(ox) + '\n' + (SRC / 'glacier.css').read_text() + '\n' + (SRC / 'system.css').read_text())
+                        '\n' + glacier.derive_css(ox) + '\n' + (SRC / 'glacier.css').read_text() + '\n' + (SRC / 'system.css').read_text() + '\n' + (SRC / 'workspace.css').read_text())
     for key, code in js.items():
         html = html.replace('/*%%' + key + '%%*/', code)
     html = html.replace('%%WALLPAPER%%', data_uri('wallpaper.jpg', 'image/jpeg'))

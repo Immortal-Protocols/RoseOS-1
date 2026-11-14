@@ -82,13 +82,23 @@
       d.setAttribute('aria-label', 'Home page ' + (i + 1)); d.dataset.page = i; d.innerHTML = '<i></i>';
       dots.appendChild(d);
     });
+    mountWorkspace();
+    if (!ox && state.homePage < 0) state = M.transition(state, { type: 'homePage', value: 0 }).state;
   }
 
+  function mountWorkspace() { if (window.RoseWorkspace) window.RoseWorkspace.mount($('home-track'), device.dataset.theme === 'oxblood'); }
   let drag = null, suppressClick = false;
+  // Project 2: an adaptive workspace page sits one page left of Home (page -1), Oxblood system only.
+  const homePages = () => [...$('home-track').querySelectorAll(':scope > .home-page')];
+  const wsMin = () => (device.dataset.theme === 'oxblood' && window.RoseWorkspace ? -1 : 0);
   function bindHomeGestures() {
     const pages = $('home-pages'), track = $('home-track');
     pages.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      // A touch swipe produces no click, so a stale suppression must never swallow the next real tap.
+      suppressClick = false;
+      // Horizontal scrollers inside the workspace own their drags; the page does not move under them.
+      if (e.target.closest && e.target.closest('.ws-carousel,.ws-field,.ws-sheet')) return;
       drag = { x: e.clientX, y: e.clientY, id: e.pointerId, moved: false, w: pages.clientWidth };
     });
     pages.addEventListener('pointermove', (e) => {
@@ -96,19 +106,21 @@
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) { drag.moved = true; pages.setPointerCapture(drag.id); track.classList.add('dragging'); }
       if (drag.moved) {
-        const max = $('home-track').children.length - 1, p = state.homePage;
-        const resist = (p === 0 && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
+        const max = homePages().length - 1, p = state.homePage;
+        const resist = (p === wsMin() && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
         track.style.transform = 'translateX(' + (-p * drag.w + dx * resist) + 'px)';
       }
     });
     const end = (e) => {
       if (!drag || (e && e.pointerId !== drag.id)) return;
       const moved = drag.moved, dx = e ? e.clientX - drag.x : 0, w = drag.w; drag = null;
-      track.classList.remove('dragging'); track.style.transform = '';
+      track.classList.remove('dragging');
+      // A tap (no drag) must not disturb the track's position; only a real drag hands back to render().
       if (moved) {
+        track.style.transform = '';
         suppressClick = true;
         const next = Math.abs(dx) > w * 0.18 ? state.homePage + (dx < 0 ? 1 : -1) : state.homePage;
-        dispatch({ type: 'homePage', value: next, max: $('home-track').children.length });
+        dispatch({ type: 'homePage', value: next, max: homePages().length, min: wsMin() });
         render();
       }
     };
@@ -118,8 +130,9 @@
     pages.addEventListener('dragstart', (e) => e.preventDefault());
     pages.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: $('home-track').children.length });
-      const first = $('home-track').children[state.homePage].querySelector('.app'); if (first) first.focus({ preventScroll: true });
+      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: homePages().length, min: wsMin() });
+      const pg = state.homePage < 0 ? $('ws-page') : homePages()[state.homePage];
+      const first = pg && pg.querySelector('.app,button'); if (first) first.focus({ preventScroll: true });
     });
   }
 
@@ -307,7 +320,9 @@
 
     // Home
     $('home-track').style.transform = 'translateX(' + (-state.homePage * 100) + '%)';
-    [...$('home-track').children].forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
+    homePages().forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
+    const wsp = $('ws-page'); if (wsp) { wsp.inert = state.homePage !== -1; wsp.setAttribute('aria-hidden', String(state.homePage !== -1)); }
+    if (window.RoseWorkspace) window.RoseWorkspace.render(state);
     const oxDots = device.dataset.theme === 'oxblood';
     [...$('page-dots').children].forEach((d, i) => { d.setAttribute('aria-current', String(i === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
     $('page-dots').setAttribute('aria-hidden', String(oxDots));
@@ -436,7 +451,7 @@
     const app = e.target.closest('.app[data-app]');
     if (app) { dispatch({ type: 'openApp', value: app.dataset.app }); return; }
     const dot = e.target.closest('#page-dots button');
-    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: $('home-track').children.length }); return; }
+    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: homePages().length, min: wsMin() }); return; }
   });
   $('tray-rose').addEventListener('click', () => dispatch({ type: 'openRose' }));
   $('tray-overview').addEventListener('click', () => dispatch({ type: 'switcher' }));
