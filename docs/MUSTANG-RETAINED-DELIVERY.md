@@ -1,5 +1,66 @@
 # Dedicated retained-output delivery
 
+## Finalized artifact index reconciliation (2026-11-13)
+
+Recovery43517597779/source d232e904 passed the corrected disk gate, rehashed
+compile51 and its current journal, created the unsigned edge proof and uploaded
+both signing artifacts. The last builder check rejected `collector-api-list-incomplete`.
+Its exact rejected list/count snapshot was not logged; current successful API reads
+report four artifacts and four returned entries, including both finalized inputs:
+
+- Bundle14081916080:4667 bytes, SHA-256
+  `cac788822b80420a4191ab22764096886deda36011b6bdf2545e14fefded8679`.
+  The downloaded document is independently hash-verified as
+  `90374c6b625fcfbd6b04ad1fd0fec9ff78c85026af1eb0bba62d0fe2b784a6d6`.
+- Payload14082106032:5070059216 bytes, SHA-256
+  `ffe2cb14e4d543841ac5ae28fbd63ec2637ddd17ce9146fe0c013634781f1061`.
+  This is finalized metadata; hosted payload-byte preflight remains mandatory.
+
+Upload confirmation now permits up to eight metadata reads, five seconds apart,
+only after successful responses with an incomplete but structurally valid index
+or not-yet-listed required artifacts. It retains complete-count, unique-name,
+run/source/repository, expiry, size and digest checks. Malformed responses,
+ambiguous artifacts, API/transport errors and access denials stop; no upload is
+retried, no secret is read and no payload is admitted by this confirmation.
+The failure now reports safe listed/reported counts if the bounded wait expires.
+
+Current main also adds the independent Python `workspace/models/local-composer/`
+component. It has no manifest/app-source/build references and lies outside all
+three declared app-source sets; its own source-only addition does not change
+Mustang inputs. Retained compatibility permits only that additional component
+prefix, while integration into OS/app inputs and other model paths still refuses.
+No composer source is edited by this change. A new full delivery can reuse
+compile51 without Make or allocation, retaining the complete sign/publish route.
+
+## Completed compile51 and phase-aware disk admission (2026-11-13)
+
+Run43486889593/source8103ca2f completed native Make and all four output hashes at
+20:55:56Z, build2611131800/timestamp1794599326, using voice374/calculator6/background43.
+Its compiler cache reported70859 hits and zero misses. The subsequent collection CLI
+incorrectly required another full906238099456-byte source/metadata/vendor/lunch/compile
+budget against884227551232 free bytes. No collection/bundle/signing was started.
+Cleanup succeeded and stopped the VM; the completed compile and journal remain intact.
+
+Collection now retains the existing300GiB reserve plus250GiB compile allowance
+(590558003200 bytes), with unchanged VM/disk/UUID/inode/nonroot checks. Initial full
+build admission still requires906238099456 bytes. This is a phase correction, not a
+reserve reduction or new disk purchase. It also applies to explicit retained-output
+host checks and signer verification of the recorded native guest facts.
+
+The explicit retained selector is now43486889593, replacing the obsolete42664204892
+case whose apps/source no longer match current inputs. It authenticates completed
+failed producer51, successful Make and owned cleanup, skipped signer/publisher, and
+receipt artifact14077115670:25576 bytes, SHA-256
+`58ac9c8dbf8b8c70ad79d2fe516078e1b9ed1bb3c31c8a09344fc77f437451d0`.
+Its hash-bound candidate, successful compile and allocation receipts must agree;
+no earlier collection receipt is adopted or invented. A fresh attempt reads and
+rehashes original native outputs and the current allocation journal under the shared
+lock, creates a new unsigned edge proof and bundles qualified tools, then signs,
+verifies and publishes automatically. It performs no Make/new allocation, old-output
+mutation, deletion, IAM/credential change or resource increase. Original and delivery
+run/source identities remain distinct; unchanged OS/app/input/tool source is required.
+The older recovery sections below are historical receipts, not active selector pins.
+
 ## Finalized artifact recovery for run 46
 
 Nathan selected salvage of run `43074045726`, build `2611111800`, rather than

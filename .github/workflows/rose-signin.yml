@@ -1,0 +1,54 @@
+name: rose-signin (Project 1 sign-in)
+
+# Builds and tests workspace/rose-signin: the Rust server library and the pure-Java client core, both against
+# vectors/rose-signin-v1.txt. Proves library behaviour on the host only: no server, endpoint, phone, secrets, cloud
+# access, deployment or release interaction.
+on:
+  pull_request:
+    paths:
+      - 'workspace/rose-signin/**'
+      - 'docs/ROSE-SIGNIN-V1.md'
+      - '.github/workflows/rose-signin.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/rose-signin/**'
+      - 'docs/ROSE-SIGNIN-V1.md'
+      - '.github/workflows/rose-signin.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rose-signin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rose-signin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: workspace/rose-signin
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.0
+          rustc --version
+          cargo --version
+          java -version
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Tests (shared vectors, flow and security properties)
+        run: cargo test --locked --no-fail-fast
+      - name: Java client core (shared vectors, Java 8 source level, no android.*)
+        run: bash java/test.sh

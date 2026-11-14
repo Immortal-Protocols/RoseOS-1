@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Rose Keyboard Study</title>
+<style>
+:root{--field:url(%%FIELD%%)}
+/*%%CSS%%*/
+</style></head>
+<body>
+<noscript><div class="noscript"><b>This viewer isn’t running the prototype.</b> It shows the page without JavaScript, so nothing can move. Open the file in a browser: on Android, open it with Chrome from the Files app; on a computer, open it in Chrome, Safari, Edge or Firefox.</div></noscript>
+<div class="page">
+<main class="stage" id="stage" aria-label="Rose keyboard study">
+ <div class="fit" id="fit">
+  <section class="device" id="device" aria-label="Simulated RoseOS phone">
+   <div class="screen" id="screen" data-kb="off" data-chin="down" data-app="messages">
+    <div class="field-bg" aria-hidden="true"></div>
+    <header class="status"><span class="clock" aria-hidden="true">9:41</span><span class="mic-ind" id="mic-ind" role="img" aria-label="Microphone muted"></span><span class="sys" aria-hidden="true"><i></i><i></i><i></i></span></header>
+
+    <!-- The app window: its bottom follows the keyboard and the chin (adjust-resize). -->
+    <section class="app" id="app" aria-label="App">
+     <div class="msgs" id="msgs" data-pane="messages">
+      <header class="a-head"><button class="a-back" aria-label="Back" tabindex="-1"></button><span class="avatar" aria-hidden="true">J</span><div><b>Jamie</b><small>Messages</small></div></header>
+      <div class="thread" id="thread" role="log" aria-label="Conversation">
+       <p class="day">Wednesday</p>
+       <p class="in">Did you see the garden reopened?</p>
+       <p class="out">No! Since when?</p>
+       <p class="in">Last weekend. The rose beds are back and the café by the lake is open again.</p>
+       <p class="out">We should go before it gets cold.</p>
+       <p class="in">Saturday morning? It’s quieter before eleven.</p>
+       <p class="out">Let me check, I think I’m free.</p>
+       <p class="day">Today</p>
+       <p class="in">Are we still on for Saturday?</p>
+       <p class="out">Yes! Garden at ten?</p>
+       <p class="in">Perfect. I’ll bring coffee.</p>
+       <p class="in">Rose said the river path is open again 🌿</p>
+      </div>
+      <div class="composer">
+       <button class="c-plus" aria-label="Attach" tabindex="-1">+</button>
+       <div class="field" id="f-msg" role="textbox" aria-label="Message" aria-multiline="false" tabindex="0" data-placeholder="Message"></div>
+       <button class="c-send" id="c-send" aria-label="Send" disabled></button>
+      </div>
+     </div>
+     <div class="notes" id="notes" data-pane="notes" hidden>
+      <header class="a-head"><button class="a-back" aria-label="Back" tabindex="-1"></button><div><b>Saturday</b><small>Notes</small></div></header>
+      <div class="field note-body" id="f-note" role="textbox" aria-label="Note" aria-multiline="true" tabindex="0" data-placeholder="Start writing"></div>
+      <nav class="note-bar" aria-label="Note tools"><button tabindex="-1">Checklist</button><button tabindex="-1">Aa</button><button tabindex="-1">Photo</button><button tabindex="-1">Share</button></nav>
+     </div>
+    </section>
+
+    <!-- Keyboard: suggestion/edit strip + four rows. Built by app.js from RoseKeys.LAYOUTS. -->
+    <section class="kb" id="kb" aria-label="Keyboard" aria-hidden="true">
+     <div class="strip" id="strip" role="toolbar" aria-label="Suggestions"></div>
+     <div class="keys" id="keys"></div>
+     <div class="pop" id="pop" aria-hidden="true"></div>
+    </section>
+    <div class="rail" id="rail" aria-hidden="true"></div>
+
+    <!-- The Rose chin: OS edge with Rose, the microphone-input mute and the switcher. -->
+    <div class="chin" id="chin" role="toolbar" aria-label="Rose chin" hidden>
+     <button class="plate" id="chin-rose" aria-label="Open Rose"><span class="pearl" aria-hidden="true"></span></button>
+     <button class="plate mic" id="chin-mic" aria-pressed="false" aria-label="Mute microphone"></button>
+     <button class="plate" id="chin-switch" aria-label="Open system switcher"><svg class="stacks" viewBox="2 3 60 20" aria-hidden="true"><path d="M8 19 L14 7 L30 7 L24 19 Z M34 19 L40 7 L56 7 L50 19 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M50 19 L56 7" stroke="#e04a62" stroke-width="2"/></svg></button>
+    </div>
+    <button class="handle" id="handle" aria-label="Rose chin: swipe up to show, or press Arrow Up" aria-expanded="false"><i></i></button>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+   </div>
+  </section>
+ </div>
+</main>
+
+<aside class="harness" aria-label="Study controls">
+ <h1>Rose Keyboard · F10 study<small>Oxblood · prototype only · controls outside the phone</small></h1>
+ <fieldset><legend>App</legend>
+  <div class="row"><button class="hbtn" id="h-messages" aria-pressed="true">Messages</button><button class="hbtn" id="h-notes" aria-pressed="false">Notes</button></div>
+ </fieldset>
+ <fieldset><legend>States</legend>
+  <div class="row"><button class="hbtn" id="h-kb">Show keyboard</button><button class="hbtn" id="h-chin">Raise chin</button></div>
+  <div class="row"><button class="hbtn" id="h-mic" aria-pressed="false">Mic muted</button><button class="hbtn" id="h-reset">Reset</button></div>
+  <label class="hcheck"><input type="checkbox" id="h-reduced">Reduced motion</label>
+ </fieldset>
+ <fieldset><legend>Live layout (pt)</legend>
+  <p class="hstatus" id="h-layout"></p>
+ </fieldset>
+ <fieldset><legend>Keyboard state</legend>
+  <p class="hstatus" id="h-state"></p>
+  <ol class="hlog" id="h-log" aria-label="Recent keyboard events"></ol>
+ </fieldset>
+ <fieldset><legend>Try</legend>
+  <ul class="hhelp">
+   <li>Tap the message field to open the keyboard. Desktop typing works too.</li>
+   <li>Shift: tap once for one capital, double-tap for caps lock.</li>
+   <li>Drag along the space bar to move the cursor; hold it, then drag, to select.</li>
+   <li>Hold ⌫ to repeat (it speeds up to whole words), or swipe left from ⌫ to delete a word.</li>
+   <li>Long-press text to select a word and get Cut / Copy / Paste.</li>
+   <li>Swipe down on the suggestion strip, tap ⌄, tap the conversation or press Esc to hide.</li>
+   <li>Swipe up from the bottom edge to raise the Rose chin with the keyboard open.</li>
+  </ul>
+ </fieldset>
+</aside>
+<button class="harness-toggle" id="h-toggle" aria-expanded="false" aria-label="Show study controls"><span aria-hidden="true">⋯</span></button>
+</div>
+<script>/*%%KEYS%%*/</script>
+<script>/*%%APP%%*/</script>
+</body></html>

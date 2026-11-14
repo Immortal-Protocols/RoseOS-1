@@ -502,8 +502,10 @@ def report(root=ROOT):
         'blockers': found}
 
 
-def evaluate_guest(obs, lane, cfg, root=ROOT):
-    """Identity, mount, free bytes and free inodes. A passing result admits no artifact."""
+def evaluate_guest(obs, lane, cfg, root=ROOT, *, phase="full"):
+    """Identity/mount plus the budget for work still ahead; never a second source copy."""
+    if phase not in ("full", "collection"):
+        raise ValueError("dedicated disk budget phase differs")
     if not isinstance(obs, dict) or obs.get('instanceId') != lane['vm']['instanceId']:
         raise ValueError('runner is not the admitted dedicated VM')
     if obs.get('instanceId') in {mustang_lane.FRANKEL_INSTANCE_ID, '2720796557371812468', '8812446529823929967'}:
@@ -533,10 +535,11 @@ def evaluate_guest(obs, lane, cfg, root=ROOT):
             raise ValueError('dedicated runner must be a nonroot user')
         recipe = load(Path(root)/'os/build-only/mustang.json')
         if recipe.get('sprint', {}).get('reserveChecks') is True:
-            required = full_run_disk_budget(recipe)
+            required = (full_run_disk_budget(recipe) if phase == "full" else
+                        recipe["capacity"]["compileAllowanceBytes"] + recipe["capacity"]["reserveBytes"])
             if available < required:
-                raise ValueError(f'dedicated data filesystem needs {required} free bytes for source, metadata, lunch, '
-                                 f'compile and reserve; observed {available}')
+                raise ValueError(f'dedicated data filesystem needs {required} free bytes for '
+                                 f'{"source, metadata, lunch, compile and reserve" if phase == "full" else "collection and reserve"}; observed {available}')
     return {'identity': 'matched', 'availableBytes': available, 'availableInodes': inodes, 'admitted': False}
 
 

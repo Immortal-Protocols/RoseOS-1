@@ -657,3 +657,22 @@ span.well{cursor:default}
 .app-bar .ab-plus,.app-bar .ab-send{position:relative}
 .c-msg{overflow:auto;scrollbar-width:none}
 .c-msg p{flex:none}
+
+/* ---------- Phone mode: the simulated screen fills a real phone; controls fold into a sheet ---------- */
+.harness-toggle{display:none}
+.noscript{position:fixed;left:12px;right:12px;top:12px;z-index:200;padding:14px 16px;border-radius:14px;background:#2a0a10;color:#f6ebe0;font:14px/1.45 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+html.phone-mode{--bezel:0px}
+html.phone-mode,html.phone-mode body{height:100%;overflow:hidden;overscroll-behavior:none;background:#000}
+html.phone-mode .page{display:block;height:100%}
+html.phone-mode .stage{position:fixed;inset:0;height:auto!important;background:#000}
+html.phone-mode .device{border-radius:0;padding:0;box-shadow:none}
+html.phone-mode .screen{border-radius:0}
+html.phone-mode .punch,html.phone-mode .glass{display:none}
+html.phone-mode .harness{position:fixed;left:0;right:0;bottom:0;z-index:100;max-height:72vh;max-height:72dvh;border:0;border-radius:18px 18px 0 0;
+  background:rgba(250,252,254,.96);padding:16px 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -12px 40px rgba(0,0,0,.45);
+  transform:translateY(105%);visibility:hidden;transition:transform var(--t-med) var(--ease),visibility 0s linear var(--t-med)}
+html.phone-mode.harness-open .harness{transform:none;visibility:visible;transition:transform var(--t-med) var(--ease)}
+html.phone-mode .harness-toggle{display:grid;place-items:center;position:fixed;z-index:101;top:calc(4px + env(safe-area-inset-top));right:calc(4px + env(safe-area-inset-right));
+  width:44px;height:44px;border-radius:50%;color:#f2e6d9;font-size:20px;line-height:1}
+html.phone-mode .harness-toggle span{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(20,8,10,.5);box-shadow:inset 0 0 0 1px rgba(255,240,230,.18)}
+html.phone-mode.harness-open .harness-toggle span{background:#233247;color:#fff}

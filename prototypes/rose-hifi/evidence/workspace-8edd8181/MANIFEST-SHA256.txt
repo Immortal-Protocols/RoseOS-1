@@ -1,0 +1,7 @@
+b40fde302e474fc6256bcaf98317c9be3ac7a890ecb004f44bac26dc2fe4b28f  workspace-check.json
+59954349d9975f2f98512a684e2dd70a06f24f673e7c742325b2ddd4bd6b2606  Workspace-flow-8edd8181.png
+c46e35cf9f134da139188144e5a815e8b8d01ee75b3c4e69d209b4272b40acaf  Workspace-sizes-8edd8181.png
+# Bound run of workspace-check.cjs on commit 8edd8181 (267/267). HTML blobs equal the committed blobs
+# (see workspace-check.json "htmls"). tree_clean=false only because this evidence directory was being
+# written inside the checked tree during the run. The 62 individual screenshots are listed with SHA-256
+# in workspace-check.json "shots"; they were kept out of Git for size. Browser-emulated, not phone/native.
