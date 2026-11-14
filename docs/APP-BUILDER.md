@@ -306,6 +306,38 @@ existing task card v1 and Stop contract 1. The composer cannot invent a
 capability: it only references the action ids and apps it gathered on the
 phone.
 
+## 4A. Codex generator design (next; not implemented)
+
+The builder takes an injected `generate(source, kind, request, cancelled)`. The
+production generator will be a Codex thread opened through the existing
+producer bridge (`codex-voice-bridge.mjs` → `codex.mjs`). There is no second
+app-server client.
+
+- **Bridge purpose `app_build`.** No dynamic tools. `cwd` is the project's
+  absolute `source` path. The thread is `ephemeral`, uses `approvalPolicy:
+  never` and `sandbox: workspace-write`, with network access off. Web search,
+  apps, MCP servers, memories, hooks, plugins, multi-agent and image tools are
+  disabled and re-verified after thread start, the same way the
+  `public_research` purpose is today. Model and tier follow the producer's
+  Terra Fast checks.
+- **Instructions.** Write only under the skeleton (Java at the 8 source level,
+  android.jar APIs, aapt v1 resources). Never touch the package, version, SDK
+  levels or signing. On a revise, keep existing storage keys, preference names
+  and database schemas, adding migrations instead of clearing data. Report
+  honestly what was not possible.
+- **Turns and cancel.** One turn per job, bounded by the build timeout. Cancel
+  and shutdown use the bridge's existing `interrupt` op. The builder then
+  resets the source as it does today.
+- **Read isolation is not provided by Codex.** `workspace-write` limits where
+  Codex may write, not what it may read. Keeping the generator out of
+  `ROSE_CONFIG_DIR` (pairing keys, TLS, provider tokens, the project signing
+  keys) needs the generator to run as a separate OS user, or in a container
+  that only mounts the project source. That is blocker 3 below: it belongs to
+  the Server Worker, and nothing here claims it.
+- **Shared code.** `codex.mjs` also carries the research and character-life
+  isolation checks. The `app_build` purpose will be added beside them without
+  changing their behaviour, as its own reviewed change.
+
 ## 5. Blockers (exact) and owners
 
 1. **Signing identity for generated apps (decision: Nathan).** Choose:
