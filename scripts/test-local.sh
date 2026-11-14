@@ -107,6 +107,7 @@ python3 scripts/tests/test_release_chain.py
 python3 scripts/tests/test_mustang_ota_chain_workflow.py
 # Yogi OTA route: contract, guards, allocation, packaged-Updater/trust and publication checks (synthetic; no host, key or network).
 python3 scripts/tests/test_yogi_ota.py
+python3 scripts/tests/test_yogi_full.py
 # Yogi direct operator route: plan/start/run/status/cancel/cleanup and the guest agent (fake gcloud/ssh; no VM, SSH or key).
 python3 scripts/tests/test_yogi_direct.py
 # Yogi replacement recovery: dry-run plan, fake control plane, in-memory guest (no GCP, SSH, or key).
@@ -338,6 +339,10 @@ java -cp "$JAVA_TESTS/AppRemoval" dev.pixel.voice.AppRemovalTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ReturnModel" \
  workspace/rose-agent/app/src/dev/pixel/voice/ReturnModel.java workspace/rose-agent/app/tests/ReturnModelTest.java
 java -cp "$JAVA_TESTS/ReturnModel" dev.pixel.voice.ReturnModelTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderRules" \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/tests/BuilderRulesTest.java
+java -cp "$JAVA_TESTS/BuilderRules" dev.pixel.builder.BuilderRulesTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
