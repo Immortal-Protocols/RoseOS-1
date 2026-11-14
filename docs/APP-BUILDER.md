@@ -339,6 +339,124 @@ route test in `test_builder_routes.py`). That covers:
 accessibility-service manifest is refused by the source check, and again by
 the built-APK check when the source check is bypassed.
 
+### 3.7 Screening policy interface (proposal, not implemented)
+
+This answers blocker 0 (§5). It is a design only. It chooses no moderation
+provider, enables nothing and weakens nothing in §3.6.
+
+**Interface.** A screening policy is an ordered chain of gates. Each gate is
+called with:
+
+```
+assess(request) -> Decision
+request  = {kind: create | revise, text, priorText, locale}
+Decision = {verdict: allow | review_required | deny, category, reason,
+            gate, gateVersion}
+```
+
+- `priorText` is the project's accepted description and earlier revisions. A
+  revise is judged with its context, so harm can't be built up step by step.
+- `reason` is owner-facing text. It never echoes the request.
+- `gate` and `gateVersion` are recorded with the job, so every decision is
+  traceable to the policy that made it.
+
+**Fail-closed rules** (property-tested, independent of any gate):
+
+1. `allow` only when every gate in the chain returns `allow`. An empty chain
+   is `deny`.
+2. Any `deny` gives `deny`. Otherwise any `review_required` gives
+   `review_required`.
+3. A gate that throws, times out, returns an unknown verdict, a malformed
+   object or the wrong version counts as `review_required`, with category
+   `unavailable`. That is never `allow`, and no job is written.
+4. A gate may be deny-only. The §3.6 phrase screen becomes such a gate: it
+   returns `deny`, or `allow` meaning "no objection". It can never be the
+   chain's only allow-capable gate. So the builder accepts no job until a
+   second, allow-authoritative gate is configured.
+5. Replays keep their recorded decision, as in §3.6. The same
+   clientRequestId with the same text replays it; anything else is screened
+   afresh.
+
+**`review_required`** means no job exists. The response is 400 with `code`
+`review_required`, plus `category` and `reason`. It can be resolved only in
+these ways:
+
+- the owner rewords, and the new request is screened from scratch;
+- someone in a reviewer role, who is not the requester, decides. The reviewer
+  can only find a request not harmful. A reviewer can't approve harmful
+  functionality, and no code path turns `deny` into `allow`.
+
+The owner's confirmation alone never changes a verdict. It can add context,
+for example that "track" means the owner's own runs. That arrives as new
+request text and is screened again.
+
+**Second gate: semantic moderation versus owner review**
+
+| | Semantic moderation (a model judges the request) | Owner review (the requester confirms) |
+|---|---|---|
+| Catches rewordings and other languages | yes, within the model's quality | no |
+| Can authorize harm | no, if fail-closed | it must not: the requester is not an independent check |
+| Data and cost | request text goes to a model; a provider and data-use decision | none |
+| Availability | an outage blocks builds (fail-closed) | always available |
+| Proof | offline eval on fixtures, then a recorded-verdict regression | none possible for safety |
+
+Recommendation: semantic moderation as the allow-authoritative second gate.
+The phrase screen stays as a cheap deny-only first gate. Owner review is a
+clarification step, never a safety gate. One option keeps data where it
+already goes. The request text is sent to the Codex account the writer
+already uses (§4A), so a separate ephemeral, tool-less classification thread
+with a structured verdict adds no new recipient. Choosing that, or any other
+provider, is Nathan's decision (below).
+
+**Adversarial fixtures.** These are JSONL files of
+`{id, kind, text, priorText, expected, category, source}`:
+
+- **Benign near-misses:** the 112-request review corpus and the review-4
+  lists, with expected `allow` overall and the phrase gate returning no
+  objection.
+- **Harm and other-platform sets:** expected `deny` or `review_required`.
+  Their content belongs to whoever owns content policy. App Core keeps the
+  current §3.6 examples and supplies the harness, but does not author new
+  harmful phrasings.
+- **Context sets:** a benign create followed by revises whose combination
+  should be `review_required`.
+- **Gate-failure cases** (code, not text): throw, timeout, unknown verdict,
+  malformed result, version mismatch and an empty chain. Each must give no
+  job.
+
+CI replays recorded verdicts and never calls a model. A semantic gate's real
+evaluation is a separate, explicitly authorized offline run.
+
+**Proof bar before any enabling:**
+
+- zero `allow` on the deny set;
+- the false-`deny` rate on the benign corpus below a threshold Nathan sets;
+- every gate-failure case non-`allow`;
+- the eval run recorded with the gate version and fixture hashes.
+
+**Source work that can proceed now** (container tests only, no model calls):
+
+1. `rose/app_builder/policy.py`: the `Decision` and gate types, the chain with
+   rules 1–5, and property tests for rule 3.
+2. The §3.6 phrase screen wrapped as the deny-only gate.
+3. `Builder` takes a chain. The default chain has no allow-authoritative gate,
+   so it accepts nothing. That preserves the disabled state even if routes
+   were mounted. Tests inject a recorded-verdict gate.
+4. The fixture format, the harness and the failure-mode fixtures, plus the
+   existing benign corpus.
+5. The `review_required` 400 body, shared with Home/App as an additive v1
+   field before they show it.
+
+**Decisions for Nathan:**
+
+1. Which allow-authoritative second gate, and whether request text may go to
+   it. That includes whether the writer's existing Codex account counts as
+   already-approved data use.
+2. Who holds the reviewer role, confirming that the requesting owner can't
+   self-approve.
+3. Who owns the harm and platform content policy and its fixtures, and the
+   acceptance thresholds.
+
 ## 4. Project 2: composer intent/result contract v1
 
 Purpose: route the owner's explicit conversational requests for the
@@ -599,7 +717,7 @@ Proof levels:
    hand-extending harm phrase lists. A dependable second gate needs a
    decision on its form: a moderation model, an owner-confirmed review step,
    or narrower harm rules owned by whoever owns content policy. Until then the
-   builder must stay disabled, which it is.
+   builder must stay disabled, which it is. Proposal: §3.7.
 1. **Signing identity for generated apps (decision: Nathan).** Choose:
    - per-project keys (recommended, because sharing one key makes every
      generated app the same signer) or one shared generated-apps key;
