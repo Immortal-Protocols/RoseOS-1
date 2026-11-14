@@ -28,6 +28,12 @@ class Clock:
         return self.t
 
 
+def fake_backup(keys, project_id, package):
+    """Stands in for the host's key backup (no key leaves the test); the builder only needs a receipt."""
+    assert (Path(keys) / 'app.p12').is_file()
+    return f'test-backup:{project_id}'
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -265,7 +271,7 @@ class BuildTest(Base):
 
     def builder(self, generate, key_creation=True):
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=key_creation)
-        b = Builder(self.root, tools, generate)
+        b = Builder(self.root, tools, generate, backup=fake_backup)
         self.addCleanup(b.ledger.close)
         return b
 

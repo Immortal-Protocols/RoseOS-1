@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   request TEXT NOT NULL, client_key TEXT NOT NULL UNIQUE, attempt INTEGER NOT NULL, state TEXT NOT NULL,
   stage TEXT NOT NULL, message TEXT NOT NULL, log_tail TEXT NOT NULL, started REAL NOT NULL, updated REAL NOT NULL,
   failure TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0, version_code INTEGER);
+CREATE TABLE IF NOT EXISTS key_backups (
+  project_id TEXT PRIMARY KEY REFERENCES projects(project_id), receipt TEXT NOT NULL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -230,6 +232,16 @@ class Ledger:
             code = newest + 1
             self.db.execute('UPDATE jobs SET version_code=? WHERE job_id=?', (code, job_id))
             return code
+
+    def key_backup(self, project: str) -> str | None:
+        """The receipt of the project's signing-key backup, or None if it was never backed up."""
+        with self.lock:
+            row = self.db.execute('SELECT receipt FROM key_backups WHERE project_id=?', (project,)).fetchone()
+        return None if row is None else row[0]
+
+    def record_key_backup(self, project: str, receipt: str) -> None:
+        with self.lock:
+            self.db.execute('INSERT OR REPLACE INTO key_backups VALUES (?,?,?)', (project, receipt, self.clock()))
 
     def bind_signer(self, project: str, signer_sha256: str):
         """The project's signer is set once, by its first signed build, and never changes."""

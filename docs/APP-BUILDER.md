@@ -538,6 +538,59 @@ Proof levels:
 - **Not done:** any real model turn, read isolation (blocker 3) and any host
   wiring.
 
+## 6. Standalone builder host (source only; not configured, deployed or enabled)
+
+`rose/app_builder/host.py` runs the builder on its own machine, without the
+Rose conversation server. It reads one strict JSON config file:
+
+```
+{schemaVersion: 1, root, remoteDir, name, port, adminPort, hosts[], sdk,
+ javaHome?, buildTimeoutS?, keyCreation? (default false),
+ writer?: {argv[], timeoutS?}, backup?: {argv[], timeoutS?}}
+```
+
+- **Signed listener.** It serves `/pair`, `/hello` and the builder API v1
+  routes only. There are no voice or phone websockets
+  (`build_remote_app(..., voice=False)`), and `/hello` reports
+  `phone: "none"`. The builder client pairs with it as its own device.
+- **Pairing.** Codes are minted only on the host, through a loopback-only
+  admin listener (`/api/pair/*`, the existing `add_pairing_api`).
+- **Writer.** `CodexGenerator` launched with `writer.argv`. On a host, that
+  would be a command that runs the bridge as a separate OS user. With no
+  writer configured, every job fails as "No app writer is set up on this
+  builder host".
+- **Signing-key backup before first delivery.**
+  - After a project's first signed build, and before its signer is bound or
+    anything is delivered, `Builder(backup=…)` must return a receipt. The
+    receipt is recorded in the `key_backups` table.
+  - A missing backup, a failed backup, a timeout or a bad receipt fails the
+    job as `signing`: nothing is delivered and the signer stays unbound. A
+    failure other than a missing backup can be retried.
+  - Later builds of the project need no new backup.
+  - `CommandBackup` runs `backup.argv + [keysDir, projectId, package]` with a
+    scrubbed environment and keeps only the first line of output as the
+    receipt. It never logs the rest of the output or stderr.
+  - Which backup tool and storage to use is not chosen in source.
+- **Defaults are off.** Key creation is off unless the config enables it, no
+  writer and no backup are configured, and both directories are created
+  0700 and must be separate.
+
+Proof level: container tests only (`rose/tests/test_app_host.py`). They cover:
+
+- config refusals, and `main` refusing a bad file without serving;
+- the wired host: pairing through the admin app, signed `/hello`, the
+  websockets absent, unsigned requests refused, and a signed create;
+- no writer configured, and starting and stopping the worker;
+- `CommandBackup` arguments, environment, failures and timeout;
+- with the pinned SDK: no backup configured, a failed backup blocking
+  delivery until a retry succeeds, the backup taken once per project, and bad
+  receipts.
+
+Each of these breakages makes the tests fail: skipping the backup, mounting
+the websockets, defaulting key creation on, and accepting an empty receipt.
+Nothing was bound to a public port, configured or deployed. No key left the
+test, and no model was called.
+
 ## 5. Blockers (exact) and owners
 
 

@@ -192,12 +192,15 @@ def _note(note, request: str) -> str:
 
 
 class Builder:
-    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None):
+    def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
-        toolchain.StepFailed."""
+        toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
+        host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
+        lost. Without one, nothing is delivered."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         self.tools, self.generate = tools, generate
+        self.backup = backup
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -353,6 +356,7 @@ class Builder:
             toolchain.ensure_key(keys, package, self.tools, cancelled, signer_bound=bool(project['signerSha256']))
             signed = work / 'signed.apk'
             receipt = toolchain.sign(unsigned, signed, keys, project['signerSha256'], self.tools)
+            self._back_up_key(keys, project_id, package)  # before the signer is bound or anything is delivered
             try:
                 self.ledger.bind_signer(project_id, receipt['signerSha256'])
             except LedgerError:
@@ -377,6 +381,24 @@ class Builder:
         except Exception as error:  # never leave a job running; the summary carries no paths or tool output
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
+
+    def _back_up_key(self, keys: Path, project_id: str, package: str):
+        """Once per project: the injected backup must return a receipt before the first delivery."""
+        if self.ledger.key_backup(project_id) is not None:
+            return
+        if self.backup is None:
+            raise toolchain.StepFailed('signing', 'This builder has no signing-key backup set up, so the app was not '
+                                       'delivered.')
+        try:
+            receipt = self.backup(keys, project_id, package)
+        except toolchain.StepFailed:
+            raise
+        except Exception:
+            receipt = None
+        if not (isinstance(receipt, str) and 0 < len(receipt) <= 200 and receipt.isprintable()):
+            raise toolchain.StepFailed('signing', 'This app\'s signing key could not be backed up, so the app was '
+                                       'not delivered.', retryable=True)
+        self.ledger.record_key_backup(project_id, receipt)
 
     def _record_failure(self, job_id, category, summary, retryable, log=''):
         """Record a failure, retrying a failed write (a full disk often caused the failure itself). If it still

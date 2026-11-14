@@ -9,7 +9,7 @@ from pathlib import Path
 
 from rose.app_builder import template, toolchain
 from rose.app_builder.service import Builder
-from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK
+from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
 
 P = 'app.rose.gen.p1'
 CAPABILITIES = ('<uses-permission android:name="android.permission.READ_SMS"/>'
@@ -81,7 +81,7 @@ class BuildsWhateverItDeclares(unittest.TestCase):
 
     def test_an_app_with_sms_accessibility_vpn_and_device_admin_is_built_and_signed(self):
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=True)
-        b = Builder(Path(self.tmp.name) / 'b', tools, self.declare)
+        b = Builder(Path(self.tmp.name) / 'b', tools, self.declare, backup=fake_backup)
         self.addCleanup(b.ledger.close)
         out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'an SMS and VPN helper'})
         self.assertTrue(b.run_next())

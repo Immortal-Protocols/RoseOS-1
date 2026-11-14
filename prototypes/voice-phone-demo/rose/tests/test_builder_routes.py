@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from rose.app_builder import toolchain
 from rose.app_builder.service import Builder
 from rose.remote import Remote, build_remote_app
-from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK
+from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
 
 
 class Device:
@@ -56,7 +56,7 @@ class Routes(unittest.TestCase):
         self.device = Device()
         self.remote.devices.enroll(self.device.spki, 'phone', 'Pixel', '100.64.0.2')
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=True)
-        self.builder = Builder(root / 'builder', tools, label)
+        self.builder = Builder(root / 'builder', tools, label, backup=fake_backup)
         self.addCleanup(self.builder.ledger.close)
         self.server = server(app_builder=self.builder)
         self.client = TestClient(build_remote_app(self.server, self.remote))

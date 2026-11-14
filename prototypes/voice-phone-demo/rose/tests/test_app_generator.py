@@ -15,7 +15,7 @@ from rose.app_builder import toolchain
 from rose.app_builder.generator import CodexGenerator, prompt
 from rose.app_builder.service import Builder
 from rose.app_builder.toolchain import StepFailed
-from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK
+from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
 
 
 class FakeClient:
@@ -300,7 +300,7 @@ class BuilderWithWriter(RealBridge):
 
     def builder(self):
         tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=True)  # throwaway keys in a temp dir
-        b = Builder(Path(self.tmp.name) / 'builder', tools, CodexGenerator(timeout_s=60))
+        b = Builder(Path(self.tmp.name) / 'builder', tools, CodexGenerator(timeout_s=60), backup=fake_backup)
         self.addCleanup(b.ledger.close)
         return b
 
