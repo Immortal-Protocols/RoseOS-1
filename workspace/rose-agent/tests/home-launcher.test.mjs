@@ -664,3 +664,15 @@ test('Settings opens a window-owned dialog without depending on the launcher fra
  assert.match(route,/getWindow\(\)\.getDecorView\(\)\.post/);
  assert.match(main,/void homeOptions\(View anchor\)\{SettingsDialog\.show\(this\);\}/);
 });
+
+test('Project 2: Ask again is offered only after an unknown send, and always with the duplicate warning',()=>{
+ const page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
+ const confirm=page.slice(page.indexOf('private void confirmTask('),page.indexOf('private String labelOf('));
+ // Exactly one Ask again, inside the mayAskAgain branch, on a sheet whose message carries the warning.
+ assert.equal(confirm.split('"Ask again"').length-1,1);
+ assert.match(confirm,/if\(hub\.tasks\.mayAskAgain\(id\)\)b\.setMessage\(hub\.taskLine\(id\)\+"\\n\\n"\+WorkspaceTaskTracker\.ASK_AGAIN_WARNING\)\n\s*\.setPositiveButton\("Ask again",\(d,w\)->hub\.startTask\(id\)\)\.setNegativeButton\("Not now",null\);/);
+ // A fresh request is the person's own tap: startTask mints a new requestId; the client retries only that one.
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java');
+ assert.match(hub,/void startTask\(String id\)\{[\s\S]*?final String requestId="tap-"\+java\.util\.UUID\.randomUUID\(\);[\s\S]*?client\.start\(requestId,task,true\)/);
+ assert.equal((page+hub).split('startTask(').length-1,3,'startTask is called from Ask Rose and Ask again only, and defined once');
+});

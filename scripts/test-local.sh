@@ -321,11 +321,12 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceAgent.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceRequests.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceRecovery.java \
  workspace/rose-agent/app/src/dev/pixel/voice/LocalRoseAuth.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTaskClient.java \
- workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceHttp.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTaskCard.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceHttp.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTaskTracker.java \
  workspace/rose-agent/app/tests/WorkspaceTest.java workspace/rose-agent/app/tests/WorkspaceSnapshotTest.java \
  workspace/rose-agent/app/tests/WorkspaceEngineTest.java workspace/rose-agent/app/tests/WorkspaceAgentTest.java \
  workspace/rose-agent/app/tests/WorkspaceReplayTest.java workspace/rose-agent/app/tests/WorkspaceRecoveryTest.java \
- workspace/rose-agent/app/tests/WorkspaceTaskClientTest.java workspace/rose-agent/app/tests/WorkspaceTaskWireTest.java
+ workspace/rose-agent/app/tests/WorkspaceTaskClientTest.java workspace/rose-agent/app/tests/WorkspaceTaskWireTest.java \
+ workspace/rose-agent/app/tests/WorkspaceTaskTrackerTest.java
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTest
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceSnapshotTest
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceEngineTest
@@ -335,6 +336,7 @@ java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceReplayTest
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceRecoveryTest
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTaskClientTest
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTaskWireTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTaskTrackerTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeOverview" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeOverview.java workspace/rose-agent/app/tests/HomeOverviewTest.java
 java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest

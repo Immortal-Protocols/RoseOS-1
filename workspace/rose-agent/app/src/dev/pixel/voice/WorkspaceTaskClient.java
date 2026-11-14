@@ -48,7 +48,11 @@ final class WorkspaceTaskClient {
  }
 
  /** One HTTP exchange; throws when no definite response arrived (connection lost, timeout). */
- interface Transport { Response post(String path,Map<String,String> headers,byte[] body)throws Exception; }
+ interface Transport {
+  Response post(String path,Map<String,String> headers,byte[] body)throws Exception;
+  /** One GET (App Core's page-task read). Fakes that never read need not implement it. */
+  default Response get(String path,Map<String,String> headers)throws Exception{throw new UnsupportedOperationException("get");}
+ }
  static final class Response {
   final int status;final String body;
   Response(int status,String body){this.status=status;this.body=body;}
@@ -115,6 +119,18 @@ final class WorkspaceTaskClient {
   if(r.status==400&&"refused".equals(status))return new Outcome(Kind.REFUSED,why,null,attempts);
   if(r.status==503&&"unavailable".equals(status))return new Outcome(Kind.UNAVAILABLE,null,null,attempts);
   return new Outcome(Kind.UNCERTAIN,"unexpected_reply",null,attempts);
+ }
+
+ /**
+  * App Core's authoritative state for one page task: a signed GET /workspace/v1/tasks/&lt;taskId&gt;, one
+  * attempt, behind the same gate. Returns null on 404 unknown, any failure or anything malformed; that is no
+  * change, and never a state. Called off the main thread, only for a taskId the phone was given.
+  */
+ WorkspaceTaskTracker.State lookup(String taskId){
+  if(!gate.enabled()||taskId==null||!WorkspaceTaskTracker.TASK_ID.matcher(taskId).matches())return null;
+  String path=PATH+"/"+taskId;
+  try{return WorkspaceTaskTracker.read(transport.get(path,new LinkedHashMap<>(signer.headers("GET",path))),taskId);}
+  catch(Exception e){return null;}
  }
 
  private final Gate gate;private final Transport transport;private final Signer signer;
