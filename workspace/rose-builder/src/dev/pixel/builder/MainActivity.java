@@ -142,7 +142,8 @@ public final class MainActivity extends Activity {
 
  void report(BuilderApi.InstallReceipt r) {
   BuilderApi a = api;
-  if (a == null) return;
+  // No pairing, or no known version (an installer report without one): nothing the builder could record.
+  if (a == null || !BuilderWire.sendable(r)) return;
   io.execute(() -> { try { a.reportInstall(r); } catch (BuilderApi.Unreachable e) { main.post(() -> toast("Your builder couldn't be told the install result yet")); } });
  }
 

@@ -77,6 +77,15 @@ public final class BuilderWireTest {
         String rb = BuilderWire.receiptBody(new BuilderApi.InstallReceipt("p1", "app.rose.gen.pp1", 2, null, InstallPlan.Receipt.CANCELLED_BY_USER, null));
         expect(rb.equals("{\"schemaVersion\":1,\"projectId\":\"p1\",\"packageName\":\"app.rose.gen.pp1\",\"versionCode\":2,\"signerSha256\":null,\"status\":\"cancelled_by_user\",\"detail\":\"\"}"), "receipt body");
 
+        // Receipt limits: detail at most 500 characters, never splitting a pair; no receipt without a version.
+        StringBuilder longMsg = new StringBuilder(); for (int i = 0; i < 700; i++) longMsg.append('x');
+        String clipped = BuilderWire.receiptBody(new BuilderApi.InstallReceipt("p1", "app.rose.gen.pp1", 2, null, InstallPlan.Receipt.FAILED, longMsg.toString()));
+        expect(clipped.contains("\"detail\":\"" + longMsg.substring(0, 500) + "\"}"), "detail clipped to 500");
+        expect(BuilderWire.clip("ab\uD83D\uDE00cd", 3).equals("ab\uD83D\uDE00"), "clip counts code points");
+        expect(!BuilderWire.sendable(new BuilderApi.InstallReceipt("p1", "x", -1, null, InstallPlan.Receipt.FAILED, null)), "no receipt without a version");
+        expect(!BuilderWire.sendable(new BuilderApi.InstallReceipt("p1", "x", 1L << 31, null, InstallPlan.Receipt.FAILED, null)), "versionCode beyond 2^31-1 isn't sent");
+        expect(BuilderWire.sendable(new BuilderApi.InstallReceipt("p1", "x", 2, null, InstallPlan.Receipt.UPDATED, null)), "a normal receipt is sent");
+
         // Path ids.
         expect("p1".equals(BuilderWire.segment("p1")), "id segment");
         for (String bad : new String[]{"", "../x", "a/b", "a b", null}) { try { BuilderWire.segment(bad); throw new AssertionError("segment " + bad); } catch (BuilderWire.Malformed e) { checks++; } }

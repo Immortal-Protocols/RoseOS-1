@@ -142,6 +142,7 @@ final class Pairing {
   }
  }
 
- static String clip(String s) { String t = s == null ? "" : s.trim(); return t.length() > 64 ? t.substring(0, 64) : t; }
+ /** The builder takes a device name of at most 64 characters (a longer one is a failed pairing attempt). */
+ static String clip(String s) { return BuilderWire.clip(s == null ? "" : s.trim().replaceAll("\\p{Cntrl}", " "), 64); }
  static List<String> list(String... s) { return new ArrayList<>(Arrays.asList(s)); }
 }

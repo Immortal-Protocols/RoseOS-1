@@ -38,6 +38,16 @@ final class BuilderWire {
 
  static String emptyBody() { return Json.write(base()); }
 
+ /** §3.5 limits: a receipt the builder would refuse is never sent (it would only fail). versionCode is 1…2^31−1. */
+ static final int DETAIL_MAX = 500;
+ static boolean sendable(BuilderApi.InstallReceipt r) { return r != null && r.versionCode >= 1 && r.versionCode <= Integer.MAX_VALUE; }
+
+ /** At most n code points, never splitting a surrogate pair. */
+ static String clip(String s, int n) {
+  if (s == null) return "";
+  return s.codePointCount(0, s.length()) <= n ? s : s.substring(0, s.offsetByCodePoints(0, n));
+ }
+
  static String receiptBody(BuilderApi.InstallReceipt r) {
   Map<String, Object> m = base();
   m.put("projectId", r.projectId);
@@ -45,7 +55,8 @@ final class BuilderWire {
   m.put("versionCode", r.versionCode);
   m.put("signerSha256", r.signerSha256);
   m.put("status", r.status.wire());
-  m.put("detail", r.detail == null ? "" : r.detail);
+  // Android's own message can be long; the builder takes at most 500 characters.
+  m.put("detail", clip(text(r.detail == null ? "" : r.detail), DETAIL_MAX));
   return Json.write(m);
  }
 
