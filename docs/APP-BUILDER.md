@@ -1046,7 +1046,7 @@ Rose conversation server. It reads one strict JSON config file:
 ```
 {schemaVersion: 1, root, remoteDir, name, port, adminPort, hosts[], sdk,
  javaHome?, buildTimeoutS?, keyCreation? (default false),
- writer?: {argv[], timeoutS?}, backup?: {argv[], timeoutS?}}
+ writer?: {argv[], timeoutS?}, backup?: {argv[], timeoutS?}, libraryStore?}
 ```
 
 - **Signed listener.** It serves `/pair`, `/hello` and the builder API v1
@@ -1059,6 +1059,16 @@ Rose conversation server. It reads one strict JSON config file:
   would be a command that runs the bridge as a separate OS user. With no
   writer configured, every job fails as "No app writer is set up on this
   builder host".
+- **Offline libraries.** Optional `libraryStore` is an absolute path to an
+  existing host-owned `RecordedStore` (§2.1): `index.json` with
+  `{schemaVersion: 1, artifacts: {"group:artifact:version": "<sha256>"}}`
+  and the corresponding `<sha256>.jar` files. The host passes this resolver
+  to `Builder` and its live available-coordinate list to `CodexGenerator`.
+  Omission preserves framework-only builds. A configured store that is missing,
+  malformed or uses symlinked store/index/JAR paths is refused before the writer
+  or listeners are constructed; it is never silently disabled. Job resolution
+  still verifies artifact digests, structure and prior-version locks. No
+  downloads or store population are performed by the host.
 - **Signing-key backup before first delivery.**
   - After a project's first signed build, and before its signer is bound or
     anything is delivered, `Builder(backup=…)` must return a receipt. The
@@ -1092,6 +1102,8 @@ Rose conversation server. It reads one strict JSON config file:
 Proof level: container tests only (`rose/tests/test_app_host.py`). They cover:
 
 - config refusals, and `main` refusing a bad file without serving;
+- configured-library advertisement and job-local resolution through the host,
+  live catalog updates, and missing/malformed store refusals;
 - the wired host: pairing through the admin app, signed `/hello`, the
   websockets absent, unsigned requests refused, and a signed create;
 - no writer configured, and starting and stopping the worker;
