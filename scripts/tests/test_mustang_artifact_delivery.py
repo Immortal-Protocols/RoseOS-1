@@ -53,6 +53,15 @@ class RecoveryTest(unittest.TestCase):
             workflow_run=dict(id=int(recovery.RUN),head_sha=recovery.SOURCE,repository_id=1428996648,head_repository_id=1428996648))
             for p in recovery.ARTIFACTS.values()]
         self.calls=[];self.phase('guard')
+        # Cloud metadata cases exercise a compatible synthetic delivery source.
+        # Do not depend on every future main commit preserving the old run-46
+        # signing profile tree; real delivery must continue refusing that drift.
+        compatible = recovery.compatible
+        def fixture_compatible(source, root=recovery.ROOT, git=None):
+            clean = lambda args: SimpleNamespace(returncode=0, stdout='')
+            return compatible(source, root=root, git=git or clean)
+        binding = patch.object(recovery, 'compatible', fixture_compatible)
+        binding.start();self.addCleanup(binding.stop)
 
     def phase(self,name):
         self.env['GITHUB_JOB']=name
@@ -152,6 +161,12 @@ class RecoveryTest(unittest.TestCase):
         path=self.home/recovery.RECORD;path.parent.mkdir(parents=True);value=recovery.original();value['build']='2611111900'
         path.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError,'document differs'):recovery.original(self.home)
+
+    def test_changed_yogi_profile_still_invalidates_real_old_artifact_custody(self):
+        def git(args):
+            return SimpleNamespace(returncode=0,stdout='os/signing-bootstrap/yogi.json\n' if args[0]=='diff' else '')
+        with self.assertRaisesRegex(ValueError,'inputs changed'):
+            recovery.compatible(self.source,git=git)
 
     def test_queued_original_cleanup_requires_all_recovery_steps_before_signer_admission(self):
         self.old_jobs[4].update(status='queued',conclusion=None)
