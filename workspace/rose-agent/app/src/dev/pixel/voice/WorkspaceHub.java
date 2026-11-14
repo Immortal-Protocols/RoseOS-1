@@ -5,7 +5,6 @@ import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,8 +28,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class WorkspaceHub {
  static final String PREFS="rose-workspace",KEY="state",REVISION="revision";
- /** How many answered conversational requests are remembered, so a repeated requestId gets its first answer. */
- static final int ANSWERED=50;
 
  /** The page, while it exists. */
  interface Listener {
@@ -54,7 +51,6 @@ final class WorkspaceHub {
  private final ExecutorService worker=Executors.newSingleThreadExecutor();
  private final Handler main=new Handler(Looper.getMainLooper());
  private AtomicBoolean cancel=new AtomicBoolean();
- private final Map<String,Map<String,Object>> answered=new LinkedHashMap<>();
  private Listener listener;
  /** The pager is on the workspace (pageShown) and Home's window is visible (windowVisible): only both together is on screen. */
  private boolean pageShown,windowVisible,reading;
@@ -95,10 +91,7 @@ final class WorkspaceHub {
   * result. A requestId answered before gets its first answer again, and nothing new is composed.
   */
  void conversation(WorkspaceAgent.Request r,WorkspaceRequests.Reply reply){
-  Map<String,Object> first=answered.get(r.requestId);
-  if(first!=null){reply.send(first);return;}
-  WorkspaceRequests.Reply remember=result->{answered.put(r.requestId,result);while(answered.size()>ANSWERED)answered.remove(answered.keySet().iterator().next());reply.send(result);};
-  WorkspaceRequests.Step s=requests.conversation(r,model(),onScreen(),remember);
+  WorkspaceRequests.Step s=requests.conversation(r,model(),onScreen(),reply);
   if(s.composes())start(s.gen);else if(WorkspaceAgent.UNDO.equals(r.kind))changed(null);
  }
 

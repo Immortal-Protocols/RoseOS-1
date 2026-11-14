@@ -17,7 +17,7 @@ public final class WorkspaceAgentTest {
  static String refusal(String params){try{WorkspaceAgent.parse(json(params));return null;}catch(WorkspaceAgent.Refused e){return e.reason;}}
 
  public static void main(String[] args)throws Exception{
-  parse();kinds();results();revision();dispatch();
+  parse();kinds();results();revision();dispatch();repeats();
   System.out.println("WorkspaceAgentTest: "+checks+" checks passed");
  }
 
@@ -141,6 +141,35 @@ public final class WorkspaceAgentTest {
   // The hub's floor keeps the revision from going back after a lost store.
   WorkspaceState lost=WorkspaceState.fromJson("not json");lost.raiseRevision(7);lost.raiseRevision(3);
   expect(lost.revision()==7,"raised, never lowered");
+ }
+
+ /** Section 4.1: a repeated requestId returns the first outcome and composes nothing new, whenever it arrives. */
+ static void repeats()throws Exception{
+  WorkspaceState state=new WorkspaceState();WorkspaceComposer composer=new WorkspaceComposer(state);
+  WorkspaceRequests d=new WorkspaceRequests(state,composer);
+  final java.util.List<Map<String,Object>> a=new java.util.ArrayList<>(),b=new java.util.ArrayList<>(),c=new java.util.ArrayList<>();
+  WorkspaceAgent.Request arrange=WorkspaceAgent.parse(json("{\"schemaVersion\":1,\"requestId\":\"same\",\"kind\":\"arrange\"}"));
+  WorkspaceRequests.Step first=d.conversation(arrange,false,false,a::add);
+  expect(first.composes(),"the first one composes");
+  // The same requestId again while it is still composing: no second composition; it waits for the same answer.
+  WorkspaceRequests.Step again=d.conversation(arrange,false,false,b::add);
+  expect(!again.composes()&&b.isEmpty()&&composer.requestId().equals("same"),"a repeat while composing starts nothing");
+  WorkspaceComposer.Outcome o=composer.finish(first.gen,WorkspaceTest.result("same","s-1","Tonight",WorkspaceTest.GRID),WorkspaceTest.REG);
+  d.finished(first.gen,o,false);
+  expect(a.size()==1&&b.size()==1&&a.get(0).equals(b.get(0))&&"prepared".equals(a.get(0).get("status")),"both callers get the one answer: "+a);
+  long revision=state.revision();
+  // And again after it was answered: the first answer, nothing composed, the revision unchanged.
+  WorkspaceRequests.Step late=d.conversation(arrange,false,true,c::add);
+  expect(!late.composes()&&c.size()==1&&c.get(0).equals(a.get(0))&&state.revision()==revision&&!composer.busy(),"a late repeat gets the first answer");
+  // A refusal is remembered as well.
+  final java.util.List<Map<String,Object>> r1=new java.util.ArrayList<>(),r2=new java.util.ArrayList<>();
+  WorkspaceAgent.Request prompt=WorkspaceAgent.parse(json("{\"schemaVersion\":1,\"requestId\":\"p\",\"kind\":\"prompt\",\"text\":\"x\"}"));
+  d.conversation(prompt,false,true,r1::add);d.conversation(prompt,true,true,r2::add);
+  expect(r1.get(0).equals(r2.get(0))&&"kind_not_offered".equals(r2.get(0).get("reason")),"a repeat of a refused request is refused the same way, even if prompt is offered now");
+  // Only the last 50 are remembered; an older id composes again, as a new request.
+  for(int i=0;i<WorkspaceRequests.ANSWERED;i++)d.conversation(WorkspaceAgent.parse(json("{\"schemaVersion\":1,\"requestId\":\"u"+i+"\",\"kind\":\"undo\"}")),false,true,x->{});
+  WorkspaceRequests.Step old=d.conversation(arrange,false,true,x->{});
+  expect(old.composes(),"beyond the remembered window the id is new again");
  }
 
  static Map<String,Object> map(Object... kv){Map<String,Object> m=new LinkedHashMap<>();for(int i=0;i<kv.length;i+=2)m.put((String)kv[i],kv[i+1]);return m;}

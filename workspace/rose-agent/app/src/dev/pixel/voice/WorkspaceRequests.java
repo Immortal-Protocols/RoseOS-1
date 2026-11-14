@@ -33,6 +33,11 @@ final class WorkspaceRequests {
 
  final WorkspaceState state;final WorkspaceComposer composer;
  private final Map<Integer,Waiting> waiting=new LinkedHashMap<>();
+ /** How many answered conversational requests are remembered, so a repeated requestId gets its first answer. */
+ static final int ANSWERED=50;
+ private final Map<String,Map<String,Object>> answered=new LinkedHashMap<>();
+ /** Requests still composing, by requestId: a repeat while composing waits for the same answer. */
+ private final Map<String,List<Reply>> repeats=new LinkedHashMap<>();
  private static final class Waiting {final String requestId;final Reply reply;Waiting(String requestId,Reply reply){this.requestId=requestId;this.reply=reply;}}
 
  WorkspaceRequests(WorkspaceState state,WorkspaceComposer composer){this.state=state;this.composer=composer;}
@@ -55,7 +60,18 @@ final class WorkspaceRequests {
   * the page is showing now (only for undo, which answers at once). The reply is called exactly once: now for
   * an immediate answer, or from finished() for a composition.
   */
- Step conversation(WorkspaceAgent.Request r,boolean model,boolean onScreen,Reply reply){
+ Step conversation(WorkspaceAgent.Request r,boolean model,boolean onScreen,Reply caller){
+  // Section 4.1: a repeated requestId returns the first outcome and composes nothing new.
+  Map<String,Object> first=answered.get(r.requestId);
+  if(first!=null){caller.send(first);return new Step(first,-1);}
+  List<Reply> joined=repeats.get(r.requestId);
+  if(joined!=null){joined.add(caller);return new Step(WorkspaceAgent.result(r.requestId,"uncertain",null,"still_composing"),-1);}
+  final List<Reply> all=new ArrayList<>();all.add(caller);
+  Reply reply=result->{
+   answered.put(r.requestId,result);while(answered.size()>ANSWERED)answered.remove(answered.keySet().iterator().next());
+   repeats.remove(r.requestId);
+   for(Reply x:all)x.send(result);
+  };
   if(!WorkspaceAgent.offered(r.kind,model)){
    Map<String,Object> m=WorkspaceAgent.result(r.requestId,"rejected",null,"kind_not_offered");reply.send(m);return new Step(m,-1);
   }
@@ -72,7 +88,7 @@ final class WorkspaceRequests {
    reply.send(m);return new Step(m,-1);
   }
   supersede(gen);
-  waiting.put(gen,new Waiting(r.requestId,reply));
+  waiting.put(gen,new Waiting(r.requestId,reply));repeats.put(r.requestId,all);
   return new Step(null,gen);
  }
 
