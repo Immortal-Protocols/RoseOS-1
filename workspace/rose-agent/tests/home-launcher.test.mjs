@@ -705,6 +705,6 @@ test('Project 2: the Rose server decides behind the compose route; Rose Agent ru
  assert.match(hub,/boolean model\(\)\{return WorkspaceDecisionGate\.enabled\(app\)\|\|WorkspaceTiming\.isModel\(engine\.modelId\(\)\);\}/);
  assert.match(page,/label\.setText\(hub\.deciderLabel\(\)\)/);
  const gate=read('../app/src/dev/pixel/voice/WorkspaceDecisionGate.java');
- assert.match(gate,/getBoolean\(KEY,false\)/);
+ assert.match(gate,/getBoolean\(KEY,true\)/);
  assert.doesNotMatch(hub+page,/compose-route-enabled",true|putBoolean\(WorkspaceDecisionGate/,'nothing in source turns the route on');
 });

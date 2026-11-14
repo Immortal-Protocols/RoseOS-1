@@ -9,7 +9,7 @@ import java.util.Map;
 import javax.net.ssl.SSLSocket;
 
 /**
- * Project 2: WorkspaceTaskClient's transport and signer, over the trust the phone already has.
+ * Project 2: The workspace clients' transport and signer, over the trust the phone already has.
  * <ul>
  *   <li>The paired backend's addresses, port and certificate pin (LocalRoseConnection.paired).</li>
  *   <li>TLS that accepts only the pinned certificate (LocalRoseConnection.tls).</li>
@@ -17,8 +17,8 @@ import javax.net.ssl.SSLSocket;
  * </ul>
  * Nothing new is trusted, stored or requested.
  *
- * Only WorkspaceHub calls this, and only for a task the person confirmed while WorkspaceTaskGate is on, which
- * it is not by default. It moves to the next paired address only when the TLS connection itself fails. Once the
+ * WorkspaceHub uses this for layout composition and for confirmed tasks. Task calls remain behind
+ * WorkspaceTaskGate; layout requests use the separate compose endpoint. It moves to the next paired address only when the TLS connection itself fails. Once the
  * request has been written, the answer, or its absence, is final for this attempt, so one signed nonce is never
  * sent twice.
  */

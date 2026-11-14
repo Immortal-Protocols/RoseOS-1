@@ -1,7 +1,7 @@
-"""Project 2: route the owner's explicit requests for the workspace page to the phone-local composer.
+"""Project 2: route the owner's explicit requests for the workspace page to the workspace composer.
 
-The page left of Home is composed on the phone (OS Product's composer and model). Rose's conversation only forwards
-an explicit request and reports, honestly, what the phone did. The server never generates a layout. The contract is
+The page left of Home is composed by Rose server's local model and rendered on the phone. Rose's conversation only forwards
+an explicit request and reports, honestly, what the phone did. The phone submits its current snapshot to Rose server for a validated layout. The contract is
 docs/APP-BUILDER.md §4 (composer intent/result v1):
 
 - request ``{schemaVersion: 1, requestId, kind, text?}`` with ``kind`` prompt | arrange | regenerate | undo, sent as
@@ -28,7 +28,7 @@ TOOL = {
     'type': 'function', 'name': 'compose_workspace',
     'description': ('Ask the phone to compose the workspace page left of Home, only when the owner explicitly asks for '
                     'it: prompt (their words, for example "set up for cooking"), arrange (a best guess), regenerate '
-                    'or undo. The phone composes it locally; say it changed only when the result is shown or '
+                    'or undo. Rose server composes it; say it changed only when the result is shown or '
                     'prepared.'),
     'inputSchema': {'type': 'object', 'properties': {
         'kind': {'type': 'string', 'enum': list(KINDS)},
@@ -36,7 +36,7 @@ TOOL = {
         'required': ['kind'], 'additionalProperties': False},
 }
 POLICY_LINE = ('Use compose_workspace only when the owner explicitly asks to set up, rearrange, regenerate or undo the '
-               'workspace page left of Home. It is composed on the phone: say it changed only when the result is '
+               'workspace page left of Home. Rose server chooses the layout and the phone renders it: say it changed only when the result is '
                'shown or prepared, and never describe a layout yourself.')
 
 MESSAGES = {

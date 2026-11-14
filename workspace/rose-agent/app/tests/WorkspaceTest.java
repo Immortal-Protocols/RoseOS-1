@@ -207,7 +207,7 @@ public final class WorkspaceTest {
   expect(c.begin(huge.toString(),false)==-1,"an oversized request is not sent");
 
   int g1=c.begin("dinner",false);String r1=c.requestId();
-  expect(c.busy()&&c.status().equals("Composing on this phone…")&&c.trigger().equals("direct_text"),"typed text composes as direct_text");
+  expect(c.busy()&&c.status().equals("Composing with Rose…")&&c.trigger().equals("direct_text"),"typed text composes as direct_text");
   int g2=c.begin("work",false);String r2=c.requestId();
   expect(!r1.equals(r2),"each page request has its own id");
   expect(c.finish(g1,result(r1,"s-1","T",GRID),REG)==WorkspaceComposer.Outcome.IGNORED&&s.layout()==null,"a newer request supersedes: the late result is ignored");

@@ -63,7 +63,7 @@ public final class Composer {
             LocalInference.Generation gen;
             try {
                 gen = inference.generate(new LocalInference.Request(Prompt.SYSTEM, user, gbnf, maxTokens,
-                        deadlineLeft, cancellation));
+                        deadlineLeft, cancellation, ctx));
             } catch (Refused r) {
                 throw r;
             } catch (RuntimeException e) { // a runtime failure is a typed failure, never a crash of the page

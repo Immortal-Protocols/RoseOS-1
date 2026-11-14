@@ -145,9 +145,10 @@ model behind it (`decide(request, deadline_s)`); this side owns the client and t
   not have is `unknown_ref`, and nothing is drawn. The server never makes the phone open anything.
 - **One attempt.** The call has the request's own deadline (4 s, `WorkspaceEngine.DEADLINE_MS`) plus the
   transport's read timeout. There is no retry.
-- **Off by default.** The route is behind the `compose-route-enabled` preference (`WorkspaceDecisionGate`), which
-  nothing in source sets. While it is off, the starter arranges the page and nothing is sent.
-- **Privacy: Nathan's decision before it is turned on.** With the route on, the snapshot leaves the phone for the
+- **Authorized route.** Nathan's current server-local direction and implementation approval enable the default
+  route. `compose-route-enabled=false` remains an explicit opt-out; a preference-read failure stays closed.
+  While off, the labelled starter arranges the page and nothing is sent.
+- **Privacy.** Nathan authorized the server-local architecture in this session. With the route on, the snapshot leaves the phone for the
   owner's own Rose server, over the paired, pinned link. That includes the labels of apps, shortcuts and
   templates, and, for a prompt, the owner's words.
 - **Labels and timing.**
@@ -155,12 +156,14 @@ model behind it (`decide(request, deadline_s)`); this side owns the client and t
     starter's label with it off.
   - Each timing record has `route`: `server` or `phone`. With `server`, `requestToResultMs` includes the
     network round trip, and the composer's own `timing` is the server's.
-- **Not yet decided.** App Core's route isn't assigned or built yet. The server's latency cap needs agreeing with
-  the Mac model worker. For a conversational request, the provider's 7 s wait covers the 4 s deadline plus the
+- **Model integration.** The signed route now calls the local Mac worker in `rose/workspace_model.py`.
+  The worker respects cat-1's 4 s composition deadline, with bounded IPC headroom. Results are replayed by
+  device/request/body for 15 minutes in a bounded, process-local cache; no prompt is persisted. For a conversational request, the provider's 7 s wait covers the 4 s deadline plus the
   round trip, but a longer deadline would need that wait revisited.
 
-`app/tests/WorkspaceDecisionClientTest.java` checks this with a fake transport. No request is sent and no model
-runs.
+`app/tests/WorkspaceDecisionClientTest.java` checks the client with a fake transport. The separate opt-in
+`workspace/models/local-composer/runtime/smoke.py` exercises the real model through the signed server route,
+and `WorkspaceRenderedModelTest` checks those results through native renderer data and persistence.
 
 ## Request-to-render timing (for Models)
 

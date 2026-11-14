@@ -693,10 +693,10 @@ Proof level: container tests (`rose/tests/test_app_capabilities.py`,
 ## 4. Project 2: composer intent/result contract v1
 
 Purpose: route the owner's explicit conversational requests for the
-one-page-left-of-Home workspace to the **phone-local** composer, and route
+one-page-left-of-Home workspace to the workspace composer, and route
 agent tasks the owner explicitly selects there through the existing server. The
-server never generates layouts. Native UI and the composer belong to OS
-Product, after Nathan approves the prototype. Until a phone composer provider
+server runs the local decision model; the phone supplies the snapshot and renders its result. Native UI belongs
+to OS Product under Nathan's approved prototype. Until a phone composer provider
 reports this contract, the conversation tool is not offered, so Rose never
 claims a page change she cannot make.
 
@@ -751,6 +751,16 @@ mere submission.
   nothing changed.
 - Rose Agent relays `app_command` only to same-signer or allowlisted packages,
   so the composer provider must be one of those.
+
+### Server-local layout inference (Nathan's 2026-11-14 correction)
+
+The decision model runs in Rose server, not the client. Once the phone receives the above intent (or a page
+button/text request), it posts its existing rose-layout-v1 request and current snapshot to
+`POST /workspace/v1/compose` on the paired TLS listener, signed with the same rose-auth-v1 headers as `/hello`.
+The server returns a validated rose-layout-v1 result. The phone checks it again, retains pins/undo and reports
+shown/prepared through the unchanged outer contract. No Project 1 build dependency, new listener, cloud model
+endpoint or renderer format is added. Direct page requests now require the paired Rose server. Model setup
+and source/runtime evidence are in `workspace/models/local-composer/README.md`.
 
 ### 4.3 Agent tasks chosen on the page (workspace task handoff v1)
 

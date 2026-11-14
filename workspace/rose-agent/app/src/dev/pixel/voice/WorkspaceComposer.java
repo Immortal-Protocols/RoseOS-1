@@ -115,7 +115,7 @@ final class WorkspaceComposer {
 
  /** The status line (fixed height on the page; only its text changes). */
  String status(){
-  if(phase==Phase.COMPOSING)return "Composing on this phone…";
+  if(phase==Phase.COMPOSING)return "Composing with Rose…";
   if(phase==Phase.FAILED)return "Couldn't arrange · kept your last layout";
   String r=state.request();
   return r==null?"":ARRANGE.equals(r)?"Best guess":"“"+r+"”";

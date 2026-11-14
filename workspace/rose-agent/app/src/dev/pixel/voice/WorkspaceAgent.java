@@ -70,7 +70,7 @@ final class WorkspaceAgent {
  }
 
  /**
-  * The kinds the phone can honestly honour. The page and a composer are always on the phone. prompt is offered
+  * The kinds the phone can honestly honour. The page is on the phone and the model is in Rose server. prompt is offered
   * only with a real model: the starter ignores words, so Rose would otherwise claim a request it cannot follow.
   */
  static List<String> kinds(boolean model){
