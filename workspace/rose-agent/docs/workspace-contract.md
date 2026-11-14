@@ -217,6 +217,32 @@ mounted only when the server enables it, which nothing does yet. The phone treat
 | 503 `unavailable` | nothing started | "Couldn't start · try again". Safe to retry with the same `requestId`. |
 | 401 | signature failure | Same as the builder routes. Not retried. |
 
+
+**The phone's client is `WorkspaceTaskClient`, pure source.**
+
+- **Off by default.** Nothing is signed or sent unless its `Gate` is explicitly enabled, and nothing in source
+  enables it. Until App Core's route is enabled, the snapshot offers no Rose task, so none can be chosen.
+- **Only a confirmed task.** The body is built only after the person confirms, from one of the phone's own
+  templates. It has exactly `schemaVersion`, `requestId`, `actionId` (`task:<id>`), `label`, `goal` and
+  `confirmed: true`.
+- **The same checks as the server.** Before sending, the client checks the body the way
+  `rose/workspace_tasks.py` does:
+  - `requestId` 1–64 characters, `label` 1–60 and `goal` 1–300, counted in code points;
+  - no NUL, and valid UTF-8;
+  - the action id must match `task:[A-Za-z0-9._-]{1,48}`.
+
+  App Core's own `check()` accepts the bodies the client builds, at those limits.
+- **The ask is not sent.** It is display text for the confirm sheet.
+- **Signed.** The request is signed rose-auth-v1 for `POST /workspace/v1/tasks`, as `LocalRoseAuth.headers`
+  signs `/hello`. A request that cannot be signed is never sent.
+- **Retries keep the `requestId`.** The client retries only after `503 unavailable` or when no response came at
+  all: at most 3 attempts in all, each signed afresh, with the same `requestId`. An unexpected reply, such as
+  a 500, is `uncertain` and not retried, because the server might have started the task.
+- **The card says "started", never "done".** `accepted` and `duplicate` read "Started · in Rose's work", and
+  the task's own events say the rest.
+
+**Not yet:** the Android transport over the paired, pinned link, and the confirm-sheet wiring. Both are a
+later slice, behind the same gate.
 ## Open decisions
 
 | # | Decision | Status |
