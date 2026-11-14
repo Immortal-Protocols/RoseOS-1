@@ -19,7 +19,8 @@ interface BuilderApi {
    this.sourceRevision = sourceRevision; this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
   }
  }
- /** §3.3 project. job: its activeJob (queued or running) from the library, or else the last job this client followed
+ /** §3.3 project, re-read from the library on every refresh (signerSha256 is null until the first signed build and
+  * fixed after, so a null from an early read is never kept). job: its activeJob (queued or running) from the library, or else the last job this client followed
   * (GET jobs/<jobId>), so a finished build still shows its result. packageName and signerSha256 never change. */
  final class Project {
   final String projectId, name, packageName, signerSha256;

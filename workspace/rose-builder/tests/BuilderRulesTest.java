@@ -65,6 +65,11 @@ public final class BuilderRulesTest {
         expect(down.refusal == InstallPlan.Receipt.REFUSED_VERSION && resign.refusal == InstallPlan.Receipt.REFUSED_SIGNER, "refusals carry their receipt");
         expect("Update".equals(InstallPlan.label(InstallPlan.offer(v2, new InstallPlan.Installed(pkg, signer, 1)))), "update label");
 
+        // No signer pin yet (before the first signed build): never installed, never called "signed differently".
+        InstallPlan noPin = InstallPlan.offer(new InstallPlan.Apk(pkg, null, "ff00", 1), null);
+        expect(noPin.action == InstallPlan.Action.REFUSE && noPin.reason.contains("hasn't recorded"), "no signer pin: refused honestly");
+        expect(InstallPlan.verify(new InstallPlan.Apk(pkg, null, "ff00", 1), new InstallPlan.Apk(pkg, signer, "ff00", 1), null).action == InstallPlan.Action.REFUSE, "no signer pin: a download isn't installed either");
+
         // A download is used only when it is exactly the recorded version.
         expect(InstallPlan.verify(v2, null, null).action == InstallPlan.Action.REFUSE, "missing file refused");
         expect(InstallPlan.verify(v2, new InstallPlan.Apk(pkg, signer, "0000", 2), null).action == InstallPlan.Action.REFUSE, "hash mismatch refused");

@@ -34,6 +34,9 @@ final class InstallPlan {
 
  /** Before download: what the version's button offers. */
  static InstallPlan offer(Apk expected, Installed installed) {
+  // builder API v1: a project's signer is null until its first signed build. Nothing is installed without the pin.
+  if (expected.signerSha256 == null || expected.signerSha256.isEmpty())
+   return new InstallPlan(Action.REFUSE, "Your builder hasn't recorded this app's signing identity yet, so it can't be installed. Refresh and try again.", Receipt.FAILED);
   if (installed == null) return new InstallPlan(Action.INSTALL, null);
   if (!eq(installed.packageName, expected.packageName)) return new InstallPlan(Action.INSTALL, null);
   if (!eqIgnoreCase(installed.signerSha256, expected.signerSha256))
@@ -46,6 +49,7 @@ final class InstallPlan {
 
  /** After download, before Android's installer: the file must be exactly the version the builder recorded. */
  static InstallPlan verify(Apk expected, Apk found, Installed installed) {
+  if (expected.signerSha256 == null || expected.signerSha256.isEmpty()) return offer(expected, installed);
   if (found == null || !eqIgnoreCase(found.sha256, expected.sha256))
    return new InstallPlan(Action.REFUSE, "The download doesn't match what your builder made, so it wasn't installed. Try downloading it again.", Receipt.FAILED);
   if (!eq(found.packageName, expected.packageName) || found.versionCode != expected.versionCode)
