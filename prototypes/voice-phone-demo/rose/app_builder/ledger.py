@@ -147,6 +147,10 @@ class Ledger:
                         (job, project, kind, request, key, 'queued', 'queued', 'Queued.', '', now, now))
 
     def next_queued(self):
+        with self.lock:
+            return self._next_queued()
+
+    def _next_queued(self):
         row = self.db.execute("SELECT job_id FROM jobs WHERE state='queued' ORDER BY started LIMIT 1").fetchone()
         return None if row is None else self.job(row[0])
 
@@ -259,7 +263,13 @@ class Ledger:
 
     # Reads.
 
+    # Reads take the same lock as writes: the one shared connection never shows another thread's open transaction.
+
     def project(self, project: str):
+        with self.lock:
+            return self._project(project)
+
+    def _project(self, project: str):
         row = self.db.execute('SELECT project_id, name, package_name, signer_sha256, description FROM projects '
                               'WHERE project_id=?', (project,)).fetchone()
         if row is None:
@@ -268,12 +278,20 @@ class Ledger:
                 'description': row[4]}
 
     def versions(self, project: str) -> list[dict]:
+        with self.lock:
+            return self._versions(project)
+
+    def _versions(self, project: str) -> list[dict]:
         rows = self.db.execute('SELECT version_code, version_name, created, job_id, source_revision, sha256, size, '
                                'notes FROM versions WHERE project_id=? ORDER BY version_code', (project,)).fetchall()
         return [{'versionCode': r[0], 'versionName': r[1], 'createdAt': r[2], 'jobId': r[3], 'sourceRevision': r[4],
                  'apk': {'sha256': r[5], 'size': r[6]}, 'notes': r[7]} for r in rows]
 
     def projects(self) -> list[dict]:
+        with self.lock:
+            return self._projects()
+
+    def _projects(self) -> list[dict]:
         out = []
         for (project,) in self.db.execute('SELECT project_id FROM projects ORDER BY created').fetchall():
             p = self.project(project)
@@ -286,6 +304,10 @@ class Ledger:
         return out
 
     def job(self, job_id: str):
+        with self.lock:
+            return self._job(job_id)
+
+    def _job(self, job_id: str):
         row = self.db.execute('SELECT job_id, project_id, kind, request, attempt, state, stage, message, log_tail, '
                               'started, updated, failure, version_code FROM jobs WHERE job_id=?',
                               (job_id,)).fetchone()
@@ -299,5 +321,9 @@ class Ledger:
         return out
 
     def artifact(self, sha256: str):
+        with self.lock:
+            return self._artifact(sha256)
+
+    def _artifact(self, sha256: str):
         row = self.db.execute('SELECT project_id, version_code FROM versions WHERE sha256=?', (sha256,)).fetchone()
         return None if row is None else {'projectId': row[0], 'versionCode': row[1]}

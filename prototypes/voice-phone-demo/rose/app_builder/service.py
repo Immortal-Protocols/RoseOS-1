@@ -74,6 +74,19 @@ def _git(source: Path, *args) -> str:
     return result.stdout.strip()
 
 
+def _owner_access(root: Path):
+    """Give the builder (owner) rwx on directories and rw on files, without following links."""
+    for top, dirs, files in os.walk(root, followlinks=False):
+        for name in dirs + files:
+            path = os.path.join(top, name)
+            mode = os.lstat(path).st_mode
+            if stat.S_ISDIR(mode):
+                os.chmod(path, stat.S_IMODE(mode) | 0o700)
+            elif stat.S_ISREG(mode):
+                os.chmod(path, stat.S_IMODE(mode) | 0o600)
+        # os.walk lists a directory before descending, so a directory fixed above is then readable
+
+
 def _place(src: Path, dst: Path):
     """Copy to a temporary name, fsync, then rename: a crash never leaves a partial artifact under its hash."""
     if dst.exists():
@@ -262,6 +275,8 @@ class Builder:
 
     def _prepare(self, source: Path, project: dict, job: dict):
         gitdir = source.parent / 'repo.git'
+        if source.exists():
+            _owner_access(source)
         if gitdir.exists():
             # One builder process runs git at a time, so a lock here was left by a crash: clear it.
             for lock in [*gitdir.glob('*.lock'), *gitdir.glob('refs/**/*.lock')]:
@@ -298,15 +313,16 @@ class Builder:
         """Back to the last delivered version's commit (or the skeleton): a failed attempt never carries over."""
         if not (source.parent / 'repo.git').exists():
             return
-        if (source / '.git').exists() or (source / '.git').is_symlink():  # never the builder's; drop it unread
-            path = source / '.git'
-            path.unlink() if path.is_symlink() or path.is_file() else shutil.rmtree(path)
+        _owner_access(source)  # whatever modes the generator left, git and the cleanup below can work
+        for entry in list(source.iterdir()):  # never let the attempt's git metadata act during the reset
+            if template.git_name(entry.name):
+                entry.unlink() if entry.is_symlink() or not entry.is_dir() else shutil.rmtree(entry)
         versions = self.ledger.versions(project_id)
         target = versions[-1]['sourceRevision'] if versions else _git(source, 'rev-list', '--max-parents=0', 'HEAD')
         _git(source, 'reset', '-q', '--hard', target)
         _git(source, 'clean', '-q', '-ffdx')  # twice: also nested repositories git would otherwise keep
         for path in sorted(source.rglob('*'), key=lambda p: len(p.parts), reverse=True):
             mode = os.lstat(path).st_mode
-            if path.name in template.FORBIDDEN_NAMES or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            if template.git_name(path.name) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                 # whatever git left (metadata, FIFOs, sockets, links), never into the next attempt
                 path.unlink() if not stat.S_ISDIR(mode) else shutil.rmtree(path)

@@ -20,6 +20,13 @@ ALLOWED_TOP = {'AndroidManifest.xml', 'src', 'res', 'assets', 'README.md'}
 # git metadata is the builder's, kept outside the generated tree; none of it may appear inside.
 FORBIDDEN_NAMES = {'.git', '.gitignore', '.gitattributes', '.gitmodules'}
 MAX_FILE = 4 * 1024 * 1024
+
+
+def git_name(name: str) -> bool:
+    """A name git treats as its own: .git and friends in any case, with trailing dots or spaces, or an NTFS short
+    name such as git~1 (git refuses all of these as paths)."""
+    clean = name.lower().rstrip('. ')
+    return clean in FORBIDDEN_NAMES or bool(re.fullmatch(r'git~\d+', clean))
 FORBIDDEN_SUFFIXES = ('.gradle', '.kts', '.kt', '.so', '.jar', '.aar', '.sh', '.py', '.mk', '.cmake', '.c', '.cpp',
                       '.h', '.jks', '.keystore', '.p12', '.pk8', '.apk', '.dex')
 OWNED_ATTRIBUTES = ('versionCode', 'versionCodeMajor', 'versionName', 'sharedUserId', 'sharedUserLabel',
@@ -109,8 +116,10 @@ def check(source: Path, package: str) -> None:
     for path in source.rglob('*'):
         mode = os.lstat(path).st_mode  # never follow or open anything that is not a plain file or directory
         name = path.relative_to(source)
-        if path.name in FORBIDDEN_NAMES:
+        if git_name(path.name):
             raise TemplateRefused(f'{name} is not allowed; the builder keeps the project history itself.')
+        if stat.S_ISDIR(mode) and mode & 0o700 != 0o700 or stat.S_ISREG(mode) and mode & 0o600 != 0o600:
+            raise TemplateRefused(f'{name} is not readable and writable by the builder; it is not built.')
         if stat.S_ISLNK(mode):
             raise TemplateRefused('Source contains a symbolic link; it is not built.')
         if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
@@ -137,8 +146,8 @@ def check(source: Path, package: str) -> None:
             if key.startswith('{') and not key.startswith(ANDROID):
                 raise TemplateRefused('The manifest may use only the android namespace.')
     for key in root.attrib:
-        if not key.startswith('{') and key not in ROOT_ATTRIBUTES:
-            raise TemplateRefused(f'The manifest attribute {key!r} is not allowed.')
+        if key not in ROOT_ATTRIBUTES:  # android:* too: targetSandboxVersion, installLocation, ... are not the app's
+            raise TemplateRefused(f'The manifest attribute {key.replace(ANDROID, "android:")!r} is not allowed.')
     if root.tag != 'manifest' or root.get('package') != package:
         raise TemplateRefused('The manifest package must stay ' + package + '.')
     for name in OWNED_ATTRIBUTES:

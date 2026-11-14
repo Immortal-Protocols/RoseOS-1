@@ -64,8 +64,11 @@ directory beside it in `repo.git`), outside
    security-relevant runtime change; see §5. The generator is injected and is
    not implemented yet.
 5. **Build.** Before git or any tool touches the generated tree, the builder
-   refuses `.git`, `.gitignore`, `.gitattributes`, symbolic and hard links, and
-   non-regular files, anywhere in the tree. Compiled classes must sit in the
+   refuses git metadata (`.git`, `.gitignore`, `.gitattributes`, `.gitmodules`
+   in any case, with trailing dots or spaces, or as short names like `git~1`),
+   symbolic and hard links, non-regular files, and entries the builder cannot
+   read and write, anywhere in the tree. Before each reset, owner access is
+   restored, so modes the generator left cannot block it. Compiled classes must sit in the
    app's own package, whatever the source text claims. The manifest may hold
    only `application`, permissions, features, `queries` and screen-support
    elements, and `<manifest>` may carry only `package`, so `split` and the
@@ -256,6 +259,10 @@ claims a page change she cannot make.
 `{schemaVersion: 1, requestId, status, revision?, reason?}`, with `status` one
 of:
 
+`revision` is a non-negative integer that grows with each composition. It is
+required with `shown` and `prepared`; a result without one is treated as
+`uncertain`.
+
 - `shown`: the page drew exactly `revision`.
 - `prepared`: composed and saved as `revision`, but not on screen (the owner is
   in another app; nothing interrupted them).
@@ -271,7 +278,10 @@ mere submission.
   the owner asks again if they want to. Only a link that reports the request
   was never sent (`offline`) means nothing changed.
 - The server waits 25 s, longer than Rose Agent's 20 s `app_command` wait, so
-  Rose Agent's own reply always arrives. A composition slower than 20 s comes
+  Rose Agent's own reply normally arrives. Rose Agent runs phone commands one
+  at a time and starts its 20 s wait only when it reaches this one, so a
+  command queued behind another can still come back late and be reported as
+  `uncertain`. A composition slower than 20 s comes
   back as Rose Agent's `running` and is reported as `uncertain`; v1 does not
   fetch it later.
 - A busy or transient reply to the capabilities check (`routine_busy`,

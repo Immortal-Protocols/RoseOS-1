@@ -165,7 +165,7 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     tree = run([tools.bt / 'aapt', 'dump', 'xmltree', unsigned, 'AndroidManifest.xml'], work, home, tools, cancelled,
                'compile', hidden)
     # sharedUserId, debuggable, sharedUserLabel, versionCodeMajor; and identity elements by name.
-    if ('application-debuggable' in badging or re.search(r'\((0x0101000b|0x0101000f|0x01010261|0x01010576)\)', tree)
+    if ('application-debuggable' in badging or re.search(r'\((0x0101000b|0x0101000f|0x01010261|0x01010576|0x0101054c)\)', tree)
             or re.search(r'E: (key-sets|upgrade-key-set|original-package|adopt-permissions)\b', tree)):
         raise StepFailed('compile', 'The app tries to set its own identity, debuggability or update keys, '
                          'which is not allowed.')

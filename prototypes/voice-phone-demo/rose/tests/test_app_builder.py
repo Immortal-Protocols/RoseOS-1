@@ -180,6 +180,12 @@ class TemplateTest(Base):
             'versionCodeMajor': lambda s: (s / 'AndroidManifest.xml').write_text(
                 (s / 'AndroidManifest.xml').read_text().replace('package=', 'android:versionCodeMajor="1" package=')),
             'java dir': lambda s: (s / 'src/Dir.java').mkdir(),
+            'targetSandboxVersion': lambda s: (s / 'AndroidManifest.xml').write_text(
+                (s / 'AndroidManifest.xml').read_text().replace('package=', 'android:targetSandboxVersion="2" package=')),
+            'upper-case git': lambda s: (s / 'src/.GIT').mkdir(),
+            'git short name': lambda s: (s / 'res/git~1').mkdir(),
+            'git trailing dot': lambda s: (s / 'res/.git.').mkdir(),
+            'read-only dir': lambda s: os.chmod(s / 'res/values', 0o500),
             'split': lambda s: (s / 'AndroidManifest.xml').write_text(
                 (s / 'AndroidManifest.xml').read_text().replace('package=', 'split="config.xx" package=')),
             'isFeatureSplit': lambda s: (s / 'AndroidManifest.xml').write_text(
@@ -192,6 +198,8 @@ class TemplateTest(Base):
             change(s)
             with self.assertRaises(template.TemplateRefused, msg=name):
                 template.check(s, self.PKG)
+            for top, dirs, files in os.walk(s):
+                os.chmod(top, 0o700)
             shutil.rmtree(s)
 
 
@@ -443,6 +451,25 @@ class BuildTest(Base):
             out = b.create('d', {'schemaVersion': 1, 'clientRequestId': str(id(generate)), 'description': 'x'})
             b.run_next()
             self.assertEqual(b.job(out['jobId'])['failure']['category'], 'dependency', b.job(out['jobId']))
+
+    def test_a_read_only_directory_from_a_failed_attempt_is_reset(self):
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+
+        def locked(source, kind, request, cancelled):
+            (source / 'res/values-de').mkdir()
+            (source / 'res/values-de/strings.xml').write_text('<resources')
+            os.chmod(source / 'res/values-de', 0o555)
+        b.generate = locked
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'failed')
+        b.generate = self.label_generator('two')
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r3', 'request': 'y'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+        self.assertFalse((self.root / 'projects' / out['projectId'] / 'source/res/values-de').exists())
 
     def test_a_stale_git_lock_from_a_crash_is_cleared(self):
         b = self.builder(self.label_generator('one'))
