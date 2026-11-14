@@ -131,6 +131,26 @@ class Routes(unittest.TestCase):
         r = self.client.get('/builder/v1/projects')
         self.assertEqual((r.status_code, r.json()['schemaVersion']), (401, 1))
 
+    def test_library_serves_each_version_its_api_report_summary(self):
+        # docs/APP-BUILDER.md §3.3 `apiReport`; the cases are rose/tests/fixtures/api-report-summary-v1.json.
+        from rose.tests.test_app_api_summary import CASES
+        ledger = self.builder.ledger
+        for n, (rid, case) in enumerate((('r1', 'legacy-no-report'), ('r2', 'incomplete-zero-counts')), 1):
+            job = (ledger.create('phone', rid, 'x', 'X') if n == 1 else
+                   ledger.revise('phone', project, rid, 'more'))
+            project = job['projectId']
+            ledger.advance(job['jobId'], 'building', 'b', 'b')
+            ledger.allocate_version(job['jobId'])
+            ledger.bind_signer(project, 'a' * 64)
+            ledger.deliver(job['jobId'], str(n), f'rev{n}', f'{n}' * 64, 10, 'x', api_report=CASES[case]['stored'])
+        r = self.signed('GET', '/builder/v1/projects')
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([v['apiReport'] for v in r.json()['projects'][0]['versions']],
+                         [CASES['legacy-no-report']['apiReport'], CASES['incomplete-zero-counts']['apiReport']])
+        r = self.client.get('/builder/v1/projects')  # still only for a paired, signed device
+        self.assertEqual(r.status_code, 401)
+        self.assertNotIn('apiReport', r.text)
+
     def test_artifact_paths_are_not_files(self):
         for sha in ('0' * 64, '..%2F..%2Fetc%2Fpasswd', 'A' * 64):
             self.assertEqual(self.signed('GET', f'/builder/v1/artifacts/{sha}').status_code, 404, sha)

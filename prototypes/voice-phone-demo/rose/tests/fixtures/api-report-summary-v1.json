@@ -1,0 +1,380 @@
+{
+ "contract": "Builder API v1 library versions[].apiReport, schemaVersion 1 (docs/APP-BUILDER.md §3.3)",
+ "comment": "Each case: the report the server recorded (\"stored\": an object, the raw text, or null for none) and the apiReport the library serves for it. Home/App clients parse apiReport only.",
+ "cases": [
+  {
+   "case": "legacy-no-report",
+   "comment": "A version with no recorded report (built before the report existed, or its report file could not be read). Never clean.",
+   "stored": null,
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "none",
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "unavailable",
+   "comment": "The analysis did not run. No counts, so nothing reads as zero.",
+   "stored": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "minSdk": 26,
+    "status": "unavailable",
+    "reason": "the pinned API database or dexdump is missing",
+    "findings": [],
+    "note": "Advisory: references above minSdk found in the built dex. This is detection, not device compatibility proof; an empty list does not mean the app works on every supported phone."
+   },
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "unavailable",
+    "reason": "the pinned API database or dexdump is missing",
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "incomplete-zero-counts",
+   "comment": "Zero counts from an analysis that did not finish: part of the app was not looked at.",
+   "stored": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "minSdk": 26,
+    "status": "incomplete",
+    "database": {
+     "file": "api-versions.xml",
+     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "counts": {
+     "not_guarded_here": 0,
+     "unverified": 0,
+     "guarded": 0
+    },
+    "unlisted": [],
+    "unlistedCount": 0,
+    "findings": [],
+    "truncated": 0,
+    "note": "Advisory: references above minSdk found in the built dex. This is detection, not device compatibility proof; an empty list does not mean the app works on every supported phone.",
+    "reason": "3 method(s) not analysed: the 60 s analysis budget ran out"
+   },
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "incomplete",
+    "reason": "3 method(s) not analysed: the 60 s analysis budget ran out",
+    "minSdk": 26,
+    "counts": {
+     "notGuardedHere": 0,
+     "unverified": 0,
+     "guarded": 0
+    },
+    "highestLevel": null,
+    "truncated": 0,
+    "unlistedCount": 0,
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "complete-with-findings",
+   "comment": "highestLevel counts not_guarded_here and unverified findings only (guarded ones are left out). An unverified finding the database cannot place has level null and is still counted.",
+   "stored": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "minSdk": 26,
+    "status": "complete",
+    "database": {
+     "file": "api-versions.xml",
+     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "counts": {
+     "not_guarded_here": 1,
+     "unverified": 2,
+     "guarded": 1
+    },
+    "unlisted": [],
+    "unlistedCount": 0,
+    "findings": [
+     {
+      "level": 34,
+      "api": "java.lang.String.formatted(Ljava/lang/Object;)Ljava/lang/String;",
+      "kind": "invoke",
+      "where": "dev.pixel.app.x.MainActivity.run()V",
+      "origin": "app",
+      "status": "not_guarded_here",
+      "reason": "r"
+     },
+     {
+      "level": 31,
+      "api": "android.app.Activity.setTranslucent(Z)Z",
+      "kind": "invoke",
+      "where": "dev.pixel.app.x.MainActivity.run()V",
+      "origin": "app",
+      "status": "unverified",
+      "reason": "r"
+     },
+     {
+      "level": null,
+      "api": "android.example.Unplaced",
+      "kind": "invoke",
+      "where": "dev.pixel.app.x.MainActivity.run()V",
+      "origin": "app",
+      "status": "unverified",
+      "reason": "r"
+     },
+     {
+      "level": 35,
+      "api": "android.app.Activity.requestOpenInBrowser()V",
+      "kind": "invoke",
+      "where": "dev.pixel.app.x.MainActivity.run()V",
+      "origin": "app",
+      "status": "guarded",
+      "reason": "r"
+     }
+    ],
+    "truncated": 0,
+    "note": "Advisory: references above minSdk found in the built dex. This is detection, not device compatibility proof; an empty list does not mean the app works on every supported phone."
+   },
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "complete",
+    "minSdk": 26,
+    "counts": {
+     "notGuardedHere": 1,
+     "unverified": 2,
+     "guarded": 1
+    },
+    "highestLevel": 34,
+    "truncated": 0,
+    "unlistedCount": 0,
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "truncated",
+   "comment": "Shape only: a real report keeps 200 findings, and this one keeps 2 to stay small. The counts include the findings that were not kept. highestLevel covers kept findings only, so treat it as a lower bound.",
+   "stored": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "minSdk": 26,
+    "status": "complete",
+    "database": {
+     "file": "api-versions.xml",
+     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "counts": {
+     "not_guarded_here": 4,
+     "unverified": 1,
+     "guarded": 0
+    },
+    "unlisted": [],
+    "unlistedCount": 0,
+    "findings": [
+     {
+      "level": 34,
+      "api": "a.B.c()V",
+      "kind": "invoke",
+      "where": "dev.pixel.app.x.MainActivity.run()V",
+      "origin": "app",
+      "status": "not_guarded_here",
+      "reason": "r"
+     },
+     {
+      "level": 33,
+      "api": "a.B.d()V",
+      "kind": "invoke",
+      "where": "dev.pixel.app.x.MainActivity.run()V",
+      "origin": "app",
+      "status": "not_guarded_here",
+      "reason": "r"
+     }
+    ],
+    "truncated": 3,
+    "note": "Advisory: references above minSdk found in the built dex. This is detection, not device compatibility proof; an empty list does not mean the app works on every supported phone."
+   },
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "complete",
+    "minSdk": 26,
+    "counts": {
+     "notGuardedHere": 4,
+     "unverified": 1,
+     "guarded": 0
+    },
+    "highestLevel": 34,
+    "truncated": 3,
+    "unlistedCount": 0,
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "complete-unlisted-assumptions",
+   "comment": "No findings, but 60 members were assumed available from their class level (50 listed in the full report). That is an assumption, not a clean result.",
+   "stored": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "minSdk": 26,
+    "status": "complete",
+    "database": {
+     "file": "api-versions.xml",
+     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "counts": {
+     "not_guarded_here": 0,
+     "unverified": 0,
+     "guarded": 0
+    },
+    "unlisted": [
+     "java.lang.StringBuilder.m0()V",
+     "java.lang.StringBuilder.m1()V",
+     "java.lang.StringBuilder.m2()V",
+     "java.lang.StringBuilder.m3()V",
+     "java.lang.StringBuilder.m4()V",
+     "java.lang.StringBuilder.m5()V",
+     "java.lang.StringBuilder.m6()V",
+     "java.lang.StringBuilder.m7()V",
+     "java.lang.StringBuilder.m8()V",
+     "java.lang.StringBuilder.m9()V",
+     "java.lang.StringBuilder.m10()V",
+     "java.lang.StringBuilder.m11()V",
+     "java.lang.StringBuilder.m12()V",
+     "java.lang.StringBuilder.m13()V",
+     "java.lang.StringBuilder.m14()V",
+     "java.lang.StringBuilder.m15()V",
+     "java.lang.StringBuilder.m16()V",
+     "java.lang.StringBuilder.m17()V",
+     "java.lang.StringBuilder.m18()V",
+     "java.lang.StringBuilder.m19()V",
+     "java.lang.StringBuilder.m20()V",
+     "java.lang.StringBuilder.m21()V",
+     "java.lang.StringBuilder.m22()V",
+     "java.lang.StringBuilder.m23()V",
+     "java.lang.StringBuilder.m24()V",
+     "java.lang.StringBuilder.m25()V",
+     "java.lang.StringBuilder.m26()V",
+     "java.lang.StringBuilder.m27()V",
+     "java.lang.StringBuilder.m28()V",
+     "java.lang.StringBuilder.m29()V",
+     "java.lang.StringBuilder.m30()V",
+     "java.lang.StringBuilder.m31()V",
+     "java.lang.StringBuilder.m32()V",
+     "java.lang.StringBuilder.m33()V",
+     "java.lang.StringBuilder.m34()V",
+     "java.lang.StringBuilder.m35()V",
+     "java.lang.StringBuilder.m36()V",
+     "java.lang.StringBuilder.m37()V",
+     "java.lang.StringBuilder.m38()V",
+     "java.lang.StringBuilder.m39()V",
+     "java.lang.StringBuilder.m40()V",
+     "java.lang.StringBuilder.m41()V",
+     "java.lang.StringBuilder.m42()V",
+     "java.lang.StringBuilder.m43()V",
+     "java.lang.StringBuilder.m44()V",
+     "java.lang.StringBuilder.m45()V",
+     "java.lang.StringBuilder.m46()V",
+     "java.lang.StringBuilder.m47()V",
+     "java.lang.StringBuilder.m48()V",
+     "java.lang.StringBuilder.m49()V"
+    ],
+    "unlistedCount": 60,
+    "findings": [],
+    "truncated": 0,
+    "note": "Advisory: references above minSdk found in the built dex. This is detection, not device compatibility proof; an empty list does not mean the app works on every supported phone."
+   },
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "complete",
+    "minSdk": 26,
+    "counts": {
+     "notGuardedHere": 0,
+     "unverified": 0,
+     "guarded": 0
+    },
+    "highestLevel": null,
+    "truncated": 0,
+    "unlistedCount": 60,
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "unknown-schema",
+   "comment": "A recorded report whose schema this server does not read.",
+   "stored": {
+    "schemaVersion": 2,
+    "advisory": true,
+    "status": "complete"
+   },
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "unavailable",
+    "reason": "the recorded report has a schema this server does not read",
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "malformed-text",
+   "comment": "Recorded text that is not JSON.",
+   "stored": "{\"schemaVersion\": 1, \"status\": \"compl",
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "unavailable",
+    "reason": "the recorded report could not be read",
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  },
+  {
+   "case": "inconsistent-counts",
+   "comment": "Counts that do not add up to the kept and the dropped findings.",
+   "stored": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "minSdk": 26,
+    "status": "complete",
+    "database": {
+     "file": "api-versions.xml",
+     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "counts": {
+     "not_guarded_here": 0,
+     "unverified": 0,
+     "guarded": 0
+    },
+    "unlisted": [],
+    "unlistedCount": 0,
+    "findings": [
+     {
+      "level": 34,
+      "api": "a.B.c()V",
+      "kind": "invoke",
+      "where": "dev.pixel.app.x.MainActivity.run()V",
+      "origin": "app",
+      "status": "not_guarded_here",
+      "reason": "r"
+     }
+    ],
+    "truncated": 0,
+    "note": "Advisory: references above minSdk found in the built dex. This is detection, not device compatibility proof; an empty list does not mean the app works on every supported phone."
+   },
+   "apiReport": {
+    "schemaVersion": 1,
+    "advisory": true,
+    "deviceProof": false,
+    "status": "unavailable",
+    "reason": "the recorded report could not be read",
+    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+   }
+  }
+ ]
+}

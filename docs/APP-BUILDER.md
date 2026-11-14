@@ -305,7 +305,8 @@ trusted in the image.
 After each successful build, `rose/app_builder/apilevel.py` writes an
 **advisory** report of platform API references above minSdk 26 that it
 finds. It goes into the job log as one summary line, and the full report is
-recorded with the delivered version (`Ledger.api_report`). It never fails or
+recorded with the delivered version (`Ledger.api_report`). The library
+serves each version a summary of it, `apiReport` (§3.3). It never fails or
 changes a build, and adds no rule on what an app may do. It does take time:
 `dexdump` runs within the build's tool timeout, and the analysis has a 60 s
 budget.
@@ -529,7 +530,7 @@ updatedAt, failure?}`
 
 `[{projectId, name, packageName, signerSha256, activeJob: {jobId, state} |
 null, versions: [{versionCode, versionName, createdAt, jobId, sourceRevision,
-apk: {sha256, size}, notes}]}]`
+apk: {sha256, size}, notes, apiReport}]}]`
 
 - `activeJob` is the project's queued or running job, so a restarted client or
   a second phone can show progress and Cancel.
@@ -542,6 +543,61 @@ apk: {sha256, size}, notes}]}]`
 project's first signed build, then fixed for good. A client must re-read it
 rather than cache a `null`; every delivered version has one. `versionCode`
 strictly increases and is allocated by the server ledger, never by Codex.
+
+**`apiReport`** summarises the version's advisory API level report (§2.3).
+It was added after v1 was agreed and is optional: a client that doesn't know
+it ignores it, as the client does with every unknown field. The server
+sends it on every version. A client must still treat a missing field as
+`none`.
+
+| Field | Present | Meaning |
+|---|---|---|
+| `schemaVersion` | always | `1`, the version of this summary |
+| `advisory` | always | `true` |
+| `deviceProof` | always | `false` |
+| `status` | always | one of the four statuses below |
+| `note` | always | fixed text: advisory, detection, not device proof |
+| `reason` | `incomplete`, `unavailable` | why; at most 300 characters. Display text, which can name the app's own classes |
+| `minSdk` | `complete`, `incomplete` | the app's minSdk (26) |
+| `counts` | `complete`, `incomplete` | `{notGuardedHere, unverified, guarded}`, over all findings, including those the full report did not keep |
+| `highestLevel` | `complete`, `incomplete` | the highest API level a kept `notGuardedHere` or `unverified` finding names, or `null` |
+| `truncated` | `complete`, `incomplete` | findings past the 200 the full report keeps |
+| `unlistedCount` | `complete`, `incomplete` | members the pinned database doesn't list, assumed available from their class's level |
+
+Statuses:
+- `complete`: the analysis read every method.
+- `incomplete`: the analysis ran but did not read everything, so `counts` can
+  be zero while part of the app was never looked at.
+- `unavailable`: no analysis result. Either the analysis did not run, or the
+  recorded report can't be read or has a schema this server does not read.
+- `none`: no report is recorded for the version. Either it was built before
+  the report existed, or the build's report file could not be read.
+
+`counts`, `highestLevel`, `truncated` and `unlistedCount` appear only for
+`complete` and `incomplete`. No zero is ever sent for an analysis that did
+not run.
+
+`highestLevel` is a lower bound, never a ceiling. A finding the full report
+did not keep, an `unverified` finding the database cannot place (a `null`
+level), or a method left unanalysed can need more.
+
+Rules for a client:
+- **No status is a pass.** That includes zero counts, `complete`, and a
+  `highestLevel` at or below the phone's `SDK_INT`. A client never says
+  "compatible", "safe" or "works on this phone" from this summary.
+- An unknown `status` or `schemaVersion`, or a field of the wrong type, is
+  treated as `unavailable`, never as clean. Only the summary is refused, never
+  the library.
+- Anything shown says advisory and detection, not device proof. Showing it is
+  optional.
+- Nothing in it blocks or changes a build, an install or what may be built.
+- `reason` is plain display text, never markup or a link.
+
+The exact cases, each the recorded report and the `apiReport` served for it,
+are in `prototypes/voice-phone-demo/rose/tests/fixtures/api-report-summary-v1.json`.
+Server tests check every case, and a client can test its parsing against
+the same file. This is the server and wire side only (App Core). The phone's
+parsing and display are Home/App's, and are not implemented here.
 
 ### 3.4 Baseline
 
