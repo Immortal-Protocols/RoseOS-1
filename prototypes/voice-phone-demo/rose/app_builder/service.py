@@ -200,6 +200,8 @@ class Builder:
         lost. Without one, nothing is delivered."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
+        if tools.cache is None:
+            tools.cache = self.root / 'toolchain'  # the Java system image, made once per toolchain (toolchain.py)
         self.tools, self.generate = tools, generate
         self.backup = backup
         self.resolver = resolver  # an offline dependencies.Resolver; None: an app that declares libraries fails

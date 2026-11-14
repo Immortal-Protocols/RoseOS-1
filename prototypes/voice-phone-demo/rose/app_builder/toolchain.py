@@ -1,7 +1,8 @@
 """Build and sign one generated app with the repository's pinned toolchain.
 
-The build mirrors workspace/pixel-calculator-agent/build.sh (aapt v1 -> javac -source 8 -> d8 -> zipalign) with the
-identity injected by the builder: the package is checked, and versionCode, versionName and SDK levels are set at
+The build follows workspace/pixel-calculator-agent/build.sh (aapt v1 -> javac -> d8 -> zipalign), with Java at the
+17 source level compiled against Android's own core library (``system_image``) and the identity injected by the
+builder: the package is checked, and versionCode, versionName and SDK levels are set at
 packaging. Every tool runs with a scrubbed environment (no inherited tokens, HOME in the job's own directory), a
 timeout and cooperative cancellation. Generated code is compiled, never executed.
 
@@ -17,6 +18,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -37,12 +39,17 @@ class StepFailed(Exception):
         self.category, self.summary, self.retryable, self.log = category, summary, retryable, log
 
 
+JAVA_LEVEL = '17'
+SYSTEM_RECIPE = 1  # bump when system_image builds differently, so an older cached image is never reused
+
+
 @dataclass
 class Tools:
     sdk: Path
     java_home: Path | None = None
     timeout_s: float = 600.0
     key_creation: bool = False  # set only by the host owner; never by a request
+    cache: Path | None = None  # derived toolchain files (the Java system image); the Builder sets its own
 
     @property
     def bt(self) -> Path:
@@ -51,6 +58,18 @@ class Tools:
     @property
     def android_jar(self) -> Path:
         return self.sdk / 'platforms/android-35/android.jar'
+
+    @property
+    def core_modules(self) -> Path:
+        """Android's core library as the platform ships it for compilers (java.*, javax.* and friends at API 35)."""
+        return self.sdk / 'platforms/android-35/core-for-system-modules.jar'
+
+    def jdk(self) -> Path:
+        """The JDK the java launcher belongs to."""
+        return Path(self.java()).resolve().parent.parent
+
+    def jdk_tool(self, name: str) -> Path:
+        return self.jdk() / 'bin' / name
 
     def java(self) -> str:
         return str(self.java_home / 'bin/java') if self.java_home else (shutil.which('java') or 'java')
@@ -69,9 +88,14 @@ class Tools:
         for path in (self.bt / 'aapt', self.bt / 'd8', self.bt / 'zipalign', self.bt / 'apksigner', self.android_jar):
             if not path.exists():
                 return f'The pinned Android toolchain is missing {path.name}.'
+        if not self.core_modules.exists():
+            return f'The pinned Android toolchain is missing {self.core_modules.name}.'
         for tool in (self.java(), self.keytool()):
             if not (Path(tool).is_absolute() and Path(tool).exists()):
                 return f'The builder\'s JDK is missing {Path(tool).name}.'
+        for path in (self.jdk_tool('jmod'), self.jdk_tool('jlink'), self.jdk() / 'lib/jrt-fs.jar', self.jdk() / 'release'):
+            if not path.exists():
+                return f'The builder\'s JDK is missing {path.name}.'
         return None
 
 
@@ -109,6 +133,115 @@ def run(args: list, cwd: Path, home: Path, tools: Tools, cancelled, category: st
     return out
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tree_digest(root: Path) -> str | None:
+    """sha256 over every file's relative path and content, in order; None if the tree holds anything but plain
+    files and directories (a link is never trusted)."""
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            path = Path(dirpath) / name
+            mode = os.lstat(path).st_mode
+            if stat.S_ISDIR(mode):
+                continue
+            if not stat.S_ISREG(mode):
+                return None
+            h.update(path.relative_to(root).as_posix().encode() + b'\0' + _sha256(path).encode() + b'\n')
+    return h.hexdigest()
+
+
+def jdk_identity(tools: Tools) -> dict:
+    """The JDK's version, feature release and jmod target platform, from its own ``release`` file."""
+    values = {}
+    for line in (tools.jdk() / 'release').read_text(encoding='utf-8', errors='replace').splitlines():
+        key, _, value = line.partition('=')
+        values[key.strip()] = value.strip().strip('"')
+    version = values.get('JAVA_VERSION', '')
+    os_name = {'linux': 'linux', 'darwin': 'macos', 'mac os x': 'macos'}.get(values.get('OS_NAME', '').lower())
+    arch = {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'aarch64', 'arm64': 'aarch64'}.get(
+        values.get('OS_ARCH', '').lower())
+    if not re.fullmatch(r'\d+(\.\d+)*', version) or os_name is None or arch is None:
+        raise StepFailed('toolchain', 'The builder\'s JDK does not say which version and platform it is.')
+    return {'version': values.get('JAVA_RUNTIME_VERSION') or version, 'feature': version.split('.')[0],
+            'platform': f'{os_name}-{arch}'}
+
+
+def system_image(tools: Tools, cache: Path, cancelled=lambda: False) -> Path:
+    """A Java system image of Android's core library (platform 35's core-for-system-modules.jar), the way the Android
+    Gradle plugin makes one: a generated module-info exporting every package, then jmod and jlink, all with the
+    pinned JDK. javac compiles against it with --system, so Java 17 source sees exactly the java.* APIs Android has.
+
+    Cached under ``cache`` by a key over the recipe, the core jar's sha256 and the JDK identity, so a changed JDK or
+    platform gets a new image and a stale one is never used. On every use the image's tree digest is checked against
+    the one recorded when it was made; a missing, partial or changed image is discarded and made again (the build is
+    deterministic). This guards against corruption and staleness, not against someone who can write the builder's
+    own directory, which also holds the signing keys."""
+    identity = {'recipe': SYSTEM_RECIPE, 'core': _sha256(tools.core_modules), 'jdk': jdk_identity(tools)}
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:32]
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    final = cache / f'system-{key}'
+    try:
+        recorded = json.loads((final / 'manifest.json').read_text(encoding='utf-8'))
+        if recorded.get('identity') == identity and tree_digest(final / 'image') == recorded.get('tree'):
+            return final / 'image'
+    except (OSError, ValueError):
+        pass
+    shutil.rmtree(final, ignore_errors=True)
+    staging = cache / f'.system-{key}-{secrets.token_hex(4)}'
+    (staging / 'core').mkdir(parents=True)
+    (staging / 'home').mkdir()
+    try:
+        import zipfile
+        with zipfile.ZipFile(tools.core_modules) as z:
+            packages = set()
+            for name in z.namelist():
+                parts = name.split('/')
+                if name.startswith('/') or '..' in parts or '\\' in name:
+                    raise StepFailed('toolchain', 'The pinned Android core library has an unexpected entry.')
+                if name.endswith('.class') and len(parts) > 1:
+                    packages.add('.'.join(parts[:-1]))
+            z.extractall(staging / 'core')
+        (staging / 'mi').mkdir()
+        (staging / 'mi/module-info.java').write_text(
+            'module java.base {\n' + ''.join(f'  exports {p};\n' for p in sorted(packages)) + '}\n', encoding='utf-8')
+        home, hide = staging / 'home', (staging, tools.sdk)
+        run([tools.java(), '-m', 'jdk.compiler/com.sun.tools.javac.Main', '--system=none',
+             f'--patch-module=java.base={staging / "core"}', '-d', staging / 'mi', staging / 'mi/module-info.java'],
+            staging, home, tools, cancelled, 'toolchain', hide)
+        shutil.copyfile(staging / 'mi/module-info.class', staging / 'core/module-info.class')
+        (staging / 'jmods').mkdir()
+        run([tools.jdk_tool('jmod'), 'create', '--module-version', identity['jdk']['feature'], '--target-platform',
+             identity['jdk']['platform'], '--class-path', staging / 'core', staging / 'jmods/java.base.jmod'],
+            staging, home, tools, cancelled, 'toolchain', hide)
+        run([tools.jdk_tool('jlink'), '--module-path', staging / 'jmods', '--add-modules', 'java.base', '--output',
+             staging / 'image', '--disable-plugin', 'system-modules'], staging, home, tools, cancelled, 'toolchain', hide)
+        shutil.copyfile(tools.jdk() / 'lib/jrt-fs.jar', staging / 'image/lib/jrt-fs.jar')  # javac reads it via --system
+        for scratch in ('core', 'mi', 'jmods', 'home'):
+            shutil.rmtree(staging / scratch)
+        digest = tree_digest(staging / 'image')
+        _private(staging / 'manifest.json', json.dumps({'identity': identity, 'tree': digest}, sort_keys=True))
+        os.rename(staging, final)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return final / 'image'
+
+
+def missing_packages(log: str) -> list[str]:
+    return sorted(set(re.findall(r'error: package ([\w.]+) does not exist', log)))
+
+
+JDK_ONLY = ('java.', 'jdk.', 'sun.', 'com.sun.')  # packages a library cannot add: Android either has them or not
+
+
 def build(source: Path, work: Path, package: str, version_code: int, version_name: str, tools: Tools,
           cancelled=lambda: False, libraries=()) -> tuple[Path, str]:
     """An unsigned, aligned APK for this exact identity, and the build log. ``libraries`` are verified job-local
@@ -133,13 +266,21 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     log.append(run(aapt, work, home, tools, cancelled, 'compile', hidden))
     sources = sorted(str(p) for p in [*source.glob('src/**/*.java'), *(work / 'generated').rglob('*.java')])
     jars = [str(lib.jar) for lib in libraries]
+    image = system_image(tools, tools.cache or work / 'system-cache', cancelled)
+    hidden = (*hidden, image)
     try:
-        log.append(run([tools.java(), '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-encoding', 'UTF-8', '-source',
-                        '8', '-target', '8', '-Xlint:-options', '-proc:none', '-bootclasspath',
-                        f'{tools.android_jar}:{tools.bt / "core-lambda-stubs.jar"}',
-                        *(['-classpath', ':'.join(jars)] if jars else []), '-d', work / 'classes',
-                        *sources], work, home, tools, cancelled, 'compile', hidden))
+        # Java 17 source against Android's own core library: --system is that image, android.jar and the declared
+        # libraries are the classpath, and string concatenation is compiled inline (Android has no
+        # StringConcatFactory). d8 then desugars records, lambdas and the like for minSdk.
+        log.append(run([tools.java(), '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-encoding', 'UTF-8', '--system',
+                        image, '-source', JAVA_LEVEL, '-target', JAVA_LEVEL, '-XDstringConcat=inline',
+                        '-Xlint:-options', '-proc:none', '-classpath', ':'.join([str(tools.android_jar), *jars]),
+                        '-d', work / 'classes', *sources], work, home, tools, cancelled, 'compile', hidden))
     except StepFailed as failed:
+        missing = missing_packages(failed.log) if failed.category == 'compile' else []
+        if missing and all(p.startswith(JDK_ONLY) for p in missing):
+            raise StepFailed('compile', 'The app uses Java APIs Android does not provide ('
+                             + ', '.join(missing[:3]) + ').', log=failed.log) from None
         if failed.category == 'compile' and jars and re.search(r'error: cannot access|bad class file', failed.log):
             raise StepFailed('dependency', 'A library the app declares could not be read by the compiler.',
                              log=failed.log) from None

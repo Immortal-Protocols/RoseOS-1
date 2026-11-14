@@ -1,6 +1,7 @@
 """The skeleton a generated app is written into, and the checks that keep its identity out of generated code's reach.
 
-The toolchain is the repository's pinned one (aapt v1, javac at the Java 8 source level, d8), so a generated app uses
+The toolchain is the repository's pinned one (aapt v1, javac at the Java 17 source level against Android's core
+library, d8), so a generated app uses
 framework APIs, plus any pure-Java JAR libraries it declares in dependencies.json that the builder's offline library
 store provides (rose.app_builder.dependencies). It never ships a library itself: no Gradle, Kotlin, AAR, JAR or
 native files in its source. The builder owns the package name,
@@ -45,7 +46,7 @@ MANIFEST_CHILDREN = {'application', 'uses-permission', 'uses-permission-sdk-23',
 DEPENDENCY_SUFFIXES = ('.gradle', '.kts', '.kt', '.jar', '.aar', '.so')
 class TemplateRefused(ValueError):
     """Generated source the builder will not compile; the summary is safe to show the owner. ``dependency`` marks a
-    refusal caused by a library or language the framework-only toolchain does not have."""
+    refusal caused by a library or language the toolchain does not provide."""
 
     def __init__(self, message: str, dependency: bool = False):
         super().__init__(message)
@@ -111,7 +112,7 @@ def write_skeleton(source: Path, package: str, label: str):
 
 
 def check(source: Path, package: str) -> None:
-    """Refuse generated source that could change the app's identity or escape the framework-only toolchain."""
+    """Refuse generated source that could change the app's identity or escape the pinned toolchain."""
     source = Path(source)
     if os.lstat(source).st_mode & 0o700 != 0o700:
         raise TemplateRefused('The app\'s source folder is not readable and writable by the builder.')

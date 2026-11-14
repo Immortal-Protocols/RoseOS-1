@@ -18,7 +18,8 @@ host-owned directory of recorded files and digests; nothing here downloads anyth
 - rewritten as a job-local JAR holding exactly those class files, which is what javac and d8 see.
 
 Deliberately not supported yet (interim, not product scope): AAR packages and Android resources from libraries
-(they need a pinned aapt2), Kotlin sources (no pinned kotlinc), Gradle, native code, Java resources inside a JAR,
+(they need an aapt2 resource pipeline; aapt2 is in the pinned build-tools but the builder does not use it yet),
+Kotlin sources (no pinned kotlinc), Gradle, native code, Java resources inside a JAR,
 multi-release JARs, ServiceLoader files, and transitive resolution (each library is declared). Each fails as a
 ``dependency`` failure with a summary the owner can read.
 """
