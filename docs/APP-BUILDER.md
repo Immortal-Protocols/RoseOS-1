@@ -185,7 +185,11 @@ in source downloads or populates a store. Then, per job:
    `javac` compiles against it, and `d8` first converts the libraries alone,
    so a library `d8` can't convert, or `javac` can't read, is a `dependency`
    failure and not blamed on the app's code. `d8` then adds them to the app.
-   The app's own classes are still checked to be in its package.
+   The app's own classes are still checked to be in its package. The builder
+   checks a library's structure and names, not whether the library is
+   correct. A library that contradicts itself (for example, generic
+   signatures that disagree with its real method descriptors) can still show
+   up as an app compile error or a runtime linkage error inside that app.
 5. **Lock.** The delivered version records each library's coordinate, sha256
    and size (`Ledger.dependencies`), in the same transaction as the version.
    It is the next revision's lock.
