@@ -77,7 +77,7 @@ class States(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.events = []
-        self.tasks = WorkspaceTasks(Path(self.tmp.name), Starter(), emit=self.events.append)
+        self.tasks = WorkspaceTasks(Path(self.tmp.name), Starter(), emit=lambda task, device: self.events.append(task))
         self.id = self.tasks.submit('d', GOOD)['taskId']
 
     def tearDown(self):
@@ -136,11 +136,44 @@ class States(unittest.TestCase):
         self.tasks.turn_ended(done, 'completed')
         self.tasks.close()
         events = []
-        self.tasks = WorkspaceTasks(Path(self.tmp.name), Starter(), emit=events.append)
+        self.tasks = WorkspaceTasks(Path(self.tmp.name), Starter(), emit=lambda task, device: events.append(task))
         self.assertEqual((self.state(), self.tasks.get(done)['state']), ('uncertain', 'done'))
         self.assertEqual([e['taskId'] for e in events], [self.id])
         self.tasks.turn_ended(self.id, 'completed')  # a late report cannot turn it into done
         self.assertEqual(self.state(), 'uncertain')
+
+    def test_updated_at_never_goes_back(self):  # amendment A
+        times = iter([1000.0, 900.0, 800.0, 700.0])
+        self.tasks.clock = lambda: next(times)
+        before = self.tasks.get(self.id)['updatedAt']
+        self.tasks.attach(self.id, 1)
+        self.tasks.turn_ended(self.id, 'completed')
+        self.tasks.phone_task(1, 'done')
+        stamps = [e['updatedAt'] for e in self.events]
+        self.assertEqual(stamps, sorted(stamps))
+        self.assertGreaterEqual(self.tasks.get(self.id)['updatedAt'], before)
+        self.assertEqual(self.state(), 'done')
+
+    def test_at_most_eight_phone_tasks_shown_but_all_counted(self):  # amendment B
+        for i in range(1, 11):
+            self.tasks.attach(self.id, i)
+        self.tasks.turn_ended(self.id, 'completed')
+        for i in range(2, 11):
+            self.tasks.phone_task(i, 'done')
+        t = self.tasks.get(self.id)
+        self.assertEqual([p['id'] for p in t['phoneTasks']], list(range(3, 11)))  # the newest eight
+        self.assertEqual(t['state'], 'running')  # task 1 is still running, though not shown
+        self.tasks.phone_task(1, 'done')
+        self.assertEqual(self.state(), 'done')
+
+    def test_device_scope(self):  # amendment C
+        self.assertIsNotNone(self.tasks.get(self.id, 'd'))
+        self.assertIsNone(self.tasks.get(self.id, 'another-device'))
+        other = self.tasks.submit('e', {**GOOD, 'requestId': 'r1'})['taskId']  # same requestId, another device
+        self.assertNotEqual(other, self.id)
+        self.assertEqual([t['taskId'] for t in self.tasks.recent('d')], [self.id])
+        self.assertEqual([t['taskId'] for t in self.tasks.recent('e')], [other])
+        self.assertEqual(len(self.tasks.recent()), 2)
 
     def test_reads(self):
         for bad in (None, 7, 'wt-xyz', 'wt-' + 'g' * 16, 'task:grocery', 'wt-' + '0' * 16):
@@ -261,6 +294,47 @@ class PageTaskFlow(unittest.TestCase):
         self.assertEqual([t['taskId'] for t in self.tasks.recent()], [task_id])
 
 
+class Events(unittest.TestCase):
+    """/ws/events (rose.app's Server.serve_events) shows a phone only its own page tasks (amendment C), without the
+    internal device field, in the replay, the reconnect snapshot and live."""
+
+    def test_only_this_devices_page_tasks(self):
+        import threading
+        from fastapi import FastAPI, WebSocket
+        from fastapi.testclient import TestClient
+        from rose.app import Server
+        from rose.bus import Bus
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bus = Bus()
+        tasks = WorkspaceTasks(Path(tmp.name), Starter(), emit=lambda t, d: bus.emit('workspace_task', task=t, device=d))
+        self.addCleanup(tasks.close)
+        mine = tasks.submit('phone', GOOD)['taskId']
+        tasks.submit('tablet', GOOD)
+        server = SimpleNamespace(bus=bus, snapshot=lambda: {'tasks': []}, _stale=lambda m: False, workspace_tasks=tasks)
+        app = FastAPI()
+
+        @app.websocket('/events')
+        async def events(ws: WebSocket):
+            import asyncio
+            bus.loop = asyncio.get_running_loop()  # as rose.app does at startup, so live events are delivered
+            ws.scope['rose_device'] = 'phone'  # what the guarded remote route sets
+            await Server.serve_events(server, ws)
+        with TestClient(app).websocket_connect('/events') as ws:
+            frames = [ws.receive_json() for _ in range(4)]  # hello, one replay, replay_done, one snapshot
+            later = tasks.submit('tablet', {**GOOD, 'requestId': 'r9'})  # not shown live either
+            tasks.turn_ended(mine, 'completed')
+            frames.append(ws.receive_json())
+            ws.close()
+        kinds = [f['kind'] for f in frames]
+        self.assertEqual(kinds, ['hello', 'workspace_task', 'replay_done', 'workspace_task', 'workspace_task'])
+        page = [f for f in frames if f['kind'] == 'workspace_task']
+        self.assertEqual({f['task']['taskId'] for f in page}, {mine})
+        self.assertTrue(all('device' not in f for f in page))
+        self.assertEqual(page[-1]['task']['state'], 'done')
+        self.assertNotEqual(later['taskId'], mine)
+
+
 class Route(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -292,6 +366,14 @@ class Route(unittest.TestCase):
         self.assertRegex(task_id, r'^wt-[0-9a-f]{16}$')
         self.assertEqual(self.post(GOOD).json(), {'schemaVersion': 1, 'status': 'duplicate', 'taskId': task_id})
         self.assertEqual(len(self.start.calls), 1)
+
+    def test_another_devices_task_is_unknown(self):  # amendment C
+        task_id = self.post(GOOD).json()['taskId']
+        other = Device()
+        self.remote.devices.enroll(other.spki, 'tablet', 'Pixel Tablet', '100.64.0.3')
+        path = '/workspace/v1/tasks/' + task_id
+        r = self.client.get(path, headers=other.headers('GET', path, self.remote.identity.pin))
+        self.assertEqual((r.status_code, r.json()), (404, {'schemaVersion': 1, 'status': 'unknown'}))
 
     def test_signed_status_read(self):
         task_id = self.post(GOOD).json()['taskId']

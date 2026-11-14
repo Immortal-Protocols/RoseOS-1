@@ -52,7 +52,7 @@ def add_routes(app: FastAPI, remote: Any, tasks: WorkspaceTasks, peer: Callable[
         if auth.device is None:
             return JSONResponse({'schemaVersion': 1, 'error': auth.reason, 'final': auth.final}, 401,
                                 headers=refusal_headers(auth))
-        task = await asyncio.to_thread(tasks.get, task_id)
+        task = await asyncio.to_thread(tasks.get, task_id, auth.device.id)  # only this device's own tasks
         if task is None:
             return JSONResponse({'schemaVersion': 1, 'status': 'unknown'}, 404, headers=headers)
         return JSONResponse(task, headers=headers)

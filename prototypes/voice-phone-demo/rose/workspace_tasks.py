@@ -63,6 +63,7 @@ STATES = ('running', 'done', 'failed', 'cancelled', 'uncertain')
 FINAL = ('done', 'failed', 'cancelled', 'uncertain')
 PHONE_FINAL = ('done', 'failed', 'cancelled')
 RECENT = 20
+PHONE_TASKS_SHOWN = 8  # at most this many phoneTasks on the wire; every one still counts toward the state
 DETAIL = {
     'done': 'Rose finished this.',
     'failed': 'Rose could not finish this.',
@@ -91,6 +92,7 @@ class WorkspaceTasks:
     (docs/APP-BUILDER.md §4.3). ``emit(task)`` receives every change, for the ``workspace_task`` event."""
 
     def __init__(self, root: Path, start, emit=None, clock=time.time):
+        """``emit(task, device)`` receives every change with the device that asked for the task."""
         self.root = Path(root)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self.root / 'workspace-tasks.sqlite3'
@@ -103,7 +105,7 @@ class WorkspaceTasks:
                         'created REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS tasks (task_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, '
                         'action_id TEXT NOT NULL, turn TEXT NOT NULL, phone TEXT NOT NULL, state TEXT NOT NULL, '
-                        'detail TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL)')
+                        'detail TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, device TEXT NOT NULL)')
         self.lock = threading.RLock()
         self.start, self.emit, self.clock = start, emit, clock
         self._recover()
@@ -129,8 +131,9 @@ class WorkspaceTasks:
             # could be started, so the phone may retry.
             self.db.execute('BEGIN IMMEDIATE')
             self.db.execute('INSERT INTO requests VALUES (?,?,?)', (key, json.dumps(reply), now))
-            self.db.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?)',
-                            (task_id, body['requestId'], body['actionId'], 'pending', '{}', 'running', '', now, now))
+            self.db.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?)',
+                            (task_id, body['requestId'], body['actionId'], 'pending', '{}', 'running', '', now, now,
+                             device))
             self.db.execute('COMMIT')
             try:
                 self.start(body['label'].strip(), body['goal'].strip(), body['requestId'], task_id)
@@ -167,7 +170,8 @@ class WorkspaceTasks:
 
     def _change(self, task_id, turn=None, phone=None):
         with self.lock:
-            row = self.db.execute('SELECT turn, phone, state FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+            row = self.db.execute('SELECT turn, phone, state, updated FROM tasks WHERE task_id=?',
+                                  (task_id,)).fetchone()
             if row is None or row[2] in FINAL:  # a final state never changes
                 return
             current_turn, current_phone = row[0], json.loads(row[1])
@@ -179,48 +183,62 @@ class WorkspaceTasks:
                         current_phone[key] = status
             state = _state(current_turn, current_phone)
             self.db.execute('UPDATE tasks SET turn=?, phone=?, state=?, detail=?, updated=? WHERE task_id=?',
-                            (current_turn, json.dumps(current_phone), state, DETAIL.get(state, ''), self.clock(),
-                             task_id))
+                            (current_turn, json.dumps(current_phone), state, DETAIL.get(state, ''),
+                             max(row[3], self.clock()), task_id))  # updatedAt never goes back for a task
         self._emit(task_id)
 
     def _recover(self):
         """After a restart nothing is still being tracked: a page task that had not ended is uncertain."""
         with self.lock:
             rows = self.db.execute("SELECT task_id FROM tasks WHERE state='running'").fetchall()
-            self.db.execute("UPDATE tasks SET state='uncertain', detail=?, updated=? WHERE state='running'",
-                            (DETAIL['uncertain'], self.clock()))
+            self.db.execute("UPDATE tasks SET state='uncertain', detail=?, updated=MAX(updated, ?) "
+                            "WHERE state='running'", (DETAIL['uncertain'], self.clock()))
         for (task_id,) in rows:
             self._emit(task_id)
 
     # Reads.
 
-    def get(self, task_id) -> dict | None:
+    def get(self, task_id, device=None) -> dict | None:
+        """The task's state; with ``device``, only if that device asked for it (another device's task is unknown)."""
+        found = self._get(task_id)
+        if found is None or (device is not None and found[1] != device):
+            return None
+        return found[0]
+
+    def _get(self, task_id):
         if not isinstance(task_id, str) or not re.fullmatch(r'wt-[0-9a-f]{16}', task_id):
             return None
         with self.lock:
-            row = self.db.execute('SELECT task_id, request_id, action_id, phone, state, detail, created, updated '
-                                  'FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+            row = self.db.execute('SELECT task_id, request_id, action_id, phone, state, detail, created, updated, '
+                                  'device FROM tasks WHERE task_id=?', (task_id,)).fetchone()
         if row is None:
             return None
         phone = json.loads(row[3])
-        return {'schemaVersion': 1, 'taskId': row[0], 'requestId': row[1], 'actionId': row[2], 'state': row[4],
-                'detail': row[5], 'phoneTasks': [{'id': int(k) if k.isdigit() else k, 'status': v}
-                                                 for k, v in sorted(phone.items(), key=lambda kv: kv[0])],
+        shown = sorted(phone.items(), key=lambda kv: (len(kv[0]), kv[0]))[-PHONE_TASKS_SHOWN:]  # the newest
+        task = {'schemaVersion': 1, 'taskId': row[0], 'requestId': row[1], 'actionId': row[2], 'state': row[4],
+                'detail': row[5][:200], 'phoneTasks': [{'id': int(k) if k.isdigit() else k[:128], 'status': v}
+                                                      for k, v in shown],
                 'createdAt': int(row[6]), 'updatedAt': int(row[7])}
+        return task, row[8]
 
-    def recent(self, limit: int = RECENT) -> list:
+    def recent(self, device=None, limit: int = RECENT) -> list:
+        """The most recent page tasks, oldest first; with ``device``, only that device's."""
         with self.lock:
-            ids = [r[0] for r in self.db.execute('SELECT task_id FROM tasks ORDER BY updated DESC, rowid DESC '
-                                                 'LIMIT ?', (limit,)).fetchall()]
-        return [t for t in (self.get(i) for i in reversed(ids)) if t]
+            if device is None:
+                rows = self.db.execute('SELECT task_id FROM tasks ORDER BY updated DESC, rowid DESC LIMIT ?',
+                                       (limit,)).fetchall()
+            else:
+                rows = self.db.execute('SELECT task_id FROM tasks WHERE device=? ORDER BY updated DESC, rowid DESC '
+                                       'LIMIT ?', (device, limit)).fetchall()
+        return [t for t in (self.get(r[0]) for r in reversed(rows)) if t]
 
     def _emit(self, task_id):
         if self.emit is None:
             return
-        task = self.get(task_id)
-        if task is not None:
+        found = self._get(task_id)
+        if found is not None:
             try:
-                self.emit(task)
+                self.emit(*found)
             except Exception:
                 pass  # delivery is best effort; the GET route and reconnect snapshots are authoritative
 
@@ -249,6 +267,6 @@ def connect(conductor, tasks: WorkspaceTasks) -> WorkspaceTasks:
     """Wire page tasks to a conductor: requests start conversation turns, the conductor reports back to ``tasks``,
     and every change is a ``workspace_task`` event on the bus (sent to the phone with the other events)."""
     tasks.start = conversation_starter(conductor)
-    tasks.emit = lambda task: conductor.bus.emit('workspace_task', task=task)
+    tasks.emit = lambda task, device: conductor.bus.emit('workspace_task', task=task, device=device)
     conductor.workspace_tasks = tasks
     return tasks

@@ -429,16 +429,27 @@ one.
 
   Every state except `running` is final, so a late report can't turn
   `uncertain` into `done`.
+
+  OS Product's amendments, agreed:
+  - **A.** `updatedAt` never decreases for a `taskId`.
+  - **B.** `phoneTasks` shows at most the 8 newest entries, though every one
+    still counts toward `state`. `detail` is at most 200 characters, and an
+    `id` at most 128.
+  - **C.** A page task is visible only to the device that asked for it, in the
+    GET, the live events and the reconnect replay. Another device's `taskId`
+    is 404 `unknown`.
+  - **D.** A reply lost after acceptance is matched by `requestId` from the
+    reconnect replay. No new endpoint is needed.
 - **Delivery and recovery:**
   - **Live:** `{kind: "workspace_task", t, task}` on `/ws/events` at every
     change.
   - **Reconnect:** after the existing task snapshots, one `workspace_task`
-    event for each of the 20 most recent page tasks.
+    event for each of this device's 20 most recent page tasks.
   - **Authoritative read:** signed `GET /workspace/v1/tasks/<taskId>` returns
     200 with the state, or 404 `{schemaVersion: 1, status: "unknown"}`.
 
   The card follows its `taskId` through these, not through the local phone
-  stream's `current.id`. The client side is OS Product's.
+  stream's `current.id`. The client side is OS Product's (#800).
 - **Proof levels.** Source tests drive the real conductor with the simulated
   Codex and phone fixtures. They cover:
   - a turn that starts phone work, then a completed phone task, giving `done`;
