@@ -1192,6 +1192,11 @@ class Server:
             # identity/binding as subsequent updates; never replay user actions.
             for task in state.get('tasks', []):
                 await ws.send_text(dumps({'kind': 'task', 't': time.time(), 'task': task}))
+            # Page tasks (docs/APP-BUILDER.md §4.3), only on a server that enabled them: their current states.
+            page_tasks = getattr(self, 'workspace_tasks', None)
+            if page_tasks is not None:
+                for task in await asyncio.to_thread(page_tasks.recent):
+                    await ws.send_text(dumps({'kind': 'workspace_task', 't': time.time(), 'task': task}))
             incoming = asyncio.create_task(ws.receive())
             outgoing = asyncio.create_task(q.get())
             try:

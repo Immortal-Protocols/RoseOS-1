@@ -10,7 +10,9 @@ from fastapi.testclient import TestClient
 
 from rose.remote import Remote, build_remote_app
 from rose.tests.test_builder_routes import Device, server
-from rose.workspace_tasks import Unavailable, WorkspaceTasks, check
+import re
+
+from rose.workspace_tasks import Unavailable, WorkspaceTasks, check, connect
 
 GOOD = {'schemaVersion': 1, 'requestId': 'r1', 'actionId': 'task:grocery', 'label': 'Add missing items',
         'goal': 'Compare the recipe with my Notes list and add what is missing.', 'confirmed': True}
@@ -20,11 +22,10 @@ class Starter:
     def __init__(self, fail=False):
         self.calls, self.fail = [], fail
 
-    def __call__(self, label, goal, request_id):
+    def __call__(self, label, goal, request_id, task_id):
         if self.fail:
             raise Unavailable()
-        self.calls.append((label, goal, request_id))
-        return f'task-{len(self.calls)}'
+        self.calls.append((label, goal, request_id, task_id))
 
 
 class Handoff(unittest.TestCase):
@@ -48,24 +49,109 @@ class Handoff(unittest.TestCase):
             self.assertEqual(self.tasks.submit('d', bad)['status'], 'refused', bad)
         self.assertEqual(self.start.calls, [])
 
-    def test_accepted_once_per_request_even_across_a_restart(self):
+    def test_accepted_once_per_request_with_a_stable_task_id_even_across_a_restart(self):
         first = self.tasks.submit('d', GOOD)
-        self.assertEqual(first, {'schemaVersion': 1, 'status': 'accepted', 'taskId': 'task-1'})
-        self.assertEqual(self.start.calls, [('Add missing items', GOOD['goal'], 'r1')])
+        self.assertEqual((first['schemaVersion'], first['status']), (1, 'accepted'))
+        self.assertRegex(first['taskId'], r'^wt-[0-9a-f]{16}$')
+        self.assertEqual(self.start.calls, [('Add missing items', GOOD['goal'], 'r1', first['taskId'])])
         again = self.tasks.submit('d', GOOD)
-        self.assertEqual((again['status'], again['taskId']), ('duplicate', 'task-1'))
+        self.assertEqual((again['status'], again['taskId']), ('duplicate', first['taskId']))
         self.tasks.close()
         self.tasks = WorkspaceTasks(self.root / 'ws', self.start)
-        self.assertEqual(self.tasks.submit('d', GOOD)['status'], 'duplicate')
+        self.assertEqual(self.tasks.submit('d', GOOD)['taskId'], first['taskId'])
         self.assertEqual(len(self.start.calls), 1)
         self.assertEqual(self.tasks.submit('other-device', GOOD)['status'], 'accepted')  # another device's request
         self.assertEqual(((self.root / 'ws' / 'workspace-tasks.sqlite3').stat().st_mode & 0o777), 0o600)
 
-    def test_unavailable_starts_nothing_and_can_be_retried(self):
+    def test_unavailable_starts_nothing_records_nothing_and_can_be_retried(self):
         self.tasks.start = Starter(fail=True)
         self.assertEqual(self.tasks.submit('d', GOOD), {'schemaVersion': 1, 'status': 'unavailable'})
+        self.assertEqual(self.tasks.recent(), [])
         self.tasks.start = self.start
         self.assertEqual(self.tasks.submit('d', GOOD)['status'], 'accepted')
+
+
+class States(unittest.TestCase):
+    """The page task's state from its turn and its phone tasks; acceptance is never completion."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.events = []
+        self.tasks = WorkspaceTasks(Path(self.tmp.name), Starter(), emit=self.events.append)
+        self.id = self.tasks.submit('d', GOOD)['taskId']
+
+    def tearDown(self):
+        self.tasks.close()
+        self.tmp.cleanup()
+
+    def state(self):
+        return self.tasks.get(self.id)['state']
+
+    def test_acceptance_is_running_never_done(self):
+        t = self.tasks.get(self.id)
+        self.assertEqual((t['state'], t['requestId'], t['actionId'], t['phoneTasks']), ('running', 'r1', 'task:grocery', []))
+        self.assertEqual([e['state'] for e in self.events], ['running'])
+
+    def test_a_turn_that_starts_no_phone_work_is_done_when_it_completes(self):
+        self.tasks.turn_ended(self.id, 'completed')
+        self.assertEqual(self.state(), 'done')
+
+    def test_phone_tasks_decide_after_the_turn(self):
+        self.tasks.attach(self.id, 7)
+        self.tasks.turn_ended(self.id, 'completed')
+        self.assertEqual(self.state(), 'running')  # the turn ended, its phone task has not
+        self.tasks.phone_task(7, 'done')
+        t = self.tasks.get(self.id)
+        self.assertEqual((t['state'], t['phoneTasks']), ('done', [{'id': 7, 'status': 'done'}]))
+
+    def test_failed_and_cancelled(self):
+        for setup, expected in (([('attach', 1), ('phone', 1, 'failed'), ('turn', 'completed')], 'failed'),
+                                ([('attach', 1), ('phone', 1, 'cancelled'), ('turn', 'completed')], 'cancelled'),
+                                ([('turn', 'interrupted')], 'cancelled'), ([('turn', 'failed')], 'failed'),
+                                ([('attach', 1), ('attach', 2), ('phone', 1, 'cancelled'), ('phone', 2, 'failed'),
+                                  ('turn', 'completed')], 'failed')):
+            with self.subTest(setup=setup):
+                tid = self.tasks.submit('d', {**GOOD, 'requestId': 'x' + str(len(self.events))})['taskId']
+                for step in setup:
+                    if step[0] == 'attach':
+                        self.tasks.attach(tid, step[1])
+                    elif step[0] == 'phone':
+                        self.tasks.phone_task(step[1], step[2])
+                    else:
+                        self.tasks.turn_ended(tid, step[1])
+                self.assertEqual(self.tasks.get(tid)['state'], expected)
+
+    def test_a_final_state_never_changes_and_unrelated_tasks_are_ignored(self):
+        self.tasks.turn_ended(self.id, 'completed')
+        self.tasks.turn_ended(self.id, 'failed')
+        self.tasks.attach(self.id, 3)
+        self.tasks.phone_task(3, 'failed')
+        self.assertEqual((self.state(), self.tasks.get(self.id)['phoneTasks']), ('done', []))
+        other = self.tasks.submit('d', {**GOOD, 'requestId': 'r2'})['taskId']
+        self.tasks.phone_task(99, 'failed')  # never attached to anything
+        self.assertEqual(self.tasks.get(other)['state'], 'running')
+
+    def test_a_restart_makes_unfinished_tasks_uncertain_and_they_stay_so(self):
+        done = self.tasks.submit('d', {**GOOD, 'requestId': 'r2'})['taskId']
+        self.tasks.turn_ended(done, 'completed')
+        self.tasks.close()
+        events = []
+        self.tasks = WorkspaceTasks(Path(self.tmp.name), Starter(), emit=events.append)
+        self.assertEqual((self.state(), self.tasks.get(done)['state']), ('uncertain', 'done'))
+        self.assertEqual([e['taskId'] for e in events], [self.id])
+        self.tasks.turn_ended(self.id, 'completed')  # a late report cannot turn it into done
+        self.assertEqual(self.state(), 'uncertain')
+
+    def test_reads(self):
+        for bad in (None, 7, 'wt-xyz', 'wt-' + 'g' * 16, 'task:grocery', 'wt-' + '0' * 16):
+            self.assertIsNone(self.tasks.get(bad))
+        for i in range(25):
+            self.tasks.submit('d', {**GOOD, 'requestId': f'n{i}'})
+        recent = self.tasks.recent()
+        self.assertEqual(len(recent), 20)
+        self.assertEqual(recent[-1]['requestId'], 'n24')  # oldest first, newest last
+        self.assertTrue(all(set(t) == {'schemaVersion', 'taskId', 'requestId', 'actionId', 'state', 'detail',
+                                       'phoneTasks', 'createdAt', 'updatedAt'} for t in recent))
 
 
 class ConversationStarter(unittest.TestCase):
@@ -86,7 +172,7 @@ class ConversationStarter(unittest.TestCase):
     def test_a_confirmed_task_becomes_the_owners_request(self):
         from rose.workspace_tasks import PREFIX, conversation_starter
         start = conversation_starter(self.engine)
-        self.assertIsNone(start('Add missing items', 'Compare the recipe with my Notes list.', 'r1'))
+        self.assertIsNone(start('Add missing items', 'Compare the recipe with my Notes list.', 'r1', 'wt-' + '1' * 16))
         s = self.engine.sessions['conversation']
         self.assertTrue(self.fixtures.wait(lambda: any(
             op == 'submit' and PREFIX + 'Add missing items. Compare the recipe with my Notes list.' in p.get('text', '')
@@ -99,12 +185,80 @@ class ConversationStarter(unittest.TestCase):
         s = self.engine.sessions['conversation']
         s.busy = True
         with self.assertRaises(Unavailable):
-            start('x', 'y', 'r')
+            start('x', 'y', 'r', 'wt-' + '2' * 16)
         s.busy = False
         self.engine.stop()
         with self.assertRaises(Unavailable):
-            start('x', 'y', 'r')
+            start('x', 'y', 'r', 'wt-' + '3' * 16)
         self.assertFalse(any(op == 'submit' for op, _, p in self.engine.client.calls))
+
+
+class PageTaskFlow(unittest.TestCase):
+    """The real conductor with the simulated Codex and phone (test_codex.Integration's fixtures): a page task's state
+    follows its own turn and the phone tasks that turn starts, and nothing else."""
+
+    def setUp(self):
+        from rose.tests import test_codex
+        self.fixtures = test_codex
+        test_codex.Integration.setUp(self)
+        self.addCleanup(test_codex.Integration.tearDown, self)
+        self.tasks = connect(self.engine, WorkspaceTasks(Path(self.tmp.name) / 'ws', None))
+        self.addCleanup(self.tasks.close)
+        self.conversation = self.engine.sessions['conversation']
+
+    call = property(lambda self: self.fixtures.Integration.call.__get__(self))
+
+    def submit(self, request_id='r1'):
+        reply = self.tasks.submit('d', {**GOOD, 'requestId': request_id})
+        self.assertEqual(reply['status'], 'accepted')
+        self.assertTrue(self.fixtures.wait(lambda: self.conversation.turn is not None and self.conversation.busy))
+        return reply['taskId']
+
+    def end_turn(self, status='completed'):
+        self.engine._event({'event': 'done', 'session': 'conversation',
+                            'turn': {'id': self.conversation.turn, 'status': status}})
+
+    def events(self, task_id):
+        return [m['task']['state'] for m in list(self.bus.history)
+                if m.get('kind') == 'workspace_task' and m['task']['taskId'] == task_id]
+
+    def test_phone_work_started_by_the_turn_decides_completion(self):
+        task_id = self.submit()
+        started = self.call(self.conversation, 'phone_task', app='Calculator', goal='Open Calculator')
+        self.assertTrue(started['ok'])
+        self.end_turn()
+        self.assertEqual(self.tasks.get(task_id)['state'], 'running')  # Rose replied; the phone work goes on
+        app = self.engine.sessions['app-' + str(started['task_id'])]
+        self.assertTrue(self.fixtures.wait(lambda: app.turn is not None))
+        self.assertTrue(self.call(app, 'open_app', app='Calculator')['ok'])
+        app.text = 'Calculator is open.'
+        self.engine._event({'event': 'done', 'session': app.name, 'turn': {'id': app.turn, 'status': 'completed'}})
+        t = self.tasks.get(task_id)
+        self.assertEqual((t['state'], t['phoneTasks']), ('done', [{'id': started['task_id'], 'status': 'done'}]))
+        self.assertEqual(self.events(task_id)[0], 'running')
+        self.assertEqual(self.events(task_id)[-1], 'done')
+        self.assertNotIn('done', self.events(task_id)[:-1])
+
+    def test_a_reply_only_turn_is_done_and_a_superseded_turn_is_cancelled(self):
+        first = self.submit('r1')
+        self.end_turn()
+        self.assertEqual(self.tasks.get(first)['state'], 'done')
+        second = self.submit('r2')
+        self.engine.inject_text_turn('something else')  # the owner speaks before Rose finished
+        self.assertTrue(self.fixtures.wait(lambda: self.tasks.get(second)['state'] != 'running'))
+        self.assertEqual(self.tasks.get(second)['state'], 'cancelled')
+        self.end_turn()  # the new turn's end is not the page task's
+        self.assertEqual(self.tasks.get(second)['state'], 'cancelled')
+
+    def test_a_failed_turn_fails_the_page_task(self):
+        task_id = self.submit()
+        self.engine._failed(self.conversation, RuntimeError('codex'))
+        self.assertEqual(self.tasks.get(task_id)['state'], 'failed')
+
+    def test_reconnect_snapshot_and_events_reach_the_bus(self):
+        task_id = self.submit()
+        self.assertEqual(self.events(task_id), ['running'])
+        self.assertEqual([t['taskId'] for t in self.tasks.recent()], [task_id])
 
 
 class Route(unittest.TestCase):
@@ -133,9 +287,21 @@ class Route(unittest.TestCase):
 
     def test_signed_confirmed_request_starts_one_task(self):
         r = self.post(GOOD)
-        self.assertEqual((r.status_code, r.json()['status'], r.json()['taskId']), (200, 'accepted', 'task-1'))
-        self.assertEqual(self.post(GOOD).json()['status'], 'duplicate')
+        self.assertEqual((r.status_code, r.json()['status']), (200, 'accepted'))
+        task_id = r.json()['taskId']
+        self.assertRegex(task_id, r'^wt-[0-9a-f]{16}$')
+        self.assertEqual(self.post(GOOD).json(), {'schemaVersion': 1, 'status': 'duplicate', 'taskId': task_id})
         self.assertEqual(len(self.start.calls), 1)
+
+    def test_signed_status_read(self):
+        task_id = self.post(GOOD).json()['taskId']
+        path = '/workspace/v1/tasks/' + task_id
+        r = self.client.get(path, headers=self.device.headers('GET', path, self.remote.identity.pin))
+        self.assertEqual((r.status_code, r.json()['state'], r.json()['taskId']), (200, 'running', task_id))
+        self.assertEqual(self.client.get(path).status_code, 401)  # unsigned
+        unknown = '/workspace/v1/tasks/wt-' + '0' * 16
+        r = self.client.get(unknown, headers=self.device.headers('GET', unknown, self.remote.identity.pin))
+        self.assertEqual((r.status_code, r.json()), (404, {'schemaVersion': 1, 'status': 'unknown'}))
 
     def test_unsigned_or_unconfirmed_is_refused(self):
         r = self.post(GOOD, signed=False)

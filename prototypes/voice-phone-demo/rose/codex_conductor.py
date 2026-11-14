@@ -104,6 +104,7 @@ class Session:
     wake_id: str | None = None
     action_id: str | None = None
     blocked_reason: str | None = None
+    workspace_task: str | None = None  # the page task this conversation turn serves (docs/APP-BUILDER.md §4.3)
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,7 @@ class CodexConductor:
         self._identity_lock = threading.Lock()
         self.client = client_factory(self._events.put)
         self._wake_sinks = {}
+        self.workspace_tasks = None  # page tasks to report to (rose.workspace_tasks.connect), when enabled
         if self.life is not None and hasattr(self.life, 'bind'):
             self.life.bind(self)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
@@ -202,15 +204,18 @@ class CodexConductor:
     def _background(self, fn, *args):
         threading.Thread(target=fn, args=args, daemon=True).start()
 
-    def inject_text_turn(self, text):
-        self._background(self._user_turn, text)
+    def inject_text_turn(self, text, workspace_task=None):
+        self._background(self._user_turn, text, workspace_task)
 
-    def _user_turn(self, text):
+    def _user_turn(self, text, workspace_task=None):
         if self.life is not None:
             self.life.user_active()
         s = self.sessions['conversation']
         try:
             with s.submit_lock:
+                # A page task whose turn had not ended is superseded by this turn; its own end is never reported.
+                self._workspace_turn_ended(s, 'interrupted')
+                s.workspace_task = workspace_task
                 self._interrupt_reply('new user turn')
                 s.cancelled.clear()
                 s.rid = next(self._reply_ids)
@@ -509,6 +514,11 @@ class CodexConductor:
 
     def _task_event(self, s):
         self.bus.emit('task', task=self.task_snapshot(s.task))
+        if self.workspace_tasks is not None and s.task is not None:
+            try:
+                self.workspace_tasks.phone_task(s.task.id, s.task.status)
+            except Exception:
+                self.log(s, 'workspace_task_unrecorded', task=s.task.id)
 
     def _life_event(self, event):
         # Reuse the existing task feed and scoped native inspect/Stop path.
@@ -629,6 +639,8 @@ class CodexConductor:
             status = e['turn'].get('status')
             self.log(s, 'turn_finished', status=status, elapsed_ms=round((time.monotonic()-s.started)*1000),
                      first_text_ms=None if not s.first_text else round((s.first_text-s.started)*1000))
+            if not s.task:
+                self._workspace_turn_ended(s, status)
             if s.task:
                 validation_error = None
                 if status == 'completed':
@@ -673,8 +685,26 @@ class CodexConductor:
             if s.busy:
                 self._failed(s)
 
+    def _workspace_turn_ended(self, s, status):
+        task_id, s.workspace_task = s.workspace_task, None
+        if task_id and self.workspace_tasks is not None:
+            try:
+                self.workspace_tasks.turn_ended(task_id, status)
+            except Exception:
+                self.log(s, 'workspace_task_unrecorded', task=task_id)
+
+    def _workspace_attach(self, task):
+        s = self.sessions.get('conversation')
+        if task and s is not None and s.workspace_task and self.workspace_tasks is not None:
+            try:
+                self.workspace_tasks.attach(s.workspace_task, task.id, task.status)
+            except Exception:
+                self.log(s, 'workspace_task_unrecorded', task=s.workspace_task)
+
     def _failed(self, s, error=None):
         s.busy = False
+        if not s.task:
+            self._workspace_turn_ended(s, 'failed')
         code = str(error) if str(error) in {'chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch'} else 'backend_operation_failed'
         message = 'Sign in with ChatGPT again on this backend, then restart Rose.' if code == 'chatgpt_login_required' else 'Codex or phone operation failed; check backend setup.'
         self.log(s, 'failure', reason=code)
@@ -861,6 +891,7 @@ class CodexConductor:
                     {'ok': False, 'reason': 'life_not_configured'}), None
         if name == 'phone_task':
             task = self.start_phone(str(a['app']), str(a['goal']))
+            self._workspace_attach(task)
             return {'ok': True, 'task_id': task.id, 'status': task.status}, None
         if name == 'update_task':
             s = next((s for s in self.sessions.values() if s.task and s.task.id == int(a['task_id'])), None)
@@ -868,6 +899,7 @@ class CodexConductor:
                 self.life.diary.action_state(s.action_id, 'handed_off')
                 s.origin, s.wake_id = 'user', None  # explicit user-directed takeover
             task = self.update(int(a['task_id']), str(a['instruction']))
+            self._workspace_attach(task)
             return {'ok': bool(task), 'task_id': task.id if task else None}, None
         if name == 'cancel_task':
             return {'ok': self.cancel(int(a['task_id']))}, None
