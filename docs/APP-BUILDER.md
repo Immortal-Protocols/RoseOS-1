@@ -351,11 +351,25 @@ one.
   Models Core's and OS Product's choice.
 - **Action kinds.** Please add `agent_task` (§4.3) to the action kinds, limited
   to `button` and `card` actions, and keep the goal out of the model's input.
-- **Provider package.** Rose Agent relays `app_command` only to same-signer or
-  allowlisted packages. If the native page lives in Rose Agent
-  (`dev.pixel.voice`), the composer provider can be a Rose Agent operation
-  (`workspace_compose`, plus `capabilities`), like the customization tools.
-  That is OS Product's call. App Core needs only the package name.
+- **Provider: confirmed by OS Product (#787 at `d71fd72a`).** It is Rose Agent
+  itself (`dev.pixel.voice`), serving `workspace_compose` (kinds `prompt`,
+  `arrange`, `regenerate`, `undo`) and `capabilities` like the customization
+  tools. `capabilities` reports the contract only once the native page and a
+  composer are on the phone.
+- **The provider's result is §4.2 exactly.** It carries `schemaVersion: 1` and
+  echoes `requestId`. `revision` is the layout store's monotonically increasing
+  revision. `model_unavailable` reads as `unavailable`. Any other
+  `rose-layout-v1` failure reads as `rejected`, with the failure token as
+  `reason`.
+- **Ids (opaque to App Core):** `app:<package>/<activity>`,
+  `launch:<package>/<activity>`, `sc:<package>/<shortcut id>`,
+  `intent:<template>` and `task:<template id>`. After OS Product's decision D1
+  they also include `n:<key>` and `nact:<key>/<index>`.
+- **Rose tasks:** registry kind `agent_task`, id `task:<template id>`. They
+  are allowed only in a `button` row or as a `card` action, and their goal
+  never enters the model.
+- **Layout format:** OS Product dropped its own, so `rose-layout-v1` is the
+  one format.
 
 ## 4A. Codex generator design (next; not implemented)
 
