@@ -186,8 +186,18 @@ final class WorkspacePage extends FrameLayout {
   arrange.setEnabled(false);regenerate.setEnabled(false);undo.setEnabled(false);
  }
 
- /** Draws the current layout. timedRequest names a just-committed request whose first frame is timed. */
+ /**
+  * Draws the current layout. timedRequest names a just-committed request whose first frame is timed. A failure
+  * to draw never reaches Home: the page says so, and its saved state is untouched.
+  */
  void render(String timedRequest){
+  try{draw(timedRequest);}
+  catch(RuntimeException e){
+   sections.removeAllViews();carousels.clear();veil.setVisibility(View.GONE);sections.setAlpha(1f);
+   sections.addView(text("Couldn't show the workspace · your layout is kept",15,RoseThemeNow.c(0xb3f4ede0)));
+  }
+ }
+ private void draw(String timedRequest){
   veil.setVisibility(View.GONE);sections.setAlpha(1f);
   status.setText(composer.status());
   arrange.setEnabled(true);regenerate.setEnabled(state.request()!=null);undo.setEnabled(state.canUndo());

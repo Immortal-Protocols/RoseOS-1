@@ -37,7 +37,9 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
  assert.match(pages,/titles\.add\("Workspace"\);pages\.add\(new ArrayList<>\(\)\);\n  titles\.add\("Home"\);pages\.add\(new ArrayList<>\(\)\);/);
  assert.ok(pages.indexOf('launcherPager.addView(workspacePage);')>=0&&pages.indexOf('launcherPager.addView(workspacePage);')<pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView('),'the workspace before Home');
- assert.match(pages,/if\(workspacePage!=null&&!workspacePage\.theme\.equals\(RoseThemeNow\.id\)\)\{workspacePage\.release\(\);workspacePage=null;\}\n  if\(workspacePage==null\)workspacePage=new WorkspacePage\(this\);\n  else if\(workspacePage\.getParent\(\) instanceof ViewGroup\)\(\(ViewGroup\)workspacePage\.getParent\(\)\)\.removeView\(workspacePage\);/);
+ // A workspace page that fails to build leaves an empty page in its place, so Home is still HomePages.HOME.
+ assert.match(pages,/if\(workspacePage!=null\)launcherPager\.addView\(workspacePage\);else\{View none=new View\(this\);none\.setContentDescription\(titles\.get\(HomePages\.WORKSPACE\)\);launcherPager\.addView\(none\);\}/);
+ assert.match(pages,/if\(workspacePage!=null&&!workspacePage\.theme\.equals\(RoseThemeNow\.id\)\)\{workspacePage\.release\(\);workspacePage=null;\}\n  \/\/ A page that cannot be built never takes Home down[^\n]*\n  if\(workspacePage==null\)try\{workspacePage=new WorkspacePage\(this\);\}catch\(RuntimeException e\)\{workspacePage=null;\}\n  else if\(workspacePage\.getParent\(\) instanceof ViewGroup\)\(\(ViewGroup\)workspacePage\.getParent\(\)\)\.removeView\(workspacePage\);/);
  assert.match(pages,/if\(workspacePage!=null\)workspacePage\.shown\(HomePages\.workspace\(index\)\);/,'the workspace knows when it is shown (inert otherwise)');
  // A drag that starts on the workspace's request field or a carousel stays with it. (Back from the workspace, as from
  // any page, goes to homePage, which is HomePages.HOME: pinned with onBackPressed below.)

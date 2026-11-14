@@ -410,9 +410,10 @@ public class MainActivity extends Activity {
   // The workspace page survives a rebuild (an app installed or removed), with any request still composing. A new
   // theme draws a new page; its layout, pins and undo steps are saved, so only a request in flight is dropped.
   if(workspacePage!=null&&!workspacePage.theme.equals(RoseThemeNow.id)){workspacePage.release();workspacePage=null;}
-  if(workspacePage==null)workspacePage=new WorkspacePage(this);
+  // A page that cannot be built never takes Home down: an empty page holds its place, so Home stays HomePages.HOME.
+  if(workspacePage==null)try{workspacePage=new WorkspacePage(this);}catch(RuntimeException e){workspacePage=null;}
   else if(workspacePage.getParent() instanceof ViewGroup)((ViewGroup)workspacePage.getParent()).removeView(workspacePage);
-  launcherPager.addView(workspacePage);
+  if(workspacePage!=null)launcherPager.addView(workspacePage);else{View none=new View(this);none.setContentDescription(titles.get(HomePages.WORKSPACE));launcherPager.addView(none);}
   launcherPager.addView(roseHome=new RoseHomeView(this,homeEntries,homeColumns,this::homeMeasured));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
   for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),appEntries.isEmpty()));
