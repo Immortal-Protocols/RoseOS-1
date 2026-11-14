@@ -171,8 +171,8 @@ final class BuilderWire {
  }
 
  /**
-  * 400 out_of_scope: the builder's own sentence (§3.6); any other 400, or a 404 for an id it doesn't know: refused
-  * with its error. 401 final: the
+  * 400 with a legacy refusal code (which the builder no longer sends): its own sentence; any other 400, or a 404
+  * for an id it doesn't know: refused with its error. 401 final: the
   * server no longer knows this phone (pair again); 401 not final (stale time, replayed nonce): sign afresh and try
   * once more. Anything else, or an unreadable body, is the builder being unavailable.
   */
@@ -182,7 +182,7 @@ final class BuilderWire {
   String error = o == null || !(o.get("error") instanceof String) ? null : (String) o.get("error");
   if (status == 404) return new Refusal(Kind.REFUSED, error == null ? "not found" : error, null);
   if (status == 400) {
-   // §3.6 out_of_scope and §3.7 review_required: the builder started nothing and says why in its own sentence.
+   // Legacy codes, tolerated: the builder no longer sends out_of_scope or review_required (#782).
    if (o != null && ("out_of_scope".equals(o.get("code")) || "review_required".equals(o.get("code"))))
     return new Refusal(Kind.OUT_OF_SCOPE, error, o.get("category") instanceof String ? (String) o.get("category") : null);
    return new Refusal(Kind.REFUSED, error, null);

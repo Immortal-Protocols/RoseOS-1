@@ -52,23 +52,13 @@ final class FakeBuilderApi implements BuilderApi {
   return q;
  }
 
- /** The fake's stand-in for App Core's screening: a request naming "spyware" is refused, and one asking for Kotlin
-  * gets a note. App Core's real screening is server-side; this only drives the screens. */
- static void screen(String text) throws OutOfScope {
-  if (text.toLowerCase(java.util.Locale.ROOT).contains("spyware"))
-   throw new OutOfScope("Rose won't build an app that secretly watches someone. Nothing was started.", "harm");
- }
+ /** The demo accepts whatever the owner asks for, like the builder (Nathan, Nov 14: no rules on what people can ask
+  * to build). Its notes are always empty, as the builder's now are. */
+ static List<String> notes() { return new ArrayList<>(); }
 
- static List<String> notes(String text) {
-  List<String> n = new ArrayList<>();
-  if (text.toLowerCase(java.util.Locale.ROOT).contains("kotlin")) n.add("Generated apps are written in Java with Android's own features, so Kotlin isn't used.");
-  return n;
- }
-
- @Override public synchronized Started create(String clientRequestId, String description) throws OutOfScope {
+ @Override public synchronized Started create(String clientRequestId, String description) {
   String[] seen = requests.get(clientRequestId);
-  if (seen != null) return new Started(projects.get(seen[0]), notes(description));
-  screen(description);
+  if (seen != null) return new Started(projects.get(seen[0]), notes());
   String id = String.valueOf(next++);
   String name = ShareMessage.clean(description, "New app");
   if (name.length() > 24) name = name.substring(0, 24).trim() + "…";
@@ -76,17 +66,16 @@ final class FakeBuilderApi implements BuilderApi {
   Project p = new Project(id, name, "app.rose.gen.p" + id, "fake", new ArrayList<Version>(), new BuildJob("j" + next++, BuildJob.Stage.QUEUED, null, null, 1, clock++));
   projects.put(id, p);
   requests.put(clientRequestId, new String[]{id});
-  return new Started(p, notes(description));
+  return new Started(p, notes());
  }
 
- @Override public synchronized Started revise(String id, String clientRequestId, String request) throws OutOfScope {
-  if (requests.containsKey(clientRequestId)) return new Started(projects.get(id), notes(request));
-  screen(request);
+ @Override public synchronized Started revise(String id, String clientRequestId, String request) {
+  if (requests.containsKey(clientRequestId)) return new Started(projects.get(id), notes());
   Project p = projects.get(id);
   Project q = new Project(p.projectId, p.name, p.packageName, p.signerSha256, p.versions, new BuildJob("j" + next++, BuildJob.Stage.QUEUED, null, null, 1, clock++));
   projects.put(id, q);
   requests.put(clientRequestId, new String[]{id});
-  return new Started(q, notes(request));
+  return new Started(q, notes());
  }
 
  @Override public synchronized CancelStatus cancel(String jobId) {

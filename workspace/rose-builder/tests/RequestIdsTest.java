@@ -17,9 +17,9 @@ public final class RequestIdsTest {
         ids.done();
         expect(!b.equals(ids.forText("A tip calculator that splits the bill")), "after the builder answers, the same text is a new request");
         ids.done();
-        String afterRefusal = ids.forText("Spyware for my partner's phone");
+        String answered = ids.forText("A habit tracker");
         ids.done();
-        expect(!afterRefusal.equals(ids.forText("Spyware for my partner's phone")), "a refused request is finished: rewording or resending gets a new id");
+        expect(!answered.equals(ids.forText("A habit tracker")), "once the builder has answered, sending it again is a new request with a new id");
         System.out.println("RequestIdsTest: " + checks + " checks passed");
     }
 }

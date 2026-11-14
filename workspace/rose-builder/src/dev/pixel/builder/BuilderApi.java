@@ -64,9 +64,9 @@ interface BuilderApi {
   final Project project; final List<String> notes;
   Started(Project project, List<String> notes) { this.project = project; this.notes = notes; }
  }
- /** §3.6/§3.7: the builder refused the request before any job existed (400 code out_of_scope, or review_required
-  * while no authorized review gate exists). The message is the builder's own owner-facing sentence ("… Nothing was
-  * started."); category is harm, platform or unavailable. Never retried automatically; asking again is a new request. */
+ /** A 400 carrying a legacy refusal code (out_of_scope or review_required). The builder imposes no rules on what
+  * people ask for and no longer sends either code (#782); the client still tolerates one, showing the builder's own
+  * sentence as plain text, never treating it as success or retrying it. */
  final class OutOfScope extends Exception {
   final String category;
   OutOfScope(String message, String category) { super(message); this.category = category; }

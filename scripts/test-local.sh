@@ -358,6 +358,11 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-builder/src/dev/pixel/builder/Json.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
  workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/tests/BuilderWireTest.java
 java -cp "$JAVA_TESTS/BuilderWire" dev.pixel.builder.BuilderWireTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/FakeBuilderApi" \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java \
+ workspace/rose-builder/src/dev/pixel/builder/FakeBuilderApi.java workspace/rose-builder/tests/FakeBuilderApiTest.java
+java -cp "$JAVA_TESTS/FakeBuilderApi" dev.pixel.builder.FakeBuilderApiTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
