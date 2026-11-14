@@ -109,6 +109,19 @@ The composer provider is Rose Agent itself, `dev.pixel.voice`. Its operations ar
 the customization tools. `capabilities` reports kinds only once the native page and a composer are on the
 phone, so the conversation tool is not offered before then.
 
+## Rose tasks (App Core's route, #782)
+
+A confirmed `agent_task` tap sends a signed `POST /workspace/v1/tasks`. The route exists in source, and it is
+mounted only when the server enables it, which nothing does yet. The phone treats the answers as follows:
+
+| Answer | Meaning | Phone |
+| --- | --- | --- |
+| 200 `accepted`, `taskId` | started | "Started". `taskId` may be null until App Core's conversation wiring exists, so card state never depends on it. |
+| 200 `duplicate`, first `taskId` | the same device and `requestId` again; nothing new started | Same as the first answer. A retry reuses the tap's `requestId`. |
+| 400 `refused`, `reason` | bad body, an id that isn't `task:<id>`, label > 60, goal > 300, or no `confirmed: true` | "Couldn't start". Not retried. |
+| 503 `unavailable` | nothing started | "Couldn't start · try again". Safe to retry with the same `requestId`. |
+| 401 | signature failure | Same as the builder routes. Not retried. |
+
 ## Open decisions
 
 | # | Decision | Status |
