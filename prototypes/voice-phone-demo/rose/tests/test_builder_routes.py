@@ -136,9 +136,11 @@ class Routes(unittest.TestCase):
         from rose.tests.test_app_api_summary import CASES
         ledger = self.builder.ledger
         for n, (rid, case) in enumerate((('r1', 'legacy-no-report'), ('r2', 'incomplete-zero-counts')), 1):
-            job = (ledger.create('phone', rid, 'x', 'X') if n == 1 else
-                   ledger.revise('phone', project, rid, 'more'))
-            project = job['projectId']
+            if n == 1:
+                job = ledger.create('phone', rid, 'x', 'X')
+                project = job['projectId']
+            else:
+                job = ledger.revise('phone', project, rid, 'more')  # its answer has only the jobId
             ledger.advance(job['jobId'], 'building', 'b', 'b')
             ledger.allocate_version(job['jobId'])
             ledger.bind_signer(project, 'a' * 64)

@@ -577,26 +577,39 @@ Statuses:
 `complete` and `incomplete`. No zero is ever sent for an analysis that did
 not run.
 
-`highestLevel` is a lower bound, never a ceiling. A finding the full report
-did not keep, an `unverified` finding the database cannot place (a `null`
-level), or a method left unanalysed can need more.
+`highestLevel` is a lower bound, never a ceiling. More can be needed by:
+- a finding the full report did not keep;
+- an `unverified` finding the database cannot place (a `null` level);
+- a member the database doesn't list, which is placed at its class's level;
+- a method left unanalysed.
 
 Rules for a client:
 - **No status is a pass.** That includes zero counts, `complete`, and a
   `highestLevel` at or below the phone's `SDK_INT`. A client never says
   "compatible", "safe" or "works on this phone" from this summary.
-- An unknown `status` or `schemaVersion`, or a field of the wrong type, is
-  treated as `unavailable`, never as clean. Only the summary is refused, never
-  the library.
+- The summary is treated as `unavailable`, never as clean, if it has any of
+  these:
+  - an unknown `status` or `schemaVersion`;
+  - a field the table says is present for its status that is missing;
+  - a field of the wrong type, or a negative count;
+  - `advisory` other than `true`, or `deviceProof` other than `false`.
+
+  Only the summary is refused, never the library.
 - Anything shown says advisory and detection, not device proof. Showing it is
   optional.
 - Nothing in it blocks or changes a build, an install or what may be built.
 - `reason` is plain display text, never markup or a link.
 
-The exact cases, each the recorded report and the `apiReport` served for it,
-are in `prototypes/voice-phone-demo/rose/tests/fixtures/api-report-summary-v1.json`.
-Server tests check every case, and a client can test its parsing against
-the same file. This is the server and wire side only (App Core). The phone's
+The exact cases are in
+`prototypes/voice-phone-demo/rose/tests/fixtures/api-report-summary-v1.json`:
+- `cases`: each recorded report, with the `apiReport` the server sends for
+  it;
+- `clientUnreadable`: served values the server never sends, which a client
+  must read as `unavailable`.
+
+Server tests check every case, and also check that each summary the server
+can send meets the rules above. A client can test its parsing against the
+same file. This is the server and wire side only (App Core). The phone's
 parsing and display are Home/App's, and are not implemented here.
 
 ### 3.4 Baseline

@@ -11,7 +11,7 @@
     "advisory": true,
     "deviceProof": false,
     "status": "none",
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -32,7 +32,7 @@
     "deviceProof": false,
     "status": "unavailable",
     "reason": "the pinned API database or dexdump is missing",
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -74,7 +74,7 @@
     "highestLevel": null,
     "truncated": 0,
     "unlistedCount": 0,
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -151,7 +151,7 @@
     "highestLevel": 34,
     "truncated": 0,
     "unlistedCount": 0,
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -210,7 +210,7 @@
     "highestLevel": 34,
     "truncated": 3,
     "unlistedCount": 0,
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -301,7 +301,7 @@
     "highestLevel": null,
     "truncated": 0,
     "unlistedCount": 60,
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -318,7 +318,7 @@
     "deviceProof": false,
     "status": "unavailable",
     "reason": "the recorded report has a schema this server does not read",
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -331,7 +331,7 @@
     "deviceProof": false,
     "status": "unavailable",
     "reason": "the recorded report could not be read",
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   },
   {
@@ -373,8 +373,128 @@
     "deviceProof": false,
     "status": "unavailable",
     "reason": "the recorded report could not be read",
-    "note": "Advisory only: detection in the built app, not device compatibility proof. No status, count or level here means the app works on a phone, and nothing here blocks a build or an install."
+    "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
    }
   }
- ]
+ ],
+ "clientUnreadable": {
+  "comment": "Served apiReport values a client must read as unavailable (\"couldn't read the API level report\"), never as clean, while still reading the rest of the library. The server never sends these.",
+  "cases": [
+   {
+    "case": "complete-without-counts",
+    "apiReport": {
+     "schemaVersion": 1,
+     "advisory": true,
+     "deviceProof": false,
+     "status": "complete",
+     "minSdk": 26,
+     "highestLevel": null,
+     "truncated": 0,
+     "unlistedCount": 0,
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "incomplete-without-reason",
+    "apiReport": {
+     "schemaVersion": 1,
+     "advisory": true,
+     "deviceProof": false,
+     "status": "incomplete",
+     "minSdk": 26,
+     "counts": {
+      "notGuardedHere": 0,
+      "unverified": 0,
+      "guarded": 0
+     },
+     "highestLevel": null,
+     "truncated": 0,
+     "unlistedCount": 0,
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "a-count-as-text",
+    "apiReport": {
+     "schemaVersion": 1,
+     "advisory": true,
+     "deviceProof": false,
+     "status": "complete",
+     "minSdk": 26,
+     "counts": {
+      "notGuardedHere": "0",
+      "unverified": 0,
+      "guarded": 0
+     },
+     "highestLevel": null,
+     "truncated": 0,
+     "unlistedCount": 0,
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "a-negative-count",
+    "apiReport": {
+     "schemaVersion": 1,
+     "advisory": true,
+     "deviceProof": false,
+     "status": "complete",
+     "minSdk": 26,
+     "counts": {
+      "notGuardedHere": -1,
+      "unverified": 0,
+      "guarded": 0
+     },
+     "highestLevel": null,
+     "truncated": 0,
+     "unlistedCount": 0,
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "device-proof-true",
+    "apiReport": {
+     "schemaVersion": 1,
+     "advisory": true,
+     "deviceProof": true,
+     "status": "none",
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "not-advisory",
+    "apiReport": {
+     "schemaVersion": 1,
+     "advisory": false,
+     "deviceProof": false,
+     "status": "none",
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "unknown-status",
+    "apiReport": {
+     "schemaVersion": 1,
+     "advisory": true,
+     "deviceProof": false,
+     "status": "compatible",
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "unknown-schema",
+    "apiReport": {
+     "schemaVersion": 2,
+     "advisory": true,
+     "deviceProof": false,
+     "status": "complete",
+     "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install."
+    }
+   },
+   {
+    "case": "not-an-object",
+    "apiReport": "complete"
+   }
+  ]
+ }
 }

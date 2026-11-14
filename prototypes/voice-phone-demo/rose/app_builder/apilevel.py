@@ -701,8 +701,8 @@ def summary(report: dict) -> str:
 # The library's per-version summary (docs/APP-BUILDER.md §3.3, `apiReport`): what the phone may show. It never turns
 # anything it cannot read into a clean answer: no recorded report is `none`, and a record it cannot read or whose
 # schema it does not know is `unavailable`. Counts appear only for an analysis that ran (`complete` or `incomplete`).
-SUMMARY_NOTE = ('Advisory only: detection in the built app, not device compatibility proof. No status, count or '
-                'level here means the app works on a phone, and nothing here blocks a build or an install.')
+SUMMARY_NOTE = ('Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that '
+                'the app works on a phone, and nothing here blocks a build or an install.')
 REASON_MAX = 300
 STATUSES = ('not_guarded_here', 'unverified', 'guarded')
 
@@ -768,6 +768,7 @@ def wire_summary(stored) -> dict:
                   'counts': {'notGuardedHere': c['not_guarded_here'], 'unverified': c['unverified'],
                              'guarded': c['guarded']},
                   # The highest level a kept finding names: a lower bound, never a ceiling (findings past the kept
-                  # ones, unverified ones the database cannot place and unanalysed methods may need more).
+                  # ones, unverified ones the database cannot place, members it does not list (placed at their
+                  # class's level) and unanalysed methods may need more).
                   'highestLevel': max(levels, default=None),
                   'truncated': report['truncated'], 'unlistedCount': report['unlistedCount'], 'note': SUMMARY_NOTE}

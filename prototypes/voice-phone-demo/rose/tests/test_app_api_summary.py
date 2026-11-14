@@ -13,9 +13,29 @@ from rose.app_builder import ledger as L
 from rose.tests.test_app_apilevel import CALL, DB, dump
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'api-report-summary-v1.json'
-CASES = {c['case']: c for c in json.loads(FIXTURE.read_text(encoding='utf-8'))['cases']}
+DOC = json.loads(FIXTURE.read_text(encoding='utf-8'))
+CASES = {c['case']: c for c in DOC['cases']}
+CLIENT_UNREADABLE = {c['case']: c['apiReport'] for c in DOC['clientUnreadable']['cases']}
 RAN = ('complete', 'incomplete')  # an analysis ran: the only statuses with counts
 COUNTED = ('minSdk', 'counts', 'highestLevel', 'truncated', 'unlistedCount')
+
+
+def served_ok(s) -> bool:
+    """The client rule of §3.3: a summary a client may show as what it says; anything else reads as unavailable."""
+    def n(v):
+        return type(v) is int and v >= 0
+    if not isinstance(s, dict) or s.get('schemaVersion') != 1 or type(s.get('schemaVersion')) is not int \
+            or s.get('advisory') is not True or s.get('deviceProof') is not False \
+            or s.get('status') not in ('none', 'unavailable', *RAN) or not isinstance(s.get('note'), str):
+        return False
+    if s['status'] in ('incomplete', 'unavailable') and not isinstance(s.get('reason'), str):
+        return False
+    if s['status'] not in RAN:
+        return not set(COUNTED) & set(s)
+    c, level = s.get('counts'), s.get('highestLevel', False)
+    return isinstance(c, dict) and all(n(c.get(k)) for k in ('notGuardedHere', 'unverified', 'guarded')) \
+        and type(s.get('minSdk')) is int and (level is None or (type(level) is int and level >= 1)) \
+        and n(s.get('truncated')) and n(s.get('unlistedCount'))
 
 
 class Fixture(unittest.TestCase):
@@ -44,9 +64,19 @@ class Fixture(unittest.TestCase):
                 self.assertIn(s['status'], ('none', 'unavailable', *RAN))
                 self.assertIn('not device compatibility proof', s['note'])
                 self.assertIn('nothing here blocks a build or an install', s['note'])
+                self.assertIn('Nothing here shows that the app works on a phone', s['note'])
+                self.assertNotIn('means the app works', s['note'])  # no wording that reads as a pass when empty
+                self.assertTrue(served_ok(s), s)
                 # Counts only for an analysis that ran, so `none` and `unavailable` never read as "zero found".
                 self.assertEqual({k for k in COUNTED if k in s}, set(COUNTED) if s['status'] in RAN else set())
                 self.assertEqual('reason' in s, s['status'] in ('incomplete', 'unavailable'))
+
+    def test_what_a_client_must_not_read_as_clean(self):
+        self.assertLessEqual({'complete-without-counts', 'device-proof-true', 'unknown-status', 'unknown-schema'},
+                             set(CLIENT_UNREADABLE))
+        for name, s in CLIENT_UNREADABLE.items():
+            with self.subTest(case=name):
+                self.assertFalse(served_ok(s))
 
 
 class Unreadable(unittest.TestCase):
@@ -103,6 +133,9 @@ class Unreadable(unittest.TestCase):
         for stored in ('', 'null', '[]', '"complete"', '{}', b'\xff', 7, [], True):
             with self.subTest(stored=stored):
                 self.assertEqual(apilevel.wire_summary(stored)['status'], 'unavailable')
+        for name, change in changes.items():  # and what the server sends always meets the client rule
+            with self.subTest(served=name):
+                self.assertTrue(served_ok(self.broken(change)))
 
     def test_an_unavailable_record_without_a_reason_is_still_unavailable(self):
         s = apilevel.wire_summary({'schemaVersion': 1, 'advisory': True, 'status': 'unavailable'})
