@@ -21,6 +21,10 @@ Rules (host-tested in `tests/BuilderRulesTest.java`, registered in `scripts/test
 - `InstallPlan`: install, update or open only with the same package, the same signer and a higher version. A changed
   signer or a downgrade is refused with its reason, never uninstalled and reinstalled. A downloaded file must match
   the SHA-256, package, version and signer the builder recorded.
+- `RequestIds`: one `clientRequestId` per request. Retrying the same text after a lost connection reuses it. Changed
+  text, or any request after the builder has answered (including a §3.6 `out_of_scope` refusal, which starts
+  nothing), gets a new id. Host-tested in `tests/RequestIdsTest.java`.
+- The builder's refusal sentence and its accepted-request `notes` are shown as plain text only.
 - `ShareMessage`: the text the owner sends from Android's share sheet or SMS composer. It carries either the version's
   immutable link or the latest link. The link is a public APK download only.
 
