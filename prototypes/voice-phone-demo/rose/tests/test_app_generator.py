@@ -8,6 +8,7 @@ import textwrap
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from rose.app_builder import toolchain
@@ -174,6 +175,22 @@ class Snapshot(unittest.TestCase):
                     service._snapshot(self.src, self.dest)
                 self.assertEqual(cm.exception.category, 'compile')
                 self.assertFalse(any(p.is_file() and p.read_bytes() == b'key' for p in self.dest.rglob('*')))
+        # Modes are refused as written (checked on the descriptor), and nesting is bounded.
+        for make in (lambda: os.chmod(self.src / 'res/values', 0o500),
+                     lambda: os.chmod(self.src / 'res/values/strings.xml', 0o200),
+                     lambda: (self.src / ('/'.join(['d'] * (service.SNAPSHOT_MAX_DEPTH + 2)))).mkdir(parents=True)):
+            with self.subTest(make=make):
+                for p in self.src.rglob('*'):
+                    os.chmod(p, 0o700)
+                shutil.rmtree(self.src)
+                (self.src / 'res/values').mkdir(parents=True)
+                (self.src / 'res/values/strings.xml').write_text('<resources/>')
+                make()
+                with self.assertRaises(StepFailed) as cm:
+                    service._snapshot(self.src, self.dest)
+                self.assertEqual(cm.exception.category, 'compile')
+        for p in self.src.rglob('*'):
+            os.chmod(p, 0o700)
         old = service.SNAPSHOT_MAX_ENTRIES
         service.SNAPSHOT_MAX_ENTRIES = 3
         try:
@@ -210,10 +227,15 @@ FAKE_CODEX = textwrap.dedent('''\
       if(scenario==='notes')fs.writeFileSync(path.join(process.cwd(),'res','values','notes.xml'),
        '<?xml version="1.0" encoding="utf-8"?>\\n<resources><string name="note">Tip</string></resources>\\n');
       if(scenario==='late'){
-       // A writer that escapes the process group (setsid) and changes the manifest after the stop.
+       // A writer that escapes the process group (setsid) and, once the build has started (the test's "go"
+       // marker), adds debuggable to the manifest and a Java file that does not compile.
        const m=path.join(process.cwd(),'AndroidManifest.xml');
-       require('node:child_process').spawn('setsid',['sh','-c','sleep 0.4; sed -i "s/<application/<application android:debuggable=\\"true\\"/" "$0"; echo late > "$1"',
-        m,path.join(process.cwd(),'res','values','late.txt')],{detached:true,stdio:'ignore'}).unref();
+       require('node:child_process').spawn('setsid',['sh','-c',
+        'i=0; until [ -e "$2" ] || [ $i -ge 300 ]; do sleep 0.05; i=$((i+1)); done; '+
+        'sed -i "s/<application/<application android:debuggable=\\"true\\"/" "$0"; '+
+        'mkdir -p src/late && echo "not java" > src/late/Broken.java; echo late > "$1"',
+        m,path.join(process.cwd(),'res','values','late.txt'),path.join(process.cwd(),'..','go')],
+        {detached:true,stdio:'ignore',cwd:process.cwd()}).unref();
       }
       if(scenario==='identity'){const f=path.join(process.cwd(),'AndroidManifest.xml');
        fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace('<application','<application android:debuggable="true"'));}
@@ -298,17 +320,29 @@ class BuilderWithWriter(RealBridge):
     def test_a_writer_left_running_never_changes_what_is_built(self):
         os.environ['ROSE_TEST_SCENARIO'] = 'late'
         b = self.builder()
+        real_build = toolchain.build
+
+        def build_after_the_late_write(source, *args, **kwargs):
+            # Deterministic order: the escaped writer changes the live source after the snapshot and before any
+            # build step reads files. Building from the live source would then fail (debuggable, broken Java).
+            project = Path(self.tmp.name) / 'builder' / 'projects' / out['projectId']
+            (project / 'go').touch()
+            for _ in range(300):
+                if (project / 'source/res/values/late.txt').exists():
+                    break
+                time.sleep(0.05)
+            self.assertTrue((project / 'source/res/values/late.txt').exists())
+            return real_build(source, *args, **kwargs)
+
         out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r1', 'description': 'Tip calculator'})
-        self.assertTrue(b.run_next())
+        with unittest.mock.patch.object(toolchain, 'build', build_after_the_late_write):
+            self.assertTrue(b.run_next())
         job = b.job(out['jobId'])
         self.assertEqual(job['state'], 'ready', job)
         project = Path(self.tmp.name) / 'builder' / 'projects' / out['projectId']
         source = project / 'source'
-        for _ in range(100):  # the escaped writer did change the live source, after the snapshot
-            if (source / 'res/values/late.txt').exists():
-                break
-            time.sleep(0.05)
-        self.assertIn('debuggable', (source / 'AndroidManifest.xml').read_text())
+        self.assertIn('debuggable', (source / 'AndroidManifest.xml').read_text())  # the live source did change
+        self.assertTrue((source / 'src/late/Broken.java').exists())
         # ... but the recorded revision and the delivered APK are the checked snapshot.
         from rose.app_builder.service import _git
         version = b.projects()[0]['versions'][0]

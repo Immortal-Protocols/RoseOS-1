@@ -312,8 +312,10 @@ export class Codex extends EventEmitter {
   const gone=async()=>{const end=Date.now()+waitMs;
    while(Date.now()<end){if(exited()&&!alive())return true;await new Promise(resolve=>setTimeout(resolve,20));}
    return exited()&&!alive();};
+  // SIGTERM lets the app-server exit cleanly. SIGKILL then always follows: a clean scan alone proves nothing while
+  // members can still fork, but a group SIGKILL is delivered to every member at once, after which the scan is sound.
   signal('SIGTERM');
-  if(await gone())return true;
+  await gone();
   signal('SIGKILL');
   return gone();
  }

@@ -107,14 +107,17 @@ def _place(src: Path, dst: Path):
 
 SNAPSHOT_MAX_ENTRIES = 5000
 SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
+SNAPSHOT_MAX_DEPTH = 32
 NOTE_MAX = 1200
 
 
 def _snapshot(source: Path, dest: Path):
     """A private copy of the written source, outside the writer's sandbox. The builder checks, records and builds
     only this copy, so anything the writer may have left running can still change ``source`` (which the next job
-    resets) but never what is checked, committed and built. Directories are opened without following links and each
-    file is read through one descriptor that is checked as a regular file with a single link."""
+    resets) but never what is checked, committed and built. Nothing here opens a path that could block or follow a
+    link: directories are opened with O_NOFOLLOW, each file through one non-blocking descriptor that is checked as a
+    regular file with a single link, and modes are checked on the descriptor (the same owner-access rule as
+    ``template.check``), so the source is refused as written. Names are copied as they are and checked afterwards."""
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(mode=0o700, parents=True)
@@ -122,7 +125,15 @@ def _snapshot(source: Path, dest: Path):
     refuse = lambda why: toolchain.StepFailed('compile', why)
     nofollow = os.O_NOFOLLOW | os.O_CLOEXEC
 
-    def copy_dir(fd: int, to: Path):
+    def owner_access(st, name):
+        if stat.S_ISDIR(st.st_mode) and st.st_mode & 0o700 != 0o700 or \
+                stat.S_ISREG(st.st_mode) and st.st_mode & 0o600 != 0o600:
+            raise refuse(f'{name} has permissions the builder cannot use.')
+
+    def copy_dir(fd: int, to: Path, depth: int):
+        if depth > SNAPSHOT_MAX_DEPTH:
+            raise refuse(f'The app\'s folders are nested more than {SNAPSHOT_MAX_DEPTH} deep.')
+        owner_access(os.fstat(fd), to.name if depth else 'The app folder')
         for entry in sorted(os.scandir(fd), key=lambda e: e.name):
             budget['entries'] -= 1
             if budget['entries'] < 0:
@@ -132,7 +143,7 @@ def _snapshot(source: Path, dest: Path):
                 child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | nofollow, dir_fd=fd)
                 try:
                     (to / entry.name).mkdir(mode=0o700)
-                    copy_dir(child, to / entry.name)
+                    copy_dir(child, to / entry.name, depth + 1)
                 finally:
                     os.close(child)
             elif stat.S_ISREG(mode):
@@ -141,6 +152,7 @@ def _snapshot(source: Path, dest: Path):
                     st = os.fstat(f)
                     if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
                         raise refuse(f'{entry.name} is linked to another file.')
+                    owner_access(st, entry.name)
                     with open(to / entry.name, 'xb', opener=lambda p, fl: os.open(p, fl, 0o600)) as out:
                         size = 0
                         while chunk := os.read(f, 1 << 20):
@@ -161,7 +173,7 @@ def _snapshot(source: Path, dest: Path):
     except OSError:
         raise toolchain.StepFailed('internal', 'The project source could not be read.') from None
     try:
-        copy_dir(root, dest)
+        copy_dir(root, dest, 0)
     except OSError:  # an entry changed or vanished while it was copied
         raise refuse('The app\'s files changed while they were being checked.') from None
     finally:
@@ -312,11 +324,10 @@ class Builder:
             note = self.generate(source, kind, request, cancelled)
             if cancelled():
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
-            # From here on only the snapshot is read: checked, recorded and built are the same files. The source
-            # is checked first too, so its names, modes and links are refused as written, not as copied.
+            # From here on only the snapshot is read: checked, recorded and built are the same files. The live
+            # source is never opened by path here, since something the writer left running may still change it.
             snapshot = work.parent / f'snapshot-{job["attempt"]}'
             try:  # before git touches anything the generator wrote
-                template.check(source, package)
                 _snapshot(source, snapshot)
                 template.check(snapshot, package)
             except template.TemplateRefused as refused:

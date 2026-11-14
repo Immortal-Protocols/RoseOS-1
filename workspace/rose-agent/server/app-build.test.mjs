@@ -251,3 +251,11 @@ test('a group that cannot be emptied is never confirmed stopped',async()=>{
  finally{process.kill=realKill;member.kill('SIGKILL');}
  assert.deepEqual(sent,[[-member.pid,'SIGTERM'],[-member.pid,'SIGKILL']]);
 });
+
+test('SIGKILL always follows, even when the group already looks empty after SIGTERM',async()=>{
+ const c=new Codex('/x/source','',null,{appBuild:true}),child={pid:2147480,exitCode:0,signalCode:null};
+ const realKill=process.kill,sent=[];
+ process.kill=(pid,signal)=>{if(signal===0)throw Object.assign(Error('no such process'),{code:'ESRCH'});sent.push([pid,signal]);return true;};
+ try{assert.equal(await c.closeGroupConfirmed(child,60),true);}finally{process.kill=realKill;}
+ assert.deepEqual(sent,[[-2147480,'SIGTERM'],[-2147480,'SIGKILL']]);
+});

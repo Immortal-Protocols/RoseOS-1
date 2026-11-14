@@ -442,8 +442,10 @@ app-server client.
   - stops the turn on any item other than messages, reasoning, plans, commands
     and file changes, or on more than 400 items;
   - closes only once the app-server's whole process group is gone. The
-    app-server starts as its own group, which is SIGTERMed and then SIGKILLed.
-    On Linux, members that are already zombies count as gone.
+    app-server starts as its own group. The group is sent SIGTERM and then
+    always SIGKILL, which reaches every member at once. Only after that does
+    an empty group count, and on Linux members that are already zombies count
+    as gone.
 - `rose/app_builder/generator.py`: `CodexGenerator` is the Builder's `generate`.
   Each job gets one bridge process and one turn, bounded by `timeout_s` and
   stopped on cancel. It returns only after the bridge confirms that process
@@ -452,19 +454,25 @@ app-server client.
 - A process that leaves the group (`setsid`, a double fork) is not covered
   by that stop. So the Builder never reads the live source after the writer:
   - it copies the source into a private snapshot under `jobs/<id>/`, outside
-    the writer's writable root, reading each file through one descriptor
-    that is checked as a single-link regular file;
-  - it refuses links, special files, more than 5000 entries or more than
-    64 MB;
+    the writer's writable root. Each directory is opened without following
+    links, and each file is read through one non-blocking descriptor that is
+    checked as a single-link regular file with owner access;
+  - it refuses links, special files, more than 5000 entries, nesting deeper
+    than 32 or more than 64 MB;
+  - it never opens the live source by path, since something left running
+    could plant a FIFO or a link to an endless device there;
   - it checks, records (git with the snapshot as work tree) and builds only
     that snapshot.
 
   Something left running can still change `source`, but the next job resets
-  it to the delivered revision. A test has an escaped writer add
-  `debuggable` after the stop: the delivered revision and the APK don't have
-  it.
-- Writer output gets no trust: the Builder's `template.check` and build checks
-  still apply, to the source as written and to the snapshot. A test has the
+  it to the delivered revision. In a test, an escaped writer adds `debuggable`
+  and a broken Java file after the snapshot and before the build reads
+  anything. The job is ready, and neither the delivered revision nor the APK
+  contains them. With the snapshot replaced by the live source, the same test
+  fails.
+- Writer output gets no trust: the snapshot's own refusals, then the
+  Builder's `template.check` and build checks on the snapshot, all still
+  apply. A test has the
   fake writer add `debuggable`, and the job fails with nothing delivered.
 - A version's `notes` (§3.3) carry the writer's own summary of what the app
   does and what it could not do. It is untrusted display text, at most 1200
