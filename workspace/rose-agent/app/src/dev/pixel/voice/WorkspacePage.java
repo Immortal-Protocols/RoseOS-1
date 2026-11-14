@@ -259,10 +259,12 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   boolean open=last!=null&&!last.finalState()&&(last.sent==null||"STARTED".equals(last.sent)||"ALREADY_STARTED".equals(last.sent)||"UNCERTAIN".equals(last.sent));
   if(open){
    // Already asked and not ended (or not known to have ended): show where it is rather than asking twice. Only
-   // when the phone never learned whether it started (no taskId) may the person explicitly ask again.
-   AlertDialog.Builder b=new AlertDialog.Builder(activity).setTitle(task.label).setMessage(hub.taskLine(id));
-   if("UNCERTAIN".equals(last.sent)&&last.taskId==null)b.setPositiveButton("Ask again",(d,w)->hub.startTask(id)).setNegativeButton("Not now",null);
-   else b.setPositiveButton("OK",null);
+   // when the phone never learned whether it started (no taskId) may the person explicitly ask again, and then the
+   // sheet says the first task may already exist or still be running, so a new request could start it twice.
+   AlertDialog.Builder b=new AlertDialog.Builder(activity).setTitle(task.label);
+   if(hub.tasks.mayAskAgain(id))b.setMessage(hub.taskLine(id)+"\n\n"+WorkspaceTaskTracker.ASK_AGAIN_WARNING)
+    .setPositiveButton("Ask again",(d,w)->hub.startTask(id)).setNegativeButton("Not now",null);
+   else b.setMessage(hub.taskLine(id)).setPositiveButton("OK",null);
    b.show();
    return;
   }

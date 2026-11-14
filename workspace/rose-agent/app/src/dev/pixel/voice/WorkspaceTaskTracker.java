@@ -109,6 +109,22 @@ final class WorkspaceTaskTracker {
   }
  }
 
+ /**
+  * Shown with Ask again. The first request may have reached Rose even though no reply came, so asking again can
+  * start the same task twice: the new request has a new requestId, and App Core cannot tell the two apart.
+  */
+ static final String ASK_AGAIN_WARNING="Rose may already have this task from your first request, and it may still be running. "
+  +"Asking again sends a new request, which could start it a second time. Check Rose's work first.";
+
+ /**
+  * Whether the sheet may offer Ask again: only when the send's outcome is unknown (UNCERTAIN), no taskId ever
+  * came, and no state for it has arrived. Nothing asks again on its own; it is the person's new confirmation.
+  */
+ boolean mayAskAgain(String actionId){
+  Record r=byAction(actionId);
+  return r!=null&&r.taskId==null&&r.state==null&&"UNCERTAIN".equals(r.sent);
+ }
+
  /** Records whose taskId is known but whose end is not: the GET answers these after a restart or a gap. */
  List<String> openTaskIds(){List<String> ids=new ArrayList<>();for(Record r:records)if(r.taskId!=null&&!r.finalState())ids.add(r.taskId);return ids;}
  Record byAction(String actionId){for(int i=records.size()-1;i>=0;i--)if(records.get(i).actionId.equals(actionId))return records.get(i);return null;}

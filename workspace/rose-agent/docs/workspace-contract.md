@@ -289,7 +289,15 @@ mounted only when the server enables it, which nothing does yet. The phone treat
     end yet, when the page is reached. It does this only while the gate is on.
   - **No double start.** A task already asked and not ended shows its line instead of asking again. Only when
     the phone never learned whether a task started does the sheet offer **Ask again**, as a new, explicit
-    confirmation.
+    confirmation (`WorkspaceTaskTracker.mayAskAgain`).
+  - **Ask again can duplicate.** Its sheet always carries `ASK_AGAIN_WARNING`: Rose may already have the task
+    from the first request, and it may still be running. A new request could start it a second time. Ask again
+    sends a new `requestId`, and App Core cannot tell the two requests apart. Nothing asks again on its own, and
+    there is no exactly-once promise. Within one tap, `WorkspaceTaskClient.start` retries only with that tap's
+    own `requestId`, so App Core answers a retry as a duplicate.
+  - **Known limit.** The new tap replaces the action's record. If the first request did start, its later
+    states carry the old `requestId`, so they are not shown on the card. They stay visible in Rose's work,
+    which the warning points to.
 
 **Not proven:** none of this has run on Android, sent a request, or started a task.
 ## Open decisions

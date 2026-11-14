@@ -65,13 +65,27 @@ public final class WorkspaceTaskTrackerTest {
   expect("Not sure it started · check Rose's work".equals(t.line(A)),"lost reply: unsure");
   WorkspaceTaskTracker back=WorkspaceTaskTracker.fromJson(t.toJson());
   expect("Not sure it started · check Rose's work".equals(back.line(A)),"survives a restart");
+  // Ask again is offered only here, and its warning says the first task may exist, may run, and may be doubled.
+  expect(t.mayAskAgain(A)&&back.mayAskAgain(A),"unknown send, no taskId: Ask again offered (and after a restart)");
+  String w=WorkspaceTaskTracker.ASK_AGAIN_WARNING;
+  expect(w.contains("may already have this task")&&w.contains("may still be running")&&w.contains("new request")&&w.contains("second time"),"Ask again warns of an existing, running or duplicated task");
+  expect(!w.contains("safe")&&!w.contains("only once")&&!w.contains("won't"),"no exactly-once promise");
   expect(back.apply(WorkspaceTaskTracker.event(event(state(ID,"tap-4",A,"running",110))))!=null,"the replay carries requestId: re-associated");
   expect(ID.equals(back.byAction(A).taskId)&&"Rose is working".equals(back.line(A)),"now follows its taskId");
+  expect(!back.mayAskAgain(A),"once its taskId is known, no Ask again");
   WorkspaceTaskTracker again=WorkspaceTaskTracker.fromJson(back.toJson());
   expect(ID.equals(again.byAction(A).taskId)&&"Rose is working".equals(again.line(A))&&again.openTaskIds().contains(ID),"taskId and state survive, and it is still open for the GET");
   // A duplicate reply also gives the taskId.
   WorkspaceTaskTracker d=new WorkspaceTaskTracker();d.tapped(A,"tap-5");d.replied("tap-5",new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.ALREADY_STARTED,null,ID,1));
   expect(ID.equals(d.byAction(A).taskId)&&"Started · in Rose's work".equals(d.line(A)),"duplicate re-associates");
+  // Never offered for no tap, a tap still sending, a definite answer, or an uncertain send whose taskId came.
+  WorkspaceTaskTracker n=new WorkspaceTaskTracker();
+  expect(!n.mayAskAgain(A),"no tap: no Ask again");
+  n.tapped(A,"tap-6a");expect(!n.mayAskAgain(A),"still sending: no Ask again");
+  for(WorkspaceTaskClient.Kind k:new WorkspaceTaskClient.Kind[]{WorkspaceTaskClient.Kind.STARTED,WorkspaceTaskClient.Kind.ALREADY_STARTED,WorkspaceTaskClient.Kind.REFUSED,WorkspaceTaskClient.Kind.UNAVAILABLE,WorkspaceTaskClient.Kind.NOT_AUTHORIZED,WorkspaceTaskClient.Kind.NOT_SENT}){
+   WorkspaceTaskTracker k1=new WorkspaceTaskTracker();k1.tapped(A,"tap-k");k1.replied("tap-k",new WorkspaceTaskClient.Outcome(k,null,k==WorkspaceTaskClient.Kind.STARTED||k==WorkspaceTaskClient.Kind.ALREADY_STARTED?ID:null,1));
+   expect(!k1.mayAskAgain(A),"no Ask again after "+k);
+  }
  }
 
  /** T5: older updates are dropped; nothing is upgraded without App Core saying so. */
