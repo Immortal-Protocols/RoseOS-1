@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS key_backups (
 CREATE TABLE IF NOT EXISTS version_dependencies (
   project_id TEXT NOT NULL, version_code INTEGER NOT NULL, coordinate TEXT NOT NULL, sha256 TEXT NOT NULL,
   size INTEGER NOT NULL, PRIMARY KEY (project_id, version_code, coordinate));
+CREATE TABLE IF NOT EXISTS version_api_reports (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, report TEXT NOT NULL,
+  PRIMARY KEY (project_id, version_code));
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -257,7 +260,7 @@ class Ledger:
                 raise LedgerError('the signer changed')
 
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
-                dependencies=()):
+                dependencies=(), api_report: dict | None = None):
         """Record the delivered version and, in the same transaction, the libraries it was built with (its lock)."""
         with self.lock:
             job = self.job(job_id)
@@ -275,6 +278,9 @@ class Ledger:
                 for lib in dependencies:
                     self.db.execute('INSERT INTO version_dependencies VALUES (?,?,?,?,?)',
                                     (job['projectId'], job['versionCode'], lib.coordinate, lib.sha256, lib.size))
+                if api_report is not None:  # advisory, kept with the version it describes
+                    self.db.execute('INSERT INTO version_api_reports VALUES (?,?,?)',
+                                    (job['projectId'], job['versionCode'], json.dumps(api_report, sort_keys=True)))
                 self.db.execute("UPDATE jobs SET state='ready', stage='ready', message='Ready to install.', "
                                 "updated=? WHERE job_id=?", (self.clock(), job_id))
                 self.db.execute('COMMIT')
@@ -315,6 +321,13 @@ class Ledger:
             rows = self.db.execute('SELECT coordinate, sha256, size FROM version_dependencies WHERE project_id=? AND '
                                    'version_code=? ORDER BY coordinate', (project, version_code)).fetchall()
         return [{'coordinate': c, 'sha256': h, 'size': n} for c, h, n in rows]
+
+    def api_report(self, project: str, version_code: int) -> dict | None:
+        """The advisory API level report recorded for a delivered version (rose.app_builder.apilevel)."""
+        with self.lock:
+            row = self.db.execute('SELECT report FROM version_api_reports WHERE project_id=? AND version_code=?',
+                                  (project, version_code)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def library_lock(self, project: str) -> dict:
         """coordinate -> sha256 for every library any delivered version of the project used (the newest digest if

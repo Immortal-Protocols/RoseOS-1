@@ -378,7 +378,30 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     problem = declared_permission_problem(tree, package)
     if problem:
         raise StepFailed('compile', problem)
+    report = api_report(work, package, tools, home, cancelled, hidden)  # advisory: never fails the build
+    _private(work / 'api-report.json', json.dumps(report, sort_keys=True))
+    from .apilevel import summary
+    log.append(summary(report))
     return unsigned, '\n'.join(x for x in log if x)
+
+
+def api_report(work: Path, package: str, tools: Tools, home: Path, cancelled, hidden=()) -> dict:
+    """The advisory API level report of the built dex (rose.app_builder.apilevel). Whatever goes wrong, it says
+    ``unavailable`` and the build goes on; only a cancel stops it."""
+    from . import apilevel
+    database, dexdump = tools.sdk / apilevel.DATABASE, tools.bt / 'dexdump'
+    if not database.is_file() or not dexdump.exists():
+        return apilevel.unavailable('the pinned API database or dexdump is missing', template.MIN_SDK)
+    try:
+        dumps = [run([dexdump, '-d', dex], work, home, tools, cancelled, 'internal', hidden)
+                 for dex in sorted((work / 'dex').glob('classes*.dex'))]
+        return apilevel.analyse(dumps, apilevel.database(database), package, template.MIN_SDK)
+    except StepFailed as failed:
+        if failed.category == 'cancelled':
+            raise
+        return apilevel.unavailable(f'dexdump did not finish ({failed.category})', template.MIN_SDK)
+    except Exception as error:
+        return apilevel.unavailable(f'the analysis stopped ({type(error).__name__})', template.MIN_SDK)
 
 
 def declared_permission_problem(tree: str, package: str) -> str | None:
