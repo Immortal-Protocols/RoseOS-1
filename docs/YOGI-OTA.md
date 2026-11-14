@@ -13,7 +13,7 @@ and `publish=true` in the existing Yogi workflow once the actual setup below is
 bound. This runs the complete path automatically, with no individual-stage
 dispatches or manual transfer of bootstrap receipts:
 
-1. Hosted admission checks the captured main commit, current immutable app
+1. Hosted admission checks the captured main commit, exact immutable app
    export, exclusive protected Yogi runner and signing/setup bindings. The
    controller checks the actual 12-hour STOP limit and preserved dedicated disk
    before starting the replacement VM; it never adopts a running VM.
@@ -63,10 +63,13 @@ no SSH or registration credential. Administrator action/approval is needed for
 those access/resource changes. Binding their actual evidence and expiries then
 opens `fullRun.enabled`; this source commit deliberately leaves it false.
 
-The current accepted app input is `frankel-2026111201` (voice 374, calculator 6,
+The selected app input is `frankel-2026111201` (voice 374, calculator 6,
 background control 43), exported by run 43485652878, artifact 14067412309. Its
-declared app-source sets are checked again against the actual workflow source;
-the downloaded bytes and signatures are admitted by the existing verifier.
+record bytes are pinned in the Yogi configuration. The downloaded bytes and
+signatures are admitted by the existing verifier. This deliberately uses the
+verified fleet set; newer in-tree app-builder changes are excluded until a new
+export is selected. Source drift is observed and recorded in the native and
+public run bindings, never misrepresented as source-current app compilation.
 The initial one-shot needs two compiles and two signings; no successful timing
 measurement exists yet. The native job is limited to 660 minutes, with a
 separate 12-hour VM STOP fallback. No schedule is added.

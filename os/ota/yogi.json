@@ -236,8 +236,13 @@
       "dev.pixel.calculator.agent"
     ],
     "record": "os/app-inputs/frankel-2026111201.json",
-    "basis": "Reuse the immutable Release export from run 43485652878 attempt 1, artifact 14067412309, producer 43216030196. Full admission checks the declared app-source sets against the captured workflow commit; native integration rechecks the downloaded 12-file export and actual APK identities. SDK37 is the build contract; actual targetSdk is35.",
-    "artifactExpiresAt": "2026-11-27T18:46:20Z"
+    "basis": "Reuse the immutable Release export from run 43485652878 attempt 1, artifact 14067412309, producer 43216030196. The selected record hash pins the actual app set. Native integration rechecks the downloaded 12-file export and actual APK identities; newer in-tree app changes are excluded and reported as source drift. SDK37 is the build contract; actual targetSdk is35.",
+    "artifactExpiresAt": "2026-11-27T18:46:20Z",
+    "selection": {
+      "mode": "pinned-verified-export",
+      "recordSha256": "8139a4da9040330124e7c4e5f73eeaedac6d593557f60d85ee19bca9c2a5f9ab",
+      "basis": "Consume the last verified immutable fleet app export for the first Yogi attempt. Record producer/source/version identity explicitly; newer in-tree app-builder changes are not included until a new export is selected. No app compilation or app signing on Yogi."
+    }
   },
   "wire": {
     "tag": "yogi-{build}",
