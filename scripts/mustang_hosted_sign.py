@@ -28,6 +28,7 @@ import re
 import shutil
 import stat
 import sys
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -324,7 +325,7 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
     return result
 
 
-def confirm_uploads(bundle_path,env=None,*,api=None,root=ROOT):
+def confirm_uploads(bundle_path,env=None,*,api=None,root=ROOT,poll_attempts=8,wait=time.sleep):
     """Require finalized same-run artifacts; payload verification remains on the signer."""
     import mustang_bootstrap_collector as collector
     env=os.environ if env is None else env
@@ -334,8 +335,33 @@ def confirm_uploads(bundle_path,env=None,*,api=None,root=ROOT):
             or not re.fullmatch(r'[1-9][0-9]{0,19}',str(bundle['runId'])):
         raise ValueError('upload confirmation requires this fresh builder attempt')
     api=api or collector.github_reader(dict(runId=bundle['runId']),env.get('GH_TOKEN',''),include_artifacts=True)
-    rows=collector.listing(api('/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+bundle['runId']+
-                               '/artifacts?per_page=100'),'artifacts')
+    if type(poll_attempts) is not int or not 1 <= poll_attempts <= 8:
+        raise ValueError('artifact confirmation read bound differs')
+    path='/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+bundle['runId']+'/artifacts?per_page=100'
+    names={'mustang-signing-'+kind+'-'+bundle['runId']+'-1' for kind in ('bundle','inputs')}
+    for attempt in range(poll_attempts):
+        # A successful list can race the finalization index. Never retry an API
+        # denial/transport failure: the API call is deliberately outside try.
+        snapshot=api(path)
+        try:
+            rows=collector.listing(snapshot,'artifacts')
+        except collector.git.Refused:
+            rows=snapshot.get('artifacts');count=snapshot.get('total_count')
+            if type(count) is not int or not 0 <= count <= 100 or not isinstance(rows,list) \
+                    or len(rows)>100 or any(not isinstance(row,dict) for row in rows):
+                raise
+            if attempt+1==poll_attempts:
+                raise ValueError('artifact index did not settle: listed='+str(len(rows))+' reported='+str(count)) from None
+        else:
+            counts=[sum(row.get('name')==name for row in rows) for name in names]
+            if any(count>1 for count in counts):
+                raise ValueError('finalized signing artifact missing or ambiguous')
+            if all(count==1 for count in counts):break
+            if attempt+1==poll_attempts:
+                raise ValueError('finalized signing artifact missing or ambiguous after bounded metadata wait')
+        print(json.dumps(dict(artifactMetadataPending=True,read=attempt+1,maximumReads=poll_attempts,
+                              listed=len(rows),reported=snapshot['total_count'])))
+        wait(5)
     found={}
     for kind in ('bundle','inputs'):
         name='mustang-signing-'+kind+'-'+bundle['runId']+'-1'
