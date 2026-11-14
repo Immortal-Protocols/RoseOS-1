@@ -470,6 +470,8 @@ one.
   - phone work whose call returns after its turn ended or was superseded,
     which stays with its own page task;
   - a stale queued change after the reconnect snapshot, which is not sent;
+  - a phone task that fails before it is attached, giving `failed`;
+  - a page task accepted during a reset, which runs on the new conversation;
   - a failed turn, giving `failed`;
   - a restart, giving `uncertain`;
   - a stable `taskId` across duplicates and restarts;
@@ -479,7 +481,9 @@ one.
   restart recovery, no supersede, a final state that can change, a null
   `taskId`, no in-flight hold, attaching to the session's current page task
   instead of the call's own, a hold that doesn't end the page task, no
-  reconnect filter, and no rollback after a failed insert. There is no live end-to-end proof: no phone, no real Codex turn,
+  reconnect filter, no rollback after a failed insert, a phone status read
+  outside the store's lock, a turn kept on a conversation that a reset
+  replaced, and a hold not released when its call never starts. There is no live end-to-end proof: no phone, no real Codex turn,
   and the server is not enabled or running.
 
 ### 4.4 App Core's answers to `rose-layout-v1` (Models Core, #781)

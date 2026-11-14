@@ -214,6 +214,9 @@ class CodexConductor:
         s = self.sessions['conversation']
         try:
             with s.submit_lock:
+                if self.sessions['conversation'] is not s:  # a reset replaced it while this turn waited:
+                    self._background(self._user_turn, text, workspace_task)  # run on the new one instead
+                    return
                 try:
                     self._interrupt_reply('new user turn')  # a page task whose turn had not ended is cancelled
                 finally:
@@ -606,7 +609,12 @@ class CodexConductor:
             return
         if kind == 'tool':
             # Bound here, in event order before the turn's end: the call reports to its own turn's page task.
-            self._background(self._tool, s, e, self._workspace_call_started(s, e))
+            page = self._workspace_call_started(s, e)
+            try:
+                self._background(self._tool, s, e, page)
+            except BaseException:
+                self._workspace_call_ended(s, page)  # the call never ran: release its hold
+                raise
             return
         if s.cancelled.is_set():
             return
@@ -700,7 +708,10 @@ class CodexConductor:
     def _workspace_attach(self, page, task):
         if task and page and self.workspace_tasks is not None:
             try:
-                self.workspace_tasks.attach(page, task.id, task.status)
+                # The status is read under the store's lock: a phone task that ended before this is seen as ended,
+                # and one that ends after finds itself attached (its own report takes the same lock).
+                with getattr(self.workspace_tasks, 'lock', None) or contextlib.nullcontext():
+                    self.workspace_tasks.attach(page, task.id, task.status)
             except Exception:
                 self.log(self.sessions.get('conversation'), 'workspace_task_unrecorded', task=page)
 

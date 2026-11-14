@@ -383,6 +383,86 @@ class PageTaskFlow(unittest.TestCase):
         self.assertEqual(self.tasks.get(reset)['state'], 'cancelled')
         self.assertIsNone(self.engine.sessions['conversation'].workspace_task)
 
+    def test_a_phone_task_that_ends_before_it_is_attached_still_ends_the_page_task(self):
+        import threading
+        task_id = self.submit()
+        real_lock, waiting, ended = self.tasks.lock, threading.Event(), threading.Event()
+        caller, armed = threading.current_thread(), []
+
+        class Lock:  # the call is about to attach; the phone task fails on its own thread first
+            def __enter__(self):
+                if armed and threading.current_thread() is caller:
+                    armed.clear()
+                    waiting.set()
+                    ended.wait(5)
+                return real_lock.__enter__()
+
+            def __exit__(self, *exc):
+                return real_lock.__exit__(*exc)
+        self.tasks.lock = Lock()
+
+        def failing(s):  # the phone task's own thread: it fails fast (an unavailable app)
+            waiting.wait(5)
+            self.engine._failed(s, RuntimeError('unavailable'))
+            ended.set()
+        self.engine._start_phone = failing
+        real_start = self.engine.start_phone
+
+        def start_phone(*a, **k):
+            task = real_start(*a, **k)
+            armed.append(True)
+            return task
+        self.engine.start_phone = start_phone
+        started = self.call(self.conversation, 'phone_task', app='Calculator', goal='Open Calculator')
+        self.end_turn()
+        t = self.tasks.get(task_id)
+        self.assertEqual(self.engine.tasks[started['task_id']].status, 'failed')
+        self.assertEqual((t['state'], t['phoneTasks']), ('failed', [{'id': started['task_id'], 'status': 'failed'}]))
+
+    def test_a_page_task_accepted_during_a_reset_runs_on_the_new_conversation(self):
+        import threading
+        client, gate, entered = self.engine.client, threading.Event(), threading.Event()
+        real = client.request
+
+        def request(op, session, **p):
+            if op == 'close' and session == 'conversation':
+                entered.set()
+                gate.wait(5)  # reset() is closing the old conversation
+            return real(op, session, **p)
+        client.request = request
+        old = self.conversation
+        resetting = threading.Thread(target=self.engine.reset)
+        resetting.start()
+        self.assertTrue(entered.wait(2))
+        reply = self.tasks.submit('d', GOOD)  # accepted against the old, idle conversation
+        self.assertEqual(reply['status'], 'accepted')
+        import time
+        time.sleep(0.2)  # its turn is waiting on the old conversation's lock
+        gate.set()
+        resetting.join(5)
+        new = self.conversation = self.engine.sessions['conversation']
+        self.assertIsNot(new, old)
+        self.assertTrue(self.fixtures.wait(lambda: new.turn is not None and new.busy))
+        self.assertEqual(new.workspace_task, reply['taskId'])
+        self.assertFalse(new.cancelled.is_set())
+        self.end_turn()
+        self.assertEqual(self.tasks.get(reply['taskId'])['state'], 'done')
+
+    def test_a_call_whose_thread_never_starts_releases_its_hold(self):
+        task_id = self.submit()
+        real = self.engine._background
+
+        def no_thread(fn, *args):
+            raise RuntimeError("can't start new thread")
+        self.engine._background = no_thread
+        with self.assertRaises(RuntimeError):
+            self.engine._event({'event': 'tool', 'session': 'conversation', 'turnId': self.conversation.turn,
+                                'params': {'tool': 'phone_task', 'arguments': {'app': 'Calculator', 'goal': 'x'},
+                                           'turnId': self.conversation.turn, 'callId': 'c1'}, 'callId': 'c1'})
+        self.engine._background = real
+        self.end_turn()
+        self.assertEqual(self.tasks.get(task_id)['state'], 'done')
+
     def test_reconnect_snapshot_and_events_reach_the_bus(self):
         task_id = self.submit()
         self.assertEqual(self.events(task_id), ['running'])
