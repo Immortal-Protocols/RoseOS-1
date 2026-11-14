@@ -143,9 +143,12 @@ until at least two candidates have device numbers and validity/usefulness on the
   compose return reaches `resulted()`, and `WorkspacePage.timeFirstFrame`'s one-shot `OnDrawListener` calls
   `rendered()`. All three use `System.nanoTime()`; "rendered" is the draw pass, not display presentation.
   `requestToRenderMs` here **stays null**: nothing calls `WorkspacePage.timingJson()` or exports it, `bench.py`
-  ingests nothing, and there is no phone or model measurement. These records are **not benchmark-ready**. A
-  commit prepared off screen can be drawn only when the person comes back, so its render time can include that
-  delay, and a record does not say whether the page was on screen.
+  ingests nothing, and there is no phone or model measurement. Since #813 (merged `1fd9c2ec`) each record has a
+  `basis`: `request-to-first-draw` (on screen from the result to its first draw; the only basis with
+  `requestToRenderMs`), `prepared-then-shown` (drawn after the person came back; `resultToShownDrawMs` with
+  `includesHumanWait`, never latency) or `result-only`, plus `visibleAtResult`, `leftBeforeDraw` and
+  `replacedBeforeDraw`. Visibility is recorded from the result onward, not for the whole request. These records are
+  still **not benchmark-ready**: there is no export route and no cold/warm or device/runtime provenance.
 - **True cold start** (fresh process, model load) is a device measurement; `first` here is only the first call in
   a process.
 - Validity rate and failure categories; usefulness as recall and precision of each case's expected IDs (the
@@ -181,9 +184,9 @@ and a content source. The renderer timestamp exists in source (above); exporting
 4. **Gated weights.** Gemma (Google repos) and Llama 3.2 need licence acceptance with a Hugging Face account, which
    is a credential; their configs (and so KV budgets) are unverified. Gemma's licence also needs Nathan's call.
 5. **Contract answers.** Merged: OS Product's PR 787 (`d17e60f7`) and App Core's PR 782 (`e8eb0453`).
-6. **Request-to-render data.** The renderer timestamp exists in source (`WorkspaceTiming`), but nothing exports
-   it, `bench.py` does not ingest it, and records lack on-screen provenance (see the benchmark plan). Human review
-   of usefulness is a separate step.
+6. **Request-to-render data.** The renderer timestamp and its visibility basis exist in source (`WorkspaceTiming`,
+   #787 and #813), but nothing exports them, `bench.py` does not ingest them, and records carry no cold/warm or
+   device/runtime provenance (see the benchmark plan). Human review of usefulness is a separate step.
 7. **CI.** This directory is not wired into shared CI; tests run locally.
 8. **Android compile.** No Android SDK is present, and downloading one is outside this source-only scope, so the
    Java core has not been compiled against `android.jar` or dexed. It uses only `java.lang`, `java.util`,
