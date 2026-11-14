@@ -425,9 +425,16 @@ one.
   - `done`: the turn completed and every phone task it started finished done,
     or it started none.
   - `failed`: the turn failed, or any of its phone tasks failed.
-  - `cancelled`: the turn was interrupted, for example superseded by a newer
-    request, or a phone task was cancelled, and nothing failed.
+  - `cancelled`: the turn was interrupted, and nothing failed. That covers a
+    turn superseded by a newer request or by the owner speaking, a voice hold,
+    a conversation reset, a shutdown, or a cancelled phone task.
   - `uncertain`: the server restarted before an end was recorded.
+
+  Phone work is counted for the turn that asked for it. A `phone_task` or
+  `update_task` call is bound to its own turn's page task when the call
+  arrives. While the call is in flight, the page task stays `running`, even if
+  its turn ends or is superseded first. The phone task it starts is attached
+  to that page task, never to a later one.
 
   Every state except `running` is final, so a late report can't turn
   `uncertain` into `done`.
@@ -446,7 +453,10 @@ one.
   - **Live:** `{kind: "workspace_task", t, task}` on `/ws/events` at every
     change.
   - **Reconnect:** after the existing task snapshots, one `workspace_task`
-    event for each of this device's 20 most recent page tasks.
+    event for each of this device's 20 most recent page tasks. A change
+    already included in that snapshot is not sent again after it, so a card
+    never steps back to an older state. Changes go out in the order they were
+    made.
   - **Authoritative read:** signed `GET /workspace/v1/tasks/<taskId>` returns
     200 with the state, or 404 `{schemaVersion: 1, status: "unknown"}`.
 
@@ -456,15 +466,20 @@ one.
   Codex and phone fixtures. They cover:
   - a turn that starts phone work, then a completed phone task, giving `done`;
   - a reply-only turn, giving `done`;
-  - a superseded turn, giving `cancelled`;
+  - a superseded turn, a voice hold and a reset, each giving `cancelled`;
+  - phone work whose call returns after its turn ended or was superseded,
+    which stays with its own page task;
+  - a stale queued change after the reconnect snapshot, which is not sent;
   - a failed turn, giving `failed`;
   - a restart, giving `uncertain`;
   - a stable `taskId` across duplicates and restarts;
   - the signed GET route.
 
   Mutation checks each make them fail: no attach, ignoring phone tasks, no
-  restart recovery, no supersede, a final state that can change, and a null
-  `taskId`. There is no live end-to-end proof: no phone, no real Codex turn,
+  restart recovery, no supersede, a final state that can change, a null
+  `taskId`, no in-flight hold, attaching to the session's current page task
+  instead of the call's own, a hold that doesn't end the page task, no
+  reconnect filter, and no rollback after a failed insert. There is no live end-to-end proof: no phone, no real Codex turn,
   and the server is not enabled or running.
 
 ### 4.4 App Core's answers to `rose-layout-v1` (Models Core, #781)

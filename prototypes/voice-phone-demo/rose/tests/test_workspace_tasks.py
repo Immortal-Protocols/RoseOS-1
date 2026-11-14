@@ -131,6 +131,34 @@ class States(unittest.TestCase):
         self.tasks.phone_task(99, 'failed')  # never attached to anything
         self.assertEqual(self.tasks.get(other)['state'], 'running')
 
+    def test_a_call_in_flight_keeps_the_task_running_until_it_returns(self):
+        self.tasks.call_started(self.id)
+        self.tasks.turn_ended(self.id, 'completed')  # the turn ended while its phone_task call was still starting
+        self.assertEqual(self.state(), 'running')
+        self.tasks.attach(self.id, 5)
+        self.tasks.call_ended(self.id)
+        self.assertEqual(self.state(), 'running')  # its phone task runs
+        self.tasks.phone_task(5, 'done')
+        self.assertEqual(self.state(), 'done')
+        other = self.tasks.submit('d', {**GOOD, 'requestId': 'r2'})['taskId']
+        self.tasks.call_started(other)
+        self.tasks.turn_ended(other, 'completed')
+        self.tasks.call_ended(other)  # a call that started nothing
+        self.assertEqual(self.tasks.get(other)['state'], 'done')
+        self.assertEqual([e['state'] for e in self.events if e['taskId'] == other], ['running', 'done'])
+
+    def test_a_failed_record_leaves_no_open_transaction(self):
+        import rose.workspace_tasks as module
+        real = module.new_task_id
+        module.new_task_id = lambda: self.id  # an id already taken: the second INSERT fails after the first
+        try:
+            with self.assertRaises(Exception):
+                self.tasks.submit('d', {**GOOD, 'requestId': 'r2'})
+        finally:
+            module.new_task_id = real
+        self.assertFalse(self.tasks.db.in_transaction)
+        self.assertEqual(self.tasks.submit('d', {**GOOD, 'requestId': 'r2'})['status'], 'accepted')  # not a duplicate
+
     def test_a_restart_makes_unfinished_tasks_uncertain_and_they_stay_so(self):
         done = self.tasks.submit('d', {**GOOD, 'requestId': 'r2'})['taskId']
         self.tasks.turn_ended(done, 'completed')
@@ -288,6 +316,73 @@ class PageTaskFlow(unittest.TestCase):
         self.engine._failed(self.conversation, RuntimeError('codex'))
         self.assertEqual(self.tasks.get(task_id)['state'], 'failed')
 
+    def slow_phone_call(self):
+        """A phone_task call of the page turn that is still inside start_phone (allocating a workspace)."""
+        import threading
+        gate, entered, out = threading.Event(), threading.Event(), {}
+        real = self.engine.start_phone
+
+        def slow(*a, **k):
+            entered.set()
+            gate.wait(5)
+            return real(*a, **k)
+        self.engine.start_phone = slow
+        thread = threading.Thread(target=lambda: out.update(r=self.call(self.conversation, 'phone_task',
+                                                                         app='Calculator', goal='Open Calculator')))
+        thread.start()
+        self.assertTrue(entered.wait(2))
+
+        def finish():
+            gate.set()
+            thread.join(5)
+            self.engine.start_phone = real
+            return out['r']
+        return finish
+
+    def finish_phone(self, phone_id):
+        app = self.engine.sessions['app-' + str(phone_id)]
+        self.assertTrue(self.fixtures.wait(lambda: app.turn is not None))
+        self.assertTrue(self.call(app, 'open_app', app='Calculator')['ok'])
+        app.text = 'Calculator is open.'
+        self.engine._event({'event': 'done', 'session': app.name, 'turn': {'id': app.turn, 'status': 'completed'}})
+
+    def test_phone_work_whose_call_returns_after_the_turn_ended_still_counts(self):
+        task_id = self.submit()
+        finish = self.slow_phone_call()
+        self.end_turn()  # the bridge answered the slow call as failed; the turn completed
+        self.assertEqual(self.tasks.get(task_id)['state'], 'running')
+        started = finish()
+        t = self.tasks.get(task_id)
+        self.assertEqual((t['state'], t['phoneTasks']), ('running', [{'id': started['task_id'], 'status': 'running'}]))
+        self.finish_phone(started['task_id'])
+        self.assertEqual(self.tasks.get(task_id)['state'], 'done')
+        self.assertNotIn('done', self.events(task_id)[:-1])
+
+    def test_phone_work_of_a_superseded_turn_stays_with_its_own_page_task(self):
+        first = self.submit('r1')
+        finish = self.slow_phone_call()
+        self.engine._user_turn('wait, what time is it?')  # the owner speaks while the call is starting
+        self.assertEqual(self.tasks.get(first)['state'], 'running')
+        started = finish()
+        t = self.tasks.get(first)
+        self.assertEqual((t['state'], t['phoneTasks']), ('running', [{'id': started['task_id'], 'status': 'running'}]))
+        self.assertIsNone(self.conversation.workspace_task)  # the spoken turn serves no page task
+        self.finish_phone(started['task_id'])
+        self.assertEqual(self.tasks.get(first)['state'], 'cancelled')  # its turn was cut off
+
+    def test_a_voice_hold_or_reset_ends_the_page_task(self):
+        held = self.submit('r1')
+        turn = self.conversation.turn
+        self.engine._interrupt_reply('voice hold')
+        self.assertEqual(self.tasks.get(held)['state'], 'cancelled')
+        self.assertIsNone(self.conversation.workspace_task)
+        self.engine._event({'event': 'done', 'session': 'conversation', 'turn': {'id': turn, 'status': 'interrupted'}})
+        self.assertEqual(self.tasks.get(held)['state'], 'cancelled')
+        reset = self.submit('r2')
+        self.engine.reset()
+        self.assertEqual(self.tasks.get(reset)['state'], 'cancelled')
+        self.assertIsNone(self.engine.sessions['conversation'].workspace_task)
+
     def test_reconnect_snapshot_and_events_reach_the_bus(self):
         task_id = self.submit()
         self.assertEqual(self.events(task_id), ['running'])
@@ -333,6 +428,51 @@ class Events(unittest.TestCase):
         self.assertTrue(all('device' not in f for f in page))
         self.assertEqual(page[-1]['task']['state'], 'done')
         self.assertNotEqual(later['taskId'], mine)
+
+
+class Reconnect(unittest.TestCase):
+    def test_a_change_already_in_the_snapshot_is_not_sent_after_it(self):
+        from fastapi import FastAPI, WebSocket
+        from fastapi.testclient import TestClient
+        from rose.app import Server
+        from rose.bus import Bus
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bus = Bus()
+        tasks = WorkspaceTasks(Path(tmp.name), Starter())
+        self.addCleanup(tasks.close)
+        connect(SimpleNamespace(bus=bus, sessions={}), tasks)
+        tasks.start = Starter()
+        task_id = tasks.submit('phone', GOOD)['taskId']
+        bus.history.clear()
+        real = tasks.snapshot
+
+        def snapshot(device=None):
+            # A change still queued for this socket when the snapshot is read (it is already in the snapshot).
+            bus.emit('workspace_task', task={**tasks.get(task_id), 'state': 'running'}, device='phone',
+                     rev=tasks.revision)
+            return real(device)
+        tasks.snapshot = snapshot
+        tasks.turn_ended(task_id, 'completed')
+        bus.history.clear()
+        server = SimpleNamespace(bus=bus, snapshot=lambda: {'tasks': []}, _stale=lambda m: False, workspace_tasks=tasks)
+        app = FastAPI()
+
+        @app.websocket('/events')
+        async def events(ws: WebSocket):
+            import asyncio
+            bus.loop = asyncio.get_running_loop()
+            ws.scope['rose_device'] = 'phone'
+            await Server.serve_events(server, ws)
+        with TestClient(app).websocket_connect('/events') as ws:
+            frames = [ws.receive_json() for _ in range(3)]  # hello, replay_done, the snapshot
+            later = tasks.submit('phone', {**GOOD, 'requestId': 'r2'})['taskId']
+            frames.append(ws.receive_json())  # the next live change, not the stale one
+            ws.close()
+        self.assertEqual([f['kind'] for f in frames], ['hello', 'replay_done', 'workspace_task', 'workspace_task'])
+        self.assertEqual(frames[2]['task']['state'], 'done')
+        self.assertEqual(frames[3]['task']['taskId'], later)
+        self.assertTrue(all('rev' not in f and 'device' not in f for f in frames[2:]))
 
 
 class Route(unittest.TestCase):

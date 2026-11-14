@@ -108,6 +108,8 @@ class WorkspaceTasks:
                         'detail TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, device TEXT NOT NULL)')
         self.lock = threading.RLock()
         self.start, self.emit, self.clock = start, emit, clock
+        self._calls = {}  # task_id -> phone_task/update_task calls of its turn still in flight (not durable)
+        self.revision = 0  # counts emitted changes (this process): a snapshot taken at revision n reflects them all
         self._recover()
 
     def close(self):
@@ -130,11 +132,15 @@ class WorkspaceTasks:
             # Recorded before starting, so the turn's own events always find their task; removed again if nothing
             # could be started, so the phone may retry.
             self.db.execute('BEGIN IMMEDIATE')
-            self.db.execute('INSERT INTO requests VALUES (?,?,?)', (key, json.dumps(reply), now))
-            self.db.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?)',
-                            (task_id, body['requestId'], body['actionId'], 'pending', '{}', 'running', '', now, now,
-                             device))
-            self.db.execute('COMMIT')
+            try:
+                self.db.execute('INSERT INTO requests VALUES (?,?,?)', (key, json.dumps(reply), now))
+                self.db.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                (task_id, body['requestId'], body['actionId'], 'pending', '{}', 'running', '', now,
+                                 now, device))
+                self.db.execute('COMMIT')
+            except BaseException:
+                self.db.execute('ROLLBACK')  # never leave the store inside an open transaction
+                raise
             try:
                 self.start(body['label'].strip(), body['goal'].strip(), body['requestId'], task_id)
             except BaseException as error:
@@ -168,8 +174,24 @@ class WorkspaceTasks:
         turn = {'completed': 'completed', 'interrupted': 'interrupted'}.get(status, 'failed')
         self._change(task_id, turn=turn)
 
-    def _change(self, task_id, turn=None, phone=None):
+    def call_started(self, task_id: str):
+        """A phone_task/update_task call of this page task's turn began. Until ``call_ended``, the page task stays
+        running even if its turn ends or is superseded, so phone work the call starts is never missed."""
         with self.lock:
+            self._calls[task_id] = self._calls.get(task_id, 0) + 1
+
+    def call_ended(self, task_id: str):
+        """That call returned (its phone task, if any, already attached); the state is evaluated again."""
+        with self.lock:
+            left = self._calls.get(task_id, 0) - 1
+            if left > 0:
+                self._calls[task_id] = left
+            else:
+                self._calls.pop(task_id, None)
+            self._change(task_id)
+
+    def _change(self, task_id, turn=None, phone=None):
+        with self.lock:  # changes and their events in one order, so the event stream never goes back
             row = self.db.execute('SELECT turn, phone, state, updated FROM tasks WHERE task_id=?',
                                   (task_id,)).fetchone()
             if row is None or row[2] in FINAL:  # a final state never changes
@@ -182,10 +204,16 @@ class WorkspaceTasks:
                     if current_phone.get(key) not in PHONE_FINAL:
                         current_phone[key] = status
             state = _state(current_turn, current_phone)
+            if self._calls.get(task_id):
+                state = 'running'  # a call of its turn may still start phone work
+            if (current_phone, state) == (json.loads(row[1]), row[2]):  # nothing the phone sees has changed
+                if current_turn != row[0]:
+                    self.db.execute('UPDATE tasks SET turn=? WHERE task_id=?', (current_turn, task_id))
+                return
             self.db.execute('UPDATE tasks SET turn=?, phone=?, state=?, detail=?, updated=? WHERE task_id=?',
                             (current_turn, json.dumps(current_phone), state, DETAIL.get(state, ''),
                              max(row[3], self.clock()), task_id))  # updatedAt never goes back for a task
-        self._emit(task_id)
+            self._emit(task_id)
 
     def _recover(self):
         """After a restart nothing is still being tracked: a page task that had not ended is uncertain."""
@@ -193,8 +221,8 @@ class WorkspaceTasks:
             rows = self.db.execute("SELECT task_id FROM tasks WHERE state='running'").fetchall()
             self.db.execute("UPDATE tasks SET state='uncertain', detail=?, updated=MAX(updated, ?) "
                             "WHERE state='running'", (DETAIL['uncertain'], self.clock()))
-        for (task_id,) in rows:
-            self._emit(task_id)
+            for (task_id,) in rows:
+                self._emit(task_id)
 
     # Reads.
 
@@ -230,9 +258,15 @@ class WorkspaceTasks:
             else:
                 rows = self.db.execute('SELECT task_id FROM tasks WHERE device=? ORDER BY updated DESC, rowid DESC '
                                        'LIMIT ?', (device, limit)).fetchall()
-        return [t for t in (self.get(r[0]) for r in reversed(rows)) if t]
+            return [t for t in (self.get(r[0]) for r in reversed(rows)) if t]
 
-    def _emit(self, task_id):
+    def snapshot(self, device=None):
+        """``(recent(device), revision)`` read together: every change emitted at or before that revision is in it."""
+        with self.lock:
+            return self.recent(device), self.revision
+
+    def _emit(self, task_id):  # always called under self.lock, so events leave in the order of the changes
+        self.revision += 1
         if self.emit is None:
             return
         found = self._get(task_id)
@@ -267,6 +301,7 @@ def connect(conductor, tasks: WorkspaceTasks) -> WorkspaceTasks:
     """Wire page tasks to a conductor: requests start conversation turns, the conductor reports back to ``tasks``,
     and every change is a ``workspace_task`` event on the bus (sent to the phone with the other events)."""
     tasks.start = conversation_starter(conductor)
-    tasks.emit = lambda task, device: conductor.bus.emit('workspace_task', task=task, device=device)
+    tasks.emit = lambda task, device: conductor.bus.emit('workspace_task', task=task, device=device,
+                                                         rev=tasks.revision)
     conductor.workspace_tasks = tasks
     return tasks

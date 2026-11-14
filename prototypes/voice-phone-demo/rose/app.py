@@ -1184,8 +1184,9 @@ class Server:
             def visible(m):  # a page task is shown only to the device that asked for it
                 return m.get('kind') != 'workspace_task' or device is None or m.get('device') == device
 
-            def wire(m):
-                return {k: v for k, v in m.items() if k != 'device'} if m.get('kind') == 'workspace_task' else m
+            def wire(m):  # a page task's device and revision are internal
+                return ({k: v for k, v in m.items() if k not in ('device', 'rev')}
+                        if m.get('kind') == 'workspace_task' else m)
 
             history = [m for m in list(self.bus.history) if not self._stale(m) and visible(m)]
             seen = {id(m) for m in history}
@@ -1201,10 +1202,15 @@ class Server:
             for task in state.get('tasks', []):
                 await ws.send_text(dumps({'kind': 'task', 't': time.time(), 'task': task}))
             # Page tasks (docs/APP-BUILDER.md §4.3), only on a server that enabled them: their current states.
-            page_tasks = getattr(self, 'workspace_tasks', None)
+            page_tasks, revision = getattr(self, 'workspace_tasks', None), None
             if page_tasks is not None:
-                for task in await asyncio.to_thread(page_tasks.recent, device):
+                recent, revision = await asyncio.to_thread(page_tasks.snapshot, device)
+                for task in recent:
                     await ws.send_text(dumps({'kind': 'workspace_task', 't': time.time(), 'task': task}))
+
+            def newer(m):  # a page-task change already in that snapshot is not sent again after it (older state)
+                return (m.get('kind') != 'workspace_task' or revision is None or not isinstance(m.get('rev'), int)
+                        or m['rev'] > revision)
             incoming = asyncio.create_task(ws.receive())
             outgoing = asyncio.create_task(q.get())
             try:
@@ -1218,7 +1224,7 @@ class Server:
                     if outgoing in ready:
                         m = outgoing.result()
                         outgoing = asyncio.create_task(q.get())
-                        if id(m) not in seen and not self._stale(m) and visible(m):
+                        if id(m) not in seen and not self._stale(m) and visible(m) and newer(m):
                             await ws.send_text(dumps(wire(m)))
             finally:
                 incoming.cancel()
