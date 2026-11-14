@@ -12,7 +12,7 @@ dependencies.json.
 Use Java at the Java 17 source level (records, sealed types, switch expressions, text blocks and var are fine; no
 preview features), the Android framework APIs in android.jar and the java.* APIs Android provides (no
 java.lang.management, AWT or Swing). The app runs on API 26 and later: check Build.VERSION.SDK_INT before calling
-anything newer.
+anything newer, including newer Java methods such as String.formatted (use String.format instead).
 No Kotlin, Gradle, native code, scripts, or binary files you did not draw yourself. Never add library files
 (.jar or .aar). A pure-Java library that the request lists as provided may be declared in dependencies.json as
 {"schemaVersion": 1, "dependencies": ["group:artifact:version"]}; the host checks and adds it. Any other library

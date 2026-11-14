@@ -294,7 +294,7 @@ class RealBridge(unittest.TestCase):
         start = json.loads((self.source.parent / 'thread-start.json').read_text())
         self.assertEqual((start['cwd'], start['sandbox'], start['ephemeral']), (str(self.source.resolve()),
                                                                                 'workspace-write', True))
-        self.assertIn('Java 8 source level', start['developerInstructions'])
+        self.assertIn('Java 17 source level', start['developerInstructions'])
         self.assertFalse(start['config']['sandbox_workspace_write.network_access'])
 
     def test_cancel_interrupts_and_confirms_the_stop(self):

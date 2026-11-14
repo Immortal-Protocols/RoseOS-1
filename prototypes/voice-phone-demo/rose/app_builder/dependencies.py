@@ -158,6 +158,7 @@ def resolve(coordinates: list[str], resolver: Resolver | None, libs: Path, packa
     if resolver is None:
         raise Refused('The app declares libraries, and this builder has no library store set up.')
     locked = locked or {}
+    framework_packages = frozenset(n.rsplit('/', 1)[0] for n in framework if '/' in n)
     libs.mkdir(mode=0o700, parents=True, exist_ok=True)
     out, owners, total = [], {}, 0
     for index, coordinate in enumerate(coordinates):
@@ -177,7 +178,7 @@ def resolve(coordinates: list[str], resolver: Resolver | None, libs: Path, packa
         digest = _sha256(copy)
         if digest != artifact.sha256:
             raise Refused(f'The library {coordinate} does not match its recorded digest, so it was not used.')
-        classes = _classes(copy, coordinate, package, framework)
+        classes = _classes(copy, coordinate, package, framework, framework_packages)
         for name in classes:
             if name in owners:
                 raise Refused(f'{coordinate} and {owners[name]} both define {name[:-6].replace("/", ".")}.')
@@ -264,18 +265,18 @@ def class_name(data: bytes) -> tuple[str, int]:
     return raw.decode('ascii'), access  # a name outside ASCII is refused (UnicodeDecodeError is a ValueError)
 
 
-def _classes(jar: Path, coordinate: str, package: str, framework: frozenset) -> dict:
+def _classes(jar: Path, coordinate: str, package: str, framework: frozenset, packages: frozenset = frozenset()) -> dict:
     """The JAR's class entries, name -> bytes, after every check; Refused otherwise. Anything the archive reader
     raises is a library that is not a valid JAR, never a builder failure."""
     try:
-        return _check_archive(jar, coordinate, package, framework)
+        return _check_archive(jar, coordinate, package, framework, packages)
     except Refused:
         raise
     except Exception:
         raise Refused(f'The library {coordinate} is not a valid JAR.') from None
 
 
-def _check_archive(jar: Path, coordinate: str, package: str, framework: frozenset) -> dict:
+def _check_archive(jar: Path, coordinate: str, package: str, framework: frozenset, packages: frozenset) -> dict:
     own = package.replace('.', '/') + '/'
     with zipfile.ZipFile(jar) as z:
         infos = z.infolist()
@@ -328,7 +329,9 @@ def _check_archive(jar: Path, coordinate: str, package: str, framework: frozense
             # Every check below is on the class the bytes define, which is what javac and d8 use.
             if defined + '.class' != name:
                 raise Refused(f'The library {coordinate} stores a class under another class\'s name ({name}).')
-            if name.startswith(RESERVED) or name in framework or name.startswith(own):
+            # A package the platform has (org.json, javax.crypto, ...) belongs to its core library, which javac
+            # compiles against as a system module: a library class there could never be seen.
+            if name.startswith(RESERVED) or name in framework or name.rsplit('/', 1)[0] in packages or name.startswith(own):
                 raise Refused(f'The library {coordinate} defines {name[:-6].replace("/", ".")}, which belongs to '
                               f'{"this app" if name.startswith(own) else "the Android platform"}.')
             classes[name] = data

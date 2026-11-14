@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -187,19 +188,16 @@ def system_image(tools: Tools, cache: Path, cancelled=lambda: False) -> Path:
     identity = {'recipe': SYSTEM_RECIPE, 'core': _sha256(tools.core_modules), 'jdk': jdk_identity(tools)}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:32]
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not stat.S_ISDIR(os.lstat(cache).st_mode):
+        raise StepFailed('toolchain', 'The builder\'s toolchain cache is not a plain directory.')
     final = cache / f'system-{key}'
-    try:
-        recorded = json.loads((final / 'manifest.json').read_text(encoding='utf-8'))
-        if recorded.get('identity') == identity and tree_digest(final / 'image') == recorded.get('tree'):
-            return final / 'image'
-    except (OSError, ValueError):
-        pass
-    shutil.rmtree(final, ignore_errors=True)
+    if _valid_image(final, identity):
+        return final / 'image'
+    _discard(final)
     staging = cache / f'.system-{key}-{secrets.token_hex(4)}'
     (staging / 'core').mkdir(parents=True)
     (staging / 'home').mkdir()
     try:
-        import zipfile
         with zipfile.ZipFile(tools.core_modules) as z:
             packages = set()
             for name in z.namelist():
@@ -228,18 +226,66 @@ def system_image(tools: Tools, cache: Path, cancelled=lambda: False) -> Path:
             shutil.rmtree(staging / scratch)
         digest = tree_digest(staging / 'image')
         _private(staging / 'manifest.json', json.dumps({'identity': identity, 'tree': digest}, sort_keys=True))
-        os.rename(staging, final)
+        try:
+            os.rename(staging, final)
+        except OSError:
+            if not _valid_image(final, identity):  # another builder finished first; its image must still hold
+                raise StepFailed('toolchain', 'The builder could not store its Java system image.', retryable=True)
+            shutil.rmtree(staging, ignore_errors=True)
+    except zipfile.BadZipFile:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise StepFailed('toolchain', f'The pinned {tools.core_modules.name} is not a valid archive.') from None
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     return final / 'image'
 
 
+def _plain(path: Path, kind) -> bool:
+    try:
+        return kind(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _valid_image(final: Path, identity: dict) -> bool:
+    """Whether ``final`` holds the image for ``identity``, unchanged since it was made. No link is followed: the
+    entry, its manifest and its image must be a plain directory, file and directory."""
+    if not (_plain(final, stat.S_ISDIR) and _plain(final / 'manifest.json', stat.S_ISREG)
+            and _plain(final / 'image', stat.S_ISDIR)):
+        return False
+    try:
+        recorded = json.loads((final / 'manifest.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(recorded, dict) and recorded.get('identity') == identity
+            and tree_digest(final / 'image') == recorded.get('tree'))
+
+
+def _discard(path: Path):
+    """Remove a cache entry that is not valid, whatever it is (a link or file is unlinked, never followed)."""
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return
+    try:
+        if stat.S_ISDIR(mode):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    except OSError:
+        raise StepFailed('toolchain', 'The builder could not clear a stale Java system image.',
+                         retryable=True) from None
+
+
 def missing_packages(log: str) -> list[str]:
     return sorted(set(re.findall(r'error: package ([\w.]+) does not exist', log)))
 
 
-JDK_ONLY = ('java.', 'jdk.', 'sun.', 'com.sun.')  # packages a library cannot add: Android either has them or not
+# Packages of the JDK itself: an app cannot add them with a library; Android either has them or not.
+JDK_ONLY = ('java.', 'jdk.', 'sun.', 'com.sun.', 'javax.swing', 'javax.imageio', 'javax.sound', 'javax.management',
+            'javax.naming', 'javax.print', 'javax.rmi', 'javax.script', 'javax.tools', 'javax.accessibility',
+            'javax.smartcardio', 'javax.lang.model')
 
 
 def build(source: Path, work: Path, package: str, version_code: int, version_name: str, tools: Tools,

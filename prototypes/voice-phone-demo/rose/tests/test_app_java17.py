@@ -52,9 +52,9 @@ public final class MainActivity extends Activity {{
         super.onCreate(state);
         var items = new ArrayList<Item>(List.of(new Item("tea", 2)));
         Function<Item, String> show = item -> item.name() + " x" + item.count();
-        String text = """
+        String text = String.format("""
             Today: %s
-            """.formatted(show.apply(items.get(0))) + area(new Square(3)) + " " + label(Size.LARGE);
+            """, show.apply(items.get(0))) + area(new Square(3)) + " " + label(Size.LARGE) + " " + "ab".repeat(2);
         TextView view = new TextView(this);
         view.setText(text);
         setContentView(view);
@@ -146,6 +146,63 @@ class SystemImage(unittest.TestCase):
                 self.assertEqual(toolchain.tree_digest(again), good)  # deterministic: the same image again
                 self.assertEqual(self.manifest(again)['tree'], good)
 
+    def test_no_link_on_the_cache_path_is_trusted_and_a_broken_one_heals(self):
+        import shutil
+        image = toolchain.system_image(self.tools, self.cache)
+        final, good = image.parent, self.manifest(image)['tree']
+        elsewhere = Path(self.tmp.name) / 'elsewhere'
+        shutil.copytree(final, elsewhere)
+        for swap in ('image', 'manifest.json', '.'):  # a link at the image, the manifest, or the entry itself
+            with self.subTest(swap=swap):
+                target = final / swap if swap != '.' else final
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+                target.symlink_to(elsewhere / swap if swap != '.' else elsewhere)
+                again = toolchain.system_image(self.tools, self.cache)
+                self.assertFalse(any(p.is_symlink() for p in (again, again.parent, again.parent / 'manifest.json')))
+                self.assertEqual(toolchain.tree_digest(again), good)
+        self.assertTrue(elsewhere.is_dir())  # what a link pointed to is never removed
+        shutil.rmtree(final)
+        final.symlink_to(Path(self.tmp.name) / 'nowhere')  # a broken link, then a plain file, in the entry's place
+        self.assertEqual(toolchain.tree_digest(toolchain.system_image(self.tools, self.cache)), good)
+        shutil.rmtree(final)
+        final.write_text('not an image')
+        self.assertEqual(toolchain.tree_digest(toolchain.system_image(self.tools, self.cache)), good)
+        shutil.rmtree(self.cache)
+        self.cache.symlink_to(elsewhere)  # the cache directory itself is a link
+        with self.assertRaises(toolchain.StepFailed) as failed:
+            toolchain.system_image(self.tools, self.cache)
+        self.assertEqual(failed.exception.category, 'toolchain')
+
+    def test_two_builders_making_it_at_once_both_get_a_valid_image(self):
+        import threading
+        results = []
+
+        def make():
+            try:
+                results.append(toolchain.system_image(self.tools, self.cache))
+            except Exception as error:
+                results.append(error)
+        threads = [threading.Thread(target=make) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(isinstance(r, Path) for r in results), results)
+        self.assertEqual(results[0], results[1])
+        self.assertEqual([p.name for p in self.cache.iterdir() if p.name.startswith('.')], [])
+
+    def test_a_corrupt_core_library_is_a_toolchain_failure(self):
+        bad = Path(self.tmp.name) / 'core.jar'
+        bad.write_bytes(b'not a zip')
+        with mock.patch.object(toolchain.Tools, 'core_modules', new_callable=mock.PropertyMock, return_value=bad), \
+                self.assertRaises(toolchain.StepFailed) as failed:
+            toolchain.system_image(self.tools, self.cache)
+        self.assertEqual(failed.exception.category, 'toolchain')
+
     def test_a_changed_recipe_or_platform_gets_its_own_image(self):
         image = toolchain.system_image(self.tools, self.cache)
         with mock.patch.object(toolchain, 'SYSTEM_RECIPE', toolchain.SYSTEM_RECIPE + 1):
@@ -196,6 +253,17 @@ class Java17Build(unittest.TestCase):
         self.assertIn('MainActivity$Square;', dump)
         self.assertNotIn('invoke-custom', dump)  # lambdas, records and concatenation all desugared or inlined
         self.assertNotIn('StringConcatFactory', dump)
+        self.assertNotIn('Ljava/lang/String;.repeat', dump)  # API 33: d8 backported it
+        self.assertNotIn('Ljava/util/List;.of', dump)  # API 30: backported too
+
+    def test_d8_does_not_backport_every_newer_method(self):
+        # String.formatted is API 34 and stays a direct call: an unguarded one would fail on API 26-33. This is
+        # why minSdk 26 compatibility is documented as unresolved (docs/APP-BUILDER.md §2.2).
+        newer = ('package {package};\n\nimport android.app.Activity;\n\npublic final class MainActivity extends '
+                 'Activity {{\n    static String f() {{ return "x %s".formatted(1); }}\n}}\n')
+        b, job = self.build(lambda package: newer.format(package=package))
+        self.assertEqual(job['state'], 'ready', job)  # compiled and signed: not proof it runs on API 26
+        self.assertIn('Ljava/lang/String;.formatted', self.dex(b))
 
     def test_java8_style_sources_still_build(self):
         java8 = ('package {package};\n\nimport android.app.Activity;\nimport android.os.Bundle;\n'
@@ -213,6 +281,19 @@ class Java17Build(unittest.TestCase):
         b, job = self.build(lambda package: uses.format(package=package))
         self.assertEqual((job['state'], job['failure']['category']), ('failed', 'compile'), job)
         self.assertIn('Java APIs Android does not provide (java.lang.management)', job['failure']['summary'])
+
+    def test_a_jdk_desktop_api_is_a_compile_failure_not_a_missing_library(self):
+        uses = ('package {package};\n\nimport android.app.Activity;\nimport javax.swing.JFrame;\n\n'
+                'public final class MainActivity extends Activity {{}}\n')
+        b, job = self.build(lambda package: uses.format(package=package))
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'compile'), job)
+        self.assertIn('javax.swing', job['failure']['summary'])
+
+    def test_the_builder_does_not_change_the_callers_tools(self):
+        b = Builder(self.root, self.tools, lambda *a: None, backup=fake_backup)
+        self.addCleanup(b.ledger.close)
+        self.assertIsNone(self.tools.cache)
+        self.assertEqual(b.tools.cache, self.root / 'toolchain')
 
     def test_preview_and_newer_language_features_are_compile_failures(self):
         newer = ('package {package};\n\nimport android.app.Activity;\n\npublic final class MainActivity extends '

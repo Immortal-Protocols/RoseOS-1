@@ -179,6 +179,7 @@ class Verify(unittest.TestCase):
             with self.subTest(name=name):
                 self.refused({name: CLASS}, 'which belongs to')
         self.assertEqual(len(self.resolve_one({'javax/inject/Inject.class': CLASS})), 1)  # not the framework's
+        self.refused({'javax/crypto/MyCipher.class': CLASS}, 'which belongs to')  # a package the platform has
 
     def resolve_one(self, entries):
         self.store.add('g:ok:1', self.make(entries))

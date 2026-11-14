@@ -8,6 +8,7 @@ on an authorized host) is injected: this module never decides how code is writte
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import stat
@@ -200,8 +201,8 @@ class Builder:
         lost. Without one, nothing is delivered."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
-        if tools.cache is None:
-            tools.cache = self.root / 'toolchain'  # the Java system image, made once per toolchain (toolchain.py)
+        if tools.cache is None:  # the Java system image, made once per toolchain, in this builder's own storage
+            tools = dataclasses.replace(tools, cache=self.root / 'toolchain')  # the caller's Tools is not changed
         self.tools, self.generate = tools, generate
         self.backup = backup
         self.resolver = resolver  # an offline dependencies.Resolver; None: an app that declares libraries fails

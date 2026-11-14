@@ -243,21 +243,28 @@ used, the way the Android Gradle plugin does it:
    (§2.1) on the classpath. The app therefore sees exactly the `java.*` APIs
    Android has. String concatenation is compiled inline, because Android has
    no `StringConcatFactory`.
-3. **Desugar.** `d8 --min-api 26` desugars records, lambdas and the like, and
-   backports some newer library methods, for example `List.of` and
-   `String.formatted`.
+3. **Desugar.** `d8 --min-api 26` desugars records, lambdas and the like. It
+   also backports some newer library methods, for example `List.of`,
+   `Map.of`, `String.repeat`, `isBlank` and `strip`. It doesn't backport
+   others: `String.formatted`, `stripIndent` and `Stream.toList` are API 34
+   and stay direct calls (a test pins this).
 
-A `java.*`, `jdk.*` or `sun.*` package Android doesn't have, such as
-`java.lang.management`, is an honest `compile` failure: "uses Java APIs
-Android does not provide". It is never reported as a missing library.
+A JDK package Android doesn't have, such as `java.lang.management` or
+`javax.swing`, is an honest `compile` failure: "uses Java APIs Android does
+not provide". It is never reported as a missing library. A library may not
+put classes in a package the platform has (`org.json`, `javax.crypto`, ...).
+Those packages belong to the core library that `javac` compiles against, so
+such a class could never be seen.
 
 **The image cache.** The image is cached under the builder's own `toolchain/`
-directory. The cache key is the recipe version, the core jar's sha256 and the
+directory. No link is followed there: the cache, each entry, its manifest
+and its image must be plain directories and files. The cache key is the recipe version, the core jar's sha256 and the
 JDK's version and platform, read from its `release` file. So a changed JDK or
 platform gets a new image, and a stale one is never used. Each use recomputes
 the image's tree digest and compares it with the one recorded when it was
-made. A missing, partial, changed or linked image is discarded and made
-again. The build is deterministic, so the same inputs give byte-identical
+made. A missing, partial, changed or linked image, or any other entry in its
+place, is removed (a link is unlinked, never followed) and made again. If two
+builders make it at once, the second uses the first's after checking it. The build is deterministic, so the same inputs give byte-identical
 images. This guards against corruption and staleness, not against someone
 who can already write the builder's own directory, which also holds the
 signing keys. Making the image is a local build step, not runtime
@@ -265,22 +272,30 @@ activation.
 
 **Unresolved: API compatibility with minSdk 26.** `javac` compiles against
 API 35, and nothing checks that the app guards calls to APIs newer than 26.
-`d8` backports only some library methods, and no framework API. An app that
-calls a newer API unguarded compiles and is signed, but can fail at runtime
-on an older phone. The writer is told to check `Build.VERSION.SDK_INT`, but
-that is guidance, not enforcement. Closing this needs an API 26 platform jar
-or Android lint. Neither is pinned, so both need acquisition. Compiling and
-desugaring is not device proof.
+`d8` backports only some library methods (`String.formatted`, for one, isn't
+backported), and no framework API. An app that calls a newer API unguarded
+compiles and is signed, but can fail at runtime on an older phone. The
+writer is told to check `Build.VERSION.SDK_INT`, but that is guidance, not
+enforcement. Nothing checks this yet. It could be closed offline with data
+already pinned: platform 35's `data/api-versions.xml` records the API level
+of every framework and `java.*` member, so a check of the dex's method
+references against it needs no acquisition. Telling a guarded call from an
+unguarded one is the hard part. An API 26 platform jar or Android lint would
+be other ways, and both would need acquisition. Compiling and desugaring is
+not device proof.
 
 **Proof level.** `rose/tests/test_app_java17.py` covers:
 - a fixture using records, sealed types, a switch expression, a text block,
   `var`, an `instanceof` pattern and a lambda builds and signs, and its dex
   (inspected with `dexdump`) has no `invoke-custom`;
 - Java 8-style sources still build, as do all earlier real-build tests;
-- `java.lang.management` and a Java 21 pattern `switch` are `compile`
-  failures;
-- the cache is reused, remade when tampered with, partial, linked or missing
-  its manifest, and separate for a changed recipe or core jar.
+- `java.lang.management`, `javax.swing` and a Java 21 pattern `switch` are
+  `compile` failures, and an API 34 `String.formatted` stays in the dex;
+- the cache is reused, and remade when it is tampered with, partial, missing
+  its manifest, or a link at the image, its entry or its manifest. A broken
+  link in its place heals. It survives two builders at once, a corrupt core
+  jar is a `toolchain` failure, and the recipe and core jar each give their
+  own image.
 
 Mutation checks each make a test fail: no inline concatenation, JDK system
 modules instead of Android's, the Java 8 level, an unvalidated cache, a key
