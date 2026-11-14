@@ -308,7 +308,7 @@ java -cp "$JAVA_TESTS/HomeReuse" dev.pixel.voice.HomeReuseTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePages" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomePages.java workspace/rose-agent/app/tests/HomePagesTest.java
 java -cp "$JAVA_TESTS/HomePages" dev.pixel.voice.HomePagesTest
-# Project 2: the workspace page's contract check (workspace-v1), saved state (pins, undo, recents) and requests.
+# Project 2: the phone's check of rose-layout-v1 results (catalog cat-1), the page's saved state (pins, undo, recents) and requests.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Workspace" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceLayout.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceState.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceComposer.java \

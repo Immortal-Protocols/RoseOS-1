@@ -1,115 +1,118 @@
-# Workspace page contract (`workspace-v1`)
+# Workspace page: OS Product's side of the contract
 
 Project 2 adds one page to the left of the normal Home screen. You reach it by swiping right from Home.
-It shows a locally composed layout of native cards. Home's own layout, its dock (the first cells of the
+It shows a locally composed layout of native sections. Home's own layout, its dock (the first cells of the
 Home grid), the `HomeTray` edge and the page dots are unchanged.
 
-**Status.** Nathan approved the HiFi prototype r2 on 2026-11-14: `6fcf8c9b`,
-`prototypes/rose-hifi/HANDOFF-WORKSPACE.md` on `claude/intelligent-ritchie-x2aqz4`. That handoff is the
-behaviour reference. This document is the native contract. It is source only: nothing here has been
-built for or run on a phone.
+**Status.** Nathan approved the HiFi prototype r2 on 2026-11-14 (`6fcf8c9b`,
+`prototypes/rose-hifi/HANDOFF-WORKSPACE.md` on `claude/intelligent-ritchie-x2aqz4`). That handoff is the
+behaviour reference. This document is source only: nothing here has been built for or run on a phone.
 
-**Owners.**
+## Three contracts, one each
 
-| Owner | Responsible for |
-| --- | --- |
-| OS Product | The page, the context snapshot, the id registry, the validator, the native cards, gestures and persistence |
-| Models | Model selection, benchmarking, context selection and on-device inference that produces the reply below |
-| App Core | The conversational request/result route and Rose tasks |
-| Designer | Visuals and motion |
-
-## The rule
-
-The composer composes; the phone checks and renders.
-
-- **Ids only.** The composer names only short ids that the phone resolved before the request. It never
-  supplies a package, component, Intent, URI, style or code.
-- **The phone decides how an action runs.** Whether an action runs at once ("Direct") or asks Rose first
-  ("Rose task · asks first") comes from the phone's registry. The composer cannot choose it.
-- **Bad replies show nothing.** A reply that fails the check is never shown in part. The last layout and
-  its pins stay.
-
-This follows Models' `local-agent-v1` (`workspace/models/contracts/local-agent-v1.md`): opaque allowlist
-ids, one strict JSON envelope, and only the platform's results record what happened.
-
-## Reply (composer → phone)
-
-The whole reply is exactly one JSON object.
-
-```json
-{"rose_layout": "workspace-v1",
- "title": "Cooking tonight",
- "cards": [
-  {"type": "apps", "title": "Kitchen apps", "items": ["a2", "a5", "a7"]},
-  {"type": "actions", "title": "Quick actions", "items": ["x9", "x3"]},
-  {"type": "carousel", "title": "Listen", "items": ["a3", "x4"]},
-  {"type": "list", "title": "Ingredients", "check": true, "items": ["Spaghetti 200 g", "Lemon"]},
-  {"type": "notification", "title": "Jamie", "items": ["n4"]}]}
-```
-
-| Card | `items` | Bounds |
+| Hop | Contract | Owner |
 | --- | --- | --- |
-| `apps` | app ids | 1–8 |
-| `actions` | action ids | 1–4 |
-| `carousel` | app or action ids | 2–10 |
-| `list` | plain text; `"check": true` makes a checklist | 1–8 items, ≤ 60 characters each |
-| `notification` | one notification id (its actions come from the notification itself) | 1 |
+| Server → phone: a conversational request, and its result | composer intent/result v1, `docs/APP-BUILDER.md` §4 (#782) | App Core |
+| Phone → on-phone composer → phone: snapshot in, layout or typed failure out | `rose-layout-v1`, `workspace/models/local-composer/contract/rose-layout-v1.md` (#781) | Models |
+| The catalog, the snapshot, the real ids, the renderer, persistence, pins, undo and the last usable layout | this document | OS Product |
 
-- **Page:** 1–8 cards. The `title` is at most 32 characters. Card titles are at most 40.
-- **Text:** all text is plain. Any control character rejects the reply.
-- **Ids:** they match `[a-z][a-z0-9.]{0,15}`, and each appears at most once per page.
-- **Rejected whole:** prose or code fences around the object, a second object, a duplicate key, an unknown
-  field or card type, a wrong `rose_layout`, any bound exceeded, or an id of the wrong kind (an app id in
-  `actions`). The reason is recorded as `malformed`, `contract`, `unknown_field.<name>` or the failing
-  path.
-- **Stale, not invalid:** an id the phone no longer has (an app removed, a notification gone) is dropped.
-  A card left empty is dropped, and so is a carousel left with fewer than 2 items. If no card remains, the
-  reply is rejected as `nothing_available`.
+There is no separate OS Product layout format. The phone renders `rose-layout-v1` layouts, after its own
+check.
 
-The rules are in `WorkspaceLayout.parse`. They are checked by `app/tests/WorkspaceTest.java`, which
-`scripts/test-local.sh` runs.
+## Catalog `cat-1` (OS Product's answer to rose-layout-v1 open question 1)
 
-## Context snapshot (phone → composer): proposal for Models
+This catalog is drawn from the approved HiFi r2 cards.
 
-This is not built yet. It is the proposal for Models to tune. It is assembled on the phone for each
-request and never sent to the Rose server.
+| Component | HiFi card | Items it may reference | Items | Actions |
+| --- | --- | --- | --- | --- |
+| `grid` | apps | apps, actions (never `agent_task`) | 2–8 | 0 |
+| `carousel` | carousel | content, notifications, apps | 2–8 | 0 |
+| `list` | list / checklist | notifications, content | 1–8 | 0 |
+| `card` | notification | one notification or content item | 1 | up to 2 that target that item |
+| `button` | actions ("Quick actions") | actions, including `agent_task` | **1–4** (a row) | 0 |
 
-```json
-{"contract": "rose-workspace-context-v1",
- "request": {"kind": "arrange" | "text", "text": "…≤500 chars…"},
- "now": {"local_time": "18:40", "day": "thu", "daypart": "evening"},
- "apps": [{"id": "a7", "label": "Messages", "group": "social"}],
- "actions": [{"id": "x3", "app": "a7", "label": "New message"}],
- "notifications": [{"id": "n4", "app": "a7", "title": "Jamie", "age": "5m"}],
- "pinned": [{"type": "apps", "title": "Kitchen apps"}]}
-```
+These are the changes from Models' starting set:
+- **`button` takes 1–4 actions, not 1.** The HiFi's action card is a row of 2–3 buttons.
+- **At most 6 sections, not 4.** The HiFi's cooking and best-guess pages have 5.
+- **`agent_task` is allowed only in a `button` row or as a `card` action.** App Core §4.3 asked for this.
 
-- **Proposed bounds:** 60 apps, 40 actions and 20 notifications. Notification text is cut to 80
-  characters, and the whole snapshot is at most 8 KB.
-- **Where ids come from:** the same component keys Home uses (`package/activity`) for apps;
-  `LauncherApps` shortcuts (Home holds the HOME role), the intent templates Rose already has and suite
-  `<pkg>.agent` operations for actions; and notifications once D1 below is decided.
+These bounds stay as Models proposed:
+- section titles ≤ 30 characters, layout title ≤ 40;
+- ≤ 20 items in total;
+- every id at most once per page.
+
+Checklist ticks are local display state on the phone and never reach the composer.
+
+## Registry and ids (open question 2)
+
+Ids are opaque to Models and App Core. They are stable while the thing they name exists, so pins and saved
+layouts survive a new snapshot.
+
+| Kind | Id format | Source | In the first build |
+| --- | --- | --- | --- |
+| apps | `app:<package>/<activity>` | `queryIntentActivities(MAIN/LAUNCHER)`, Home's own component key | yes |
+| actions: `launch` | `launch:<package>/<activity>` | the app's launch intent, via `WorkspaceLauncher.open` | yes |
+| actions: `shortcut` | `sc:<package>/<shortcut id>` | `LauncherApps.getShortcuts` (Home holds the HOME role; no new permission) | yes |
+| actions: `deeplink` | `intent:<template>` | intent templates Rose already has (alarm, timer, directions, music; `LocalRosePhone`) | yes |
+| actions: `agent_task` | `task:<template id>` | the phone's task templates: `label` ≤ 60, `ask` ≤ 200, `goal` ≤ 300. The goal never enters the model. | after App Core's route |
+| actions: `notification_action` | `nact:<key>/<index>` | notification actions | after D1 |
+| actions: `app_function` | — | needs a privileged permission, so not inferred | no |
+| notifications | `n:<key>` | see D1 | after D1 |
+| content | `c:<source>/<id>` | no source yet (recipes, documents and media in the HiFi are sample data) | no |
+
+Whether an action runs at once or asks first comes from its registry kind. Only `agent_task` asks first
+("Rose task · asks first"). The composer cannot change that.
+
+## The phone's own check
+
+`WorkspaceLayout.check` re-checks every composer result before anything renders. It does this because a
+runtime without grammar support, or a bug, must never break Home. It checks:
+- the contract, `requestId` and catalog version;
+- the snapshot version, which must equal the snapshot built for that request; otherwise the result is
+  `stale_snapshot`;
+- every section against `cat-1`;
+- that every id is in the registry, of an allowed kind, and appears once;
+- that card actions target the card's item;
+- titles, which must be plain printable text.
+
+Failures use rose-layout-v1's fixed tokens, never model text, and keep the last layout.
+
+At render time, `WorkspaceLayout.available` leaves out any item whose app was removed or whose notification
+went away since the layout was made. It also leaves out a section that falls below its minimum. The saved
+layout is never reshuffled.
 
 ## On the phone
 
 | Piece | What it does |
 | --- | --- |
-| `WorkspaceState` | Keeps the layout, the request it answered, the pins, the last 20 undo steps, 3 recent layouts and the last result of each direct action. It survives restarts (`toJson`/`fromJson`). A corrupt store gives an empty page, never a crash. Pinned cards keep their exact index when a new layout arrives, and only the unpinned cards around them change. Nothing rearranges by itself. |
-| `WorkspaceComposer` | Handles one request at a time. A newer request supersedes an older one, and a late reply is ignored. A failure keeps the last layout and pins. A request from inside an app never leaves the app: it raises the "Preparing workspace / Workspace ready · Show workspace" offer, which clears when the workspace is reached. |
+| `WorkspaceState` | Keeps the layout, the request it answered, pins, the last 20 undo steps, 3 recent layouts and the last result of each direct action. It survives restarts, and a corrupt store gives an empty page. Pinned sections keep their exact index when a new layout arrives, and only the unpinned ones around them change. Nothing rearranges by itself. |
+| `WorkspaceComposer` | Handles one request at a time. It maps to rose-layout-v1 triggers: Arrange is `button`, typed text is `direct_text`, and a conversational request is `conversational` and keeps App Core's `requestId`. A newer request supersedes an older one, and a late result is ignored. A failure keeps the layout and pins. A conversational request raises the "Preparing workspace / Workspace ready · Show workspace" offer and never leaves the app. `routeStatus` gives App Core's `shown`, `prepared`, `rejected`, `unavailable` or `uncertain`. |
 
-## Entry points
+These pieces are checked by `app/tests/WorkspaceTest.java`, which `scripts/test-local.sh` runs.
 
-| Entry | Path | Server |
-| --- | --- | --- |
-| Arrange for me | Local composer (best guess) | None |
-| Direct text | Local composer | None |
-| Voice | Composition is local. Transcription is decision D2. | Depends on D2 |
-| Conversation with Rose | App Core: proposed `workspace_prepare {request}` over `/ws/phone` (`LocalRosePhone` → `PhoneControl`), answered by `{status, layout_revision}`. The phone still composes locally. Rose tasks are routed back through App Core when confirmed. | App Core's route |
+## Answers to rose-layout-v1's other open questions
+
+- **3. Pinned.** The phone places pinned sections itself, at their index. Their item ids are listed in
+  `pinned` so the composer can avoid repeating them. They are preferred to be absent, not required, and
+  the phone drops a repeat anyway.
+- **4. Where the composer runs.** In a separate process of Rose Agent (`:composer`), which Home binds to.
+  Model memory and a crash or out-of-memory kill then cannot take Home down. A dead process is
+  `model_unavailable`.
+- **6. On screen.** The composer is never told. The provider alone decides `shown` versus `prepared`.
+- **7. Regenerate.** A fresh snapshot, with the previous layout's item ids as a soft avoid hint, as App
+  Core proposed.
+
+## Provider for App Core (§4.1)
+
+The composer provider is Rose Agent itself, `dev.pixel.voice`. Its operations are `workspace_compose`
+(kinds `prompt`, `arrange`, `regenerate` and `undo`) and `capabilities`. They are served the same way as
+the customization tools. `capabilities` reports kinds only once the native page and a composer are on the
+phone, so the conversation tool is not offered before then.
 
 ## Open decisions
 
 | # | Decision | Status |
 | --- | --- | --- |
-| D1 | How Home gets notifications and their actions: (a) a notification listener in Rose Agent, which needs the person's notification-access grant; (b) the SystemUI Rose shade offers a bounded, signature-protected snapshot and action call (an OS Core change with security review); or (c) no notification cards at first. | Not decided. No permission is inferred. Until it is decided, no notification ids are offered, so no notification cards appear. |
-| D2 | Where voice requests are transcribed: a local model (Models), the existing server path (the Rose server is stopped until Nathan restarts it), or voice later. | Not decided |
-| D3 | The hook in Home's shared files (`MainActivity.attachLauncherPages`, `HomePages`, the page dots) that adds the page before Home. These files are shared with Home/App Product. | To be agreed with Home/App Product before any edit |
+| D1 | How Home gets notifications and their actions: (a) a notification listener in Rose Agent, which needs the person's notification-access grant; (b) the SystemUI Rose shade offers a bounded, signature-protected snapshot and action call, an OS Core change with security review; or (c) no notification cards at first. | Not decided. No permission is inferred. Until it is decided, the snapshot has no notifications. |
+| D2 | Where voice requests are transcribed. A transcript reaches the composer as `direct_text`. | Not decided |
+| D3 | The hook in Home's shared files (`MainActivity.attachLauncherPages`, `HomePages`, the page dots) that adds the page before Home. | To be agreed with Home/App Product |

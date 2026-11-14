@@ -14,14 +14,14 @@ import java.util.Set;
  * recents, and what the last tap on each direct action did. Pure (no Android types): the page saves
  * toJson() after every change and restores with fromJson().
  *
- * Pins keep their position: when a new layout arrives, each pinned card stays at its index and only the
- * unpinned cards around it change. Nothing here rearranges by itself; only commit, undo, pin and reopen
+ * Pins keep their position: when a new layout arrives, each pinned section stays at its index and only the
+ * unpinned sections around it change. Nothing here rearranges by itself; only commit, undo, pin and reopen
  * change the layout, and each is the person's request.
  */
 final class WorkspaceState {
  static final int UNDO=20,RECENT=3,ACTION_RESULTS=20;
 
- /** One saved arrangement: the layout, what was asked, and which of its cards were pinned. */
+ /** One saved arrangement: the layout, what was asked, and which of its sections were pinned. */
  static final class Entry {
   final WorkspaceLayout layout;final String request;final Set<String> pins;
   Entry(WorkspaceLayout layout,String request,Set<String> pins){this.layout=layout;this.request=request;this.pins=new LinkedHashSet<>(pins);}
@@ -42,40 +42,40 @@ final class WorkspaceState {
  List<Entry> recent(){return new ArrayList<>(recent);}
  String actionResult(String actionId){return actionResults.get(actionId);}
 
- /** Card keys are the phone's own and never repeat, so a pin can never attach to a different card. */
+ /** Section keys are the phone's own and never repeat, so a pin can never attach to a different section. */
  WorkspaceLayout.Keys keys(){return () -> "k"+(nextKey++);}
 
  /**
-  * A new layout from the composer replaces the current one, except that every pinned card keeps its
-  * exact index (the HiFi's splice at min(index, length)). A new card with the same content as a pinned
+  * A new layout from the composer replaces the current one, except that every pinned section keeps its
+  * exact index (the HiFi's splice at min(index, length)). A new section with the same content as a pinned
   * one is dropped, so a pin never appears twice. The previous arrangement becomes one undo step, and the
   * result becomes the newest recent layout.
   */
  void commit(WorkspaceLayout incoming,String newRequest){
-  List<WorkspaceLayout.Card> out=new ArrayList<>();
-  List<int[]> keptAt=new ArrayList<>();List<WorkspaceLayout.Card> kept=new ArrayList<>();
-  if(layout!=null)for(int i=0;i<layout.cards.size();i++){WorkspaceLayout.Card c=layout.cards.get(i);if(pins.contains(c.key)){keptAt.add(new int[]{i});kept.add(c);}}
-  for(WorkspaceLayout.Card c:incoming.cards){
-   boolean dup=false;for(WorkspaceLayout.Card p:kept)if(p.sameContent(c)){dup=true;break;}
+  List<WorkspaceLayout.Section> out=new ArrayList<>();
+  List<int[]> keptAt=new ArrayList<>();List<WorkspaceLayout.Section> kept=new ArrayList<>();
+  if(layout!=null)for(int i=0;i<layout.sections.size();i++){WorkspaceLayout.Section c=layout.sections.get(i);if(pins.contains(c.key)){keptAt.add(new int[]{i});kept.add(c);}}
+  for(WorkspaceLayout.Section c:incoming.sections){
+   boolean dup=false;for(WorkspaceLayout.Section p:kept)if(p.sameContent(c)){dup=true;break;}
    if(!dup)out.add(c);
   }
   for(int j=0;j<kept.size();j++)out.add(Math.min(keptAt.get(j)[0],out.size()),kept.get(j));
-  while(out.size()>WorkspaceLayout.MAX_CARDS){
-   // Over the bound only because pins were kept: drop unpinned cards from the end.
+  while(out.size()>WorkspaceLayout.MAX_SECTIONS){
+   // Over the bound only because pins were kept: drop unpinned sections from the end.
    for(int i=out.size()-1;i>=0;i--)if(!pins.contains(out.get(i).key)){out.remove(i);break;}
-   if(out.size()>WorkspaceLayout.MAX_CARDS&&allPinned(out))break;
+   if(out.size()>WorkspaceLayout.MAX_SECTIONS&&allPinned(out))break;
   }
   pushUndo();
-  layout=new WorkspaceLayout(incoming.title,out);request=newRequest;
+  layout=new WorkspaceLayout(incoming.snapshotVersion,incoming.title,out);request=newRequest;
   remember();
  }
 
- private boolean allPinned(List<WorkspaceLayout.Card> cards){for(WorkspaceLayout.Card c:cards)if(!pins.contains(c.key))return false;return true;}
+ private boolean allPinned(List<WorkspaceLayout.Section> sections){for(WorkspaceLayout.Section c:sections)if(!pins.contains(c.key))return false;return true;}
 
- /** Pin or unpin a card of the current layout; also an undo step, as in the HiFi. */
+ /** Pin or unpin a section of the current layout; also an undo step, as in the HiFi. */
  boolean togglePin(String key){
   if(layout==null)return false;boolean present=false;
-  for(WorkspaceLayout.Card c:layout.cards)if(c.key.equals(key)){present=true;break;}
+  for(WorkspaceLayout.Section c:layout.sections)if(c.key.equals(key)){present=true;break;}
   if(!present)return false;
   pushUndo();
   if(!pins.remove(key))pins.add(key);
@@ -90,13 +90,13 @@ final class WorkspaceState {
   return true;
  }
 
- /** Reopen a recent layout (also an undo step). Pins carry over only to cards that are in it. */
+ /** Reopen a recent layout (also an undo step). Pins carry over only to sections that are in it. */
  boolean reopen(int index){
   if(index<0||index>=recent.size())return false;
   Entry e=recent.get(index);if(e.layout==layout)return false;
   pushUndo();
   layout=e.layout;request=e.request;
-  Set<String> keysNow=new HashSet<>();for(WorkspaceLayout.Card c:layout.cards)keysNow.add(c.key);
+  Set<String> keysNow=new HashSet<>();for(WorkspaceLayout.Section c:layout.sections)keysNow.add(c.key);
   pins.retainAll(keysNow);
   remember();
   return true;
@@ -162,7 +162,7 @@ final class WorkspaceState {
    if(actions instanceof Map)for(Map.Entry<String,Object> e:((Map<String,Object>)actions).entrySet())if(e.getValue() instanceof String)s.actionResult(e.getKey(),(String)e.getValue());
    // Keys keep counting above every key in use, even if "next" was damaged.
    long max=next instanceof Long?(Long)next:1;
-   for(WorkspaceLayout l:s.allLayouts())for(WorkspaceLayout.Card c:l.cards){long k=keyNumber(c.key);if(k>=max)max=k+1;}
+   for(WorkspaceLayout l:s.allLayouts())for(WorkspaceLayout.Section c:l.sections){long k=keyNumber(c.key);if(k>=max)max=k+1;}
    s.nextKey=Math.max(1,max);
    return s;
   }catch(RuntimeException e){return new WorkspaceState();}
@@ -172,9 +172,9 @@ final class WorkspaceState {
  @SuppressWarnings("unchecked")
  private static List<Object> list(Object v){return v instanceof List?(List<Object>)v:new ArrayList<Object>();}
  private static String string(Object v){return v instanceof String?(String)v:null;}
- /** Pins, kept only for cards that are in the layout. */
+ /** Pins, kept only for sections that are in the layout. */
  private static Set<String> strings(Object v,WorkspaceLayout l){
-  Set<String> keys=new HashSet<>();for(WorkspaceLayout.Card c:l.cards)keys.add(c.key);
+  Set<String> keys=new HashSet<>();for(WorkspaceLayout.Section c:l.sections)keys.add(c.key);
   Set<String> out=new LinkedHashSet<>();for(Object o:list(v))if(o instanceof String&&keys.contains(o))out.add((String)o);return out;
  }
  @SuppressWarnings("unchecked")
