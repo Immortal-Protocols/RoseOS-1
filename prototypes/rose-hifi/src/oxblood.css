@@ -351,7 +351,7 @@
 
 /* ---------- Home field + layout (Rose-09) ---------- */
 #device[data-theme=oxblood] .home-date{top:65px;left:33px;font-size:22px;letter-spacing:0;font-weight:400;color:#eadbd0;text-shadow:none}
-#device[data-theme=oxblood] .home-page:is(.sparse,.full,.few) .app-grid{top:475px;bottom:auto;left:0;right:0;grid-template-columns:repeat(4,60px);column-gap:17.5px;row-gap:14px;justify-content:center;align-content:start}
+#device[data-theme=oxblood] .home-page:is(.sparse,.full,.few) .app-grid{top:calc(var(--screen-h,832px) - 357px);bottom:auto;left:0;right:0;grid-template-columns:repeat(4,60px);column-gap:17.5px;row-gap:14px;justify-content:center;align-content:start}
 #device[data-theme=oxblood] .home-page .app{width:60px;padding:0;gap:0}
 #device[data-theme=oxblood] .home-page.full .app{width:72px;gap:5px}
 #device[data-theme=oxblood] .home-page.full .app-grid{grid-template-columns:repeat(4,72px);column-gap:6px}
