@@ -310,6 +310,10 @@ class Builder:
             shutil.rmtree(gitdir)
             if source.exists():
                 shutil.rmtree(source)
+        if not gitdir.exists() and self.ledger.versions(project['projectId']):
+            # Delivered versions without their history: never rebuild them from the skeleton and ship a regression.
+            raise toolchain.StepFailed('internal', 'This app\'s source history is missing, so it cannot be changed '
+                                       'safely; nothing was built.')
         if not gitdir.exists():
             source.mkdir(mode=0o700, parents=True, exist_ok=True)
             _git(source, 'init', '-q')
@@ -343,6 +347,11 @@ class Builder:
                 entry.unlink() if entry.is_symlink() or not entry.is_dir() else shutil.rmtree(entry)
         versions = self.ledger.versions(project_id)
         target = versions[-1]['sourceRevision'] if versions else _git(source, 'rev-list', '--max-parents=0', 'HEAD')
+        try:
+            _git(source, 'cat-file', '-e', target + '^{commit}')
+        except toolchain.StepFailed:
+            raise toolchain.StepFailed('internal', 'The delivered version\'s source is missing from this app\'s '
+                                       'history, so it cannot be changed safely; nothing was built.') from None
         _git(source, 'reset', '-q', '--hard', target)
         _git(source, 'clean', '-q', '-ffdx')  # twice: also nested repositories git would otherwise keep
         for path in sorted(source.rglob('*'), key=lambda p: len(p.parts), reverse=True):

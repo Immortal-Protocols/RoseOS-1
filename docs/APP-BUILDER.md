@@ -45,9 +45,12 @@ apps.
    enqueues and reads jobs. It never builds.
 2. **Project.** `create` allocates a fixed `projectId`, a `packageName` in the
    reserved namespace `app.rose.gen.p<projectId>` (never `dev.pixel.*`, which
-   carries first-party signature permissions), and a per-project signer. Both
-   are fixed for the project's life. Per-project keys are the implemented
-   default, but the key decision in §5 is still Nathan's.
+   carries first-party signature permissions). The package is fixed for the
+   project's life. The project's signer is created and bound by its first
+   signed build, then fixed for good. Per-project keys are the implemented
+   default, but the key decision in §5 is still Nathan's. A project whose
+   delivered history goes missing fails closed; it is never rebuilt from the
+   skeleton.
 3. **Source.** Each project's source is a private git repository under
    `ROSE_CONFIG_DIR/app-builder/projects/<projectId>/source` (0700, with its git
 directory beside it in `repo.git`), outside
@@ -204,7 +207,9 @@ apk: {sha256, size}, notes}]}]`
   `GET /builder/v1/artifacts/<sha256>`. Public share links come separately from
   hosting (Level 3) and never grant backend or account access.
 
-`packageName` and `signerSha256` never change for a project. `versionCode`
+`packageName` never changes for a project. `signerSha256` is `null` until the
+project's first signed build, then fixed for good. A client must re-read it
+rather than cache a `null`; every delivered version has one. `versionCode`
 strictly increases and is allocated by the server ledger, never by Codex.
 
 ### 3.4 Baseline

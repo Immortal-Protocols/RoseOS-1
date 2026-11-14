@@ -528,6 +528,18 @@ class BuildTest(Base):
         b.run_next()
         self.assertEqual(b.job(out['jobId'])['state'], 'failed')
 
+    def test_lost_history_fails_closed_instead_of_shipping_the_skeleton(self):
+        b = self.builder(self.label_generator('one'))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        shutil.rmtree(self.root / 'projects' / out['projectId'] / 'repo.git')
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'x'})
+        b.run_next()
+        job = b.job(rev['jobId'])
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'internal'), job)
+        self.assertIn('history is missing', job['failure']['summary'])
+        self.assertEqual(len(b.projects()[0]['versions']), 1)
+
     def test_a_stale_git_lock_from_a_crash_is_cleared(self):
         b = self.builder(self.label_generator('one'))
         out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'Save 50% of 100% spend'})
