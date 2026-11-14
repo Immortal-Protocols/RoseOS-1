@@ -356,8 +356,19 @@ added.
     instructions that don't exactly cover the method's code, or more than
     20,000 instructions.
 
-Only the platform's own `android/os/Build$VERSION.SDK_INT` counts as a
-guard, never a look-alike field in the app. The dump is split on newlines
+Nothing is dropped silently:
+- a platform reference the pinned database can't place (a class or member
+  it doesn't list, such as some extension-SDK APIs, `sun.misc.Unsafe` or
+  `javax.naming`) is reported `unverified`, "not in the pinned API
+  database";
+- so is a supertype the database doesn't know;
+- so is an app interface method that a class implements only through an
+  inherited platform method above 26. Calls through the interface fail below
+  that level.
+
+`invoke-polymorphic` references (`VarHandle`, `MethodHandle`) are read like
+any call. Only the platform's own `android/os/Build$VERSION.SDK_INT` counts
+as a guard, never a look-alike field in the app. The dump is split on newlines
 only, so characters `dexdump` prints raw inside strings (U+2028, U+0085 and
 the like) can't forge dump lines.
 
@@ -404,7 +415,10 @@ Unit tests cover these, each `incomplete`, never clean, or never
 - the size cap, and the time budget checked between methods;
 - the inheritance levels.
 
-The fixture also has a `catch` whose try range covers unguarded code.
+The fixture also has a `catch` whose try range covers unguarded code. Unit
+tests add an `invoke-polymorphic` reference, unplaced classes, members and
+supertypes, and an app interface implemented through a newer platform
+method.
 
 It also covers a missing database and a crashing analysis, which give
 `unavailable` while the build stays `ready`. Unit tests cover every
@@ -431,7 +445,11 @@ a test fail:
 - a `catch` judged at its try start only;
 - a look-alike `SDK_INT` accepted, or app values ignored;
 - the budget checked only between classes;
-- a guard memo that drops edge guards.
+- a guard memo that drops edge guards;
+- the polymorphic comma kept;
+- unplaced references or supertypes dropped;
+- interface gaps ignored;
+- app fields not known.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 

@@ -21,7 +21,8 @@ It fails closed: anything it could not read completely makes that method's refer
 report ``incomplete``; if the database or dexdump is missing, or anything goes wrong, the report is ``unavailable``.
 It is advisory only: it never fails or changes a build, and it is not device proof. An empty list does not mean the
 app is compatible with every phone it can be installed on. Reflection and any API reached without a dex reference
-are not seen.
+are not seen. A platform reference the pinned database cannot place is reported ``unverified``, never dropped; so
+is an app interface method that a class implements only through an inherited platform method above minSdk.
 """
 from __future__ import annotations
 
@@ -43,7 +44,9 @@ SDK_INT = 'Landroid/os/Build$VERSION;.SDK_INT:I'
 CODE_LINE = re.compile(r'^[0-9a-f]{6,}: ')
 INSN = re.compile(r'^[0-9a-f]{6,}: ([0-9a-f .]+)\|([0-9a-f]{4,}): (\S+)(?: (.*))?$')
 PAYLOAD_UNITS = re.compile(r'\((\d+) units\)')
-MEMBER = re.compile(r'L([^;\s]+);\.([^:\s]+):(\S+)')
+MEMBER = re.compile(r'L([^;\s]+);\.([^:\s]+):([^\s,]+)')  # invoke-polymorphic adds ", (proto)" after it
+ACCESS = re.compile(r"  Access flags      : 0x[0-9a-f]+ \(([^)]*)\)")
+UNKNOWN = 'not in the pinned API database: the analysis cannot place it, so a phone may not have it'
 TYPE = re.compile(r'\[*L([^;\s]+);')
 TARGET = re.compile(r'(?:^|, )([0-9a-f]{4,8}) // [+-]')
 TARGET32 = re.compile(r'^#([0-9a-f]{8})$')
@@ -133,13 +136,16 @@ class Method:
 @dataclass
 class Klass:
     name: str
+    flags: str = ''
     superclass: str | None = None
     interfaces: list = field(default_factory=list)
     methods: list = field(default_factory=list)
+    fields: set = field(default_factory=set)
 
     @property
     def declared(self) -> set:
-        return {m.name + m.proto for m in self.methods}
+        """Member keys the class itself declares: methods as name+proto, fields by name."""
+        return {m.name + m.proto for m in self.methods} | self.fields
 
 
 def parse_dexdump(text: str) -> dict:
@@ -162,6 +168,10 @@ def parse_dexdump(text: str) -> dict:
         if m:
             cls.superclass = m.group(1)
             continue
+        m = ACCESS.match(line) if section is None else None
+        if m:
+            cls.flags = m.group(1)
+            continue
         m = SECTION.match(line)
         if m:
             section, method = m.group(1), None
@@ -170,6 +180,11 @@ def parse_dexdump(text: str) -> dict:
             m = INTERFACE.match(line)
             if m:
                 cls.interfaces.append(m.group(1))
+            continue
+        if section in ('Static fields', 'Instance fields'):
+            m = NAME_TYPE.match(line)
+            if m and m.group(1) == 'name':
+                cls.fields.add(m.group(2))
             continue
         if section not in ('Direct methods', 'Virtual methods'):
             continue
@@ -520,9 +535,10 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
     declared = {name: k.declared for name, k in classes.items()}
 
     def resolve(cls, member):
-        """The platform answer for a reference, walking the app's own (and its libraries') classes up first. A member
-        the app's own class declares is the app's, not the platform's."""
-        seen, todo = set(), [cls]
+        """The platform answer for a reference, walking the app's own (and its libraries') classes up first: a
+        member the app's own class declares is the app's, not the platform's. (platform class, None) when it leads to
+        a platform class the pinned database cannot place: never dropped, reported unverified."""
+        seen, todo, unplaced = set(), [cls], None
         while todo:
             c = todo.pop(0)
             if c in seen:
@@ -536,7 +552,36 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
             found = db.level(c, member)
             if found is not None:
                 return c, found
-        return None
+            unplaced = unplaced or c
+        return (unplaced, None) if unplaced else None
+
+    def interface_gaps(k: Klass):
+        """Methods of the app's own interfaces that a concrete class implements only through an inherited platform
+        method: (interface, member, platform class, level)."""
+        if 'INTERFACE' in k.flags or 'ABSTRACT' in k.flags:
+            return []
+        chain, c = [], k.name
+        while c in classes and c not in chain:
+            chain.append(c)
+            c = classes[c].superclass
+        platform = c
+        own_methods = set().union(*(declared[x] for x in chain))
+        interfaces, todo = set(), [i for x in chain for i in classes[x].interfaces]
+        while todo:
+            i = todo.pop()
+            if i in classes and i not in interfaces:
+                interfaces.add(i)
+                todo += classes[i].interfaces
+        gaps = []
+        for i in sorted(interfaces):
+            for m in classes[i].methods:
+                key = m.name + m.proto
+                if m.insns or m.size or key in own_methods or m.name.startswith('<'):
+                    continue  # a default method, or the class implements it itself
+                found = db.level(platform, key) if platform else None
+                if found and found[0] > min_sdk:
+                    gaps.append((i, key, platform, found[0]))
+        return gaps
 
     findings, problems, skipped = [], [], 0
     for k in classes.values():
@@ -547,11 +592,16 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
         for sup in [k.superclass, *k.interfaces]:
             if sup and sup not in classes:
                 found = db.level(sup)
-                if found and found[0] > min_sdk:
-                    findings.append({'level': found[0], 'api': sup, 'kind': 'supertype', 'where': k.name,
+                if found is None or found[0] > min_sdk:
+                    findings.append({'level': found and found[0], 'api': sup, 'kind': 'supertype', 'where': k.name,
                                      'origin': origin, 'status': 'unverified',
-                                     'reason': 'the class itself needs this API: only never loading it below that '
-                                               'level protects it'})
+                                     'reason': UNKNOWN if found is None else 'the class itself needs this API: only '
+                                               'never loading it below that level protects it'})
+        for iface, key, platform, level in interface_gaps(k):
+            findings.append({'level': level, 'api': f'{platform}.{key}', 'kind': 'supertype', 'where': k.name,
+                             'origin': origin, 'status': 'unverified',
+                             'reason': f'implements {iface}.{key} through the platform method: calls through the '
+                                       'interface fail below that level'})
         for method in k.methods:
             if not method.insns and not method.size and not method.unparsed:
                 continue  # abstract or native: no code
@@ -569,6 +619,13 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
             for where, cls, member, kind in refs:
                 found = resolve(cls, member)
                 if found is None:
+                    continue
+                if found[1] is None:  # a platform reference the pinned database cannot place
+                    known = db.level(found[0])
+                    findings.append({'level': known and known[0], 'kind': kind, 'origin': origin,
+                                     'api': f'{found[0]}.{member}' if member else found[0],
+                                     'where': f'{k.name}.{method.name}{method.proto}', 'status': 'unverified',
+                                     'reason': UNKNOWN})
                     continue
                 platform, (level, extension) = found
                 if level <= min_sdk:
@@ -594,7 +651,7 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
                 findings.append({'level': level, 'api': f'{platform}.{member}' if member else platform, 'kind': kind,
                                  'where': f'{k.name}.{method.name}{method.proto}', 'origin': origin,
                                  'status': status, 'reason': reason})
-    findings.sort(key=lambda f: ({'not_guarded_here': 0, 'unverified': 1, 'guarded': 2}[f['status']], -f['level'],
+    findings.sort(key=lambda f: ({'not_guarded_here': 0, 'unverified': 1, 'guarded': 2}[f['status']], -(f['level'] or 0),
                                  f['where'], f['api']))
     counts = {s: sum(1 for f in findings if f['status'] == s) for s in ('not_guarded_here', 'unverified', 'guarded')}
     reasons = []

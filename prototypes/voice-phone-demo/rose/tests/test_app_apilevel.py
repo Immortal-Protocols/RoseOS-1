@@ -217,6 +217,7 @@ DB = '''<?xml version="1.0" encoding="utf-8"?>
   <class name="android/x/New" since="30"><extends name="java/lang/Object"/>
     <implements name="android/x/Later" since="33"/></class>
   <class name="android/x/Later" since="33"><method name="go()V"/></class>
+  <class name="android/os/Build$VERSION" since="4"><extends name="java/lang/Object"/><field name="SDK_INT"/></class>
 </api>
 '''
 
@@ -228,7 +229,8 @@ def dump(body, cls: str = 'app/x/A', superclass: str = 'java/lang/Object') -> st
             for n, b in enumerate(body[1:], 1))
     lines = [f"Class #0            -\n  Class descriptor  : 'L{cls};'\n  Access flags      : 0x0001 (PUBLIC)\n"
              f"  Superclass        : 'L{superclass};'\n  Interfaces        -\n  Static fields     -\n"
-             f"  Instance fields   -\n  Direct methods    -\n    #0              : (in L{cls};)\n"
+             f"  Instance fields   -\n    #0              : (in L{cls};)\n      name          : 'level'\n"
+             f"      type          : 'I'\n  Direct methods    -\n    #0              : (in L{cls};)\n"
              f"      name          : 'm'\n      type          : '()V'\n      code          -"]
     insns = [insn.split(':', 1) for insn in body.strip().split('\n')]
     addresses = [int(a, 16) for a, _ in insns] + [int(insns[-1][0], 16) + 1]
@@ -289,7 +291,7 @@ class Units(unittest.TestCase):
                   '0002: sput v0, Lapp/x/A;.level:I // field@0001\n'
                   f'0004: {CALL}\n0007: return-void')
         self.assertEqual(self.statuses(dump(stored)), [('unverified', 34)])
-        helper = ('0000: invoke-static {}, Lapp/x/A;.ok:()Z // method@0002\n0003: move-result v0\n'
+        helper = ('0000: invoke-static {}, Lapp/x/A;.m:()V // method@0002\n0003: move-result v0\n'
                   f'0004: if-eqz v0, 0009 // +0005\n0006: {CALL}\n0009: return-void')
         self.assertEqual(self.statuses(dump(helper)), [('unverified', 34)])
 
@@ -333,10 +335,39 @@ class Units(unittest.TestCase):
                 '0002: const/16 v1, #int 34 // #0\n0004: if-lt v0, v1, 0009 // +0005\n'
                 f'0006: {CALL}\n0009: return-void')
         self.assertNotEqual(self.statuses(dump(fake))[0][0], 'guarded')
-        carried = ('0000: invoke-static {}, Lapp/x/A;.ok:()Z // method@0002\n0003: move-result v0\n'
+        carried = ('0000: invoke-static {}, Lapp/x/A;.m:()V // method@0002\n0003: move-result v0\n'
                    '0004: if-eqz v3, 0007 // +0003\n0006: nop // other work\n'
                    f'0007: if-eqz v0, 000c // +0005\n0009: {CALL}\n000c: return-void')
         self.assertEqual(self.statuses(dump(carried)), [('unverified', 34)])  # the helper's value, a block later
+
+    def test_nothing_the_database_cannot_place_is_dropped(self):
+        poly = ('0000: invoke-polymorphic {v0, v1}, Landroid/x/Later;.go:()V, (Lapp/x/A;)I // method@0005, proto@0000'
+                '\n0004: return-void')  # its ", (proto)" suffix must not hide the member
+        self.assertEqual(self.statuses(dump(poly)), [('not_guarded_here', 33)])
+        for body in ('0000: invoke-static {}, Landroid/x/Missing;.go:()V // method@0001\n0003: return-void',
+                     '0000: invoke-virtual {v0}, Landroid/x/Later;.unlisted:()V // method@0001\n0003: return-void',
+                     '0000: new-instance v0, Landroid/x/Missing; // type@0001\n0002: return-void'):
+            with self.subTest(body=body):
+                [finding] = apilevel.analyse([dump(body)], self.db, 'app.x', 26)['findings']
+                self.assertEqual((finding['status'], finding['reason']), ('unverified', apilevel.UNKNOWN))
+        report = apilevel.analyse([dump('0000: return-void', superclass='android/x/Missing')], self.db, 'app.x', 26)
+        self.assertEqual([(f['kind'], f['status'], f['reason']) for f in report['findings']],
+                         [('supertype', 'unverified', apilevel.UNKNOWN)])
+
+    def test_an_app_interface_implemented_only_by_a_newer_platform_method(self):
+        iface = ("Class #0            -\n  Class descriptor  : 'Lapp/x/KeepClear;'\n"
+                 "  Access flags      : 0x0601 (PUBLIC INTERFACE ABSTRACT)\n  Superclass        : 'Ljava/lang/Object;'\n"
+                 "  Interfaces        -\n  Static fields     -\n  Instance fields   -\n  Direct methods    -\n"
+                 "  Virtual methods   -\n    #0              : (in Lapp/x/KeepClear;)\n"
+                 "      name          : 'setShowWhenLocked'\n      type          : '(Z)V'\n"
+                 "      access        : 0x0401 (PUBLIC ABSTRACT)\n      code          : (none)\n\n")
+        impl = dump('0000: return-void', cls='app/x/V', superclass='android/app/Activity').replace(
+            "  Interfaces        -\n", "  Interfaces        -\n    #0              : 'Lapp/x/KeepClear;'\n", 1)
+        report = apilevel.analyse([iface + impl], self.db, 'app.x', 26)
+        self.assertEqual([(f['kind'], f['status'], f['level'], f['where']) for f in report['findings']],
+                         [('supertype', 'unverified', 27, 'app/x/V')])  # setShowWhenLocked is API 27
+        own = impl.replace("'m'", "'setShowWhenLocked'").replace("'()V'", "'(Z)V'")  # V implements it itself
+        self.assertEqual(apilevel.analyse([iface + own], self.db, 'app.x', 26)['findings'], [])
 
     def test_the_budget_is_checked_between_methods(self):
         import itertools
