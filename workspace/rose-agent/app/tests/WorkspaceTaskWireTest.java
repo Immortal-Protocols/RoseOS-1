@@ -12,7 +12,7 @@ import java.util.Map;
  *   <li>the HTTP/1.1 framing WorkspaceTaskTransport writes and reads (WorkspaceHttp);</li>
  *   <li>the client end to end through those exact bytes against in-memory replies shaped like App Core's
  *   route;</li>
- *   <li>the card line from the tap's outcome and the phone's own task stream (WorkspaceTaskCard).</li>
+ *   <li>the GET framing for App Core's page-task read.</li>
  * </ul>
  * Nothing opens a socket, and no task runs.
  */
@@ -80,26 +80,11 @@ public final class WorkspaceTaskWireTest {
   expect(off.kind==WorkspaceTaskClient.Kind.NOT_SENT&&wire[0]==null,"gate off: nothing written");
  }
 
- /** The card line: only the reply and the matching task in the stream; never assumed finished. */
+ /** The GET framing for App Core's page-task read. */
  static void card(){
-  WorkspaceTaskClient.Outcome withId=new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.STARTED,null,"t-1",1);
-  WorkspaceTaskClient.Outcome noId=new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.STARTED,null,null,1);
-  String running="{\"version\":1,\"current\":{\"id\":\"t-1\",\"state\":\"running\",\"title\":\"x\"}}";
-  String done="{\"version\":1,\"current\":{\"id\":\"t-1\",\"state\":\"completed\",\"title\":\"x\"}}";
-  String other="{\"version\":1,\"current\":{\"id\":\"t-2\",\"state\":\"completed\",\"title\":\"x\"}}";
-  expect("Rose task · asks first".equals(WorkspaceTaskCard.line(null,running,true)),"before any tap");
-  expect("Rose is working".equals(WorkspaceTaskCard.line(withId,running,true)),"its own task running");
-  expect("Finished · in Rose's work".equals(WorkspaceTaskCard.line(withId,done,true)),"its own task completed");
-  expect("Failed · in Rose's work".equals(WorkspaceTaskCard.line(withId,done.replace("completed","failed"),true)),"failed");
-  expect("Stopped · in Rose's work".equals(WorkspaceTaskCard.line(withId,done.replace("completed","interrupted"),true)),"interrupted");
-  expect("Stopping…".equals(WorkspaceTaskCard.line(withId,done.replace("completed","stopping"),true)),"stopping");
-  expect("Started · in Rose's work".equals(WorkspaceTaskCard.line(withId,other,true)),"another task finishing says nothing about this one");
-  expect("Started · in Rose's work".equals(WorkspaceTaskCard.line(noId,done,true)),"no taskId: never claims finished");
-  expect("Started · in Rose's work".equals(WorkspaceTaskCard.line(withId,done,false)),"a stale stream is not believed");
-  expect("Started · in Rose's work".equals(WorkspaceTaskCard.line(withId,"garbage",true))&&"Started · in Rose's work".equals(WorkspaceTaskCard.line(withId,"{\"version\":2,\"current\":{\"id\":\"t-1\",\"state\":\"completed\"}}",true)),"an unreadable or unknown-version stream is not believed");
-  expect("Started · in Rose's work".equals(WorkspaceTaskCard.line(withId,"{\"version\":1,\"current\":{\"id\":\"t-1\",\"state\":\"weird\"}}",true)),"an unknown state falls back to the reply");
-  WorkspaceTaskClient.Outcome refused=new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.REFUSED,"x",null,1);
-  expect("Couldn't start".equals(WorkspaceTaskCard.line(refused,running,true)),"a refused tap never follows the stream");
-  expect("Asking Rose…".equals(WorkspaceTaskCard.line(new WorkspaceTaskClient.Outcome(WorkspaceTaskClient.Kind.SENDING,null,null,0),running,true)),"while sending");
+  Map<String,String> h=new LinkedHashMap<>();h.put("X-Rose-Device","abc");
+  String req=text(WorkspaceHttp.get("rose.local",9443,"/workspace/v1/tasks/wt-0123456789abcdef",h));
+  expect(req.equals("GET /workspace/v1/tasks/wt-0123456789abcdef HTTP/1.1\r\nHost: rose.local:9443\r\nX-Rose-Device: abc\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),"exact GET:\n"+req);
+  try{WorkspaceHttp.get("h",1,"/a b",new LinkedHashMap<String,String>());expect(false,"space in path");}catch(IllegalArgumentException e){checks++;}
  }
 }

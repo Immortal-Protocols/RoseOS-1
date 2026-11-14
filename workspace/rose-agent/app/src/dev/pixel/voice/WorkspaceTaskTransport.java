@@ -27,7 +27,10 @@ final class WorkspaceTaskTransport implements WorkspaceTaskClient.Transport {
  private final Context context;
  WorkspaceTaskTransport(Context context){this.context=context.getApplicationContext();}
 
- @Override public WorkspaceTaskClient.Response post(String path,Map<String,String> headers,byte[] body)throws Exception{
+ @Override public WorkspaceTaskClient.Response post(String path,Map<String,String> headers,byte[] body)throws Exception{return exchange(path,headers,body,true);}
+ @Override public WorkspaceTaskClient.Response get(String path,Map<String,String> headers)throws Exception{return exchange(path,headers,null,false);}
+
+ private WorkspaceTaskClient.Response exchange(String path,Map<String,String> headers,byte[] body,boolean post)throws Exception{
   LocalRoseConnection.Paired p=LocalRoseConnection.paired(context);
   if(p==null)throw new IOException("not paired");
   IOException last=null;
@@ -38,7 +41,7 @@ final class WorkspaceTaskTransport implements WorkspaceTaskClient.Transport {
    try{
     s.setSoTimeout(READ_TIMEOUT_MS);
     OutputStream out=s.getOutputStream();
-    out.write(WorkspaceHttp.post(host,p.port,path,headers,body));out.flush();
+    out.write(post?WorkspaceHttp.post(host,p.port,path,headers,body):WorkspaceHttp.get(host,p.port,path,headers));out.flush();
     return WorkspaceHttp.read(s.getInputStream());
    }finally{try{s.close();}catch(IOException ignored){}try{raw.close();}catch(IOException ignored){}}
   }

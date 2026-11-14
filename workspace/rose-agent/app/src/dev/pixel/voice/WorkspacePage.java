@@ -234,14 +234,12 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   Button b=button(labelOf(id),()->act(id));
   b.setContentDescription(labelOf(id)+(task?", Rose task, asks first":""));
   if(!task)return b;
-  // A Rose task: outlined, with its line beneath (WorkspaceTaskCard): "Rose task · asks first" until tapped, then
-  // only what the reply and the task stream say.
+  // A Rose task: outlined, with its line beneath (WorkspaceTaskTracker): "Rose task · asks first" until tapped,
+  // then only what the reply and App Core's own state for its taskId say.
   b.setBackground(pill(0,0x99f4ede0));
   LinearLayout box=new LinearLayout(activity);box.setOrientation(LinearLayout.VERTICAL);
   box.addView(b,new LinearLayout.LayoutParams(-1,dp(HIT_DP)));
-  VoiceService voice=VoiceService.instance;
-  String line=WorkspaceTaskCard.line(hub.taskOutcome(id),voice==null?null:voice.taskStateJson,voice!=null&&voice.taskStateAvailable);
-  TextView under=text(line,11,RoseThemeNow.c(0xb3f4ede0));under.setSingleLine(true);
+  TextView under=text(hub.taskLine(id),11,RoseThemeNow.c(0xb3f4ede0));under.setSingleLine(true);
   box.addView(under,new LinearLayout.LayoutParams(-1,-2));
   return box;
  }
@@ -257,10 +255,15 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
    new AlertDialog.Builder(activity).setTitle(labelOf(id)).setMessage("Rose tasks aren't available on this phone yet.").setPositiveButton("OK",null).show();
    return;
   }
-  WorkspaceTaskClient.Outcome last=hub.taskOutcome(id);
-  if(last!=null&&(last.started()||last.kind==WorkspaceTaskClient.Kind.SENDING)){
-   // Already asked: show where it is rather than asking twice.
-   new AlertDialog.Builder(activity).setTitle(task.label).setMessage(last.status()).setPositiveButton("OK",null).show();
+  WorkspaceTaskTracker.Record last=hub.tasks.byAction(id);
+  boolean open=last!=null&&!last.finalState()&&(last.sent==null||"STARTED".equals(last.sent)||"ALREADY_STARTED".equals(last.sent)||"UNCERTAIN".equals(last.sent));
+  if(open){
+   // Already asked and not ended (or not known to have ended): show where it is rather than asking twice. Only
+   // when the phone never learned whether it started (no taskId) may the person explicitly ask again.
+   AlertDialog.Builder b=new AlertDialog.Builder(activity).setTitle(task.label).setMessage(hub.taskLine(id));
+   if("UNCERTAIN".equals(last.sent)&&last.taskId==null)b.setPositiveButton("Ask again",(d,w)->hub.startTask(id)).setNegativeButton("Not now",null);
+   else b.setPositiveButton("OK",null);
+   b.show();
    return;
   }
   new AlertDialog.Builder(activity).setTitle(task.label).setMessage(task.ask)

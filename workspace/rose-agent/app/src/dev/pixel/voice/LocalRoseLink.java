@@ -349,6 +349,12 @@ final class LocalRoseLink {
                             LocalAssistantIdentity.accept(context, identityScope, m);
                         }
                         String kind = m.optString("kind");
+                        // Project 2: App Core's page-task state, live or replayed on reconnect (both are wanted:
+                        // the replay is how a tap whose reply was lost, or a restart, recovers its end).
+                        if (kind.equals("workspace_task")) {
+                            WorkspaceHub.taskEvent(context, text);
+                            return;
+                        }
                         if (m.optBoolean("replay")) return;
                         if (kind.equals("user_turn") && !m.optBoolean("hold")) {
                             emit(new JSONObject().put("type", "message").put("role", "user")
