@@ -34,7 +34,9 @@ class Config(unittest.TestCase):
                {k: v for k, v in good.items() if k != 'sdk'}, {**good, 'root': 'relative'},
                {**good, 'remoteDir': good['root']}, {**good, 'remoteDir': good['root'] + '/remote'},
                {**good, 'port': 80}, {**good, 'adminPort': good['port']}, {**good, 'port': True},
-               {**good, 'hosts': []}, {**good, 'hosts': ['a b']}, {**good, 'name': ''},
+               {**good, 'hosts': []}, {**good, 'hosts': ['a b']}, {**good, 'hosts': ['192.168.1.5']},
+               {**good, 'hosts': ['builder.example.com']}, {**good, 'name': ''},
+               {**good, 'root': '//srv/x/remote'}, {**good, 'root': good['remoteDir'] + '/../remote'},
                {**good, 'keyCreation': 'yes'}, {**good, 'buildTimeoutS': 0},
                {**good, 'writer': {'argv': ['node', 'bridge.mjs']}}, {**good, 'writer': {'argv': []}},
                {**good, 'backup': {'argv': ['/bin/backup'], 'extra': 1}}, {**good, 'backup': ['/bin/backup']}]
@@ -52,6 +54,35 @@ class Config(unittest.TestCase):
             path.write_text(json.dumps(config_data(tmp, writer={'argv': ['/usr/bin/node', 'b.mjs'], 'timeoutS': 60})))
             c = host.load_config(path)
             self.assertEqual((c.writer.argv, c.writer.timeout_s), (('/usr/bin/node', 'b.mjs'), 60.0))
+
+
+class Serving(unittest.TestCase):
+    def test_a_listener_that_fails_is_reraised_and_main_exits_nonzero(self):
+        import asyncio
+
+        class Failing:
+            should_exit = force_exit = False
+
+            async def serve(self, sockets=None):
+                raise FileNotFoundError('tls-key.pem')
+
+        class Idle(Failing):
+            async def serve(self, sockets=None):
+                while not self.should_exit:
+                    await asyncio.sleep(0.01)
+        with self.assertRaises(FileNotFoundError):
+            asyncio.run(host._serve([(Failing(), None), (Idle(), None)]))
+
+    def test_a_symlinked_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(f'{tmp}/real')
+            os.symlink(f'{tmp}/real', f'{tmp}/builder')
+            with self.assertRaises(host.ConfigError):
+                host.build_host(host.parse_config(config_data(tmp)))
+            os.unlink(f'{tmp}/builder')
+            os.symlink(f'{tmp}/remote', f'{tmp}/builder')  # both names, one directory
+            with self.assertRaises(host.ConfigError):
+                host.build_host(host.parse_config(config_data(tmp)))
 
 
 class Wired(unittest.TestCase):
@@ -140,8 +171,38 @@ class Backup(unittest.TestCase):
             self.keys, 'p1', 'app.rose.gen.pp1')
 
     def test_receipt_and_arguments(self):
-        receipt = self.run_backup('echo "stored:$2:$3:$(basename "$1"):$HOME"\necho second line\n')
-        self.assertEqual(receipt, f'stored:p1:app.rose.gen.pp1:keys:{self.keys}')
+        receipt = self.run_backup('echo "stored:$2:$3:$(basename "$1")"\necho second line\n')
+        self.assertEqual(receipt, 'stored:p1:app.rose.gen.pp1:keys')
+
+    def test_its_own_home_outside_the_key_directory(self):
+        receipt = self.run_backup('mkdir -p "$HOME/.cache/tool" && echo state > "$HOME/.cache/tool/s"\n'
+                                  'printf "home:%s\\tcwd:%s\\n" "$HOME" "$(pwd)"\n')
+        self.assertTrue(receipt.startswith('home:'))
+        home = receipt.split()[0][5:]
+        self.assertNotEqual(Path(home).resolve(), self.keys.resolve())
+        self.assertFalse(Path(home).exists())  # removed afterwards
+        self.assertEqual(sorted(p.name for p in self.keys.iterdir()), [])  # nothing written next to the key
+
+    def test_nothing_it_started_survives(self):
+        marker = Path(self.tmp.name) / 'late'
+        # Succeeds at once but leaves a helper holding stdout; the helper must not block or outlive the backup.
+        receipt = self.run_backup(f'( sleep 2; touch {marker} ) &\necho receipt-ok\n', timeout_s=10.0)
+        self.assertEqual(receipt, 'receipt-ok')
+        for body in (f'( sleep 2; touch {marker} ) &\nsleep 30\n',):  # and on a timeout
+            with self.assertRaises(toolchain.StepFailed):
+                self.run_backup(body, timeout_s=0.5)
+        import time
+        time.sleep(2.5)
+        self.assertFalse(marker.exists())
+
+    def test_receipt_rule_matches_the_builder(self):
+        self.assertTrue(host.valid_receipt('x' * 200))
+        for bad in ('', 'x' * 201, 'a\nb', None):
+            self.assertFalse(host.valid_receipt(bad))
+        self.assertEqual(self.run_backup('printf "Hash (crc32c):\\t\\tabc\\n"\n'), 'Hash (crc32c):  abc')
+        with self.assertRaises(toolchain.StepFailed) as cm:
+            self.run_backup('printf "%0300d\\n" 0\n')
+        self.assertIn('unusable receipt', cm.exception.summary)
 
     def test_failures_raise_signing_without_echoing_output(self):
         for body, timeout in (('echo secret-material >&2\nexit 3\n', 10.0), ('exit 0\n', 10.0),

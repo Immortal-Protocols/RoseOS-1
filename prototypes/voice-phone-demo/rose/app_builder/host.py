@@ -21,7 +21,9 @@ import contextlib
 import json
 import os
 import signal
+import shutil
 import subprocess
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +36,7 @@ SCHEMA_VERSION = 1
 KEYS = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk', 'javaHome',
         'buildTimeoutS', 'keyCreation', 'writer', 'backup'}
 REQUIRED = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk'}
+RECEIPT_MAX = 200
 NO_WRITER = 'No app writer is set up on this builder host, so nothing was written.'
 
 
@@ -66,7 +69,7 @@ class HostConfig:
 def _path(value, name: str) -> Path:
     if not isinstance(value, str) or not value.startswith('/') or '\0' in value or len(value) > 4096:
         raise ConfigError(f'{name} must be an absolute path')
-    return Path(value)
+    return Path(os.path.normpath('/' + value.lstrip('/')))  # '//x' and '/a/../x' name the directory they mean
 
 
 def _port(value, name: str) -> int:
@@ -109,9 +112,13 @@ def parse_config(data) -> HostConfig:
     if not isinstance(data['name'], str) or not 0 < len(data['name'].strip()) <= 64:
         raise ConfigError('name must be 1 to 64 characters')
     hosts = data['hosts']
-    if (not isinstance(hosts, list) or not hosts or len(hosts) > 8
-            or not all(isinstance(h, str) and 0 < len(h) <= 253 and h.isprintable() and ' ' not in h for h in hosts)):
+    if not isinstance(hosts, list) or not hosts or len(hosts) > 8 or not all(isinstance(h, str) for h in hosts):
         raise ConfigError('hosts must be 1 to 8 host names or addresses')
+    from ..remote import configured_hosts
+    try:  # the same rule pairing applies, so a host that can never pair is refused at load
+        hosts = configured_hosts(hosts)
+    except ValueError as exc:
+        raise ConfigError(f'hosts: {exc}') from None
     key_creation = data.get('keyCreation', False)
     if type(key_creation) is not bool:
         raise ConfigError('keyCreation must be true or false')
@@ -141,28 +148,59 @@ def no_writer(source, kind, request, cancelled):
     raise toolchain.StepFailed('internal', NO_WRITER, retryable=True)
 
 
+def valid_receipt(receipt) -> bool:
+    """The one rule for a backup receipt, used by CommandBackup and the Builder alike."""
+    return isinstance(receipt, str) and 0 < len(receipt) <= RECEIPT_MAX and receipt.isprintable()
+
+
 class CommandBackup:
     """backup(keys_dir, project_id, package) by running ``argv + [keys_dir, project_id, package]``. The command copies
     the key bundle off the host (for example encrypted to the owner's offline key) and prints one receipt line, such as
-    the hash of what it stored. Its output beyond that line, and anything it writes to stderr, is never logged or
-    shown. A failure, a timeout or an empty receipt raises, and the builder then delivers nothing."""
+    the hash of what it stored (at most 200 printable characters; tabs become spaces). Its output beyond that line, and
+    anything it writes to stderr, is never logged or shown.
+
+    It runs in its own session with its own empty HOME and working directory, outside the key directory, so a tool's
+    own state never lands next to the key. When the command finishes, fails or times out, its whole process group is
+    killed, so nothing it started keeps running with access to the key. A failure, a timeout or an unusable receipt
+    raises, and the builder then delivers nothing."""
 
     def __init__(self, command: Command):
         self.command = command
 
+    @staticmethod
+    def _failed(why: str = 'could not be backed up') -> toolchain.StepFailed:
+        return toolchain.StepFailed('signing', f'This app\'s signing key {why}, so the app was not delivered.',
+                                    retryable=True)
+
     def __call__(self, keys: Path, project_id: str, package: str) -> str:
-        env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(keys)}
+        scratch = Path(tempfile.mkdtemp(prefix='rose-key-backup-'))
+        os.chmod(scratch, 0o700)
+        env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(scratch), 'TMPDIR': str(scratch)}
+        proc = None
         try:
-            result = subprocess.run([*self.command.argv, str(keys), project_id, package], env=env, cwd=str(keys),
-                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, errors='replace',
-                                    timeout=self.command.timeout_s)
-        except (OSError, subprocess.TimeoutExpired):
-            raise toolchain.StepFailed('signing', 'This app\'s signing key could not be backed up, so the app was '
-                                       'not delivered.', retryable=True) from None
-        receipt = (result.stdout.splitlines() or [''])[0].strip()
-        if result.returncode != 0 or not receipt:
-            raise toolchain.StepFailed('signing', 'This app\'s signing key could not be backed up, so the app was '
-                                       'not delivered.', retryable=True)
+            with open(scratch / '.stdout', 'w+b') as out:  # a file, so a leftover helper holding it changes nothing
+                try:
+                    proc = subprocess.Popen([*self.command.argv, str(keys), project_id, package], env=env,
+                                            cwd=str(scratch), stdin=subprocess.DEVNULL, stdout=out,
+                                            stderr=subprocess.DEVNULL, start_new_session=True)
+                    code = proc.wait(timeout=self.command.timeout_s)
+                except (OSError, subprocess.TimeoutExpired):
+                    raise self._failed() from None
+                finally:
+                    if proc is not None:
+                        with contextlib.suppress(ProcessLookupError, PermissionError):
+                            os.killpg(proc.pid, signal.SIGKILL)  # the whole group, finished or not
+                        with contextlib.suppress(Exception):
+                            proc.wait(timeout=5)
+                out.seek(0)
+                first = out.read(4096).decode('utf-8', 'replace').splitlines()
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        receipt = (first[0] if first else '').replace('\t', ' ').strip()
+        if code != 0 or not receipt:
+            raise self._failed()
+        if not valid_receipt(receipt):
+            raise self._failed('was backed up with an unusable receipt (over 200 characters or not printable)')
         return receipt
 
 
@@ -194,8 +232,13 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
     from ..remote import Remote, add_pairing_api, build_remote_app
 
     for directory in (config.root, config.remote_dir):
+        if directory.is_symlink():
+            raise ConfigError(f'{directory} must not be a symbolic link')
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(directory, 0o700)
+    root, remote_dir = config.root.resolve(), config.remote_dir.resolve()
+    if root == remote_dir or root in remote_dir.parents or remote_dir in root.parents:
+        raise ConfigError('root and remoteDir must be separate directories')
     if generate is None:
         if config.writer is not None:
             from .generator import CodexGenerator
@@ -239,18 +282,36 @@ def servers(host: Host):
 
 
 async def _serve(pairs) -> None:
+    """Serve until a signal or until a server stops; a second signal forces exit. A server that failed is re-raised,
+    so the host exits non-zero and a supervisor sees it."""
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
-    for sig in (signal.SIGINT, signal.SIGTERM):
+
+    def on_signal():
+        if stop.is_set():
+            for server, _ in pairs:
+                server.force_exit = True
+        stop.set()
+
+    sigs = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    for sig in sigs:
         with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, on_signal)
     tasks = [asyncio.create_task(s.serve(sockets=socks)) for s, socks in pairs]
     waiter = asyncio.create_task(stop.wait())
-    await asyncio.wait([*tasks, waiter], return_when=asyncio.FIRST_COMPLETED)
-    for server, _ in pairs:
-        server.should_exit = True
-    waiter.cancel()
-    await asyncio.gather(*tasks, waiter, return_exceptions=True)
+    try:
+        await asyncio.wait([*tasks, waiter], return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for server, _ in pairs:
+            server.should_exit = True
+        waiter.cancel()
+        results = await asyncio.gather(*tasks, waiter, return_exceptions=True)
+        for sig in sigs:
+            with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):
+                loop.remove_signal_handler(sig)
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            raise result
 
 
 def main(argv=None) -> int:
@@ -262,13 +323,21 @@ def main(argv=None) -> int:
     except ConfigError as exc:
         print(f'[rose-builder] config refused: {exc}', flush=True)
         return 2
-    host = build_host(config)
-    pairs = servers(host)
+    try:
+        host = build_host(config)
+        pairs = servers(host)
+    except (ConfigError, OSError) as exc:
+        print(f'[rose-builder] could not start: {type(exc).__name__}: {exc}', flush=True)
+        return 2
     host.start_worker()
     try:
         asyncio.run(_serve(pairs))
+    except Exception as exc:  # a listener failed: exit non-zero, naming only the error type
+        print(f'[rose-builder] a listener stopped: {type(exc).__name__}', flush=True)
+        return 1
     finally:
         host.stop()
+        host.remote.flush()
     return 0
 
 

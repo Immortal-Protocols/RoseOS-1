@@ -38,7 +38,22 @@ def source_with(tmp, inner='', application='', root_extra=''):
 class NoCapabilityRules(unittest.TestCase):
     def test_any_permission_or_role_passes_the_source_check(self):
         with tempfile.TemporaryDirectory() as tmp:
-            template.check(source_with(tmp, CAPABILITIES + '<permission android:name="other.app.PERM"/>', SERVICES), P)
+            template.check(source_with(tmp, CAPABILITIES + f'<permission android:name="{P}.MINE"/>'
+                                            f'<permission-tree android:name="{P}.tree"/>', SERVICES), P)
+
+    def test_declared_permissions_stay_in_the_apps_own_namespace(self):
+        # Isolation between projects, not a rule on what an app may request.
+        for inner in ('<permission android:name="other.app.PERM"/>',
+                      '<permission android:name="app.rose.gen.p2.READ"/>', '<permission-tree android:name="com.x.y"/>',
+                      f'<permission android:name="{P}"/>', '<permission/>'):
+            with tempfile.TemporaryDirectory() as tmp, self.subTest(inner=inner):
+                with self.assertRaises(template.TemplateRefused):
+                    template.check(source_with(tmp, inner), P)
+        tree = '  E: manifest (line=1)\n    E: permission (line=2)\n      A: android:name(0x01010003)="{}" (Raw: "x")\n'
+        self.assertIsNone(toolchain.declared_permission_problem(tree.format(P + '.MINE'), P))
+        self.assertIsNotNone(toolchain.declared_permission_problem(tree.format('app.rose.gen.p2.READ'), P))
+        self.assertIsNotNone(toolchain.declared_permission_problem(tree.replace('permission (', 'permission-tree (')
+                                                                   .format('com.x.y'), P))
 
     def test_identity_and_update_checks_still_refuse(self):
         cases = [('', '', ' android:versionCode="7"'), ('', '', ' android:sharedUserId="android.uid.system"'),

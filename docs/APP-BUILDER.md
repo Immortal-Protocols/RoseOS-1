@@ -265,6 +265,11 @@ refused only for technical reasons:
   - the manifest can't use namespaced elements, which those checks couldn't
     see;
   - the app can't be debuggable;
+  - a permission the app declares (`<permission>`, `<permission-tree>`) must
+    be named under its own package. That keeps one project from defining,
+    and so controlling access to, another project's or another app's
+    permissions. It is isolation between projects and puts no limit on what
+    the app may request or do;
   - Java must be in the app's package;
   - no git metadata, links or special files.
 - **Toolchain facts:** framework Java at source level 8 only, because there's
@@ -568,12 +573,26 @@ Rose conversation server. It reads one strict JSON config file:
     failure other than a missing backup can be retried.
   - Later builds of the project need no new backup.
   - `CommandBackup` runs `backup.argv + [keysDir, projectId, package]` with a
-    scrubbed environment and keeps only the first line of output as the
-    receipt. It never logs the rest of the output or stderr.
+    scrubbed environment.
+    - It runs in its own session, with an empty HOME and working directory
+      outside the key directory, removed afterwards.
+    - Its whole process group is killed when it finishes, fails or times
+      out, so nothing it started keeps running with access to the key.
+    - The receipt is the first line of its output, with tabs as spaces, at
+      most 200 printable characters. The builder applies the same rule
+      (`host.valid_receipt`).
+    - It never logs the rest of the output or stderr.
   - Which backup tool and storage to use is not chosen in source.
-- **Defaults are off.** Key creation is off unless the config enables it, no
-  writer and no backup are configured, and both directories are created
-  0700 and must be separate.
+- **Defaults are off.** Key creation is off unless the config enables it, and
+  no writer and no backup are configured.
+- **Config checks.**
+  - Both directories are created 0700. They must not be symbolic links, and
+    after resolving they must be separate.
+  - `hosts` must pass the same Tailscale rule pairing uses
+    (`configured_hosts`).
+- **Serving.** A listener that fails is re-raised, so `main` exits non-zero.
+  SIGINT, SIGTERM and SIGHUP stop both servers, a second signal forces exit,
+  and device state is flushed on the way out.
 
 Proof level: container tests only (`rose/tests/test_app_host.py`). They cover:
 

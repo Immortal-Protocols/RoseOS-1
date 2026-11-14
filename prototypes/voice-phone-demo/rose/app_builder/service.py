@@ -395,7 +395,7 @@ class Builder:
             raise
         except Exception:
             receipt = None
-        if not (isinstance(receipt, str) and 0 < len(receipt) <= 200 and receipt.isprintable()):
+        if not (isinstance(receipt, str) and 0 < len(receipt) <= 200 and receipt.isprintable()):  # = host.valid_receipt
             raise toolchain.StepFailed('signing', 'This app\'s signing key could not be backed up, so the app was '
                                        'not delivered.', retryable=True)
         self.ledger.record_key_backup(project_id, receipt)

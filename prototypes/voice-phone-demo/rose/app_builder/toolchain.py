@@ -171,7 +171,30 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
                          'which is not allowed.')
     if re.search(r'^\s*E: \S*:', tree, re.M):  # an element form the identity checks above do not know
         raise StepFailed('compile', 'Manifest elements may not use a namespace.')
+    problem = declared_permission_problem(tree, package)
+    if problem:
+        raise StepFailed('compile', problem)
     return unsigned, '\n'.join(x for x in log if x)
+
+
+def declared_permission_problem(tree: str, package: str) -> str | None:
+    """The source check's permission-ownership rule again, on ``aapt dump xmltree`` of the built manifest: every
+    <permission> or <permission-tree> name is under the app's own package, given as a plain string."""
+    element = None
+    for line in tree.splitlines():
+        opened = re.match(r'\s*E: (\S+)', line)
+        if opened:
+            element = opened.group(1)
+            continue
+        if element not in ('permission', 'permission-tree'):
+            continue
+        attribute = re.match(r'\s*A: [^(]*\((0x01010003)\)=(.*)$', line)
+        if attribute:
+            value = re.match(r'"([^"]*)"', attribute.group(2))
+            name = value.group(1) if value else ''
+            if not name.startswith(package + '.') or len(name) <= len(package) + 1:
+                return f'An app may declare permissions only under its own name ({package}.*).'
+    return None
 
 
 def _private(path: Path, data: str):

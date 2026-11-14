@@ -165,6 +165,12 @@ def check(source: Path, package: str) -> None:
     for child in root:
         if child.tag not in MANIFEST_CHILDREN:
             raise TemplateRefused(f'<{child.tag}> is not allowed in a generated app\'s manifest.')
+    for element in [*root.iter('permission'), *root.iter('permission-tree')]:
+        # Isolation, not a rule on what an app may do: a permission an app declares lives in its own namespace, so no
+        # project can define (and so control access to) another project's or another app's permissions.
+        name = element.get(ANDROID + 'name')
+        if not isinstance(name, str) or not name.startswith(package + '.') or len(name) <= len(package) + 1:
+            raise TemplateRefused(f'An app may declare permissions only under its own name ({package}.*).')
     application = root.find('application')
     if application is not None and application.get(ANDROID + 'debuggable') is not None:
         raise TemplateRefused('android:debuggable is not allowed.')
