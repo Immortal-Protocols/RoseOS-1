@@ -228,6 +228,7 @@ final class WorkspaceLayout {
   if(v==null||v==MiniJson.NULL){b.append("null");return;}
   if(v instanceof String){quote(b,(String)v);return;}
   if(v instanceof Boolean||v instanceof Long||v instanceof Integer){b.append(v);return;}
+  if(v instanceof Double){double d=(Double)v;b.append(Double.isNaN(d)||Double.isInfinite(d)?"null":java.math.BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());return;}
   if(v instanceof Map){b.append('{');boolean first=true;for(Map.Entry<String,Object> e:((Map<String,Object>)v).entrySet()){if(!first)b.append(',');first=false;quote(b,e.getKey());b.append(':');write(b,e.getValue());}b.append('}');return;}
   if(v instanceof List){b.append('[');boolean first=true;for(Object o:(List<Object>)v){if(!first)b.append(',');first=false;write(b,o);}b.append(']');return;}
   throw new IllegalArgumentException("unsupported "+v.getClass());
