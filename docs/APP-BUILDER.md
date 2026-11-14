@@ -357,10 +357,15 @@ nothing and weakens nothing in §3.6.
   allow-authoritative gate, so every create and revise is refused with
   `review_required`/`unavailable` and nothing is recorded. No approving gate
   exists outside tests.
-- A revise is judged with the project's history (`Ledger.request_history`).
-  The decisions that accepted a job (gate, version, verdict, category) and its
-  notes are kept with it (`screenings` table). A replay returns them unchanged
-  whatever the policy is now.
+- A revise is judged with the project's history in submission order
+  (`Ledger.request_history`). A retry doesn't reorder it.
+- The decisions that accepted a job (gate, version, verdict, category) and its
+  notes are written in the same transaction as the job (`screenings` table),
+  so no job exists without them. A replay returns them unchanged whatever the
+  policy is now.
+- The worker never runs, and `retry` never re-queues, a job that has no
+  recorded decision, for example one written before screening existed. Such a
+  job fails as "never screened".
 - `rose/tests/policy_fixtures.py`: test-only `RecordedGate`, which answers
   from recorded verdicts, and `approving_policy()` for build-path tests.
 - `rose/tests/fixtures/screening/*.jsonl`: 155 recorded cases, all moved from
@@ -377,11 +382,26 @@ route test). They cover:
 - the default policy across all 155 fixtures, which allows none of them;
 - recorded replay, matching every expected verdict;
 - the default Builder recording nothing;
-- review_required never overridden, and replays keeping their decision.
+- review_required never overridden, and replays keeping their decision;
+- after review of c8bf8a6c, these added cases:
+  - `BaseException`, unreadable attributes, look-alike verdicts and a
+    truthy non-bool `can_allow`;
+  - a queued timed-out call is dropped;
+  - history order after a retry;
+  - a job and its screening written together;
+  - unscreened jobs never run or retry;
+  - an empty chain is `unavailable`.
 
-Each rule has a mutation check: accepting malformed answers, needing no
-allow-authoritative gate, letting an empty chain allow, or letting
-review_required through each makes the tests fail.
+Each rule has a mutation check. Each of these breakages makes the tests fail:
+- accepting malformed answers;
+- needing no allow-authoritative gate;
+- letting an empty chain allow;
+- letting review_required through;
+- ordering history by `started`;
+- writing the screening after the job's commit;
+- running unscreened jobs;
+- catching only `Exception`;
+- not cancelling a timed-out call.
 
 Not done:
 
@@ -410,12 +430,18 @@ Decision = {verdict: allow | review_required | deny, category, reason,
 **Fail-closed rules** (property-tested, independent of any gate):
 
 1. `allow` only when every gate in the chain returns `allow`. An empty chain
-   is `deny`.
+   is a misconfiguration, so it gives `review_required`/`unavailable`. It is
+   never `allow`, and it is never reported as `out_of_scope`.
 2. Any `deny` gives `deny`. Otherwise any `review_required` gives
    `review_required`.
-3. A gate that throws, times out, returns an unknown verdict, a malformed
-   object or the wrong version counts as `review_required`, with category
-   `unavailable`. That is never `allow`, and no job is written.
+3. Each of these counts as `review_required`, with category `unavailable`:
+   - a gate that throws anything, `BaseException` included;
+   - a gate that times out. A call still queued is cancelled;
+   - a gate whose attributes can't be read as plain values;
+   - an unknown verdict, a malformed or look-alike object (not exactly a
+     `Decision` with plain `str` fields), or the wrong gate name or version.
+
+   That is never `allow`, and no job is written.
 4. A gate may be deny-only. The §3.6 phrase screen becomes such a gate: it
    returns `deny`, or `allow` meaning "no objection". It can never be the
    chain's only allow-capable gate. So the builder accepts no job until a
@@ -425,7 +451,8 @@ Decision = {verdict: allow | review_required | deny, category, reason,
    afresh.
 
 **`review_required`** means no job exists. The response is 400 with `code`
-`review_required`, plus `category` and `reason`. It can be resolved only in
+`review_required` and `category`. The owner-facing reason is in `error`, as for
+`out_of_scope`. It can be resolved only in
 these ways:
 
 - the owner rewords, and the new request is screened from scratch;

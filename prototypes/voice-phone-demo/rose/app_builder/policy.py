@@ -5,10 +5,11 @@ A policy is an ordered chain of gates. Each gate judges one request and returns 
 allowed:
 
 1. ``allow`` only when every gate allows and at least one of them is allow-authoritative (``can_allow``). An empty
-   chain is ``deny``.
+   chain is ``review_required``/``unavailable`` (a misconfiguration, not a judgement of the request).
 2. Any ``deny`` gives ``deny``; otherwise any ``review_required`` gives ``review_required``.
-3. A gate that raises, times out, or returns anything but a well-formed ``Decision`` from itself counts as
-   ``review_required`` with category ``unavailable``: never ``allow``.
+3. A gate that raises (anything, BaseException included), times out, has attributes that cannot be read, or
+   returns anything but a well-formed ``Decision`` from itself counts as ``review_required`` with category
+   ``unavailable``: never ``allow``.
 4. A gate that is not allow-authoritative (the phrase screen) can only object. Its ``allow`` means "no objection",
    so a chain without an allow-authoritative gate never allows: it answers ``review_required``/``unavailable``.
 
@@ -73,9 +74,19 @@ def default_policy() -> 'Chain':
     return Chain([PhraseGate()])
 
 
-def _unavailable(gate) -> Decision:
-    return Decision(REVIEW, UNAVAILABLE, UNAVAILABLE_REASON, str(getattr(gate, 'name', '?')),
-                    str(getattr(gate, 'version', '?')))
+def _attrs(gate):
+    """(name, version, can_allow) read once; None if they cannot be read as plain values."""
+    try:
+        name, version, can_allow = gate.name, gate.version, gate.can_allow
+    except BaseException:
+        return None
+    if type(name) is not str or type(version) is not str or type(can_allow) is not bool:
+        return None
+    return name, version, can_allow
+
+
+def _unavailable(name='?', version='?') -> Decision:
+    return Decision(REVIEW, UNAVAILABLE, UNAVAILABLE_REASON, name, version)
 
 
 class Chain:
@@ -85,36 +96,47 @@ class Chain:
 
     @property
     def can_allow(self) -> bool:
-        return any(getattr(g, 'can_allow', False) is True for g in self.gates)
+        return any((_attrs(g) or (None, None, False))[2] for g in self.gates)
 
-    def _one(self, gate, request: ScreenRequest) -> Decision:
-        """One gate's decision, or ``unavailable`` for anything that is not a well-formed answer from that gate."""
+    def _one(self, gate, attrs, request: ScreenRequest) -> Decision:
+        """One gate's decision, or ``unavailable`` for anything that is not a well-formed answer from that gate.
+        Verdicts and texts must be plain ``str`` (not subclasses), so every comparison sees the same value."""
+        if attrs is None:
+            return _unavailable()
+        name, version, _ = attrs
+        future = None
         try:
-            decision = _POOL.submit(gate.assess, request).result(timeout=self.timeout_s)
-        except Exception:  # raised, timed out (the thread is left to finish on its own), or could not start
-            return _unavailable(gate)
-        if (not isinstance(decision, Decision) or decision.verdict not in VERDICTS
-                or decision.gate != getattr(gate, 'name', None) or decision.gate_version != getattr(gate, 'version', None)
-                or not isinstance(decision.category, str) or not isinstance(decision.reason, str)
-                or not isinstance(decision.notes, tuple) or not all(isinstance(n, str) for n in decision.notes)
+            future = _POOL.submit(gate.assess, request)
+            decision = future.result(timeout=self.timeout_s)
+        except BaseException:  # raised anything, timed out, or could not start
+            if future is not None:
+                future.cancel()  # dropped if still queued; a running call is left to finish and is ignored
+            return _unavailable(name, version)
+        if (type(decision) is not Decision or type(decision.verdict) is not str or decision.verdict not in VERDICTS
+                or type(decision.gate) is not str or decision.gate != name
+                or type(decision.gate_version) is not str or decision.gate_version != version
+                or type(decision.category) is not str or type(decision.reason) is not str
+                or type(decision.notes) is not tuple or not all(type(n) is str for n in decision.notes)
                 or decision.verdict != ALLOW and not decision.reason.strip()):
-            return _unavailable(gate)
+            return _unavailable(name, version)
         return decision
 
     def assess(self, request: ScreenRequest) -> tuple:
         """(the chain's Decision, every gate's Decision in order). Stops at the first ``deny``."""
         if not self.gates:
-            return Decision(DENY, 'no_policy', NO_POLICY_REASON, 'chain', '1'), ()
-        decisions = []
+            return Decision(REVIEW, UNAVAILABLE, NO_POLICY_REASON, 'chain', '1'), ()
+        decisions, authoritative = [], []
         for gate in self.gates:
-            decision = self._one(gate, request)
+            attrs = _attrs(gate)
+            decision = self._one(gate, attrs, request)
             decisions.append(decision)
             if decision.verdict == DENY:
                 return decision, tuple(decisions)
+            if attrs is not None and attrs[2] and decision.verdict == ALLOW:
+                authoritative.append(decision)
         review = next((d for d in decisions if d.verdict == REVIEW), None)
         if review is not None:
             return review, tuple(decisions)
-        authoritative = [d for g, d in zip(self.gates, decisions) if getattr(g, 'can_allow', False) is True]
         if not authoritative:  # only "no objection" from deny-only gates
             return Decision(REVIEW, UNAVAILABLE, UNAVAILABLE_REASON, 'chain', '1'), tuple(decisions)
         notes = tuple(n for d in decisions for n in d.notes)

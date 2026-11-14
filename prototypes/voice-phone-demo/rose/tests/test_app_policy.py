@@ -39,7 +39,7 @@ class Scripted:
 def oracle(spec):
     """The chain's verdict, from the rules alone (independent of policy.Chain)."""
     if not spec:
-        return policy.DENY
+        return policy.REVIEW  # a misconfiguration: unavailable, never allow
     seen = []
     for behaviour, can_allow in spec:
         verdict = behaviour if behaviour in policy.VERDICTS else policy.REVIEW  # malformed: unavailable
@@ -80,6 +80,69 @@ class ChainProperties(unittest.TestCase):
         decision, _ = policy.Chain([Slow()], timeout_s=0.1).assess(R)
         self.assertLess(time.monotonic() - start, 0.9)
         self.assertEqual((decision.verdict, decision.category), (policy.REVIEW, policy.UNAVAILABLE))
+
+    def test_anything_raised_or_unreadable_or_look_alike_is_unavailable(self):
+        class Raises:
+            name, version, can_allow = 'r', '1', True
+
+            def __init__(self, exc):
+                self.exc = exc
+
+            def assess(self, request):
+                raise self.exc
+        for exc in (KeyboardInterrupt(), SystemExit(1), GeneratorExit(), RuntimeError()):
+            decision, _ = policy.Chain([Raises(exc)]).assess(R)
+            self.assertEqual((decision.verdict, decision.category), (policy.REVIEW, policy.UNAVAILABLE), exc)
+
+        class BadAttrs:
+            version = '1'
+
+            @property
+            def name(self):
+                raise ValueError('no name')
+            can_allow = True
+
+            def assess(self, request):
+                return policy.Decision(policy.ALLOW, 'none', '', 'x', '1')
+        decision, _ = policy.Chain([BadAttrs()]).assess(R)
+        self.assertEqual(decision.verdict, policy.REVIEW)
+
+        class Always(str):
+            def __eq__(self, other):
+                return True
+            __hash__ = str.__hash__
+
+        class LookAlike:
+            name, version, can_allow = 'l', '1', False
+
+            def assess(self, request):
+                return policy.Decision(Always('deny'), 'c', 'x', 'l', '1')
+        decision, _ = policy.Chain([LookAlike()]).assess(R)
+        self.assertEqual((decision.verdict, type(decision.verdict)), (policy.REVIEW, str))
+
+        decision, _ = policy.Chain([RecordedGate(can_allow=1)]).assess(R)  # truthy, but not a bool
+        self.assertEqual(decision.verdict, policy.REVIEW)
+
+    def test_a_timed_out_call_that_never_started_is_dropped(self):
+        import threading
+        release = threading.Event()
+
+        class Blocking:
+            name, version, can_allow = 'b', '1', True
+
+            def assess(self, request):
+                release.wait(5)
+                return policy.Decision(policy.ALLOW, 'none', '', 'b', '1')
+        counted = RecordedGate()
+        try:
+            for _ in range(policy._POOL._max_workers):  # hold every worker
+                policy._POOL.submit(Blocking().assess, R)
+            decision, _ = policy.Chain([counted], timeout_s=0.1).assess(R)
+            self.assertEqual(decision.category, policy.UNAVAILABLE)
+        finally:
+            release.set()
+        time.sleep(0.3)
+        self.assertEqual(counted.seen, [])  # cancelled while queued: the gate never saw the request
 
     def test_deny_stops_the_chain_and_no_objection_never_allows(self):
         later = RecordedGate()
@@ -163,6 +226,49 @@ class BuilderPolicy(unittest.TestCase):
         b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'add a clock'})
         self.assertEqual(gate.seen[-1].kind, 'revise')
         self.assertEqual(gate.seen[-1].prior_text, ('chess with Firebase',))
+
+    def test_revise_history_keeps_submission_order_after_a_retry(self):
+        gate = RecordedGate()
+        b = self.builder(policy.Chain([policy.PhraseGate(), gate]))
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'c', 'description': 'a stopwatch'})
+        b.ledger.finish_failed(out['jobId'], 'internal', 'x', True)
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r1', 'request': 'add laps'})
+        b.ledger.finish_failed(rev['jobId'], 'internal', 'x', True)
+        b.retry(out['jobId'], {'schemaVersion': 1})
+        b.ledger.finish_failed(out['jobId'], 'internal', 'x', True)
+        b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'r2', 'request': 'make it blue'})
+        self.assertEqual(gate.seen[-1].prior_text, ('a stopwatch', 'add laps'))
+
+    def test_a_job_and_its_screening_are_written_together(self):
+        b = self.builder(approving_policy())
+        real = b.ledger._insert_screening
+
+        def fail(*a):
+            raise OSError('disk full')
+        b.ledger._insert_screening = fail
+        with self.assertRaises(OSError):
+            b.create('d', {'schemaVersion': 1, 'clientRequestId': 'c', 'description': 'a stopwatch'})
+        b.ledger._insert_screening = real
+        self.assertEqual(b.projects(), [])
+        self.assertIsNone(b.ledger.next_queued())
+
+    def test_a_job_no_decision_accepted_is_never_run_or_retried(self):
+        b = self.builder(approving_policy())
+        out = b.ledger.create('d', 'legacy', 'a stopwatch', 'a stopwatch')  # e.g. written before screening existed
+        calls = []
+        b.generate = lambda *a: calls.append(a)
+        self.assertTrue(b.run_next())
+        job = b.job(out['jobId'])
+        self.assertEqual((job['state'], job['failure']['retryable'], calls), ('failed', False, []))
+        with self.assertRaises(Refused) as cm:
+            b.retry(out['jobId'], {'schemaVersion': 1})
+        self.assertIn('never screened', str(cm.exception))
+
+    def test_an_empty_chain_is_unavailable_not_out_of_scope(self):
+        b = self.builder(policy.Chain([]))
+        with self.assertRaises(Refused) as cm:
+            b.create('d', {'schemaVersion': 1, 'clientRequestId': 'c', 'description': 'a stopwatch'})
+        self.assertEqual(cm.exception.details, {'code': 'review_required', 'category': 'unavailable'})
 
     def test_review_required_is_never_overridden_and_a_replay_keeps_its_decision(self):
         gate = RecordedGate(recorded={'a timer': policy.REVIEW})

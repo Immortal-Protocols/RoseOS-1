@@ -81,12 +81,13 @@ class Ledger:
                               (client_key,)).fetchone()
         return None if row is None else {'jobId': row[0], 'projectId': row[1], 'request': row[2]}
 
-    def record_screening(self, job_id: str, decisions: list, notes) -> None:
-        """The policy decisions that accepted a job (gate, version, verdict, category), kept with it; the first
-        record wins, so a concurrent replay never rewrites it."""
-        with self.lock:
-            self.db.execute('INSERT OR IGNORE INTO screenings VALUES (?,?,?,?)',
-                            (job_id, json.dumps(decisions), json.dumps(list(notes)), self.clock()))
+    def _insert_screening(self, job_id: str, screening, now):
+        """Inside the job's own transaction: the policy decisions that accepted it (gate, version, verdict,
+        category) and its notes, so a job never exists without the decision that accepted it."""
+        if screening is not None:
+            decisions, notes = screening
+            self.db.execute('INSERT INTO screenings VALUES (?,?,?,?)',
+                            (job_id, json.dumps(list(decisions)), json.dumps(list(notes)), now))
 
     def screening(self, job_id: str) -> dict | None:
         with self.lock:
@@ -96,7 +97,8 @@ class Ledger:
     def request_history(self, project: str) -> tuple:
         """The project's description and every request made of it, oldest first: what a revise is judged with."""
         with self.lock:
-            rows = self.db.execute('SELECT request FROM jobs WHERE project_id=? ORDER BY started, rowid',
+            # rowid is the insertion order; `started` moves when a job is retried.
+            rows = self.db.execute('SELECT request FROM jobs WHERE project_id=? ORDER BY rowid',
                                    (project,)).fetchall()
         return tuple(r[0] for r in rows)
 
@@ -106,7 +108,7 @@ class Ledger:
             existing = self._existing(f'{device}\n{client_request_id}')
             return existing is not None and existing['request'] == text
 
-    def create(self, device: str, client_request_id: str, description: str, name: str) -> dict:
+    def create(self, device: str, client_request_id: str, description: str, name: str, screening=None) -> dict:
         """A new project and its first job; retrying the same request returns the same ids."""
         key = f'{device}\n{client_request_id}'
         with self.lock:
@@ -121,13 +123,14 @@ class Ledger:
                 self.db.execute('INSERT INTO projects VALUES (?,?,?,?,?,?)',
                                 (project, name, PACKAGE_PREFIX + project, None, description, now))
                 self._insert_job(job, project, 'create', description, key, now)
+                self._insert_screening(job, screening, now)
                 self.db.execute('COMMIT')
             except Exception:
                 self.db.execute('ROLLBACK')
                 raise
             return {'projectId': project, 'jobId': job}
 
-    def revise(self, device: str, project: str, client_request_id: str, request: str) -> dict:
+    def revise(self, device: str, project: str, client_request_id: str, request: str, screening=None) -> dict:
         key = f'{device}\n{client_request_id}'
         with self.lock:
             existing = self._existing(key)
@@ -144,7 +147,9 @@ class Ledger:
             job = _id()
             self.db.execute('BEGIN IMMEDIATE')
             try:
-                self._insert_job(job, project, 'revise', request, key, self.clock())
+                now = self.clock()
+                self._insert_job(job, project, 'revise', request, key, now)
+                self._insert_screening(job, screening, now)
                 self.db.execute('COMMIT')
             except Exception:
                 self.db.execute('ROLLBACK')

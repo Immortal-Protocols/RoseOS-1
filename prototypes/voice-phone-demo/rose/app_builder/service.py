@@ -110,6 +110,7 @@ def _place(src: Path, dst: Path):
     toolchain.fsync_path(dst.parent)
 
 
+NOT_SCREENED = 'This request was never screened, so it was not built. Ask for it again.'
 SNAPSHOT_MAX_ENTRIES = 5000
 SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
 SNAPSHOT_MAX_DEPTH = 32
@@ -213,7 +214,7 @@ class Builder:
         name = b['description'].splitlines()[0][:40].strip() or 'New app'
         screened = self._screen(device, b['clientRequestId'], 'create', b['description'], ())
         try:
-            out = self.ledger.create(device, b['clientRequestId'], b['description'], name)
+            out = self.ledger.create(device, b['clientRequestId'], b['description'], name, self._record(screened))
         except LedgerError as error:
             raise Refused(str(error)) from None
         return self._accepted(out, screened)
@@ -225,7 +226,7 @@ class Builder:
         screened = self._screen(device, b['clientRequestId'], 'revise', b['request'],
                                 self.ledger.request_history(project))
         try:
-            out = self.ledger.revise(device, project, b['clientRequestId'], b['request'])
+            out = self.ledger.revise(device, project, b['clientRequestId'], b['request'], self._record(screened))
         except LedgerError as error:
             raise Refused(str(error)) from None
         return self._accepted(out, screened)
@@ -243,18 +244,26 @@ class Builder:
             raise Refused(decision.reason, code=code, category=decision.category)
         return decision, decisions
 
-    def _accepted(self, out: dict, screened) -> dict:
-        if screened is None:  # a replay: the notes recorded when it was accepted
-            recorded = self.ledger.screening(out['jobId'])
-            return {**out, 'notes': recorded['notes'] if recorded else []}
+    @staticmethod
+    def _record(screened):
+        if screened is None:
+            return None
         decision, decisions = screened
-        self.ledger.record_screening(out['jobId'], [d.record() for d in decisions], decision.notes)
-        self.wake.set()
-        return {**out, 'notes': list(decision.notes)}
+        return [d.record() for d in decisions], decision.notes
+
+    def _accepted(self, out: dict, screened) -> dict:
+        # The ledger wrote the job and its screening in one transaction; a replay (or a concurrent duplicate that
+        # lost the race) answers with what was recorded.
+        recorded = self.ledger.screening(out['jobId'])
+        if screened is not None:
+            self.wake.set()
+        return {**out, 'notes': recorded['notes'] if recorded else []}
 
     def retry(self, job_id: str, body) -> dict:
         """Run a failed, retryable job again as its next attempt (same jobId, attempt + 1)."""
         _body(body, {})
+        if self.ledger.job(job_id) is not None and self.ledger.screening(job_id) is None:
+            raise Refused(NOT_SCREENED)
         try:
             job = self.ledger.retry(job_id)
         except LedgerError as error:
@@ -331,6 +340,9 @@ class Builder:
         job = self.ledger.next_queued()
         if job is None:
             return False
+        if self.ledger.screening(job['jobId']) is None:  # written before screening existed, or by hand
+            self._record_failure(job['jobId'], 'internal', NOT_SCREENED, False)
+            return True
         self._run(job)
         return True
 
