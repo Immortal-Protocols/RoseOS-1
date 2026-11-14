@@ -19,7 +19,7 @@ COMPONENT_HELP = {
     'carousel': 'carousel: 2-8 content, notifications or apps',
     'list': 'list: 1-8 notifications or content',
     'card': 'card: 1 notification or content, plus up to 2 actions marked "-> its id"',
-    'button': 'button: 1 action',
+    'button': 'button: a row of 1-4 actions',
 }
 
 BUTTON_ASK = 'No request was typed. Make the best page for {time} from what is listed.'

@@ -84,7 +84,8 @@ def validate(text, ctx: Context, catalog: dict, limits: dict, snapshot_version: 
             if a in seen:
                 raise Refused('duplicate_ref')
             seen.add(a)
-        if any(ctx.kinds[a] not in rule['items'] for a in items):
+        excluded = rule.get('excludeActionKinds', ())
+        if any(ctx.kinds[a] not in rule['items'] or ctx.action_kinds.get(a) in excluded for a in items):
             raise Refused('disallowed_ref')
         for a in actions:  # a card's actions must be actions that target one of the section's own items
             if ctx.kinds[a] != 'actions' or ctx.targets.get(a) not in items:

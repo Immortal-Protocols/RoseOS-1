@@ -114,17 +114,32 @@ class ContextTest(unittest.TestCase):
             for e in snap[k]:
                 self.assertNotIn(e['id'], text)
 
-    def test_pinned_first_and_prompt_ranks(self):
+    def test_pinned_ids_are_left_out_and_prompt_ranks(self):
+        # OS Product keeps pinned sections at their index and lists their ids so the composer does not repeat them
         ctx = context.select(snapshot(), 'recipes for cooking')
-        self.assertEqual(ctx.aliases['a1'], 'app.timer')                    # pinned
-        self.assertEqual({ctx.aliases['a2'], ctx.aliases['a3']}, {'app.recipes', 'app.groceries'})
+        self.assertNotIn('app.timer', ctx.aliases.values())
+        self.assertEqual({ctx.aliases['a1'], ctx.aliases['a2']}, {'app.recipes', 'app.groceries'})
+        self.assertNotIn('x1 Start 10 minute timer [shortcut] -> ', '\n'.join(ctx.lines))  # target pinned: no link
+
+    def test_avoid_ranks_previous_items_last(self):
+        plain = context.select(snapshot(), 'recipes for cooking')
+        again = context.select(snapshot(), 'recipes for cooking', avoid=['app.recipes', 'gone:id'])
+        self.assertEqual(again.aliases['a1'], 'app.groceries')
+        self.assertIn('app.recipes', again.aliases.values())                  # soft: still selectable
+        self.assertNotEqual(plain.lines, again.lines)
+        last_app = [a for a in again.aliases if a.startswith('a')][-1]
+        self.assertEqual(again.aliases[last_app], 'app.recipes')
+
+    def test_avoid_must_be_a_bounded_list_of_ids(self):
+        self.assertEqual(check_request(request(avoid=['app.timer', 'gone:id']))['maxSections'], 6)
+        for bad in ('app.timer', [1], [''], ['x'] * 65):
+            with self.assertRaises(Refused):
+                check_request(request(avoid=bad))
 
     def test_button_uses_time_of_day_hints(self):
         ctx = context.select(snapshot(), None)                               # evening: cooking/media/music
         top = [ctx.aliases[a] for a in list(ctx.aliases)[:4]]
-        self.assertEqual(top[0], 'app.timer')
-        self.assertTrue(set(top[1:]) <= {'app.recipes', 'app.groceries', 'app.music', 'app.video',
-                                          'app.podcasts'})
+        self.assertTrue(set(top) <= {'app.recipes', 'app.groceries', 'app.music', 'app.video', 'app.podcasts'})
 
     def test_budget_is_respected_and_deterministic(self):
         for budget in (40, 120, 300, 1600):
@@ -181,7 +196,7 @@ class GrammarTest(unittest.TestCase):
         bad['sections'][0]['component'] = 'webview'                          # not in catalog
         self.assertFalse(self.accepts(bad))
         bad = copy.deepcopy(EXAMPLE_LAYOUT)
-        bad['sections'] *= 2                                                 # 6 sections > 4
+        bad['sections'] *= 3                                                 # 9 sections > 6
         self.assertFalse(self.accepts(bad))
         bad = copy.deepcopy(EXAMPLE_LAYOUT)
         bad['sections'][2]['items'] = ['a1', 'a2']                           # apps fit a carousel ...
@@ -220,7 +235,7 @@ class GrammarTest(unittest.TestCase):
         self.assertIn('grid', g)
         for name in ('list', 'card', 'button'):
             self.assertNotIn(f'component\\":\\"{name}', g)
-        one_app = dict(snap, apps=snap['apps'][:1], pinned=['app.timer'])
+        one_app = dict(snap, apps=snap['apps'][:1], pinned=[])
         self.assertIsNone(grammar.build(context.select(one_app, 'x'), DEFAULT_CATALOG, LIMITS))
 
 
@@ -274,10 +289,17 @@ class ValidateTest(unittest.TestCase):
         self.fails(self.mutated(lambda l: l['sections'][0].update(title='x' * 31)), 'over_limit')
         self.fails(self.mutated(lambda l: l['sections'][0].update(items=[f'a{i}' for i in range(1, 10)])),
                    'over_limit')
-        five = self.mutated(lambda l: l['sections'].extend(
+        seven = self.mutated(lambda l: l['sections'].extend(
             [{'component': 'button', 'title': 'Go', 'items': ['x3']},
-             {'component': 'button', 'title': 'Play', 'items': ['x4']}]))
-        self.fails(five, 'over_limit')
+             {'component': 'button', 'title': 'Play', 'items': ['x4']},
+             {'component': 'list', 'title': 'More', 'items': ['c3']},
+             {'component': 'list', 'title': 'Also', 'items': ['c4']}]))
+        self.fails(seven, 'over_limit')
+        row = self.mutated(lambda l: l['sections'].append(
+            {'component': 'button', 'title': 'Do', 'items': ['x3', 'x4']}))
+        self.check(dumps(row))                                                 # a button row of 2 actions
+        self.fails(self.mutated(lambda l: l['sections'].append(
+            {'component': 'button', 'title': 'Do', 'items': ['x3', 'x4', 'a3', 'a4', 'a5']})), 'over_limit')
         tight = dict(LIMITS, maxTotalItems=5)
         with self.assertRaises(Refused) as cm:
             validate(dumps(EXAMPLE_LAYOUT), self.ctx, DEFAULT_CATALOG, tight, 's-demo-1')

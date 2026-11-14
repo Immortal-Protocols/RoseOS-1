@@ -89,7 +89,9 @@ def build(ctx: Context, catalog: dict, limits: dict):
     """The grammar tree for one request, or None when no component can be filled from the selected context."""
     sections = []
     for name, rule in catalog['components'].items():
-        items = [a for a, k in ctx.kinds.items() if k in rule['items']]
+        excluded = rule.get('excludeActionKinds', ())
+        items = [a for a, k in ctx.kinds.items()
+                 if k in rule['items'] and ctx.action_kinds.get(a) not in excluded]
         hi = min(rule['max'], limits['maxItemsPerSection'], len(items))
         if not items or hi < rule['min']:
             continue
