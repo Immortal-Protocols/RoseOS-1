@@ -333,8 +333,16 @@ one.
   slots, and nothing gains capabilities. Progress and the final result arrive
   as the existing task events on `/ws/events` (task card v1). Stopping uses
   Stop contract 1.
-- **What the page shows:** the action's state comes from that task (`running`,
-  `attention`, `done`), exactly as in HiFi. The page never assumes success.
+- **What the page shows:** the action's state comes from that task, as in
+  HiFi. The page never assumes success. Only `running`, `done`, `failed` and
+  `cancelled` exist; there is no "needs your choice" state until the task
+  model has one.
+- **Implemented (source, tests only):** the route
+  (`rose/workspace_routes.py`) and its checks and durable once-per-request
+  store (`rose/workspace_tasks.py`), with a test suite
+  (`rose/tests/test_workspace_tasks.py`). They are mounted only when the server
+  has `workspace_tasks` set, and `rose.app` sets none. The `start()` that
+  hands the task to the conversation is the next piece and is not wired yet.
 
 ### 4.4 App Core's answers to `rose-layout-v1` (Models Core, #781)
 
