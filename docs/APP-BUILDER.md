@@ -61,8 +61,8 @@ directory beside it in `repo.git`), outside
    So a failed first build is never a dead end.
 4. **Generate.** A per-job Codex thread with `sandbox: workspace-write`, cwd =
    that project's source and no access to `ROSE_CONFIG_DIR`, writes code into a
-   fixed skeleton: Java 8 source level, android.jar APIs plus declared
-   pure-Java JAR libraries (see **Libraries** below), aapt v1 resources,
+   fixed skeleton: Java 17 source level (§2.2), android.jar APIs plus
+   declared pure-Java JAR libraries (§2.1), aapt v1 resources,
    min API 26 and target 35. It cannot change the package,
    versionCode or signing. Enabling this thread on the Mac is a
    security-relevant runtime change; see §5. The generator is injected. It is
@@ -107,7 +107,7 @@ directory beside it in `repo.git`), outside
 
 - **Ledger:** projects, versions, jobs and installs in a 0600 SQLite file, with
   idempotent requests, versionCode allocation and a fixed signer.
-- **Template:** the framework-only skeleton plus its refusals: package,
+- **Template:** the skeleton plus its refusals: package,
   version, SDK, shared uid, debuggable, build scripts, native code, symlinks
   and foreign packages.
 - **Toolchain:** the pinned build with injected identity, a scrubbed
@@ -202,8 +202,9 @@ No host configuration wires a store yet.
 
 **Not supported yet.** These paths are interim, not product scope. Each is an
 honest `dependency` failure:
-- AAR packages and Android resources from libraries, which need a pinned
-  aapt2;
+- AAR packages and Android resources from libraries. They need an aapt2
+  resource pipeline. `aapt2` 2.19 is already in the hash-pinned build-tools
+  35.0.0, but the builder doesn't use it yet;
 - Kotlin sources (no pinned `kotlinc`) and Gradle;
 - native code, Java resources inside a JAR, multi-release JARs and
   ServiceLoader files;
@@ -224,6 +225,82 @@ compiled by the pinned JDK for the real build. It shows:
 
 This is compilation and signature verification only. No real library, store,
 generated app or device was used.
+
+### 2.2 Java language level (Java 17; source only, enabled nowhere)
+
+Generated apps are Java at the **17** source level: records, sealed types,
+switch expressions, text blocks, `var` and `instanceof` patterns. Preview
+features and Java 21 language features, such as pattern `switch`, are a
+`compile` failure. Only the pinned platform 35 SDK and the pinned JDK are
+used, the way the Android Gradle plugin does it:
+
+1. **System image.** `toolchain.system_image` makes a Java system image from
+   platform 35's `core-for-system-modules.jar`, Android's core library as the
+   SDK ships it for compilers. It generates a `module-info` that exports
+   every package, then runs `jmod create` and `jlink`.
+2. **Compile.** `javac` compiles with `--system <image> -source 17 -target 17
+   -XDstringConcat=inline`, with `android.jar` and the declared libraries
+   (§2.1) on the classpath. The app therefore sees exactly the `java.*` APIs
+   Android has. String concatenation is compiled inline, because Android has
+   no `StringConcatFactory`.
+3. **Desugar.** `d8 --min-api 26` desugars records, lambdas and the like. It
+   also backports some newer library methods, for example `List.of`,
+   `Map.of`, `String.repeat`, `isBlank` and `strip`. It doesn't backport
+   others: `String.formatted`, `stripIndent` and `Stream.toList` are API 34
+   and stay direct calls (a test pins this).
+
+A JDK package Android doesn't have, such as `java.lang.management` or
+`javax.swing`, is an honest `compile` failure: "uses Java APIs Android does
+not provide". It is never reported as a missing library. A library may not
+put classes in a package the platform has (`org.json`, `javax.crypto`, ...).
+Those packages belong to the core library that `javac` compiles against, so
+such a class could never be seen.
+
+**The image cache.** The image is cached under the builder's own `toolchain/`
+directory. No link is followed there: the cache, each entry, its manifest
+and its image must be plain directories and files. The cache key is the recipe version, the core jar's sha256 and the
+JDK's version and platform, read from its `release` file. So a changed JDK or
+platform gets a new image, and a stale one is never used. Each use recomputes
+the image's tree digest and compares it with the one recorded when it was
+made. A missing, partial, changed or linked image, or any other entry in its
+place, is removed (a link is unlinked, never followed) and made again. If two
+builders make it at once, the second uses the first's after checking it. The build is deterministic, so the same inputs give byte-identical
+images. This guards against corruption and staleness, not against someone
+who can already write the builder's own directory, which also holds the
+signing keys. Making the image is a local build step, not runtime
+activation.
+
+**Unresolved: API compatibility with minSdk 26.** `javac` compiles against
+API 35, and nothing checks that the app guards calls to APIs newer than 26.
+`d8` backports only some library methods (`String.formatted`, for one, isn't
+backported), and no framework API. An app that calls a newer API unguarded
+compiles and is signed, but can fail at runtime on an older phone. The
+writer is told to check `Build.VERSION.SDK_INT`, but that is guidance, not
+enforcement. Nothing checks this yet. It could be closed offline with data
+already pinned: platform 35's `data/api-versions.xml` records the API level
+of every framework and `java.*` member, so a check of the dex's method
+references against it needs no acquisition. Telling a guarded call from an
+unguarded one is the hard part. An API 26 platform jar or Android lint would
+be other ways, and both would need acquisition. Compiling and desugaring is
+not device proof.
+
+**Proof level.** `rose/tests/test_app_java17.py` covers:
+- a fixture using records, sealed types, a switch expression, a text block,
+  `var`, an `instanceof` pattern and a lambda builds and signs, and its dex
+  (inspected with `dexdump`) has no `invoke-custom`;
+- Java 8-style sources still build, as do all earlier real-build tests;
+- `java.lang.management`, `javax.swing` and a Java 21 pattern `switch` are
+  `compile` failures, and an API 34 `String.formatted` stays in the dex;
+- the cache is reused, and remade when it is tampered with, partial, missing
+  its manifest, or a link at the image, its entry or its manifest. A broken
+  link in its place heals. It survives two builders at once, a corrupt core
+  jar is a `toolchain` failure, and the recipe and core jar each give their
+  own image.
+
+Mutation checks each make a test fail: no inline concatenation, JDK system
+modules instead of Android's, the Java 8 level, an unvalidated cache, a key
+without the recipe and core jar, a JDK API reported as a library, and links
+trusted in the image.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 
@@ -360,8 +437,9 @@ refused only for technical reasons:
     the app may request or do;
   - Java must be in the app's package;
   - no git metadata, links or special files.
-- **Toolchain facts:** Java at source level 8, against the framework and any
-  declared pure-Java JAR libraries the offline store provides. There's no
+- **Toolchain facts:** Java at source level 17 against Android's own core
+  library (§2.2), the framework and any declared pure-Java JAR libraries the
+  offline store provides. There's no
   Gradle, Kotlin or native toolchain. Any other library is a `dependency`
   failure.
 - **Isolation:** each project has its own source, git history and signing key.

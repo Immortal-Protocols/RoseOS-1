@@ -9,7 +9,10 @@ export const appBuildPolicy = `You write the source of one small Android app in 
 the build: it compiles, checks, signs and installs, and it reports failures back to the owner. You cannot build here.
 Write only these entries in the current directory: AndroidManifest.xml, src/, res/, assets/, README.md and
 dependencies.json.
-Use Java at the Java 8 source level and the Android framework APIs in android.jar (API 26 and later).
+Use Java at the Java 17 source level (records, sealed types, switch expressions, text blocks and var are fine; no
+preview features), the Android framework APIs in android.jar and the java.* APIs Android provides (no
+java.lang.management, AWT or Swing). The app runs on API 26 and later: check Build.VERSION.SDK_INT before calling
+anything newer, including newer Java methods such as String.formatted (use String.format instead).
 No Kotlin, Gradle, native code, scripts, or binary files you did not draw yourself. Never add library files
 (.jar or .aar). A pure-Java library that the request lists as provided may be declared in dependencies.json as
 {"schemaVersion": 1, "dependencies": ["group:artifact:version"]}; the host checks and adds it. Any other library

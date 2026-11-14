@@ -2,7 +2,7 @@
 
 - ``ledger``: projects, versions and jobs in one private SQLite file. The package, signer and versionCode identity
   live here, never in generated source.
-- ``template``: the framework-only skeleton generated code is written into, and the checks that keep identity out of
+- ``template``: the skeleton generated code is written into, and the checks that keep identity out of
   its reach.
 - ``toolchain``: the pinned aapt/javac/d8/zipalign build and ``scripts/sign-apk.py`` signing, run with a scrubbed
   environment, a timeout and cancellation.
