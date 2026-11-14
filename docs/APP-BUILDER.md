@@ -64,8 +64,8 @@ directory beside it in `repo.git`), outside
    fixed framework-only skeleton: Java 8 source level, android.jar APIs only,
    aapt v1 resources, min API 26 and target 35. It cannot change the package,
    versionCode or signing. Enabling this thread on the Mac is a
-   security-relevant runtime change; see §5. The generator is injected and is
-   not implemented yet.
+   security-relevant runtime change; see §5. The generator is injected. It is
+   implemented in source (§4A) but disabled: nothing configures or runs it.
 5. **Build.** Before git or any tool touches the generated tree, the builder
    refuses git metadata (`.git`, `.gitignore`, `.gitattributes`, `.gitmodules`
    in any case, with trailing dots or spaces, or as short names like `git~1`),
