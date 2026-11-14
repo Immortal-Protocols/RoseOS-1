@@ -24,13 +24,14 @@ def _failed(req, category: str, timing: dict | None = None) -> dict:
 
 
 def compose(req: dict, backend, catalog: dict = DEFAULT_CATALOG, budget_chars: int = 1600,
-            clock=time.perf_counter) -> dict:
+            clock=time.perf_counter, cancelled=lambda: False) -> dict:
+    """`cancelled()` is checked before and after generation; a backend may also raise Refused('cancelled')."""
     t0 = clock()
     timing = {}
     try:
         limits = check_request(req, catalog)
         snap = req['snapshot']
-        ctx = context_mod.select(snap, req.get('prompt'), budget_chars=budget_chars)
+        ctx = context_mod.select(snap, req.get('prompt'), budget_chars=budget_chars, avoid=req.get('avoid'))
         tree = grammar_mod.build(ctx, catalog, limits)
         if tree is None:
             raise Refused('empty_context')
@@ -40,6 +41,8 @@ def compose(req: dict, backend, catalog: dict = DEFAULT_CATALOG, budget_chars: i
         t1 = clock()
         timing['contextMs'] = round((t1 - t0) * 1000, 3)
         deadline_s = limits['deadlineMs'] / 1000 - (t1 - t0)
+        if cancelled():
+            raise Refused('cancelled')
         try:
             gen = backend.generate(system, user, gbnf, max_tokens, deadline_s)
         except Refused:
@@ -48,9 +51,11 @@ def compose(req: dict, backend, catalog: dict = DEFAULT_CATALOG, budget_chars: i
             raise Refused('model_unavailable') from None
         t2 = clock()
         timing['generationMs'] = round((t2 - t1) * 1000, 3)
+        if cancelled():
+            raise Refused('cancelled')
         if (t2 - t0) * 1000 > limits['deadlineMs']:
             raise Refused('timeout')
-        layout = validate(gen.text, ctx, catalog, limits, snap['snapshotVersion'])
+        layout = validate(getattr(gen, 'text', None), ctx, catalog, limits, snap['snapshotVersion'])
         t3 = clock()
         timing['validationMs'] = round((t3 - t2) * 1000, 3)
     except Refused as r:
