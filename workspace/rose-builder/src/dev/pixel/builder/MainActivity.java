@@ -39,7 +39,12 @@ public final class MainActivity extends Activity {
  final java.util.Set<String> stopRequested = new java.util.HashSet<>();
  /** One clientRequestId per create or change the owner asks for, reused when it's retried after a lost connection,
   * so a retry never starts a second build. Cleared once the builder answers. */
- String createRequest, reviseRequest;
+ final RequestIds createIds = new RequestIds(() -> java.util.UUID.randomUUID().toString()),
+   reviseIds = new RequestIds(() -> java.util.UUID.randomUUID().toString());
+ /** The builder's notes for a project's newest request, shown on its screen until the owner leaves it; and a
+  * refusal of a change, shown above the change box. Plain text only. */
+ final java.util.Map<String, List<String>> notesFor = new java.util.HashMap<>();
+ final java.util.Map<String, String> refusalFor = new java.util.HashMap<>();
  final Runnable poll = new Runnable() { @Override public void run() { if (openProject != null) showProject(openProject); } };
 
  @Override protected void onCreate(Bundle state) {
@@ -95,6 +100,9 @@ public final class MainActivity extends Activity {
 
  void showLibrary() {
   openProject = null;
+  // Notes and refusals belong to the request just made; leaving the project ends them.
+  notesFor.clear();
+  refusalFor.clear();
   main.removeCallbacks(poll);
   root.removeAllViews();
   title("Your apps");
@@ -106,21 +114,28 @@ public final class MainActivity extends Activity {
    String line = p.name + "\n" + (p.job != null && !p.job.terminal() ? BuildJob.status(p.job) : v == null ? BuildJob.status(p.job) : "Version " + v.versionName);
    button(line, x -> showProject(p.projectId));
   }
-  button("New app", x -> showCreate());
+  button("New app", x -> showCreate(null, null));
  }
 
- void showCreate() {
+ /** prefill keeps the owner's words after a refusal; refusal is the builder's own sentence, shown as plain text. */
+ void showCreate(String prefill, String refusal) {
   main.removeCallbacks(poll);
   root.removeAllViews();
   title("New app");
   body("Say what the app should do. You can ask for changes after it's built.");
+  if (refusal != null) body(ShareMessage.clean(refusal, "Your builder didn't start this app. Nothing was started."));
   EditText text = input("A tip calculator that splits the bill");
+  if (prefill != null) text.setText(prefill);
   button("Build it", x -> {
    String d = text.getText().toString().trim();
    if (d.isEmpty()) { toast("Describe the app first"); return; }
-   if (createRequest == null) createRequest = java.util.UUID.randomUUID().toString();
-   try { String pid = api.create(createRequest, d).projectId; createRequest = null; showProject(pid); }
-   catch (BuilderApi.Unreachable e) { toast("Can't reach your builder. Your description is kept; try again."); }
+   try {
+    BuilderApi.Started s = api.create(createIds.forText(d), d);
+    createIds.done();
+    notesFor.put(s.project.projectId, s.notes);
+    showProject(s.project.projectId);
+   } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder. Your description is kept; try again."); }
+   catch (BuilderApi.OutOfScope e) { createIds.done(); showCreate(d, e.getMessage()); }
   });
   button("Back", x -> showLibrary());
  }
@@ -133,6 +148,9 @@ public final class MainActivity extends Activity {
   root.removeAllViews();
   if (p == null) { showLibrary(); return; }
   title(p.name);
+  // The builder's own notes about this request: plain text, never markup or links.
+  List<String> notes = notesFor.get(id);
+  if (notes != null) for (String n : notes) { String c = ShareMessage.clean(n, null); if (c != null) body(c); }
   if (p.job != null) {
    body(BuildJob.status(p.job, stopRequested.contains(p.job.jobId)));
    if (p.job.stage == BuildJob.Stage.FAILED) {
@@ -171,13 +189,22 @@ public final class MainActivity extends Activity {
   // One active job per project: a change can be asked whenever none is queued or running, including after a failed
   // first build (the builder starts again from the original description plus the change).
   if (p.job == null || p.job.terminal()) {
+   String refused = refusalFor.get(id);
+   if (refused != null) body(refused);
    EditText change = input("What should change?");
    button("Request change", x -> {
     String c = change.getText().toString().trim();
     if (c.isEmpty()) { toast("Describe the change first"); return; }
-    if (reviseRequest == null) reviseRequest = java.util.UUID.randomUUID().toString();
-    try { api.revise(p.projectId, reviseRequest, c); reviseRequest = null; }
-    catch (BuilderApi.Unreachable e) { toast("Can't reach your builder. Try again; it won't start a second build."); return; }
+    try {
+     BuilderApi.Started s = api.revise(p.projectId, reviseIds.forText(c), c);
+     reviseIds.done();
+     refusalFor.remove(id);
+     notesFor.put(id, s.notes);
+    } catch (BuilderApi.Unreachable e) { toast("Can't reach your builder. Try again; it won't start a second build."); return; }
+    catch (BuilderApi.OutOfScope e) {
+     reviseIds.done();
+     refusalFor.put(id, ShareMessage.clean(e.getMessage(), "Your builder didn't make this change. Nothing was started."));
+    }
     showProject(id);
    });
   }

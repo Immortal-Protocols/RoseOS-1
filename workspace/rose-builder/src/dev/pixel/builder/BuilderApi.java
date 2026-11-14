@@ -52,9 +52,23 @@ interface BuilderApi {
 
  List<Project> projects() throws Unreachable;
  Project project(String projectId) throws Unreachable;
+ /** An accepted create or revise: the project with its new job, and the builder's notes (§3.6, often empty), plain
+  * sentences explaining what happens instead when the request named a power, library or server generated apps never
+  * get. */
+ final class Started {
+  final Project project; final List<String> notes;
+  Started(Project project, List<String> notes) { this.project = project; this.notes = notes; }
+ }
+ /** §3.6: the builder screened the request and refused it before any job existed (400 code out_of_scope). The
+  * message is the builder's own owner-facing sentence ("… Nothing was started."); category is harm or platform. */
+ final class OutOfScope extends Exception {
+  final String category;
+  OutOfScope(String message, String category) { super(message); this.category = category; }
+ }
+
  /** clientRequestId makes it idempotent: a retry with the same id returns the same project and job. */
- Project create(String clientRequestId, String description) throws Unreachable;
- Project revise(String projectId, String clientRequestId, String request) throws Unreachable;
+ Started create(String clientRequestId, String description) throws Unreachable, OutOfScope;
+ Started revise(String projectId, String clientRequestId, String request) throws Unreachable, OutOfScope;
  CancelStatus cancel(String jobId) throws Unreachable;
  /** Fetches one version's APK by SHA-256 over the same signed link (§3.1 artifacts), stopping at its exact size
   * (apk.size, exact bytes): anything longer is refused. */
