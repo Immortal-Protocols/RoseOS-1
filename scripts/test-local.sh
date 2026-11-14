@@ -6,7 +6,7 @@ cd "$ROOT"
 # Nov 10 1F/1G: bounded private life and real background-task lifecycle.
 bash scripts/test-background-life.sh
 # Shared Codex voice adapter: synthetic account/model/turn replies, no provider access.
-node --test workspace/rose-agent/server/codex-voice.test.mjs workspace/rose-agent/server/codex-provider-start.test.mjs
+node --test workspace/rose-agent/server/codex-voice.test.mjs workspace/rose-agent/server/codex-provider-start.test.mjs workspace/rose-agent/server/app-build.test.mjs
 # Rose Agent page voice state, loaded with its real assets and a fake provider.
 node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent/tests/app-delivery.test.mjs workspace/rose-agent/tests/task-continuity.test.mjs workspace/rose-agent/tests/spoken-progress.test.mjs workspace/rose-agent/tests/renderer-recovery.test.mjs
 # Every Native.* call in the app's pages names a method its Java bridge exposes.
@@ -309,6 +309,20 @@ java -cp "$JAVA_TESTS/HomeReuse" dev.pixel.voice.HomeReuseTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePages" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomePages.java workspace/rose-agent/app/tests/HomePagesTest.java
 java -cp "$JAVA_TESTS/HomePages" dev.pixel.voice.HomePagesTest
+# Project 2: the phone's check of rose-layout-v1 results (catalog cat-1), the page's saved state (pins, undo, recents),
+# its snapshot and requests, and the path through Models' composer core (with the labelled starter, not a model) to
+# request-to-render timing.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Workspace" \
+ workspace/models/local-composer/java/src/rose/models/composer/*.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceLayout.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceState.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceComposer.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceSnapshot.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTiming.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceStarter.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceEngine.java \
+ workspace/rose-agent/app/tests/WorkspaceTest.java workspace/rose-agent/app/tests/WorkspaceSnapshotTest.java \
+ workspace/rose-agent/app/tests/WorkspaceEngineTest.java
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceSnapshotTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceEngineTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeOverview" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeOverview.java workspace/rose-agent/app/tests/HomeOverviewTest.java
 java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
