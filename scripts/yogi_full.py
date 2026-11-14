@@ -94,8 +94,10 @@ def guard(cfg, env=os.environ):
     if (access_expiry-datetime.datetime.now(datetime.timezone.utc)).total_seconds() < STOP_SECONDS:
         raise yogi.Refused('Yogi signing access has less than a full run remaining')
     record = yogi.app_record(cfg)
-    if mustang_route.bound_app_freshness(record, yogi.ROOT) != []:
-        raise yogi.Refused('Yogi app export is stale or its source history is unavailable')
+    selection = cfg['appInputs'].get('selection') or {}
+    if selection.get('mode') != 'pinned-verified-export' \
+            or selection.get('recordSha256') != yogi.digest(yogi.ROOT/cfg['appInputs']['record']):
+        raise yogi.Refused('Yogi verified app export selection differs')
     expires = datetime.datetime.fromisoformat(cfg['appInputs']['artifactExpiresAt'].replace('Z', '+00:00'))
     if (expires-datetime.datetime.now(datetime.timezone.utc)).total_seconds() < STOP_SECONDS:
         raise yogi.Refused('app export has less than one full Yogi run of lifetime remaining')
@@ -151,7 +153,8 @@ def initialize(cfg, state_path, env=os.environ):
     state_path = Path(state_path)
     if state_path.exists() or state_path.is_symlink():
         raise yogi.Refused('full run already initialized; no duplicate attempt')
-    state = {'schema': SCHEMA, 'run': current(env), 'phase': 'initialized', 'needsBootstrap': True}
+    state = {'schema': SCHEMA, 'run': current(env), 'phase': 'initialized', 'needsBootstrap': True,
+             'appSourceDrift': mustang_route.bound_app_freshness(yogi.app_record(cfg), yogi.ROOT)}
     persisted = Path(cfg['builder']['bootstrapState'])/'signing-bootstrap-receipt.json'
     committed = yogi.ROOT/cfg['signing']['bootstrapReceipt']
     journal = Path(cfg['builder']['bootstrapState'])/'yogi-v1.json'
@@ -251,6 +254,7 @@ def export_bindings(cfg, state, destination):
     record = {'schema': SCHEMA, 'run': state['run'], 'baseline': state['baseline'],
               'a': state['a'], 'b': state['b'],
               'appRecord': cfg['appInputs']['record'], 'appRecordSha256': yogi.digest(yogi.ROOT/cfg['appInputs']['record']),
+              'appSourceDrift': state.get('appSourceDrift'),
               'files': {name: yogi.digest(destination/name) for name in sources}}
     release_receipts.write_once(destination/'runtime.json', record)
 

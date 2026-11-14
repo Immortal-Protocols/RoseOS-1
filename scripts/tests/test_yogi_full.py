@@ -68,18 +68,23 @@ class FullTest(unittest.TestCase):
         with self.assertRaisesRegex(yogi.Refused, 'setup is not bound'):
             full.guard(yogi.config(), ENV)
 
-    def test_guard_checks_real_source_freshness_before_identity_or_allocation(self):
+    def test_guard_accepts_only_the_exact_verified_export_before_identity_or_allocation(self):
         with mock.patch.object(yogi, 'profile_problem', return_value=None), \
                 mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=[]):
             full.guard(self.cfg, ENV)
             for changes in ({'PUBLISH': 'false'}, {'GCP_WORKLOAD_IDENTITY_PROVIDER': 'foreign'}):
                 with self.subTest(changes=changes), self.assertRaises(yogi.Refused):
                     full.guard(self.cfg, dict(ENV, **changes))
+        # An immutable published app set is an explicit input, not a claim to
+        # contain every later application source change in the OS checkout.
         for drift in (None, ['dev.pixel.voice']):
             with mock.patch.object(yogi, 'profile_problem', return_value=None), \
-                    mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=drift), \
-                    self.assertRaisesRegex(yogi.Refused, 'stale or its source history'):
+                    mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=drift):
                 full.guard(self.cfg, ENV)
+        self.cfg['appInputs']['selection']['recordSha256'] = '0'*64
+        with mock.patch.object(yogi, 'profile_problem', return_value=None), \
+                self.assertRaisesRegex(yogi.Refused, 'export selection differs'):
+            full.guard(self.cfg, ENV)
 
     def test_complete_public_receipt_is_retained_and_changed_receipt_refuses(self):
         bound = full.accept_keys(self.cfg, self.state, self.receipt)
