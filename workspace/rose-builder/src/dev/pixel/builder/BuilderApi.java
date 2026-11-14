@@ -64,8 +64,9 @@ interface BuilderApi {
   final Project project; final List<String> notes;
   Started(Project project, List<String> notes) { this.project = project; this.notes = notes; }
  }
- /** §3.6: the builder screened the request and refused it before any job existed (400 code out_of_scope). The
-  * message is the builder's own owner-facing sentence ("… Nothing was started."); category is harm or platform. */
+ /** §3.6/§3.7: the builder refused the request before any job existed (400 code out_of_scope, or review_required
+  * while no authorized review gate exists). The message is the builder's own owner-facing sentence ("… Nothing was
+  * started."); category is harm, platform or unavailable. Never retried automatically; asking again is a new request. */
  final class OutOfScope extends Exception {
   final String category;
   OutOfScope(String message, String category) { super(message); this.category = category; }

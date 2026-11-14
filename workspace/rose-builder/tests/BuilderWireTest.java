@@ -66,6 +66,8 @@ public final class BuilderWireTest {
         // Refusals.
         BuilderWire.Refusal r = BuilderWire.refusal(400, "{\"schemaVersion\":1,\"error\":\"Rose won't build that. Nothing was started.\",\"code\":\"out_of_scope\",\"category\":\"harm\"}");
         expect(r.kind == BuilderWire.Kind.OUT_OF_SCOPE && "harm".equals(r.category) && r.message.endsWith("Nothing was started."), "out of scope");
+        BuilderWire.Refusal review = BuilderWire.refusal(400, "{\"schemaVersion\":1,\"error\":\"This builder isn't accepting new apps yet. Nothing was started.\",\"code\":\"review_required\",\"category\":\"unavailable\"}");
+        expect(review.kind == BuilderWire.Kind.OUT_OF_SCOPE && "unavailable".equals(review.category) && review.message.endsWith("Nothing was started."), "review_required: the builder's own sentence, never success");
         expect(BuilderWire.refusal(400, "{\"schemaVersion\":1,\"error\":\"unknown project\"}").kind == BuilderWire.Kind.REFUSED, "other 400");
         expect(BuilderWire.refusal(404, "{\"schemaVersion\":1,\"error\":\"not found\"}").kind == BuilderWire.Kind.REFUSED, "404");
         expect(BuilderWire.refusal(401, "{\"schemaVersion\":1,\"error\":\"unknown device\",\"final\":true}").kind == BuilderWire.Kind.PAIR_AGAIN, "401 final: pair again");

@@ -182,7 +182,8 @@ final class BuilderWire {
   String error = o == null || !(o.get("error") instanceof String) ? null : (String) o.get("error");
   if (status == 404) return new Refusal(Kind.REFUSED, error == null ? "not found" : error, null);
   if (status == 400) {
-   if (o != null && "out_of_scope".equals(o.get("code")))
+   // §3.6 out_of_scope and §3.7 review_required: the builder started nothing and says why in its own sentence.
+   if (o != null && ("out_of_scope".equals(o.get("code")) || "review_required".equals(o.get("code"))))
     return new Refusal(Kind.OUT_OF_SCOPE, error, o.get("category") instanceof String ? (String) o.get("category") : null);
    return new Refusal(Kind.REFUSED, error, null);
   }
