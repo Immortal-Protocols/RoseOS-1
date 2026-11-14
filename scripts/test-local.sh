@@ -318,11 +318,13 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceState.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceComposer.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceSnapshot.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTiming.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceStarter.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceEngine.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceAgent.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceRequests.java \
  workspace/rose-agent/app/tests/WorkspaceTest.java workspace/rose-agent/app/tests/WorkspaceSnapshotTest.java \
- workspace/rose-agent/app/tests/WorkspaceEngineTest.java
+ workspace/rose-agent/app/tests/WorkspaceEngineTest.java workspace/rose-agent/app/tests/WorkspaceAgentTest.java
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTest
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceSnapshotTest
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceEngineTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceAgentTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeOverview" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeOverview.java workspace/rose-agent/app/tests/HomeOverviewTest.java
 java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest

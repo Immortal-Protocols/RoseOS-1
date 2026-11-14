@@ -33,9 +33,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Project 2: the workspace page to the left of Home (HomePages.WORKSPACE), as in the approved HiFi r2
@@ -59,21 +56,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p><b>Gestures.</b> A drag that starts on the field or a carousel belongs to it (keepsDrag); anything else pages as
  * on Home. The page is inert while off screen.
  */
-final class WorkspacePage extends FrameLayout {
- static final String PREFS="rose-workspace",KEY="state";
+final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
  static final int STATUS_DP=20,RECENT_DP=28,HIT_DP=44,COLUMNS=4;
 
  final MainActivity activity;
  /** The theme the page was drawn in (RoseThemeNow); Home makes a new page when the theme changes. */
  final String theme=RoseThemeNow.id;
+ /** The one owner of the workspace (shared with the composer provider); this page is a view onto it. */
+ final WorkspaceHub hub;
  final WorkspaceState state;
  final WorkspaceComposer composer;
- final WorkspaceEngine engine=new WorkspaceEngine(new WorkspaceStarter());
- final WorkspaceTiming timing=new WorkspaceTiming();
- private final ExecutorService worker=Executors.newSingleThreadExecutor();
  private final Handler main=new Handler(Looper.getMainLooper());
- private AtomicBoolean cancel=new AtomicBoolean();
- private WorkspaceSources.Read lastRead;
  private boolean shown;
 
  final EditText field;final Button arrange,regenerate,undo;final TextView status,label;
@@ -84,14 +77,13 @@ final class WorkspacePage extends FrameLayout {
  WorkspacePage(MainActivity activity){
   super(activity);
   this.activity=activity;
-  state=WorkspaceState.fromJson(prefs().getString(KEY,null));
-  composer=new WorkspaceComposer(state);
+  hub=WorkspaceHub.get(activity);state=hub.state;composer=hub.composer;
   setContentDescription("Workspace");
   int ink=RoseThemeNow.c(0xfff4ede0),muted=RoseThemeNow.c(0xb3f4ede0);
 
   LinearLayout column=new LinearLayout(activity);column.setOrientation(LinearLayout.VERTICAL);
   TextView title=text("Workspace",22,ink);title.setTypeface(Typeface.DEFAULT_BOLD);column.addView(title);
-  label=text(WorkspaceStarter.ID.equals(engine.modelId())?WorkspaceStarter.LABEL:"Composed on this phone",12,muted);
+  label=text(WorkspaceStarter.ID.equals(hub.engine.modelId())?WorkspaceStarter.LABEL:"Composed on this phone",12,muted);
   column.addView(label,new LinearLayout.LayoutParams(-1,dp(18)));
 
   LinearLayout ask=new LinearLayout(activity);ask.setGravity(Gravity.CENTER_VERTICAL);
@@ -128,55 +120,22 @@ final class WorkspacePage extends FrameLayout {
   int side=dp(HomeAppLayout.MARGIN_DP);
   setPadding(side,dp(HomeAppLayout.TOP_DP),side,0);
   setOnApplyWindowInsetsListener((v,i)->{v.setPadding(side+i.getSystemWindowInsetLeft(),dp(HomeAppLayout.TOP_DP)+i.getSystemWindowInsetTop(),side+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
+  hub.attach(this);
   render(null);
   shown(false);
  }
 
+ // ---------- WorkspaceHub.Listener ----------
+
+ @Override public void busy(){showBusy();}
+ @Override public void changed(String timedRequest){render(timedRequest);}
+
  // ---------- requests ----------
 
  /** Arrange (text null) or a typed request. A newer request supersedes one still composing. */
- void ask(String text){
-  int gen=composer.begin(text,false);
-  if(gen<0)return;
-  hideKeyboard();
-  start(gen);
- }
- void regenerate(){int gen=composer.regenerate();if(gen>=0)start(gen);}
- void undo(){if(!composer.busy()&&state.undo()){save();render(null);}}
-
- private void start(int gen){
-  cancel.set(true);cancel=new AtomicBoolean();final AtomicBoolean cancelled=cancel;
-  final String requestId=composer.requestId(),trigger=composer.trigger(),prompt=composer.prompt();
-  final List<String> avoid=composer.avoid();
-  final Set<String> pinned=pinnedIds();
-  timing.requested(requestId,trigger,System.nanoTime());
-  showBusy();
-  worker.execute(()->{
-   WorkspaceSources.Read read;String result;
-   try{
-    read=WorkspaceSources.read(activity,pinned);
-    result=engine.compose(WorkspaceSnapshot.request(requestId,trigger,prompt,read.snapshot,WorkspaceEngine.DEADLINE_MS,avoid),cancelled::get);
-   }catch(RuntimeException e){read=null;result=WorkspaceEngine.failed(requestId,"model_unavailable");}
-   final WorkspaceSources.Read done=read;final String text=result;final long at=System.nanoTime();
-   main.post(()->finish(gen,requestId,done,text,at));
-  });
- }
-
- private void finish(int gen,String requestId,WorkspaceSources.Read read,String result,long at){
-  WorkspaceComposer.Outcome outcome=read==null?composer.fail(gen,"model_unavailable"):composer.finish(gen,result,read.snapshot.registry);
-  timing.resulted(requestId,outcome,composer.lastFailure(),WorkspaceTiming.modelId(result),WorkspaceTiming.composerTiming(result),at);
-  if(outcome==WorkspaceComposer.Outcome.IGNORED)return;
-  if(read!=null)lastRead=read;
-  if(outcome==WorkspaceComposer.Outcome.COMMITTED){save();render(requestId);}
-  else render(null);
- }
-
- /** The item ids of pinned sections: the composer leaves them out, since the page keeps those sections in place. */
- private Set<String> pinnedIds(){
-  Set<String> ids=new HashSet<>();WorkspaceLayout l=state.layout();
-  if(l!=null)for(WorkspaceLayout.Section c:l.sections)if(state.pinned(c.key)){ids.addAll(c.items);ids.addAll(c.actions);}
-  return ids;
- }
+ void ask(String text){hideKeyboard();hub.ask(text);}
+ void regenerate(){hub.regenerate();}
+ void undo(){hub.undo();}
 
  // ---------- rendering ----------
 
@@ -204,15 +163,15 @@ final class WorkspacePage extends FrameLayout {
   renderRecents();
   sections.removeAllViews();carousels.clear();
   WorkspaceLayout layout=state.layout();
-  if(layout!=null&&lastRead==null){
+  if(layout!=null&&hub.lastRead==null){
    // A saved layout waits for the first read of the phone, so it never draws an app that has gone.
-   refreshSources();return;
+   hub.refreshSources();return;
   }
   if(layout==null){
    TextView empty=text("Tap "+WorkspaceComposer.ARRANGE+", or ask for what you're doing.",15,RoseThemeNow.c(0xb3f4ede0));
    sections.addView(empty);
   }else{
-   WorkspaceLayout shown=lastRead==null?layout:layout.available(lastRead.snapshot.present());
+   WorkspaceLayout shown=hub.lastRead==null?layout:layout.available(hub.lastRead.snapshot.present());
    for(WorkspaceLayout.Section c:shown.sections)sections.addView(section(c),margins(new LinearLayout.LayoutParams(-1,-2),0,0,0,14));
   }
   if(timedRequest!=null)timeFirstFrame(timedRequest);
@@ -227,7 +186,7 @@ final class WorkspacePage extends FrameLayout {
    String name=e.request==null||WorkspaceComposer.ARRANGE.equals(e.request)?"Best guess":e.request;
    TextView chip=text(name,12,RoseThemeNow.c(0xfff4ede0));chip.setSingleLine(true);chip.setGravity(Gravity.CENTER);
    chip.setBackground(pill(0x1fffffff,0));chip.setPadding(dp(12),0,dp(12),0);chip.setContentDescription("Reopen "+name);
-   chip.setOnClickListener(v->{if(!composer.busy()&&state.reopen(index)){save();render(null);}});
+   chip.setOnClickListener(v->hub.reopen(index));
    recents.addView(chip,margins(new LinearLayout.LayoutParams(-2,dp(RECENT_DP)),0,0,6,0));
   }
  }
@@ -239,7 +198,7 @@ final class WorkspacePage extends FrameLayout {
   TextView title=text(c.title,15,RoseThemeNow.c(0xfff4ede0));title.setTypeface(Typeface.DEFAULT_BOLD);
   head.addView(title,new LinearLayout.LayoutParams(0,-2,1));
   final boolean pinned=state.pinned(c.key);
-  Button pin=button(pinned?"Pinned":"Pin",()->{if(!composer.busy()&&state.togglePin(c.key)){save();render(null);}});
+  Button pin=button(pinned?"Pinned":"Pin",()->hub.togglePin(c.key));
   pin.setContentDescription((pinned?"Unpin ":"Pin ")+c.title);
   head.addView(pin,new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
   box.addView(head);
@@ -265,7 +224,7 @@ final class WorkspacePage extends FrameLayout {
 
  /** An app as Home draws and opens it, or an action as a tile. */
  private View tile(String id){
-  ResolveInfo app=lastRead==null?null:lastRead.apps.get(id);
+  ResolveInfo app=hub.lastRead==null?null:hub.lastRead.apps.get(id);
   if(app!=null)return activity.appTile(app);
   return action(id);
  }
@@ -279,9 +238,9 @@ final class WorkspacePage extends FrameLayout {
  }
 
  private String labelOf(String id){
-  if(lastRead!=null){
-   for(Object o:(List<?>)lastRead.snapshot.snapshot.get("apps"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
-   for(Object o:(List<?>)lastRead.snapshot.snapshot.get("actions"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
+  if(hub.lastRead!=null){
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("apps"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("actions"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
   }
   return "Unavailable";
  }
@@ -290,12 +249,12 @@ final class WorkspacePage extends FrameLayout {
  private void act(String id){
   if(composer.busy())return;
   try{
-   if(id.startsWith("app:")){ResolveInfo r=lastRead==null?null:lastRead.apps.get(id);if(r!=null){WorkspaceLauncher.open(activity,r,labelOf(id));state.actionResult(id,"opened");}}
+   if(id.startsWith("app:")){ResolveInfo r=hub.lastRead==null?null:hub.lastRead.apps.get(id);if(r!=null){WorkspaceLauncher.open(activity,r,labelOf(id));hub.actionResult(id,"opened");}}
    else if(id.startsWith("sc:")){
-    ShortcutInfo s=lastRead==null?null:lastRead.shortcuts.get(id);LauncherApps launcher=activity.getSystemService(LauncherApps.class);
-    if(s!=null&&launcher!=null){launcher.startShortcut(s.getPackage(),s.getId(),null,null,Process.myUserHandle());state.actionResult(id,"opened");}
+    ShortcutInfo s=hub.lastRead==null?null:hub.lastRead.shortcuts.get(id);LauncherApps launcher=activity.getSystemService(LauncherApps.class);
+    if(s!=null&&launcher!=null){launcher.startShortcut(s.getPackage(),s.getId(),null,null,Process.myUserHandle());hub.actionResult(id,"opened");}
    }
-   else if(id.startsWith("intent:")){Intent i=WorkspaceSources.template(id.substring("intent:".length()));if(i!=null){activity.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));state.actionResult(id,"opened");}}
+   else if(id.startsWith("intent:")){Intent i=WorkspaceSources.template(id.substring("intent:".length()));if(i!=null){activity.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));hub.actionResult(id,"opened");}}
    else if(id.startsWith("task:")){
     // Rose tasks need App Core's route, which no server enables yet, so none are offered in the snapshot. If
     // one is ever shown, it still asks first and then says it can't start.
@@ -303,9 +262,8 @@ final class WorkspacePage extends FrameLayout {
      .setPositiveButton("OK",null).show();
    }
   }catch(ActivityNotFoundException|SecurityException|IllegalStateException e){
-   state.actionResult(id,"failed");status.setText("Couldn't open "+labelOf(id));
+   hub.actionResult(id,"failed");status.setText("Couldn't open "+labelOf(id));
   }
-  save();
  }
 
  /** WorkspaceTiming's render point: the first draw after a committed layout, timed on the draw pass itself. */
@@ -313,7 +271,7 @@ final class WorkspacePage extends FrameLayout {
   final ViewTreeObserver observer=sections.getViewTreeObserver();
   final ViewTreeObserver.OnDrawListener[] once=new ViewTreeObserver.OnDrawListener[1];
   once[0]=()->{
-   timing.rendered(requestId,System.nanoTime());
+   hub.timing.rendered(requestId,System.nanoTime());
    main.post(()->{if(observer.isAlive())observer.removeOnDrawListener(once[0]);});
   };
   observer.addOnDrawListener(once[0]);
@@ -327,23 +285,8 @@ final class WorkspacePage extends FrameLayout {
   shown=now;
   setImportantForAccessibility(now?View.IMPORTANT_FOR_ACCESSIBILITY_AUTO:View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
   setDescendantFocusability(now?ViewGroup.FOCUS_AFTER_DESCENDANTS:ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-  if(now){composer.workspaceShown();refreshSources();}else{hideKeyboard();field.clearFocus();}
- }
-
- /**
-  * Re-reads the phone for rendering, without composing: a removed app or shortcut drops out of the layout on
-  * screen (WorkspaceLayout.available), and the saved layout itself is not changed.
-  */
- private boolean reading;
- void refreshSources(){
-  if(reading)return;reading=true;
-  final Set<String> pinned=pinnedIds();
-  worker.execute(()->{
-   WorkspaceSources.Read read=null;
-   try{read=WorkspaceSources.read(activity,pinned);}catch(RuntimeException ignored){}
-   final WorkspaceSources.Read done=read;
-   main.post(()->{reading=false;if(done!=null){lastRead=done;if(!composer.busy())render(null);}});
-  });
+  hub.shown(now);
+  if(now)hub.refreshSources();else{hideKeyboard();field.clearFocus();}
  }
 
  /** A drag that starts on the request field or a carousel belongs to it, not to the pager (MainActivity.canSwipePages). */
@@ -355,14 +298,13 @@ final class WorkspacePage extends FrameLayout {
  }
 
  /** The last few requests' timing, for benchmarks and logs (ids, triggers and numbers only). */
- String timingJson(){return timing.json();}
+ String timingJson(){return hub.timing.json();}
 
- void release(){cancel.set(true);worker.shutdownNow();}
+ /** The page is going away; the hub, its state and any composition carry on without it. */
+ void release(){hub.detach(this);}
 
  // ---------- small helpers ----------
 
- private void save(){try{prefs().edit().putString(KEY,state.toJson()).apply();}catch(RuntimeException ignored){}}
- private SharedPreferences prefs(){return activity.getSharedPreferences(PREFS,Context.MODE_PRIVATE);}
  private void hideKeyboard(){InputMethodManager imm=activity.getSystemService(InputMethodManager.class);if(imm!=null)imm.hideSoftInputFromWindow(field.getWindowToken(),0);}
  private int dp(float v){return activity.dp(v);}
  private TextView text(String s,float size,int color){TextView t=new TextView(activity);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);return t;}

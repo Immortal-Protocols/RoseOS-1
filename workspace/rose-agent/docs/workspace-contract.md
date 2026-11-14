@@ -156,10 +156,45 @@ All three are `System.nanoTime()`. A record gives these fields:
 
 ## Provider for App Core (§4.1)
 
-The composer provider is Rose Agent itself, `dev.pixel.voice`. Its operations are `workspace_compose`
-(kinds `prompt`, `arrange`, `regenerate` and `undo`) and `capabilities`. They are served the same way as
-the customization tools. `capabilities` reports kinds only once the native page and a composer are on the
-phone, so the conversation tool is not offered before then.
+The composer provider is Rose Agent itself, `dev.pixel.voice`. It serves two operations, the same way as the
+customization tools: `workspace_compose`, with kinds `prompt`, `arrange`, `regenerate` and `undo`, and
+`capabilities`.
+
+**The route in.** `SettingsAgentProvider.call` checks the caller's signer, and its receipts answer a repeated
+command id. It then hands `workspace_compose` to `WorkspaceHub.serve`.
+
+**One owner.** `WorkspaceHub` owns the workspace for both the page and the provider: one saved state, one
+composer, and one dispatcher (`WorkspaceRequests`).
+
+**Requests** (`WorkspaceAgent.parse`) are read strictly:
+- only `schemaVersion`, `requestId`, `kind` and `text`;
+- `schemaVersion` must be 1, and `requestId` 1 to 64 characters;
+- `text` must be present for `prompt` and only for `prompt`: not blank, at most 500 characters.
+
+A bad request is `rejected` with a fixed reason. A `requestId` already answered gets its first answer again,
+and nothing is composed.
+
+**Answers** follow §4.2: `{schemaVersion: 1, requestId, status, revision?, reason?}`.
+
+| Case | Answer |
+| --- | --- |
+| a composition commits while the workspace is on screen | `shown`, with the store's revision |
+| a composition commits while the workspace is off screen | `prepared`, with the store's revision; it is saved, and the page shows it when reached |
+| `model_unavailable` | `unavailable` |
+| any other rose-layout-v1 failure | `rejected`, with the failure token |
+| superseded by a newer request | `uncertain` |
+| still composing after 7 s (the provider waits 8 s) | `uncertain`; the composition still commits, and a repeat of the `requestId` gets that answer |
+| `undo` | answers at once, with no composer; refused while composing, and "nothing to undo" is `rejected` |
+
+**The revision** grows with every change to the layout or its pins, undo included. The highest revision saved
+is kept apart from the store, so it never goes back.
+
+**`capabilities`** adds `kinds` (§4.1). `prompt` is listed only with a real model. The starter ignores words,
+so today the kinds are `arrange`, `regenerate` and `undo`.
+
+**Not here yet: D4, the offer outside Home.** "Preparing workspace / Workspace ready · Show workspace"
+outside Home needs a surface, either a notification or an overlay, and both raise permission questions. Until
+that is decided, a conversational request reads `prepared`, and the page shows it when reached.
 
 ## Rose tasks (App Core's route, #782)
 
@@ -181,3 +216,4 @@ mounted only when the server enables it, which nothing does yet. The phone treat
 | D1 | How Home gets notifications and their actions: (a) a notification listener in Rose Agent, which needs the person's notification-access grant; (b) the SystemUI Rose shade offers a bounded, signature-protected snapshot and action call, an OS Core change with security review; or (c) no notification cards at first. | Not decided. No permission is inferred. Until it is decided, the snapshot has no notifications. |
 | D2 | Where voice requests are transcribed. A transcript reaches the composer as `direct_text`. | Not decided |
 | D3 | The hook in Home's shared files that adds the page before Home: `MainActivity.attachLauncherPages`, `HomePages`, and the page dots with the workspace's star. | Agreed with Home/App Product and in source: `WORKSPACE=0`, `HOME=1`, `FIRST_APPS=2`. HOME on Home goes to Home, Back goes to Home, a stale page restores to Home, and the dots match the pages. |
+| D4 | Where the "Workspace ready · Show workspace" offer appears while the person is in another app: a notification, an overlay, or nothing (the page shows it when reached). | Not decided. No permission is inferred. Today: nothing outside Home. |
