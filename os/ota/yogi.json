@@ -5,7 +5,7 @@
   "repository": "Immortal-Protocols/pixel-ota",
   "publicationEnabled": false,
   "automationEnabled": false,
-  "activationBasis": "Nathan approved Yogi OTA source work only (relayed by Chief, 2026-11-05). No build, key, access, signing, publication, dispatch or phone action is authorized by this file. Publication and automation stay false until separately authorized.",
+  "activationBasis": "Nathan approved the integrated Yogi attempt in this thread on 2026-11-13/14. Existing separate builder, Yogi-only keys and tag-specific stable publication. Setup, IAM and scheduling changes are not applied or implied by this source commit; fullRun.enabled stays false until those real resources are verified. No phone operation or daily schedule.",
   "plan": "https://app.notion.com/p/40e7c646c81b81629d22eb03edd73abd",
   "builder": {
     "status": "runner-unregistered",
@@ -184,7 +184,12 @@
       "operationRoot": "/srv/rose-yogi/direct",
       "lock": "/srv/rose-yogi/yogi-direct.lock"
     },
-    "basis": "Replacement dedicated Yogi VM (exact tuple: project, zone, name, numeric ID). The controller checks all four on every describe and poll. Runner label is replacement-specific because the old label's uniqueness is not evidenced. status stays runner-unregistered, and every not-ready guard stays closed, until the missing receipt fields and actual readiness evidence are recorded. Never shared with Frankel, Mustang, Rango, Blazer or Agent builds."
+    "basis": "Replacement dedicated Yogi VM (exact tuple: project, zone, name, numeric ID). The controller checks all four on every describe and poll. Runner label is replacement-specific because the old label's uniqueness is not evidenced. status stays runner-unregistered, and every not-ready guard stays closed, until the missing receipt fields and actual readiness evidence are recorded. Never shared with Frankel, Mustang, Rango, Blazer or Agent builds.",
+    "compilerCache": {
+      "enabled": true,
+      "kind": "ccache",
+      "maxBytes": 21474836480
+    }
   },
   "signing": {
     "status": "unbound",
@@ -230,8 +235,9 @@
       "dev.pixel.voice",
       "dev.pixel.calculator.agent"
     ],
-    "record": "os/app-inputs/frankel-2026110403.json",
-    "basis": "One decision record, owned by Release: os/app-inputs/frankel-2026110403.json (schema roseos.app-inputs-record.v1, PR #565), committed by Release only after a separately authorized app-inputs-export run for Frankel 2026110403 (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; signer 650d47f9...0bfb). The Yogi job downloads exactly that record's run and artifact id, admits it with Release's scripts/app-inputs-verify.py verify (its own aapt/apksigner), then re-runs its own admission. Never signed on the Yogi builder. Bootstrap A and OTA B use the same set. Unbound (the guard refuses) until Release commits that record on main; Yogi commits no export fields. The 14-day artifact window starts at the export: bootstrap A and OTA B must both download within it, or Release re-exports and commits a new record."
+    "record": "os/app-inputs/frankel-2026111201.json",
+    "basis": "Reuse the immutable Release export from run 43485652878 attempt 1, artifact 14067412309, producer 43216030196. Full admission checks the declared app-source sets against the captured workflow commit; native integration rechecks the downloaded 12-file export and actual APK identities. SDK37 is the build contract; actual targetSdk is35.",
+    "artifactExpiresAt": "2026-11-27T18:46:20Z"
   },
   "wire": {
     "tag": "yogi-{build}",
@@ -240,5 +246,12 @@
     "metadataLine": "{build} {buildDateUtc} yogi stable",
     "channel": "stable",
     "latest": false
+  },
+  "fullRun": {
+    "enabled": false,
+    "nativeMinutes": 660,
+    "stopSeconds": 43200,
+    "setupEvidence": null,
+    "basis": "Nathan approved one integrated Yogi build/sign/verify/publish attempt. Source wiring is implemented; admission remains closed pending actual runner eligibility, signer resources/trust and the longer STOP limit. No phone operation or automatic schedule."
   }
 }
