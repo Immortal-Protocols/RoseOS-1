@@ -33,6 +33,7 @@ composer/validate.py           strict output validation and alias -> real ID map
 composer/compose.py            one request -> validated layout | typed failure, with timings
 composer/backends.py           heuristic no-model baseline, scripted test backend, llama-server adapter (unexecuted)
 composer/bench.py              JSONL benchmark records + p50/p95 summary
+runtime/acquisition-manifest.json  403 receipt + pinned model digests + proposed (not run) validation/cleanup
 contract/vectors/v1.json       shared vectors, generated from the Python reference (tests/make_vectors.py)
 java/src/rose/models/composer/ Java 8 core for the app: Contract, ContextSelector, Grammar, Validator, Composer,
                                LocalInference (the runtime seam), ScriptedInference (labelled, not a model), Json
@@ -165,7 +166,11 @@ a content source, and the renderer timestamp for request-to-render timing.
 2. **No on-device runtime.** There is no llama.cpp or LiteRT-LM build in the repo; runtime installs and weight
    downloads are not authorized for this assignment.
 3. **Runtime versions unpinned.** GitHub release metadata for ggml-org/llama.cpp and google-ai-edge/LiteRT-LM
-   returns 403 in this session (repositories not enabled); not routed around.
+   returned HTTP 403 on 2026-11-13 at 22:08:33Z (curl) and again at 22:08:44Z (a second attempt through the `gh`
+   CLI, same proxy, same denial): "GitHub access to this repository is not enabled for this session". The
+   response names only `add_repo`, never called; no settings action is proven. Held since, with no further
+   attempt. Receipt and the acquisition/validation manifest (every unproven field `UNBOUND`):
+   `runtime/acquisition-manifest.json`.
 4. **Gated weights.** Gemma (Google repos) and Llama 3.2 need licence acceptance with a Hugging Face account, which
    is a credential; their configs (and so KV budgets) are unverified. Gemma's licence also needs Nathan's call.
 5. **Contract drafts.** OS Product's (PR 787) and App Core's (PR 782) answers are drafts, not merged.
