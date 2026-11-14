@@ -450,8 +450,11 @@ one.
   - **C.** A page task is visible only to the device that asked for it, in the
     GET, the live events and the reconnect replay. Another device's `taskId`
     is 404 `unknown`.
-  - **D.** A reply lost after acceptance is matched by `requestId` from the
-    reconnect replay. No new endpoint is needed.
+  - **D.** A reply lost after acceptance is matched by `requestId` from live
+    events or the reconnect replay. The replay holds only the 20 most recently
+    updated tasks, so a task can fall out of it before the phone reconnects.
+    The read by `requestId` below covers that case (agreed with OS Product,
+    2026-11-14).
 - **Delivery and recovery:**
   - **Live:** `{kind: "workspace_task", t, task}` on `/ws/events` at every
     change.
@@ -462,6 +465,20 @@ one.
     made.
   - **Authoritative read:** signed `GET /workspace/v1/tasks/<taskId>` returns
     200 with the state, or 404 `{schemaVersion: 1, status: "unknown"}`.
+  - **Read by `requestId`**, for a reply the phone lost: signed
+    `GET /workspace/v1/tasks?requestId=<percent-encoded>`, where the signature
+    covers the query. The value is decoded as RFC 3986 percent-encoding, so a
+    `+` stays a `+` and is not read as a space, as it would be in a form.
+    - 200: the same state as the read by `taskId`, `taskId` included. It is
+      looked up only among this device's own accepted requests.
+    - 404 `unknown`: the request never arrived, came back `unavailable`, or is
+      another device's.
+    - 400 `refused`: there isn't exactly one `requestId` of 1 to 64
+      characters, or there is another parameter.
+
+    It is read only: it never starts or changes anything. A re-POST is not a
+    read, because a request that never arrived would start late. The phone
+    keeps a 404 as uncertain.
 
   The card follows its `taskId` through these, not through the local phone
   stream's `current.id`. The client side is OS Product's (#800).
