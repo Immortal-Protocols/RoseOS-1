@@ -1,14 +1,14 @@
 # rose-layout-v1: the phone-local composer contract
 
-Status: **Models Core's contract (LOCAL-COMPOSER-001/002), answered by OS Product and App Core in drafts (below).** OS Product owns the component catalog,
+Status: **Models Core's contract (LOCAL-COMPOSER-001/002), answered by OS Product and App Core (below).** OS Product owns the component catalog,
 the context snapshot, the registry of real app/content/action IDs, the renderer, persistence, pin/undo and the
 last-usable layout. App Core owns conversational routing. Models owns only what sits between: context selection,
 the constrained model call and validation of its output. OS Product's phone re-checks every result before
 rendering (`WorkspaceLayout.check`), so a composer bug can never break Home.
 
-Confirmed: App Core accepted the mapping to its outer contract (`docs/APP-BUILDER.md` §4.4, PR 782 at
-`41891f4c`), and OS Product adopted this contract as the phone's only layout format, supplied catalog `cat-1` and
-answered the remaining questions (`workspace/rose-agent/docs/workspace-contract.md`, draft PR 787 at `d71fd72a`).
+Confirmed: App Core accepted the mapping to its outer contract (`docs/APP-BUILDER.md` §4.4, PR 782,
+merged `e8eb0453`), and OS Product adopted this contract as the phone's only layout format, supplied catalog `cat-1` and
+answered the remaining questions (`workspace/rose-agent/docs/workspace-contract.md`, PR 787, merged `d17e60f7`).
 Nathan approved the Project 2 HiFi direction (r2, `prototypes/rose-hifi`, source `6fcf8c9b`); OS Product owns its
 native integration.
 
@@ -195,6 +195,6 @@ provider.
    proposal, OS Product's answer). Avoided ids rank after every other entry, so the context, and therefore the
    deterministic layout, changes; they stay selectable if nothing else fits.
 
-Sources: OS Product `workspace/rose-agent/docs/workspace-contract.md` (draft PR 787 at `d71fd72a`); App Core
-`docs/APP-BUILDER.md` §4.4 (PR 782 at `41891f4c`). Both are drafts; if either changes, this document and
+Sources: OS Product `workspace/rose-agent/docs/workspace-contract.md` (PR 787, merged `d17e60f7`); App Core
+`docs/APP-BUILDER.md` §4.4 (PR 782, merged `e8eb0453`). If either changes, this document and
 `contract/vectors/v1.json` change with it.
