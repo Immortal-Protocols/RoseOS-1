@@ -312,8 +312,10 @@ java -cp "$JAVA_TESTS/HomePages" dev.pixel.voice.HomePagesTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Workspace" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceLayout.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceState.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceComposer.java \
- workspace/rose-agent/app/tests/WorkspaceTest.java
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceSnapshot.java \
+ workspace/rose-agent/app/tests/WorkspaceTest.java workspace/rose-agent/app/tests/WorkspaceSnapshotTest.java
 java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceSnapshotTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeOverview" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeOverview.java workspace/rose-agent/app/tests/HomeOverviewTest.java
 java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest

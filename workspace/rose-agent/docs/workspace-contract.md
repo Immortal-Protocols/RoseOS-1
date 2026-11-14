@@ -51,17 +51,35 @@ layouts survive a new snapshot.
 | Kind | Id format | Source | In the first build |
 | --- | --- | --- | --- |
 | apps | `app:<package>/<activity>` | `queryIntentActivities(MAIN/LAUNCHER)`, Home's own component key | yes |
-| actions: `launch` | `launch:<package>/<activity>` | the app's launch intent, via `WorkspaceLauncher.open` | yes |
+| actions: `launch` | `launch:<package>/<activity>` | reserved for content that opens in an app. An app entry already opens the app, so there is no launch copy of each app. | no |
 | actions: `shortcut` | `sc:<package>/<shortcut id>` | `LauncherApps.getShortcuts` (Home holds the HOME role; no new permission) | yes |
 | actions: `deeplink` | `intent:<template>` | intent templates Rose already has (alarm, timer, directions, music; `LocalRosePhone`) | yes |
-| actions: `agent_task` | `task:<template id>` | the phone's task templates: `label` ≤ 60, `ask` ≤ 200, `goal` ≤ 300. The goal never enters the model. | after App Core's route |
+| actions: `agent_task` | `task:<template id>` | the phone's task templates: `label` ≤ 60, `ask` ≤ 200, `goal` ≤ 300. The target is Rose Agent's own app entry, because every rose-layout-v1 action names one. The ask and goal never enter the model, and `requiresConfirmation` is always true. | after App Core's route |
 | actions: `notification_action` | `nact:<key>/<index>` | notification actions | after D1 |
 | actions: `app_function` | — | needs a privileged permission, so not inferred | no |
 | notifications | `n:<key>` | see D1 | after D1 |
 | content | `c:<source>/<id>` | no source yet (recipes, documents and media in the HiFi are sample data) | no |
 
+A package, activity, shortcut or template name that is empty, longer than 200 characters, or contains a
+space, `/`, `"` or `\` cannot make an unambiguous id, so it is left out.
+
 Whether an action runs at once or asks first comes from its registry kind. Only `agent_task` asks first
 ("Rose task · asks first"). The composer cannot change that.
+
+## The snapshot
+
+`WorkspaceSnapshot.build` makes the rose-layout-v1 snapshot and its registry together, so the composer is
+offered exactly the ids the phone can open.
+
+- **Labels** are display text the OS already shows. Control characters become one space, invisible format
+  characters are dropped, and the text is cut to 60 code points. An entry with no visible label is left out.
+- **Bounds:** at most 120 apps and 60 actions, and the first entry of a repeated id wins.
+- **Notifications and content** are empty until D1 and a content source exist.
+- **Pins:** `pinned` keeps only ids that are present.
+- **The version** is `s-` plus 12 hex digits of SHA-256 over every entry and the pins. `createdAtMs` and
+  `timeOfDay` are not part of it, so a new hour alone never makes a layout stale.
+- **Requests:** `WorkspaceSnapshot.request` writes the request with cat-1's own limits (6 sections, 8 per
+  section, 20 in total). On regenerate it adds `avoid`: the previous layout's ids, unique and at most 64.
 
 ## The phone's own check
 
@@ -88,7 +106,8 @@ layout is never reshuffled.
 | `WorkspaceState` | Keeps the layout, the request it answered, pins, the last 20 undo steps, 3 recent layouts and the last result of each direct action. It survives restarts, and a corrupt store gives an empty page. Pinned sections keep their exact index when a new layout arrives, and only the unpinned ones around them change. Nothing rearranges by itself. |
 | `WorkspaceComposer` | Handles one request at a time. It maps to rose-layout-v1 triggers: Arrange is `button`, typed text is `direct_text`, and a conversational request is `conversational` and keeps App Core's `requestId`. A newer request supersedes an older one, and a late result is ignored. A failure keeps the layout and pins. A conversational request raises the "Preparing workspace / Workspace ready · Show workspace" offer and never leaves the app. `routeStatus` gives App Core's `shown`, `prepared`, `rejected`, `unavailable` or `uncertain`. |
 
-These pieces are checked by `app/tests/WorkspaceTest.java`, which `scripts/test-local.sh` runs.
+These pieces are checked by `app/tests/WorkspaceTest.java` and `app/tests/WorkspaceSnapshotTest.java`, which
+`scripts/test-local.sh` runs.
 
 ## Answers to rose-layout-v1's other open questions
 

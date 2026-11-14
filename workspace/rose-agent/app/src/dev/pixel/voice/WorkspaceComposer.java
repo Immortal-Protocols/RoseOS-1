@@ -25,6 +25,7 @@ final class WorkspaceComposer {
  private String pending,requestId,trigger;private boolean conversational;
  private Offer offer=Offer.NONE;private String offerRequest;
  private String lastFailure;
+ private java.util.List<String> avoid=new java.util.ArrayList<>();
 
  WorkspaceComposer(WorkspaceState state){this.state=state;}
 
@@ -37,6 +38,8 @@ final class WorkspaceComposer {
  /** The current request's id and rose-layout-v1 trigger, for the composer call. */
  String requestId(){return requestId;}
  String trigger(){return trigger;}
+ /** Regenerate's soft hint for the current request: the previous layout's item ids; empty otherwise. */
+ java.util.List<String> avoid(){return new java.util.ArrayList<>(avoid);}
  /** The current request's text: null for a best guess. */
  String prompt(){return ARRANGE.equals(pending)?null:pending;}
 
@@ -49,7 +52,7 @@ final class WorkspaceComposer {
   String request;
   if(text==null)request=ARRANGE;
   else{request=text.trim();if(request.isEmpty()||request.codePointCount(0,request.length())>WorkspaceLayout.MAX_REQUEST)return -1;}
-  generation++;phase=Phase.COMPOSING;pending=request;this.conversational=conversational;lastFailure=null;
+  generation++;phase=Phase.COMPOSING;pending=request;this.conversational=conversational;lastFailure=null;avoid=new java.util.ArrayList<>();
   trigger=text==null?"button":conversational?"conversational":"direct_text";
   requestId=conversational&&routeRequestId!=null?routeRequestId:"page-"+generation;
   if(conversational){offer=Offer.PREPARING;offerRequest=request;}
@@ -61,7 +64,13 @@ final class WorkspaceComposer {
  /** Regenerate: the same request again (around the current pins). -1 if there is nothing to regenerate. */
  int regenerate(){
   String r=state.request();if(r==null)return -1;
-  return begin(ARRANGE.equals(r)?null:r,false);
+  int gen=begin(ARRANGE.equals(r)?null:r,false);
+  if(gen>0&&state.layout()!=null){
+   java.util.Set<String> ids=new java.util.LinkedHashSet<>();
+   for(WorkspaceLayout.Section c:state.layout().sections){ids.addAll(c.items);ids.addAll(c.actions);}
+   avoid=new java.util.ArrayList<>(ids);
+  }
+  return gen;
  }
 
  /** The composer's result for generation gen, checked against the registry built for that request. */
