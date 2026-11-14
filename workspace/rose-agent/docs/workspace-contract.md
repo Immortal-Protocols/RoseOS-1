@@ -171,15 +171,19 @@ composer, and one dispatcher (`WorkspaceRequests`).
 - `schemaVersion` must be 1, and `requestId` 1 to 64 characters;
 - `text` must be present for `prompt` and only for `prompt`: not blank, at most 500 characters.
 
-A bad request is `rejected` with a fixed reason. A `requestId` already answered gets its first answer again,
-and nothing is composed.
+A bad request is `rejected` with a fixed reason.
+
+**Repeats** (§4.1, in `WorkspaceRequests`, the last 50 `requestId`s):
+- a repeat while the first is still composing starts nothing and gets the same answer when it comes;
+- a repeat after the answer gets that first answer again, with the revision unchanged and nothing composed;
+- a refusal is remembered the same way, even if the kind is offered later.
 
 **Answers** follow §4.2: `{schemaVersion: 1, requestId, status, revision?, reason?}`.
 
 | Case | Answer |
 | --- | --- |
-| a composition commits while the workspace is on screen | `shown`, with the store's revision |
-| a composition commits while the workspace is off screen | `prepared`, with the store's revision; it is saved, and the page shows it when reached |
+| a composition commits while the workspace is on screen: the pager is on the workspace **and** Home's window is visible | `shown`, with the store's revision |
+| a composition commits while the workspace is off screen: Home is on another page, or another app is in front | `prepared`, with the store's revision; it is saved, and the page shows it when reached |
 | `model_unavailable` | `unavailable` |
 | any other rose-layout-v1 failure | `rejected`, with the failure token |
 | superseded by a newer request | `uncertain` |

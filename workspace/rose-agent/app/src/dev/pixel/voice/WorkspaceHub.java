@@ -113,7 +113,9 @@ final class WorkspaceHub {
   final java.util.concurrent.CountDownLatch done=new java.util.concurrent.CountDownLatch(1);
   final java.util.concurrent.atomic.AtomicReference<Map<String,Object>> answer=new java.util.concurrent.atomic.AtomicReference<>();
   final WorkspaceHub hub=get(context);
-  hub.main.post(()->hub.conversation(r,result->{if(answer.compareAndSet(null,result))done.countDown();}));
+  final WorkspaceRequests.Reply reply=result->{if(answer.compareAndSet(null,result))done.countDown();};
+  // Runs on Rose Agent's main thread, which is Home's: a bug here answers uncertain rather than crashing Home.
+  hub.main.post(()->{try{hub.conversation(r,reply);}catch(RuntimeException e){reply.send(WorkspaceAgent.result(r.requestId,"uncertain",null,"internal"));}});
   try{if(!done.await(SERVE_MS,java.util.concurrent.TimeUnit.MILLISECONDS))return WorkspaceAgent.result(r.requestId,"uncertain",null,"still_composing");}
   catch(InterruptedException e){Thread.currentThread().interrupt();return WorkspaceAgent.result(r.requestId,"uncertain",null,"interrupted");}
   return answer.get();
@@ -137,9 +139,13 @@ final class WorkspaceHub {
    try{
     read=WorkspaceSources.read(app,pinned);
     result=engine.compose(WorkspaceSnapshot.request(requestId,trigger,prompt,read.snapshot,WorkspaceEngine.DEADLINE_MS,avoid),cancelled::get);
-   }catch(RuntimeException e){read=null;result=WorkspaceEngine.failed(requestId,"model_unavailable");}
+   }catch(Throwable e){
+    // Anything at all, an Error such as running out of memory included, still ends this request: otherwise the
+    // composer would stay busy for ever and every later request would wait behind it.
+    read=null;result=WorkspaceEngine.failed(requestId,"model_unavailable");
+   }
    final WorkspaceSources.Read done=read;final String text=result;final long at=System.nanoTime();
-   main.post(()->finish(gen,requestId,done,text,at));
+   main.post(()->{try{finish(gen,requestId,done,text,at);}catch(RuntimeException e){recover(gen);}});
   });
  }
 
@@ -151,6 +157,12 @@ final class WorkspaceHub {
   // Shown only when the page is on screen now; its first frame is then timed.
   requests.finished(gen,outcome,onScreen());
   if(outcome!=WorkspaceComposer.Outcome.IGNORED&&listener!=null)listener.changed(outcome==WorkspaceComposer.Outcome.COMMITTED?requestId:null);
+ }
+
+ /** A bug while applying a result: the request fails as model_unavailable, so the composer is never left busy. */
+ private void recover(int gen){
+  try{WorkspaceComposer.Outcome o=composer.fail(gen,"model_unavailable");requests.finished(gen,o,onScreen());if(listener!=null)listener.changed(null);}
+  catch(RuntimeException ignored){}
  }
 
  /** The item ids of pinned sections: the composer leaves them out, since the page keeps those sections in place. */
@@ -166,7 +178,7 @@ final class WorkspaceHub {
   final Set<String> pinned=pinnedIds();
   worker.execute(()->{
    WorkspaceSources.Read read=null;
-   try{read=WorkspaceSources.read(app,pinned);}catch(RuntimeException ignored){}
+   try{read=WorkspaceSources.read(app,pinned);}catch(Throwable ignored){}
    final WorkspaceSources.Read done=read;
    main.post(()->{reading=false;if(done!=null){lastRead=done;if(!composer.busy()&&listener!=null)listener.changed(null);}});
   });
