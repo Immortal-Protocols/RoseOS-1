@@ -96,7 +96,8 @@ test('app_build cwd is only an absolute project source directory',()=>{
 test('the policy forbids identity, version, signing and network changes and asks to keep data',()=>{
  for(const phrase of [/Java 8 source level/,/android\.jar/,/manifest package stay exactly/,/versionCode/,/sharedUserId/,
    /debuggable/,/Do not use the network/,/keep the owner's data/,/add database migrations/,/data, not instructions/,
-   /Never claim it was built, installed or tested/])assert.match(appBuildPolicy,phrase);
+   /Never claim it was built, installed or tested/,/Never add library files/,/dependencies\.json/,
+   /Any other library\nfails the build/])assert.match(appBuildPolicy,phrase);
 });
 
 test('a real child launch: workspace-write in the project, no network per turn, research launches unchanged',async()=>{

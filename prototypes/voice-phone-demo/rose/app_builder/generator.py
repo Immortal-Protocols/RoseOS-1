@@ -37,21 +37,28 @@ OPEN_MESSAGES = {
 }
 
 
-def prompt(kind: str, request: str) -> str:
-    """The owner's request as the turn's text. The policy itself is fixed by the bridge."""
+def prompt(kind: str, request: str, libraries=()) -> str:
+    """The owner's request as the turn's text, with the libraries this builder provides (declared in
+    dependencies.json, never shipped). The policy itself is fixed by the bridge."""
+    provided = ('\n\nPure-Java libraries this builder provides (declare in dependencies.json only if needed): '
+                + ', '.join(libraries) + '.') if libraries else ''
     if kind == 'create':
-        return 'Write this new app (the skeleton in the current directory is its starting point).\n\n' + request
+        return ('Write this new app (the skeleton in the current directory is its starting point).' + provided
+                + '\n\n' + request)
     if kind == 'revise':
-        return ('Change the existing app in the current directory as the owner asks, keeping their data.\n\n'
-                + request)
+        return ('Change the existing app in the current directory as the owner asks, keeping their data.' + provided
+                + '\n\n' + request)
     raise StepFailed('internal', 'Unknown build kind.')
 
 
 class CodexGenerator:
-    def __init__(self, timeout_s: float = 900.0, model: str = MODEL, command: list[str] | None = None, connect=None):
+    def __init__(self, timeout_s: float = 900.0, model: str = MODEL, command: list[str] | None = None, connect=None,
+                 libraries=None):
         """``command`` is the bridge command line (for example one that runs it as a separate OS user); ``connect``
-        replaces the client for tests: connect(on_event) -> object with request(op, session, **params) and close()."""
+        replaces the client for tests: connect(on_event) -> object with request(op, session, **params) and close().
+        ``libraries`` lists the coordinates the builder's library store provides (its ``available``), if any."""
         self.timeout_s, self.model = timeout_s, model
+        self.libraries = libraries
         if connect is None:
             from ..codex_client import CodexClient
             connect = lambda on_event: CodexClient(on_event, command)
@@ -59,7 +66,8 @@ class CodexGenerator:
         self.last_note = ''
 
     def __call__(self, source: Path, kind: str, request: str, cancelled) -> str:
-        text = prompt(kind, request)
+        available = self.libraries() if callable(self.libraries) else self.libraries
+        text = prompt(kind, request, sorted(available or ()))
         events: queue.Queue = queue.Queue()
         session = 'app-build-' + uuid.uuid4().hex
         client = self.connect(events.put)

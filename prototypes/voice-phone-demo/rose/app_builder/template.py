@@ -1,7 +1,9 @@
 """The skeleton a generated app is written into, and the checks that keep its identity out of generated code's reach.
 
 The toolchain is the repository's pinned one (aapt v1, javac at the Java 8 source level, d8), so a generated app uses
-framework APIs only: no Gradle, AndroidX, Kotlin or third-party libraries. The builder owns the package name,
+framework APIs, plus any pure-Java JAR libraries it declares in dependencies.json that the builder's offline library
+store provides (rose.app_builder.dependencies). It never ships a library itself: no Gradle, Kotlin, AAR, JAR or
+native files in its source. The builder owns the package name,
 versionCode, versionName and SDK levels. Generated code may change activities, resources and Java sources, but a
 manifest that sets or changes any of those, asks for a shared user id or debuggability, or a source tree with build
 scripts or native code is refused before anything is compiled.
@@ -14,9 +16,11 @@ import stat
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from . import dependencies
+
 ANDROID = '{http://schemas.android.com/apk/res/android}'
 MIN_SDK, TARGET_SDK = 26, 35
-ALLOWED_TOP = {'AndroidManifest.xml', 'src', 'res', 'assets', 'README.md'}
+ALLOWED_TOP = {'AndroidManifest.xml', 'src', 'res', 'assets', 'README.md', dependencies.FILE}
 # git metadata is the builder's, kept outside the generated tree; none of it may appear inside.
 FORBIDDEN_NAMES = {'.git', '.gitignore', '.gitattributes', '.gitmodules'}
 MAX_FILE = 4 * 1024 * 1024
@@ -136,9 +140,16 @@ def check(source: Path, package: str) -> None:
         if path.name.lower().endswith(('.java',) + FORBIDDEN_SUFFIXES) and not stat.S_ISREG(mode):
             raise TemplateRefused(f'{name} is a directory with a source file name; it is not built.')
         if stat.S_ISREG(mode) and path.name.lower().endswith(FORBIDDEN_SUFFIXES):
-            raise TemplateRefused(f'{name} is not supported: generated apps use framework '
-                                  'Java only, with no build scripts, libraries or native code.',
+            raise TemplateRefused(f'{name} is not supported: generated apps are Java source, with no build '
+                                  'scripts, native code or library files (a library is declared in '
+                                  f'{dependencies.FILE}).',
                                   dependency=path.name.lower().endswith(DEPENDENCY_SUFFIXES))
+    if (source / dependencies.FILE).is_dir():
+        raise TemplateRefused(f'{dependencies.FILE} must be a file.')
+    try:
+        dependencies.declared(source)
+    except dependencies.Refused as refused:
+        raise TemplateRefused(str(refused), dependency=not refused.malformed) from None
     manifest = source / 'AndroidManifest.xml'
     if not manifest.is_file():
         raise TemplateRefused('AndroidManifest.xml is missing.')

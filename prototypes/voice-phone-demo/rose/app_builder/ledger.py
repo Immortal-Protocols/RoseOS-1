@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   failure TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0, version_code INTEGER);
 CREATE TABLE IF NOT EXISTS key_backups (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), receipt TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS version_dependencies (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, coordinate TEXT NOT NULL, sha256 TEXT NOT NULL,
+  size INTEGER NOT NULL, PRIMARY KEY (project_id, version_code, coordinate));
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -253,7 +256,9 @@ class Ledger:
             elif current != signer_sha256:
                 raise LedgerError('the signer changed')
 
-    def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str):
+    def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
+                dependencies=()):
+        """Record the delivered version and, in the same transaction, the libraries it was built with (its lock)."""
         with self.lock:
             job = self.job(job_id)
             if job['state'] not in ACTIVE or self.cancel_requested(job_id):
@@ -267,6 +272,9 @@ class Ledger:
                 self.db.execute('INSERT INTO versions VALUES (?,?,?,?,?,?,?,?,?)',
                                 (job['projectId'], job['versionCode'], version_name, job_id, source_revision, sha256,
                                  size, notes, self.clock()))
+                for lib in dependencies:
+                    self.db.execute('INSERT INTO version_dependencies VALUES (?,?,?,?,?)',
+                                    (job['projectId'], job['versionCode'], lib.coordinate, lib.sha256, lib.size))
                 self.db.execute("UPDATE jobs SET state='ready', stage='ready', message='Ready to install.', "
                                 "updated=? WHERE job_id=?", (self.clock(), job_id))
                 self.db.execute('COMMIT')
@@ -297,6 +305,16 @@ class Ledger:
             return None
         return {'projectId': row[0], 'name': row[1], 'packageName': row[2], 'signerSha256': row[3],
                 'description': row[4]}
+
+    def dependencies(self, project: str, version_code: int | None = None) -> list[dict]:
+        """The libraries a delivered version was built with (the newest one when version_code is None)."""
+        with self.lock:
+            if version_code is None:
+                version_code = self.db.execute('SELECT MAX(version_code) FROM versions WHERE project_id=?',
+                                               (project,)).fetchone()[0]
+            rows = self.db.execute('SELECT coordinate, sha256, size FROM version_dependencies WHERE project_id=? AND '
+                                   'version_code=? ORDER BY coordinate', (project, version_code)).fetchall()
+        return [{'coordinate': c, 'sha256': h, 'size': n} for c, h, n in rows]
 
     def versions(self, project: str) -> list[dict]:
         with self.lock:

@@ -61,8 +61,9 @@ directory beside it in `repo.git`), outside
    So a failed first build is never a dead end.
 4. **Generate.** A per-job Codex thread with `sandbox: workspace-write`, cwd =
    that project's source and no access to `ROSE_CONFIG_DIR`, writes code into a
-   fixed framework-only skeleton: Java 8 source level, android.jar APIs only,
-   aapt v1 resources, min API 26 and target 35. It cannot change the package,
+   fixed skeleton: Java 8 source level, android.jar APIs plus declared
+   pure-Java JAR libraries (see **Libraries** below), aapt v1 resources,
+   min API 26 and target 35. It cannot change the package,
    versionCode or signing. Enabling this thread on the Mac is a
    security-relevant runtime change; see §5. The generator is injected. It is
    implemented in source (§4A) but disabled: nothing configures or runs it.
@@ -140,6 +141,74 @@ so, but instructions are not proof. Acceptance still needs a seeded-data →
 update → read-back test on a stock-Android phone and a RoseOS phone, run
 separately.
 
+### 2.1 Libraries (pinned pure-Java JARs; source only, enabled nowhere)
+
+The writer never ships a binary and never touches the network; that keeps the
+writer isolated, and it is not the product's limit. An app *declares* the
+libraries it needs in `dependencies.json`:
+
+```json
+{"schemaVersion": 1, "dependencies": ["group:artifact:version"]}
+```
+
+The declaration allows at most 16 coordinates and no module twice.
+`rose/app_builder/dependencies.py` resolves each coordinate through an
+injected, offline `Resolver`. `RecordedStore` is one: a host-owned directory
+holding `index.json` (coordinate to sha256) and `<sha256>.jar` files. Nothing
+in source downloads or populates a store. Then, per job:
+
+1. **Copy.** Each artifact is copied into the job's own directory. A link is
+   not followed, only a regular file is accepted, and size is bounded at
+   16 MB a JAR and 64 MB a job.
+2. **Digest.** The copy's sha256 must equal the digest the resolver recorded.
+   For a coordinate the last delivered version used, it must also equal that
+   version's lock, so a library never changes under an app without its
+   coordinate changing.
+3. **Read as a plain JVM JAR.** These bounds apply:
+   - at most 20,000 entries, 64 MB unpacked, and 8 MB an entry;
+   - no unsafe names (absolute, `..`, backslash, empty segments), no
+     duplicate entries and no encryption;
+   - class files only, Java 1.1 to 21; inert `META-INF` metadata (the
+     manifest, license, notice, Maven and signature files) is allowed, and
+     `module-info.class` is skipped;
+   - no class in `java/`, `android/` or `dalvik/`, none that `android.jar`
+     defines, none in the app's own package, and none that two libraries both
+     define.
+4. **Rewrite.** A job-local JAR is written holding exactly those class files.
+   `javac` compiles against it, and `d8` adds it to the app. The app's own
+   classes are still checked to be in its package.
+5. **Lock.** The delivered version records each library's coordinate, sha256
+   and size (`Ledger.dependencies`), in the same transaction as the version.
+   It is the next revision's lock.
+
+With no resolver configured, an app that declares libraries fails as
+`dependency`, exactly as an undeclared import does. The writer's policy says
+to declare libraries rather than add them (`app-build.mjs`).
+`CodexGenerator(libraries=...)` lists what the store provides in each turn.
+No host configuration wires a store yet.
+
+**Not supported yet.** These paths are interim, not product scope. Each is an
+honest `dependency` failure:
+- AAR packages and Android resources from libraries, which need a pinned
+  aapt2;
+- Kotlin sources (no pinned `kotlinc`) and Gradle;
+- native code, Java resources inside a JAR, multi-release JARs and
+  ServiceLoader files;
+- transitive resolution: each library must be declared.
+
+**Proof level.** `rose/tests/test_app_dependencies.py` builds only tiny fake
+libraries the test makes itself: hand-built JARs for the checks, and one
+compiled by the pinned JDK for the real build. It shows:
+- an app that imports the fake library is built, signed and has its digest
+  recorded, and the library's class is in its dex;
+- with no resolver, or no declaration, the build is a `dependency` failure;
+- a revision reuses the lock, and changed bytes under the same coordinate are
+  refused;
+- tampering, namespace and archive bounds are each refused.
+
+This is compilation and signature verification only. No real library, store,
+generated app or device was used.
+
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 
 All requests use the paired device's `rose-auth-v1` signature, under the
@@ -187,8 +256,10 @@ updatedAt, failure?}`
   sets `startedAt` to the time of the retry.
 - **failure:** `{category: toolchain | dependency | compile | test | signing |
   timeout | cancelled | internal, summary, retryable}`.
-  - `dependency`: a library or language the framework-only toolchain lacks
-    (Kotlin, Gradle, a jar or aar, an import of a missing package).
+  - `dependency`: a library or language the builder can't provide. That
+    covers Kotlin, Gradle, an AAR, a JAR or AAR file in the source, an
+    undeclared or unavailable library, a library that fails its checks, or
+    an import of a missing package.
   - `compile`: anything else in the generated source.
   - `test`: reserved; no tests run yet.
 - **Concurrency:** a project has at most one queued or running job. Revise and
@@ -221,10 +292,11 @@ strictly increases and is allocated by the server ledger, never by Codex.
 
 ### 3.4 Baseline
 
-minSdk 26, targetSdk 35, framework APIs only. There is no native code, so builds
-are ABI-independent. Anything needing AndroidX, Kotlin, Compose or third-party
-libraries fails with category `dependency` and an honest summary. It is never
-silently dropped.
+minSdk 26, targetSdk 35, framework APIs, plus declared pure-Java JAR libraries
+from the builder's offline library store (**Libraries**, §2). There is no native
+code, so builds are ABI-independent. Anything needing AndroidX, Kotlin, Compose,
+an AAR or a library the store doesn't have fails with category `dependency` and
+an honest summary. It is never silently dropped.
 
 ### 3.5 Install receipt
 
@@ -272,8 +344,10 @@ refused only for technical reasons:
     the app may request or do;
   - Java must be in the app's package;
   - no git metadata, links or special files.
-- **Toolchain facts:** framework Java at source level 8 only, because there's
-  no Gradle, Kotlin or native toolchain. A library is a `dependency` failure.
+- **Toolchain facts:** Java at source level 8, against the framework and any
+  declared pure-Java JAR libraries the offline store provides. There's no
+  Gradle, Kotlin or native toolchain. Any other library is a `dependency`
+  failure.
 - **Isolation:** each project has its own source, git history and signing key.
   The writer runs in its own process group, and the build reads only a
   snapshot.
