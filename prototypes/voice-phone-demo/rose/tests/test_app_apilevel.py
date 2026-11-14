@@ -218,6 +218,9 @@ DB = '''<?xml version="1.0" encoding="utf-8"?>
     <implements name="android/x/Later" since="33"/></class>
   <class name="android/x/Later" since="33"><method name="go()V"/></class>
   <class name="android/os/Build$VERSION" since="4"><extends name="java/lang/Object"/><field name="SDK_INT"/></class>
+  <class name="java/lang/AutoCloseable" since="19"><method name="close()V"/></class>
+  <class name="android/x/Ret" since="10"><extends name="java/lang/Object"/>
+    <implements name="java/lang/AutoCloseable" since="29"/></class>
 </api>
 '''
 
@@ -345,7 +348,6 @@ class Units(unittest.TestCase):
                 '\n0004: return-void')  # its ", (proto)" suffix must not hide the member
         self.assertEqual(self.statuses(dump(poly)), [('not_guarded_here', 33)])
         for body in ('0000: invoke-static {}, Landroid/x/Missing;.go:()V // method@0001\n0003: return-void',
-                     '0000: invoke-virtual {v0}, Landroid/x/Later;.unlisted:()V // method@0001\n0003: return-void',
                      '0000: new-instance v0, Landroid/x/Missing; // type@0001\n0002: return-void'):
             with self.subTest(body=body):
                 [finding] = apilevel.analyse([dump(body)], self.db, 'app.x', 26)['findings']
@@ -353,6 +355,15 @@ class Units(unittest.TestCase):
         report = apilevel.analyse([dump('0000: return-void', superclass='android/x/Missing')], self.db, 'app.x', 26)
         self.assertEqual([(f['kind'], f['status'], f['reason']) for f in report['findings']],
                          [('supertype', 'unverified', apilevel.UNKNOWN)])
+        # A member the database leaves off a class it knows (StringBuilder.setLength and the like): assumed from the
+        # class's level, and named in 'unlisted' rather than dropped.
+        unlisted = '0000: invoke-virtual {v0}, Landroid/x/Later;.unlisted:()V // method@0001\n0003: return-void'
+        report = apilevel.analyse([dump(unlisted)], self.db, 'app.x', 26)
+        self.assertEqual([(f['status'], f['level']) for f in report['findings']], [('not_guarded_here', 33)])
+        self.assertEqual((report['unlisted'], report['unlistedCount']), (['android/x/Later.unlisted()V'], 1))
+        old = '0000: invoke-virtual {v0}, Ljava/lang/Object;.unlisted:()V // method@0001\n0003: return-void'
+        report = apilevel.analyse([dump(old)], self.db, 'app.x', 26)  # at or below minSdk: no finding, still named
+        self.assertEqual((report['findings'], report['unlistedCount']), ([], 1))
 
     def test_an_app_interface_implemented_only_by_a_newer_platform_method(self):
         iface = ("Class #0            -\n  Class descriptor  : 'Lapp/x/KeepClear;'\n"
@@ -368,6 +379,12 @@ class Units(unittest.TestCase):
                          [('supertype', 'unverified', 27, 'app/x/V')])  # setShowWhenLocked is API 27
         own = impl.replace("'m'", "'setShowWhenLocked'").replace("'()V'", "'(Z)V'")  # V implements it itself
         self.assertEqual(apilevel.analyse([iface + own], self.db, 'app.x', 26)['findings'], [])
+        # A platform interface too: Ret gets close() only from implementing AutoCloseable at 29.
+        platform = dump('0000: return-void', cls='app/x/R', superclass='android/x/Ret').replace(
+            "  Interfaces        -\n", "  Interfaces        -\n    #0              : 'Ljava/lang/AutoCloseable;'\n", 1)
+        report = apilevel.analyse([platform], self.db, 'app.x', 26)
+        self.assertEqual([(f['kind'], f['status'], f['level'], f['api']) for f in report['findings']],
+                         [('supertype', 'unverified', 29, 'android/x/Ret.close()V')])
 
     def test_the_budget_is_checked_between_methods(self):
         import itertools

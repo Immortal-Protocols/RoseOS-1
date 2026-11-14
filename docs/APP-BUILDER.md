@@ -362,9 +362,17 @@ Nothing is dropped silently:
   `javax.naming`) is reported `unverified`, "not in the pinned API
   database";
 - so is a supertype the database doesn't know;
-- so is an app interface method that a class implements only through an
-  inherited platform method above 26. Calls through the interface fail below
-  that level.
+- so is an interface method, the app's or the platform's, that a class
+  implements only through an inherited platform method above 26. Calls
+  through the interface fail below that level. For example, a class
+  extending `MediaMetadataRetriever` as an `AutoCloseable` gets `close()`
+  only from 29.
+
+A member the database leaves off a class it does know is assumed available
+from that class's own level. These are mostly methods inherited from a
+hidden superclass, such as `StringBuilder.setLength` and `substring`. They
+are named in the report's `unlisted` field (up to 50, with a count) rather
+than as findings, so ordinary code doesn't fill the findings cap.
 
 `invoke-polymorphic` references (`VarHandle`, `MethodHandle`) are read like
 any call. Only the platform's own `android/os/Build$VERSION.SDK_INT` counts
@@ -381,6 +389,8 @@ and no counts, so it never reads as clean. The build continues either way.
 **Limits.** This is detection, not device compatibility proof, and an empty
 list is no compatibility claim. These are not covered:
 - reflection, and anything reached without a dex reference;
+- a platform object passed as an interface its class only implements from a
+  later level, which needs type flow;
 - behaviour changes, permissions, OEM differences and hidden APIs;
 - guards in other methods, including library `Api*Impl` classes, and
   `@RequiresApi`, which `d8` drops;
@@ -448,8 +458,9 @@ a test fail:
 - a guard memo that drops edge guards;
 - the polymorphic comma kept;
 - unplaced references or supertypes dropped;
-- interface gaps ignored;
-- app fields not known.
+- interface gaps ignored, platform interfaces skipped;
+- app fields not known;
+- unlisted members silently dropped, or flooding the findings.
 
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 

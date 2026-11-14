@@ -22,7 +22,11 @@ report ``incomplete``; if the database or dexdump is missing, or anything goes w
 It is advisory only: it never fails or changes a build, and it is not device proof. An empty list does not mean the
 app is compatible with every phone it can be installed on. Reflection and any API reached without a dex reference
 are not seen. A platform reference the pinned database cannot place is reported ``unverified``, never dropped; so
-is an app interface method that a class implements only through an inherited platform method above minSdk.
+is an interface method (the app's or the platform's) that a class implements only through an inherited platform method
+above minSdk. A member api-versions.xml does not list on a class it does know (mostly methods inherited from a
+hidden superclass, such as StringBuilder.setLength) is assumed available from its class's level and named in the
+report's ``unlisted`` field. A platform object passed as an interface its class only implements from a later level
+is not seen (that needs type flow).
 """
 from __future__ import annotations
 
@@ -533,6 +537,7 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
     own = package.replace('.', '/') + '/'
     deadline = time.monotonic() + budget_s
     declared = {name: k.declared for name, k in classes.items()}
+    unlisted: set = set()
 
     def resolve(cls, member):
         """The platform answer for a reference, walking the app's own (and its libraries') classes up first: a
@@ -553,6 +558,11 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
             if found is not None:
                 return c, found
             unplaced = unplaced or c
+        if unplaced and member is not None and unplaced in db.classes:
+            # The class is known, the member is not listed (mostly methods inherited from a hidden superclass, such
+            # as StringBuilder.setLength): assumed available from the class's own level, and listed in 'unlisted'.
+            unlisted.add(f'{unplaced}.{member}')
+            return unplaced, db.level(unplaced)
         return (unplaced, None) if unplaced else None
 
     def interface_gaps(k: Klass):
@@ -566,21 +576,27 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
             c = classes[c].superclass
         platform = c
         own_methods = set().union(*(declared[x] for x in chain))
-        interfaces, todo = set(), [i for x in chain for i in classes[x].interfaces]
+        interfaces, platform_ifaces, todo = set(), set(), [i for x in chain for i in classes[x].interfaces]
         while todo:
             i = todo.pop()
-            if i in classes and i not in interfaces:
-                interfaces.add(i)
-                todo += classes[i].interfaces
+            if i in classes:
+                if i not in interfaces:
+                    interfaces.add(i)
+                    todo += classes[i].interfaces
+            elif i in db.classes and i not in platform_ifaces:
+                platform_ifaces.add(i)
+                todo += [sup for sup, _ in db.classes[i][2]]
+        wanted = [(i, m.name + m.proto, None) for i in sorted(interfaces) for m in classes[i].methods
+                  if not (m.insns or m.size or m.name.startswith('<'))]  # not a default method
+        wanted += [(i, key, db.level(i, key)) for i in sorted(platform_ifaces) for key in db.classes[i][3]
+                   if '(' in key and not key.startswith('<')]
         gaps = []
-        for i in sorted(interfaces):
-            for m in classes[i].methods:
-                key = m.name + m.proto
-                if m.insns or m.size or key in own_methods or m.name.startswith('<'):
-                    continue  # a default method, or the class implements it itself
-                found = db.level(platform, key) if platform else None
-                if found and found[0] > min_sdk:
-                    gaps.append((i, key, platform, found[0]))
+        for i, key, own_level in wanted:
+            if key in own_methods or not platform:
+                continue  # the class implements it itself
+            found = db.level(platform, key)
+            if found and found[0] > min_sdk and (own_level is None or found[0] > own_level[0]):
+                gaps.append((i, key, platform, found[0]))
         return gaps
 
     findings, problems, skipped = [], [], 0
@@ -662,6 +678,7 @@ def analyse(dumps: list[str], db: Database, package: str, min_sdk: int, budget_s
     return {'schemaVersion': 1, 'advisory': True, 'minSdk': min_sdk,
             'status': 'incomplete' if reasons else 'complete', **({'reason': '; '.join(reasons)} if reasons else {}),
             'database': {'file': Path(DATABASE).name, 'sha256': db.sha256}, 'counts': counts,
+            'unlisted': sorted(unlisted)[:50], 'unlistedCount': len(unlisted),
             'findings': findings[:MAX_FINDINGS], 'truncated': max(0, len(findings) - MAX_FINDINGS), 'note': NOTE}
 
 
