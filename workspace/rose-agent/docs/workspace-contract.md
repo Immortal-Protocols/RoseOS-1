@@ -109,8 +109,37 @@ layout is never reshuffled.
 | `WorkspaceState` | Keeps the layout, the request it answered, pins, the last 20 undo steps, 3 recent layouts and the last result of each direct action. It survives restarts, and a corrupt store gives an empty page. Pinned sections keep their exact index when a new layout arrives, and only the unpinned ones around them change. Nothing rearranges by itself. |
 | `WorkspaceComposer` | Handles one request at a time. It maps to rose-layout-v1 triggers: Arrange is `button`, typed text is `direct_text`, and a conversational request is `conversational` and keeps App Core's `requestId`. A newer request supersedes an older one, and a late result is ignored. A failure keeps the layout and pins. A conversational request raises the "Preparing workspace / Workspace ready · Show workspace" offer and never leaves the app. `routeStatus` gives App Core's `shown`, `prepared`, `rejected`, `unavailable` or `uncertain`. |
 
-These pieces are checked by `app/tests/WorkspaceTest.java` and `app/tests/WorkspaceSnapshotTest.java`, which
-`scripts/test-local.sh` runs.
+| `WorkspacePage` | The native page, at `HomePages.WORKSPACE` (0), left of Home (1). Its geometry is fixed: the field, Arrange, Regenerate and Undo, the status line (20dp), the recent row (28dp) and the canvas never move. Each section has a Pin control. While composing, the old sections stay dimmed under a veil and the buttons are disabled in place. Apps are drawn and opened exactly as Home draws and opens them. Shortcuts open through `LauncherApps`, and intent templates open their app. A drag that starts on the field or a carousel belongs to it, not to the pager, and the page is inert while off screen. Its state is saved in the app's own preferences after every change. |
+| `WorkspaceSources` | Reads the phone into a snapshot on the page's worker thread: launchable apps without Rose Agent, launcher shortcuts (only while Rose Agent holds the HOME role, up to 2 per app), and the timer and alarms templates. |
+| `WorkspaceEngine` | One composer call through Models' core (`workspace/models/local-composer/java`, `Catalog.cat1()`), now packaged in the app by `build.sh`; its scripted test double is not packaged. It never throws: anything unexpected is a rose-layout-v1 failure. |
+| `WorkspaceStarter` | The only inference on the phone today, and **not a model**. It ignores the request's words. It answers with the apps it is offered as a grid, and up to 4 direct actions as a button row. It never offers a Rose task. The page labels it "Starter layout · no on-phone model yet". Models' runtime replaces it behind the same `LocalInference` seam. |
+| `WorkspaceTiming` | Request-to-render timing, the renderer half of rose-layout-v1's timing. See below. |
+
+These pieces are checked by `app/tests/WorkspaceTest.java`, `WorkspaceSnapshotTest.java`,
+`WorkspaceEngineTest.java` and `HomePagesTest.java`, and by `tests/home-launcher.test.mjs`. `scripts/test-local.sh`
+runs them all.
+
+## Request-to-render timing (for Models)
+
+rose-layout-v1 leaves the renderer's completion timestamp to OS Product. `WorkspaceTiming` keeps one record per
+request (the last 20). Each record holds only ids, triggers and numbers, never the request's text.
+
+| Point | Where it is taken |
+| --- | --- |
+| requested | `WorkspaceComposer.begin`, on the main thread |
+| result | the composer's result reaching the main thread |
+| rendered | the first draw pass after the committed layout (a one-shot `ViewTreeObserver.OnDrawListener`) |
+
+All three are `System.nanoTime()`. A record gives these fields:
+
+- `requestToResultMs`, `resultToRenderMs` and `requestToRenderMs`.
+- The composer's own `timing`, copied as reported.
+- `basis`: `request-to-render` once a frame showed the layout. A failed, superseded or undrawn request is
+  `result-only`, and it never renders.
+- `modelId`, and `model`: false for the starter and for `scripted`, so neither is ever reported as a model
+  measurement.
+
+`WorkspacePage.timingJson()` returns the records as JSON. Nothing sends them anywhere.
 
 ## Answers to rose-layout-v1's other open questions
 
@@ -119,7 +148,8 @@ These pieces are checked by `app/tests/WorkspaceTest.java` and `app/tests/Worksp
   the phone drops a repeat anyway.
 - **4. Where the composer runs.** In a separate process of Rose Agent (`:composer`), which Home binds to.
   Model memory and a crash or out-of-memory kill then cannot take Home down. A dead process is
-  `model_unavailable`.
+  `model_unavailable`. That split comes with Models' runtime. Until then the composer's pure Java core and the
+  starter run on the page's own worker thread, which loads no model.
 - **6. On screen.** The composer is never told. The provider alone decides `shown` versus `prepared`.
 - **7. Regenerate.** A fresh snapshot, with the previous layout's item ids as a soft avoid hint, as App
   Core proposed.
@@ -150,4 +180,4 @@ mounted only when the server enables it, which nothing does yet. The phone treat
 | --- | --- | --- |
 | D1 | How Home gets notifications and their actions: (a) a notification listener in Rose Agent, which needs the person's notification-access grant; (b) the SystemUI Rose shade offers a bounded, signature-protected snapshot and action call, an OS Core change with security review; or (c) no notification cards at first. | Not decided. No permission is inferred. Until it is decided, the snapshot has no notifications. |
 | D2 | Where voice requests are transcribed. A transcript reaches the composer as `direct_text`. | Not decided |
-| D3 | The hook in Home's shared files (`MainActivity.attachLauncherPages`, `HomePages`, the page dots) that adds the page before Home. | To be agreed with Home/App Product |
+| D3 | The hook in Home's shared files that adds the page before Home: `MainActivity.attachLauncherPages`, `HomePages`, and the page dots with the workspace's star. | Agreed with Home/App Product and in source: `WORKSPACE=0`, `HOME=1`, `FIRST_APPS=2`. HOME on Home goes to Home, Back goes to Home, a stale page restores to Home, and the dots match the pages. |

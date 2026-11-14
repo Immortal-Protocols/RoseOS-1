@@ -38,6 +38,11 @@ cp "$ROOT/workspace/experiments/phone-command-push/delivery.js" "$STAGE/assets/p
 cp "$APP/glasses-context/GlassesPhotoProvider.java" "$STAGE/src/dev/pixel/voice/"
 cp "$APP/media-worker/src/dev/pixel/voice/"*.java "$STAGE/src/dev/pixel/voice/"
 cp "$APP/clock-worker/src/ClockControlRoutine.java" "$STAGE/src/dev/pixel/voice/"
+# Project 2: Models' on-phone composer core (workspace/models/local-composer/java), which the workspace page calls.
+# Its scripted test double is not packaged; there is no model runtime or weights in this build.
+mkdir -p "$STAGE/src/rose/models/composer"
+cp "$ROOT/workspace/models/local-composer/java/src/rose/models/composer/"*.java "$STAGE/src/rose/models/composer/"
+rm -f "$STAGE/src/rose/models/composer/ScriptedInference.java"
 cp "$APP/messages-worker/messages-tool.js" "$APP/media-worker/media-tool.js" "$APP/clock-worker/clock-tool.js" "$STAGE/assets/"
 cp "$ROOT/workspace/experiments/guardian-voice/client.js" "$STAGE/assets/guardian-voice.js"
 for name in luna-first output-boost voice-providers voice-commands; do
