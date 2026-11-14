@@ -107,6 +107,12 @@ final class WorkspaceRequests {
   for(Integer g:older){Waiting w=waiting.remove(g);w.reply.send(WorkspaceAgent.composed(w.requestId,WorkspaceComposer.Outcome.IGNORED,null,false,state.revision()));}
  }
 
+ /** The phone failed while applying generation gen: its waiting caller, if any, hears uncertain with reason. */
+ void abandon(int gen,String reason){
+  Waiting w=waiting.remove(gen);
+  if(w!=null)w.reply.send(WorkspaceAgent.result(w.requestId,"uncertain",null,reason));
+ }
+
  /** Callers still waiting (for release: each is answered uncertain). */
  void abandonAll(){
   for(Waiting w:new ArrayList<>(waiting.values()))w.reply.send(WorkspaceAgent.result(w.requestId,"uncertain",null,"stopped"));
