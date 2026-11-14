@@ -13,6 +13,14 @@ import time
 
 import mustang_compiler_cache as cache
 
+OUT = 'out-yogi-cache'
+
+
+def output_dir(cfg, build):
+    # Every attempt still gets a fresh source tree. A stable relative output
+    # path keeps generated include paths/compiler flags reusable across runs.
+    return OUT if cache.enabled({'compilerCache': cfg['builder'].get('compilerCache')}) else f'out/yogi-{build}'
+
 
 def environment(inherited):
     prefixes = ('GIT_', 'GITHUB_', 'ACTIONS_', 'INPUT_', 'CCACHE_', 'GOOGLE_', 'GCP_', 'CLOUDSDK_', 'AWS_')
@@ -58,6 +66,7 @@ def stream(argv, cwd, env, log, timeout, reserve=64 << 30, sample=5, free=None):
         # Do not leave grandchildren alive merely because the shell exited.
         until = time.monotonic() + 5
         while time.monotonic() < until:
+            process.poll()  # reap the shell; a zombie is not a live compiler
             try:
                 os.killpg(process.pid, 0)
             except ProcessLookupError:
@@ -74,8 +83,12 @@ def stream(argv, cwd, env, log, timeout, reserve=64 << 30, sample=5, free=None):
     signal.signal(signal.SIGTERM, terminated)
     try:
         with output:
+            parent_ended = False
             while selector.get_map():
                 now = time.monotonic()
+                if process.poll() is not None and not parent_ended:
+                    end_group()  # a leftover child must not hold the log pipe open
+                    parent_ended = True
                 if now >= next_sample:
                     available = free()
                     lowest = available if lowest is None else min(lowest, available)

@@ -12,7 +12,9 @@ JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 mkdir -p "$OUT/classes" "$OUT/generated" "$OUT/dex"
 "$BT/aapt" package -f -M "$APP/AndroidManifest.xml" -S "$APP/res" \
   -I "$ANDROID_JAR" -F "$OUT/resources.apk" -J "$OUT/generated"
-mapfile -t SOURCES < <(find "$APP/src" "$OUT/generated" -name '*.java' -type f | sort)
+# Rose Agent's rose-auth-v1 signer and key code, compiled in unchanged so both apps sign the same bytes (RoseLink).
+AGENT="$ROOT/workspace/rose-agent/app/src/dev/pixel/voice"
+mapfile -t SOURCES < <({ find "$APP/src" "$OUT/generated" -name '*.java' -type f; printf '%s\n' "$AGENT/LocalRoseAuth.java" "$AGENT/LocalRoseKey.java"; } | sort)
 "$JAVA" -m jdk.compiler/com.sun.tools.javac.Main -encoding UTF-8 -source 8 -target 8 \
   -Xlint:-options -bootclasspath "$ANDROID_JAR:$BT/core-lambda-stubs.jar" \
   -d "$OUT/classes" "${SOURCES[@]}"

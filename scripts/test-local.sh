@@ -343,6 +343,14 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
  workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/tests/BuilderRulesTest.java
 java -cp "$JAVA_TESTS/BuilderRules" dev.pixel.builder.BuilderRulesTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RequestIds" \
+ workspace/rose-builder/src/dev/pixel/builder/RequestIds.java workspace/rose-builder/tests/RequestIdsTest.java
+java -cp "$JAVA_TESTS/RequestIds" dev.pixel.builder.RequestIdsTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderWire" \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/src/dev/pixel/builder/Json.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/tests/BuilderWireTest.java
+java -cp "$JAVA_TESTS/BuilderWire" dev.pixel.builder.BuilderWireTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest

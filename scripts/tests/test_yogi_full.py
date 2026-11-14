@@ -68,18 +68,23 @@ class FullTest(unittest.TestCase):
         with self.assertRaisesRegex(yogi.Refused, 'setup is not bound'):
             full.guard(yogi.config(), ENV)
 
-    def test_guard_checks_real_source_freshness_before_identity_or_allocation(self):
+    def test_guard_accepts_only_the_exact_verified_export_before_identity_or_allocation(self):
         with mock.patch.object(yogi, 'profile_problem', return_value=None), \
                 mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=[]):
             full.guard(self.cfg, ENV)
             for changes in ({'PUBLISH': 'false'}, {'GCP_WORKLOAD_IDENTITY_PROVIDER': 'foreign'}):
                 with self.subTest(changes=changes), self.assertRaises(yogi.Refused):
                     full.guard(self.cfg, dict(ENV, **changes))
+        # An immutable published app set is an explicit input, not a claim to
+        # contain every later application source change in the OS checkout.
         for drift in (None, ['dev.pixel.voice']):
             with mock.patch.object(yogi, 'profile_problem', return_value=None), \
-                    mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=drift), \
-                    self.assertRaisesRegex(yogi.Refused, 'stale or its source history'):
+                    mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=drift):
                 full.guard(self.cfg, ENV)
+        self.cfg['appInputs']['selection']['recordSha256'] = '0'*64
+        with mock.patch.object(yogi, 'profile_problem', return_value=None), \
+                self.assertRaisesRegex(yogi.Refused, 'export selection differs'):
+            full.guard(self.cfg, ENV)
 
     def test_complete_public_receipt_is_retained_and_changed_receipt_refuses(self):
         bound = full.accept_keys(self.cfg, self.state, self.receipt)
@@ -116,9 +121,11 @@ class FullTest(unittest.TestCase):
         findmnt = type('Result', (), {'stdout': json.dumps({'filesystems': [
             {'uuid': mounts['filesystemUuid'], 'target': mounts['mountPoint']} ]})})()
         with mock.patch.object(full, 'guard'), mock.patch.object(yogi, 'identity_refusal'), \
-                mock.patch.object(yogi, 'preflight'), mock.patch.object(full.subprocess, 'run', return_value=findmnt):
+                mock.patch.object(yogi, 'preflight'), mock.patch.object(full.subprocess, 'run', return_value=findmnt), \
+                mock.patch.object(full.mustang_route, 'bound_app_freshness', return_value=['dev.pixel.voice']):
             reused = full.initialize(self.cfg, self.root/'new-run.json', ENV)
             self.assertFalse(reused['needsBootstrap'])
+            self.assertEqual(reused['appSourceDrift'], ['dev.pixel.voice'])
             for changed in ('importing', 'recovery-needed'):
                 value = yogi.read(journal); value['status'] = changed; journal.write_text(json.dumps(value))
                 with self.subTest(status=changed), self.assertRaisesRegex(yogi.Refused, 'completed bootstrap journal'):
@@ -224,10 +231,14 @@ class CompilerTest(unittest.TestCase):
 
     def test_cache_uses_yogi_disk_and_never_imports_an_old_out_dir(self):
         cfg = yogi.config()
+        for build in ('2026111401', '2026111402'):
+            self.assertEqual(yogi_compile.output_dir(cfg, build), 'out-yogi-cache')
+        uncached = copy.deepcopy(cfg); uncached['builder'].pop('compilerCache')
+        self.assertEqual(yogi_compile.output_dir(uncached, '2026111401'), 'out/yogi-2026111401')
         with mock.patch.object(yogi_compile.cache, 'prepare_at', return_value={'enabled': True}) as prepare:
-            yogi_compile.prepare_cache(cfg, yogi.ROOT, 'out/yogi-2026111401')
+            yogi_compile.prepare_cache(cfg, yogi.ROOT, yogi_compile.output_dir(cfg, '2026111401'))
         self.assertEqual(prepare.call_args.args, (Path('/srv/rose-yogi/compiler-cache-v1'),))
-        self.assertEqual(prepare.call_args.kwargs['out_dir'], 'out/yogi-2026111401')
+        self.assertEqual(prepare.call_args.kwargs['out_dir'], 'out-yogi-cache')
 
     def test_failed_compiler_streams_both_channels_and_retains_exact_log(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as output:
@@ -248,6 +259,15 @@ class CompilerTest(unittest.TestCase):
                     sample=.02, free=free)
                 self.assertEqual(result['stopped'], reason)
                 self.assertNotEqual(result['returncode'], 0)
+
+    def test_failed_parent_cannot_leave_a_child_holding_the_log_pipe(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()):
+            command = ('import subprocess,sys; subprocess.Popen([sys.executable,"-c",'
+                       '"import time; time.sleep(60)"]); print("parent failed",flush=True); sys.exit(7)')
+            result = yogi_compile.stream([sys.executable, '-c', command], temp, {'PATH': '/usr/bin:/bin'},
+                                        Path(temp)/'compile.log', timeout=15, reserve=0, sample=.05)
+            self.assertEqual(result['returncode'], 7)
+            self.assertIsNone(result['stopped'])
 
 
 class QueueTest(unittest.TestCase):
