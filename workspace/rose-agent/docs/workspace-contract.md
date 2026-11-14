@@ -126,20 +126,32 @@ request (the last 20). Each record holds only ids, triggers and numbers, never t
 
 | Point | Where it is taken |
 | --- | --- |
-| requested | `WorkspaceComposer.begin`, on the main thread |
-| result | the composer's result reaching the main thread |
-| rendered | the first draw pass after the committed layout (a one-shot `ViewTreeObserver.OnDrawListener`) |
+| requested | `WorkspaceHub.start`, on the main thread, right after the composer accepted the request. For a conversational request this is on the phone, so App Core's link and the provider's transit are not included. |
+| result | on the composer's worker, as soon as compose returns and before the result is posted to the main thread; main-thread queueing falls after it |
+| first draw | the first draw pass of the page's view tree after the committed layout, **while the page is on screen** (a `ViewTreeObserver.OnDrawListener`). This is when the view tree is drawn, not when pixels are presented on the display. |
 
-All three are `System.nanoTime()`. A record gives these fields:
+All three are `System.nanoTime()`. "On screen" is `WorkspaceHub.onScreen()`: the pager is on the workspace and
+Home's window is visible. The hub reports every change of it to `WorkspaceTiming.visibility`.
 
-- `requestToResultMs`, `resultToRenderMs` and `requestToRenderMs`.
-- The composer's own `timing`, copied as reported.
-- `basis`: `request-to-render` once a frame showed the layout. A failed, superseded or undrawn request is
-  `result-only`, and it never renders.
+**A person's wait is never latency.** Each record has one `basis`:
+
+| `basis` | When | Times it gives |
+| --- | --- | --- |
+| `request-to-first-draw` | The result arrived while the page was on screen, and the page stayed on screen until its first draw. | `requestToRenderMs` and `resultToRenderMs`: phone-side only. |
+| `prepared-then-shown` | The result was prepared off screen, or the person left before the first draw; it was drawn after they came back. | `resultToShownDrawMs`, with `includesHumanWait: true`. `requestToRenderMs` and `resultToRenderMs` are null. |
+| `result-only` | Failed, superseded, replaced by a newer layout before its first draw, or not drawn yet. | none |
+
+- A draw while the page is off screen is not counted. The page keeps listening until a draw on screen counts,
+  or until the record can never count.
+- A newer committed layout marks an older undrawn one `replacedBeforeDraw`, so a draw showing the newer layout
+  is never credited to the older request.
+- Every record also gives `requestToResultMs`, `visibleAtResult`, `leftBeforeDraw` and `replacedBeforeDraw`.
+- The composer's own `timing` is copied as reported, kept apart from the page's numbers.
 - `modelId`, and `model`: false for the starter and for `scripted`, so neither is ever reported as a model
   measurement.
 
-`WorkspacePage.timingJson()` returns the records as JSON. Nothing sends them anywhere.
+`WorkspacePage.timingJson()` returns the records as JSON. Nothing sends them anywhere, so nothing here is a
+measured phone latency.
 
 ## Answers to rose-layout-v1's other open questions
 

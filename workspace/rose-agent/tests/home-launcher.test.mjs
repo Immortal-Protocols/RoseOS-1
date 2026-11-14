@@ -685,3 +685,12 @@ test('Project 2: a lost reply is recovered by a read by requestId, never by re-s
  assert.match(recover,/for\(String requestId:lost\)\{[\s\S]*?s=client\.lookupRequest\(requestId\);[\s\S]*?tasks\.apply\(s\)/);
  assert.doesNotMatch(recover,/startTask|client\.start\(/,'recovery never starts a task');
 });
+
+test('Project 2: request-to-first-draw timing carries visibility, so a person\'s wait is never latency',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java'),page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
+ assert.match(hub,/void shown\(boolean now\)\{pageShown=now&&listener!=null;timing\.visibility\(onScreen\(\)\);/);
+ assert.match(hub,/void windowVisible\(boolean now\)\{windowVisible=now&&listener!=null;timing\.visibility\(onScreen\(\)\);/);
+ assert.match(hub,/void detach\(Listener page\)\{if\(listener==page\)\{listener=null;pageShown=false;windowVisible=false;timing\.visibility\(false\);\}\}/);
+ assert.match(hub,/timing\.resulted\([^;]*,at,onScreen\(\)\);/);
+ assert.match(page,/if\(done\[0\]\|\|!hub\.timing\.rendered\(requestId,System\.nanoTime\(\),hub\.onScreen\(\)\)\)return;/);
+});
