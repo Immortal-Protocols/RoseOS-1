@@ -107,7 +107,8 @@ test('the policy offers a client-server app only when the turn says so, and says
    /Otherwise write the app\nwithout a server and say in your reply what would need one/,
    /The server is not hosted yet: RoseApi\.serverUrl\(\) is null in every build today/,
    /never say the server runs, is reachable or syncs/,/Do not use the network yourself \(the app may\)/,
-   /PRAGMA foreign_keys changes nothing/,/never DROP or rebuild a table other tables reference/,
+   /all in one transaction with foreign keys off; then every reference is checked/,
+   /ON DELETE actions do not fire there: delete\n  child rows yourself/,
    /never call one on the main thread/,/Never edit, rename or delete a migration that was delivered/])
   assert.match(appBuildPolicy,phrase);
 });

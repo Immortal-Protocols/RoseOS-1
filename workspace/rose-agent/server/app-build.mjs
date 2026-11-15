@@ -48,13 +48,14 @@ cannot work until the host hosts it. Say so in your reply; never say the server 
 - server/migrations/account/0001_name.sql, 0002_..., numbered with no gap, names of a-z, 0-9 and '_': each
   user's own database (server/migrations/shared/ only with "shared": true). Plain SQL, every statement ending
   in ';', with no BEGIN, COMMIT or SAVEPOINT, ATTACH, load_extension or TEMP objects. The pending migrations
-  run once, in order, all in one transaction with foreign keys on, so PRAGMA foreign_keys changes nothing
-  there: never DROP or rebuild a table other tables reference (on phones that hold data the drop fails and
-  the server cannot start, or ON DELETE takes their rows); add or rename
-  columns with ALTER TABLE, or rebuild the referencing tables in the same migration. The PRAGMAs a migration may
-  use are foreign_keys, defer_foreign_keys, recursive_triggers, table_info, table_xinfo, index_list,
-  index_info, index_xinfo, foreign_key_list, foreign_key_check, integrity_check and quick_check. A new
-  migration must also work on tables that already hold rows.
+  run once, in order, all in one transaction with foreign keys off; then every reference is checked, and an
+  update that leaves one broken is refused at start-up (the database keeps its old version and nothing is
+  lost). So PRAGMA foreign_keys changes nothing in a migration and ON DELETE actions do not fire there: delete
+  child rows yourself, and re-key them yourself too (ON UPDATE does not act either). Rebuilding a table other
+  tables reference is fine when the new table keeps its name, the rows they point at and the key they
+  reference (its PRIMARY KEY, or a UNIQUE on those columns). The PRAGMAs a migration may use are foreign_keys, defer_foreign_keys, recursive_triggers,
+  table_info, table_xinfo, index_list, index_info, index_xinfo, foreign_key_list, foreign_key_check,
+  integrity_check and quick_check. A new migration must also work on tables that already hold rows.
 - server/src/handlers/mod.rs: Rust 2021 defining pub struct App; and impl crate::api::Handlers for App, one
   associated function per route: fn list_notes(ctx: &rose_app_runtime::server::Ctx) ->
   Result<crate::api::NoteList, crate::api::Refusal>, with a second parameter request: crate::api::NewNote

@@ -103,13 +103,20 @@ class WriterPolicy(unittest.TestCase):
     def test_the_migration_rules_are_the_sandboxs(self):
         listed = re.search(r'The PRAGMAs a migration may use are (.*?)\. A new migration', self.policy).group(1)
         self.assertEqual(set(re.split(r', | and ', listed)), migrations.PRAGMAS)
-        self.says('names of a-z, 0-9 and \'_\'', 'numbered with no gap', 'all in one transaction with foreign keys on')
+        self.says('names of a-z, 0-9 and \'_\'', 'numbered with no gap',
+                  'all in one transaction with foreign keys off; then every reference is checked',
+                  'ON DELETE actions do not fire there: delete child rows yourself', 'ON UPDATE does not act either')
         self.assertTrue(migrations.NAME.fullmatch('0001_add_notes.sql'))
         for bad in ('0001_add-notes.sql', '0001_Notes.sql', '1_notes.sql'):
             self.assertIsNone(migrations.NAME.fullmatch(bad), bad)
+        # The builder's sandbox and the adapter both apply pending migrations that way (SQLite's procedure).
+        import inspect
+        sandbox = inspect.getsource(migrations._Sandbox.apply)
         data = (ADAPTER / 'data.rs').read_text()
-        self.assertIn('PRAGMA foreign_keys = ON', data)  # on before the one transaction the pending ones share
-        self.assertIn('BEGIN IMMEDIATE', data)
+        for source in (sandbox, data):
+            self.assertRegex(source, r'foreign_keys\s*=\s*OFF')
+            self.assertIn('foreign_key_check', source)
+            self.assertIn('BEGIN IMMEDIATE', source)
 
     def test_handlers_reach_data_as_it_says(self):
         self.says('ctx.data.downcast_ref::<rose_app_runtime_signin::AppData>()', '.account(principal)', '.shared()',

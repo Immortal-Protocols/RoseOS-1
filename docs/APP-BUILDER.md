@@ -1841,7 +1841,18 @@ runs these steps before signing:
    keeps (512 KiB); a larger one is the writer's (`compile`), refused
    before anything is built.
 2. **Migrations.** They are checked against the delivered lock and in the
-   sandbox, then embedded in builder-owned files, which a generator may
+   sandbox, which applies them as the adapter does (SQLite's schema-change
+   procedure): the pending ones together, with foreign keys off, in one
+   transaction, then `foreign_key_check` over every table. A fresh
+   install is one batch. An upgrade is the delivered set, then rows seeded
+   in every ordinary table on a fresh connection (parents first, so a
+   child's foreign keys point at its parents' rows), then the new set. So
+   a rebuilt table that loses rows its children point at is refused here,
+   as the adapter refuses it at start-up, whenever the seed can fill the
+   child table. Seeding is best effort: a child table whose constraints
+   refuse every sample row stays empty, and the adapter's check on a
+   phone's real rows is then the only one.
+   They are then embedded in builder-owned files, which a generator may
    not write (it is the builder's failure, `toolchain`); the builder writes
    its other files with them:
    - `rose/migrations.rs`, in the adapter's shape: `ACCOUNT: &[&str]` and
@@ -1937,9 +1948,10 @@ builder's too. A plain app's job is unchanged.
   server and says what would need one. It also tells the writer the server
   is not hosted (`RoseApi.serverUrl()` is null in every build), so its reply
   never claims the server runs or syncs, and that pending migrations share
-  one transaction with foreign keys on (dropping or rebuilding a table
-  others reference then fails at start-up once phones hold data, or
-  deletes rows through `ON DELETE`). It limits nothing about what the app does.
+  one transaction with foreign keys off before every reference is checked
+  (so `ON DELETE` does not fire in a migration, a rebuild is fine when the
+  referenced rows stay, and a broken reference refuses the update at
+  start-up with nothing lost). It limits nothing about what the app does.
   `rose/tests/test_app_writer_policy.py` reads the policy through node and
   checks each rule and name against the builder's own constants and its
   generated code; `app-build.test.mjs` checks the source is one plain
