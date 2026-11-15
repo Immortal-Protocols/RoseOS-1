@@ -1688,6 +1688,36 @@ matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
   `HANDLERS`). It defines `pub struct App;` and
   `impl crate::api::Handlers for App`. The builder copies it to
   `<server>/src/handlers/mod.rs`.
+  - **Data.** Handlers reach the app's databases through `ctx.data`, which
+    is the adapter's `AppData`. The adapter re-exports its own SQLite
+    binding (rusqlite 0.32, bundled), so the server crate never declares
+    rusqlite itself.
+  - **Errors.** Handlers return `Result<_, crate::api::Refusal>`, so
+    storage errors are mapped rather than passed on with `?`. Any status
+    outside 4xx is answered `500 internal`.
+  - **Shared data.** `AppData::shared()` works the same way and refuses with
+    `DataError::NoShared` when the app declares no shared data.
+
+    ```rust
+    use rose_app_runtime::server::Ctx;
+    use rose_app_runtime_signin::AppData;
+    use rose_app_runtime_signin::rusqlite::{params, Connection};
+    use crate::api::Refusal;
+
+    const STORAGE: Refusal = Refusal::new(500, "internal");
+
+    fn account_db(ctx: &Ctx) -> Result<Connection, Refusal> {
+        let data = ctx.data.downcast_ref::<AppData>().ok_or(STORAGE)?;
+        // Always present on an account route.
+        let principal = ctx.principal.ok_or(Refusal::new(401, "signed_out"))?;
+        data.account(principal).map_err(|_| STORAGE)
+    }
+
+    // In a handler:
+    let conn = account_db(ctx)?;
+    conn.execute("INSERT INTO notes (body) VALUES (?1)", params![body])
+        .map_err(|_| STORAGE)?;
+    ```
 - **`rose/main.rs`** is the start-up, over OS Core's adapter
   (`rose_app_runtime_signin::{start, Config, Keys, Migrations}`, slice 7b).
   - It declares the generated modules, `meta`, `migrations` and
