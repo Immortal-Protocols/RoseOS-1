@@ -187,7 +187,7 @@ pub struct Started {
     pub restore: Restore,
 }
 
-fn auth_store(dir: &Path) -> Result<SqliteStore, StartError> {
+pub(crate) fn auth_store(dir: &Path) -> Result<SqliteStore, StartError> {
     let conn = Connection::open(dir.join("auth.sqlite3")).map_err(|e| StartError::Store(e.to_string()))?;
     SqliteStore::new(conn).map_err(|e| StartError::Store(e.0))
 }

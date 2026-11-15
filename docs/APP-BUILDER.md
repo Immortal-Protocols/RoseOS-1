@@ -1710,6 +1710,12 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
     - The loader zeroes its own buffers. It can't zero the JSON parser's internal copies, or rose-signin's `Secret`, which redacts `Debug` but isn't zeroed on drop.
     - Its path and contents are never logged. Any problem leaves the server without a key, and a reason word says why.
   - **Server.** `Started::server` attaches the data and marks the migrations done.
+- **The creator's invite** (D7). `rose_app_runtime_signin::invite(&config, account, now)` issues the token a default `invite` app needs to admit anyone.
+  - **The token.** It is the 52-character text the invitee enrolls with: single use, valid 7 days, admitting exactly that account.
+  - **The store.** It opens the sign-in store under `DATA_DIR`. It reads no key (an invite is only its hash and expiry) and waits for a busy store, so it runs safely beside a serving server.
+  - **Refusals.** `InviteError` (`invalid_name`, `already_enrolled`, `invalid_app`, `unavailable`) names the problem, never the account or a token. Admission isn't consulted.
+  - **No route.** The generated server exposes it only as its `invite <account>` command (§7.5).
+  - **The token is a credential.** It never appears in an error, a log or `Debug`. The command's stdout must go only to the person who ran it, never into the service's log capture (§7.7 item 8). How the creator runs the command on the host, and how the token reaches the invitee, are outside the adapter.
 - **Restore marker** (Chariot `e592c4b1`). At start the adapter looks up `CHARIOT_RESTORE_STATE_PATH` once, without following a link. When the variable is unset, the path is `DATA_DIR/.chariot-restore.json`, and a value that is set must be absolute.
   - **Absent** (`NotIndicated`): no restore is indicated, and `restore_done` is set.
   - **Anything present** (`Indicated`): a file, directory or link, even a dangling one. The server stays `503`.
