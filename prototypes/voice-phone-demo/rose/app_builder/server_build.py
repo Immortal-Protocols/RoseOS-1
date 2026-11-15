@@ -11,7 +11,8 @@ builds offline, from the snapshot and the host's crate set only:
 3. ``cargo metadata --offline`` resolves the lock. It starts from the last delivered version's Cargo.lock, so a
    rebuild keeps the versions that version used and only adds or drops what the declaration changed.
 4. The lock is held to the set and to every crate a delivered version used (``crate_changed``).
-5. ``cargo build --offline --frozen --release --target <target>`` builds the one binary.
+5. ``cargo build --offline --frozen --release --target <target>`` builds the one binary, statically, and it must
+   be a static x86-64 Linux executable (rose.app_builder.server_manifest.check_elf).
 
 Cargo runs with a scrubbed environment: nothing inherited, HOME, CARGO_HOME, the target folder and TMPDIR all inside
 the job, and the network off. Cargo also reads a ``.cargo/config.toml`` in any folder above where it runs, ahead of
@@ -21,11 +22,10 @@ crate's procedural macro or build script runs on the build machine and could sti
 binary that holds one is refused (``build_path_embedded``). Failures map to the job's categories with a stable
 ``reason``: rustc's diagnostics are read from cargo's JSON messages, by the package they belong to, so text in the
 writer's code (a string, a ``compile_error!``) cannot choose the category. The summary is safe to show the owner and
-the log has the job's paths redacted. The manifest and remaining ELF checks are the next slice.
+the log has the job's paths redacted.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import crates as crate_set
+from . import server_manifest
 from .toolchain import StepFailed, run
 
 TARGET = 'x86_64-unknown-linux-musl'  # §7.7: a static x86-64 musl ELF
@@ -174,7 +175,8 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
     if previous_lock is not None:
         _write(server / 'Cargo.lock', previous_lock)
     _write(cargo_home / 'config.toml', cargo_config(vendor))
-    remap = [f'--remap-path-prefix={work}=/rose-build']
+    # Static, as §7.7 agreed (the musl target's default; said once so every target the builder runs is the same).
+    remap = ['-Ctarget-feature=+crt-static', f'--remap-path-prefix={work}=/rose-build']
     if vendor is not None:
         remap.append(f'--remap-path-prefix={vendor}=/rose-crates')
     env = {'PATH': tools.path(), 'HOME': str(home), 'CARGO_HOME': str(cargo_home), 'CARGO_TARGET_DIR': str(target_dir),
@@ -216,7 +218,18 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
     if _holds_any(elf, [str(p).encode() for p in (work, Path(cache), *((vendor,) if vendor is not None else ()))]):
         raise BuildFailed('dependency', 'build_path_embedded', 'The server binary holds a path from the builder\'s '
                           'machine (a crate\'s macro or build script put it there), so it was not used.')
-    return ServerBuild(elf, _sha256(elf), st.st_size, tools.target, lock_text, used)
+    try:
+        info = server_manifest.check_elf(elf)
+    except server_manifest.Refused as refused:
+        # Not static: with no crate in the build it is the writer's own code (a link section, say); with crates the
+        # builder cannot tell a crate asking for a shared library from the writer, and reports the crate set, the
+        # usual cause. Any other mismatch is the toolchain's.
+        if refused.reason == 'server_not_static':
+            category = 'dependency' if used else 'compile'
+        else:
+            category = 'toolchain'
+        raise BuildFailed(category, refused.reason, str(refused)) from None
+    return ServerBuild(elf, info.sha256, info.size, tools.target, lock_text, used)
 
 
 def _holds_any(path: Path, needles: list[bytes]) -> bool:
@@ -359,11 +372,3 @@ def _write(path: Path, text: str):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as stream:
         stream.write(text)
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(1 << 20), b''):
-            h.update(chunk)
-    return h.hexdigest()

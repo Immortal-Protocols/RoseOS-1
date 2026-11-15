@@ -1662,6 +1662,8 @@ needing older clients to update, through the library's minClientVersionCode
   | `crate_changed` | dependency | A crate differs from the set's digest or from a delivered version's |
   | `crate_compile` | dependency | A crate, or its build script, failed |
   | `build_path_embedded` | dependency | The binary holds the job's or the set's path |
+  | `server_not_static` | compile with no crates, else dependency | The binary needs a program interpreter or a shared library (§7.7) |
+  | `server_binary_invalid` | toolchain | The binary is not a 64-bit x86-64 Linux executable (§7.7) |
   | `server_compile` | compile | The writer's server code didn't compile |
   | `server_build` | compile | Any other cargo failure |
 
@@ -1740,15 +1742,44 @@ App Core accepts this boundary. The server is one Rust ELF plus a manifest,
 with nothing Chariot-specific inside the app. The fake host in tests checks
 the same manifest.
 
-Proposed manifest:
-- `schemaVersion: 1`, `projectId`, `versionCode`;
-- `elf: {sha256, size, target}`;
-- `listen`: the host passes `PORT`, default `8080`;
+**The manifest** (`app_builder/server_manifest.py`; source, called
+nowhere). This is App Core's description of one version's server. It is not
+Chariot's own wire format, because further manifest fields are still open
+(item 1 below). Its keys follow the host's snake_case, as the readiness keys
+do:
+- `schema_version: 1`, `project_id`, `version_code`;
+- `elf: {sha256, size, target}`, with target `x86_64-unknown-linux-musl`;
+- `listen: {env: "PORT", default: 8080}`;
 - `health: "/health"`;
-- `dataDir`: the host passes `DATA_DIR`, the only writable path, holding
-  `TMPDIR`;
+- `data_dir: {env: "DATA_DIR"}`: the only writable path, holding `TMPDIR`;
 - `signin: {revision: "23062a04"}`;
-- `schema` versions.
+- `schema: {account, shared}`: the highest migration number per scope, with
+  `shared` only when the app declares a shared database.
+
+It names no host identity and no secret: no `app_id`, no deployment hash,
+and nothing about the sealing key (item 3). The manifest's bytes are
+canonical JSON, so one manifest has one digest. Decoding is strict: no
+repeated key, no float or NaN, at most 16 KB, and only the canonical bytes. `check` holds a manifest to exactly this schema, and, when
+given them, to its project, its version and its binary. That function is
+what the fake host checks now, and what the Chariot adapter will check later.
+
+**The binary check** (`check_elf`, also run by every server build). It
+reads the ELF's own headers, every offset bounded by the file, and accepts
+only a static 64-bit little-endian x86-64 Linux executable:
+- `ET_EXEC`, or `ET_DYN` with a dynamic section and no `DT_SONAME` (static
+  pie);
+- an entry point and an executable segment;
+- no program interpreter and no `DT_NEEDED`.
+
+A binary that needs an interpreter or a shared library is
+`server_not_static`. With no crate in the build, it is the writer's own code
+(a link section, say), category `compile`. With crates, the builder can't
+tell a crate asking for a shared library from the writer. It reports
+`dependency`, the usual cause. Any other mismatch is
+`server_binary_invalid`, category `toolchain`. The build passes
+`-Ctarget-feature=+crt-static`, the musl target's default, so every target
+the builder runs links the same way. The check decides nothing about what
+the server does.
 
 **Agreed with the Chariot owner (relayed by Chief, 2026-11-15):**
 - **Binary:** a static x86-64 musl ELF, taking `PORT` and `DATA_DIR`, behind
@@ -1843,7 +1874,11 @@ need no hosting and no further OS Core change.
    These real builds use the machine's own toolchain for its own target.
    CI requires them (`ROSE_REQUIRE_CARGO`). The pinned musl toolchain on the
    builder host is still the Local Server Worker's (blocker 6).
-6. The manifest and ELF checks.
+6. **The manifest and the binary check (§7.7).** Done:
+   `rose/tests/test_app_server_manifest.py`. Real binaries come from the
+   machine's own toolchain: a static-pie one passes, and a dynamically
+   linked one is refused. The rest are made byte by byte. Every server
+   build runs the check.
 7. The runtime crate on rose-signin `23062a04`, with its own CI.
 8. Codegen and the client sign-in overlay.
 9. The library wire summary and its fixture for Home/App.
