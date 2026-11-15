@@ -1881,6 +1881,21 @@ codegen never writes those.
     removes a restore (§7.7 item 5).
   - **Failures.** Any failure before serving prints `rose server: <reason>`
     and exits 1. The reason names the variable, never its value.
+  - **Invites.** `invite <account>` uses OS Core's `invite` (§7.4).
+    - It builds the same `Config` serving does, then asks the adapter for one
+      single-use invite (7 days, bound to the account).
+    - It prints the invite once, with a newline, on stdout and exits 0.
+    - It reads no keyring, binds no port and never runs a restore.
+    - The invite is a credential. Stdout goes only to the person who ran the
+      command, never into the service's log capture.
+    - A refusal prints `rose server: no invite: <word>` and exits 1. The
+      words are `invalid_name`, `already_enrolled`, `not_found` (no sign-in
+      store a server has set up; nothing is created), `restore_pending` and
+      `store_unavailable`. The word never contains the account or the
+      invite.
+    - Anything other than no arguments or exactly `invite <account>` prints
+      a usage line and exits 2. That includes a missing account, extra
+      arguments, another command or an account that isn't text.
   - **Crates.** The runtime and the adapter come in as builder-owned path
     crates. Codegen writes no Cargo files.
 
@@ -1950,6 +1965,11 @@ reserved `src/<package>/rose/`:
     listens, including the keyring reason printed before a refusal and a
     relative `CHARIOT_RESTORE_STATE_PATH`. No server is started, and no
     restore marker is created.
+  - The argument rules are also compiled and run on their own.
+  - Where the adapter build runs, every usage case exits 2. The invite
+    refusals (`not_found` for a fresh `DATA_DIR`, `invalid_name` and
+    `restore_pending`) exit 1 with nothing on stdout, and no store is
+    created. No invite is issued in these tests.
 
 ### 7.6 Builder (wired in the job; each host-side part injected)
 

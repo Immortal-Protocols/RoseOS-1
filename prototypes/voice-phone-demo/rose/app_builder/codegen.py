@@ -354,6 +354,10 @@ MAIN_RS = '''//! The server's start-up (docs/APP-BUILDER.md §7.4, §7.7): OS Co
 //! Readiness is the adapter's: `/health` answers 200 only with the keys loaded, the migrations done and no restore
 //! indicated (nothing at the restore marker's path, by default `DATA_DIR/.chariot-restore.json`). A marker, or a
 //! lookup that fails, keeps it at 503; nothing here or in the adapter runs, reads or removes a restore.
+//!
+//! `invite <account>` (§7.4): asks the adapter for one single-use invite for the account, prints it once on stdout and
+//! exits. It reads no keyring and binds no port. The invite is a credential: stdout goes only to whoever ran the
+//! command, never into the service's log capture.
 
 mod api;
 mod assets;
@@ -364,10 +368,12 @@ mod migrations;
 mod routes;
 mod wire;
 
+use std::ffi::OsString;
+use std::io::Write;
 use std::net::TcpListener;
 use std::sync::Arc;
 
-use rose_app_runtime_signin::{start, Config, Keys, Migrations};
+use rose_app_runtime_signin::{invite, start, Config, Keys, Migrations};
 
 /// The header Chariot's gateway overwrites with the client's address on every request; guest ingress admits only
 /// the gateway (§7.7 item 6). Rate limits count by it when it holds exactly one IP address, by the peer otherwise.
@@ -394,10 +400,50 @@ fn port(value: Option<String>) -> Result<u16, String> {
     }
 }
 
+/// What the program was asked to do.
+#[derive(Debug, PartialEq)]
+enum Command {
+    /// No arguments: serve.
+    Serve,
+    /// `invite <account>`: print one new invite for the account, as typed.
+    Invite(String),
+}
+
+/// The arguments after the program's name: nothing, or exactly `invite <account>` with a text account.
+fn command(args: &[OsString]) -> Option<Command> {
+    match args {
+        [] => Some(Command::Serve),
+        [verb, account] if verb == "invite" => account.to_str().map(|a| Command::Invite(a.to_string())),
+        _ => None,
+    }
+}
+
+const USAGE: &str = "usage: no arguments to serve, or invite <account>";
+
+/// The same configuration serving uses, from the host's environment and the build.
+fn config() -> Result<Config, String> {
+    let migrations = Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED };
+    Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations).map_err(|e| e.to_string())
+}
+
+/// One single-use invite (the adapter's: 7 days, bound to the account), printed once on stdout and nowhere else.
+/// No keyring is read and no port is bound; a refusal is one word (`no invite: <word>`), never the account or token.
+fn invite_one(account: &str) -> Result<(), String> {
+    let config = config()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "the clock is before 1970".to_string())?
+        .as_secs();
+    let token = invite(&config, account, now).map_err(|e| e.to_string())?;
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{}", token.as_str())
+        .and_then(|()| out.flush())
+        .map_err(|_| "the invite could not be written".to_string())
+}
+
 fn run() -> Result<(), String> {
     let port = port(var(PORT_ENV)?)?;
-    let migrations = Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED };
-    let config = Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations).map_err(|e| e.to_string())?;
+    let config = config()?;
     // The adapter loads the host's keyring. Any problem leaves no key, never a stop: sign-in answers
     // `auth_unavailable` and `/health` answers 503, and the reason is one word, never the path or a byte of the file.
     let (keys, why) = Keys::from_env();
@@ -414,7 +460,16 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(message) = run() {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let done = match command(&args) {
+        Some(Command::Serve) => run(),
+        Some(Command::Invite(account)) => invite_one(&account),
+        None => {
+            eprintln!("rose server: {USAGE}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(message) = done {
         eprintln!("rose server: {message}");
         std::process::exit(1);
     }
