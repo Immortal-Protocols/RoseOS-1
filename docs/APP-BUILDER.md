@@ -1611,14 +1611,27 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   item 6 says which proxy header carries the client. Behind one proxy every
   client shares that address. This is a known limit, not a decision.
 
-**Next (slice 7b): the adapter.** It binds `Auth` to rose-signin `23062a04`
-(`SqliteStore`, `AeadSealer`, `validate_for`/`revoke_for`), opens each
-user's own SQLite file and applies the migrations. It computes
-`revision_sha256` from the binary itself, and fills `app_id` and
-`deployment_sha256` from what the host passes. It uses only rose-signin's
-own locked dependencies, so it adds no crate. The key's delivery (D9) and
-the restore marker (item 5) stay open, so the adapter loads no key and runs
-no restore until those are agreed.
+**The adapter (slice 7b)** (`workspace/rose-app-runtime-signin`, OS Core; source, built on by nothing yet) binds `Auth` to rose-signin `23062a04`.
+
+- **Sign-in.** `SigninAuth` wraps `Authenticator<SqliteStore, AeadSealer>`.
+  - It is fixed to the app, so every session goes through `validate_for` and `revoke_for`.
+  - Handles, tokens and invites cross HTTP as rose-signin base32: letters and digits, no padding.
+  - A value that doesn't decode is treated as a wrong value, never as an error.
+  - Closed admission without an invite is `Admission::Invite(b"")`, which admits no one.
+- **Data.** Under `DATA_DIR` there are three kinds of file:
+  - `auth.sqlite3`: rose-signin's own store, with its own migrations.
+  - `accounts/<sha256>.sqlite3`: one file per account. The name is a length-prefixed SHA-256 of (app, account), so no name reaches the disk. The directory is `0700`.
+  - `shared.sqlite3`: only when the app declares shared data.
+
+  Handlers reach the data as `ctx.data` (`AppData`), and `account(principal)` opens only this app's principal's own file.
+- **Migrations.** The builder-embedded lists run forward only. Each one runs in one immediate transaction with its `user_version`. A database above the list is refused and left untouched, at start-up and on open.
+- **Start-up.** `start` opens and migrates the sign-in store, the shared database and every existing account file. It then measures `revision_sha256` from the binary.
+  - **Environment.** `Config::from_env` reads only `DATA_DIR` and `CHARIOT_DEPLOYMENT_SHA256`, which is echoed as passed.
+  - **App id.** The host's app id is passed in by the caller, because its variable isn't named yet (item 2).
+  - **Server.** `Started::server` attaches the data and marks the migrations done.
+- **Not ready yet.** Keys come only from the caller, and today's caller passes `Keys::Unavailable` (D9). `restore_done` is never set (item 5). So a server built on the adapter answers `503` until both are agreed.
+- **Dependencies.** The lock is rose-signin's 52 crates plus the two path crates, and a test checks this. Its CI (`.github/workflows/rose-app-runtime-signin.yml`) follows rose-signin's route.
+- **Build note.** The bundled SQLite C source needs a musl C compiler on the builder.
 
 ### 7.5 Client sign-in (planned)
 
