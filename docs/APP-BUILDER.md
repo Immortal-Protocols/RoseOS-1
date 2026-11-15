@@ -1192,7 +1192,7 @@ test, and no model was called.
    client/server co-generation and sign-in integration (§7). Each part is
    blocked on its owner, as follows:
    - **Chariot owner (the Codex Chariot engineering worker, via Chief).**
-     Hosting: the server boundary (§7.6), ingress, sleep/wake, the sealing
+     Hosting: the server boundary (§7.7), ingress, sleep/wake, the sealing
      key's home (D9), backups, and the deploy tools.
    - **OS Core.** `rose-signin-v1` and the RoseOS native factors.
    - **Local Server Worker.** On the builder host: the Rust toolchain and the
@@ -1207,11 +1207,11 @@ versioned together. Users sign in with `rose-signin-v1`
 Owners:
 - **App Core:** co-generation, the server profile and sign-in integration.
 - **OS Core:** `rose-signin-v1` and the RoseOS native factors.
-- **Chariot owner:** hosting (§7.6).
+- **Chariot owner:** hosting (§7.7).
 - **Home/App:** the builder's phone UI.
 
 Nothing here is built into a job, hosted, deployed or run on a phone. Only
-§7.2's checks exist in source.
+§7.2's checks and §7.3's contract exist in source.
 
 ### 7.1 Facts the design rests on
 
@@ -1224,7 +1224,7 @@ Nothing here is built into a job, hosted, deployed or run on a phone. Only
     or read while the agent sleeps, and nothing else is served.
 
   So no phone-facing endpoint exists yet. The Chariot owner is working on
-  VM/endpoint hosting, and has proposed the boundary in §7.6.
+  VM/endpoint hosting, and has proposed the boundary in §7.7.
 - **rose-signin at `23062a04` (#819, #821, #822).** The generated server uses
   this revision, which completes the decided library. OS Core owns its storage, so App Core writes no sign-in SQL and no
   sealer. The server uses:
@@ -1357,7 +1357,70 @@ The scan is a second line of defence. It does not cover:
 
 The boundary is build isolation (blocker 3).
 
-### 7.3 Server profile (planned; next slices)
+### 7.3 The shared API contract (`app_builder/contract.py`; source, called nowhere)
+
+The writer describes the app's types and routes once, in `contract/api.json`.
+The builder will generate the server's Rust handlers trait and the client's
+Java API from it (slice 8). It also checks every revision against the
+delivered one, so an update never silently breaks the copies already
+installed on phones.
+
+```json
+{"schemaVersion": 1, "api": 1,
+ "types": {"Note": {"fields": {"id": "int", "text": {"type": "string", "max": 10000},
+                               "parent": {"type": "Note", "optional": true}}},
+           "NoteList": {"fields": {"notes": {"type": "list", "of": "Note"}}}},
+ "routes": {"listNotes": {"method": "GET", "path": "/app/notes", "response": "NoteList"}}}
+```
+
+- **Fields.** A field is one of:
+  - a primitive: `bool`, `int`, `float`, `string` or `bytes`;
+  - a `list`, or a `map` with string keys, `of` a field type, nested at most
+    4 deep;
+  - one of the contract's own types.
+
+  `optional` fields may be absent or null. `max` bounds a string, bytes,
+  list or map in requests, where the server refuses more; it promises
+  nothing about responses. Generated code ignores fields it doesn't know, in
+  both directions.
+- **Routes.** A route has:
+  - a method: `GET` and `DELETE` carry no body;
+  - a path under `/app/`, with 1–8 lower-case segments and no parameters;
+  - `auth`: `account` (the default, a signed-in user) or `public`;
+  - an optional `request` type and a required `response` type.
+
+  The `(method, path)` pair is unique.
+- **Strict parsing.** The file is strict UTF-8 JSON, at most 256 KB, with no
+  repeated or unknown keys. Limits: 128 types, 64 fields per type, 128
+  routes. Malformed contracts are `contract_invalid`.
+- **No infinite types.** A type that contains itself only through required
+  fields could never have a value, so it is `type_cycle`. An optional field,
+  a list or a map breaks the cycle.
+- **Canonical digest.** The sha256 covers the canonical form: defaults
+  spelled out, sorted keys, no whitespace. Key order and spelled-out defaults
+  don't change it.
+
+**Revisions** (`check_update`) are judged by what an installed older client
+would trip on. Responses are compared by what the old client expects to
+read, and requests by what it still sends. Types are compared by shape, so
+renaming a type changes nothing.
+- **Additive, allowed as is:** new routes, types and response fields; new
+  optional request fields; a request field dropped (servers ignore extras);
+  a request field made optional, or its `max` raised; a response field made
+  required, or an optional one dropped; an account route made public.
+- **Breaking:**
+  - a route removed or moved, or a public route that now needs sign-in;
+  - a response field removed, made optional or retyped, nested types
+    included;
+  - a new or newly required request field, a `max` lowered or added, or a
+    route that now needs a body older clients don't send.
+
+A breaking change at the same `api` is refused as `breaking_without_major`,
+naming what breaks. Raising `api` allows it, and marks the version as
+needing older clients to update, through the library's minClientVersionCode
+(slice 9). `api` can never go down (`api_lowered`).
+
+### 7.4 Server profile (planned; next slices)
 
 - **Runtime.** A small runtime crate (App Core) runs the generated handlers,
   serving `rose-signin-v1`'s routes (`/signin/v1/*`) and the contract's routes.
@@ -1376,7 +1439,7 @@ The boundary is build isolation (blocker 3).
   start, and never invents one.
 - **Logs** never contain bodies, tokens, passphrases, codes or keys.
 
-### 7.4 Client sign-in (planned)
+### 7.5 Client sign-in (planned)
 
 - The client includes `RoseSigninCore.java` at the pin above.
 - It shows the `otpauth://` URI as a QR and as copyable text, and also opens
@@ -1386,7 +1449,7 @@ The boundary is build isolation (blocker 3).
 - The user types the code and the passphrase. Only the bearer token is kept,
   in no-backup storage.
 
-### 7.5 Builder (planned)
+### 7.6 Builder (planned)
 
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:
@@ -1401,7 +1464,7 @@ The boundary is build isolation (blocker 3).
   are append-only and byte-identical, and they are applied to a fresh and to
   an upgraded database.
 
-### 7.6 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
+### 7.7 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
 
 App Core accepts this boundary. The server is one Rust ELF plus a manifest,
 with nothing Chariot-specific inside the app. The fake host in tests checks
@@ -1438,7 +1501,7 @@ Open items for the Chariot owner (App Core's proposal in brackets):
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
 
-### 7.7 Slices
+### 7.8 Slices
 
 Each slice is source only, offline, and tested before merging. Slices 2–5
 need no hosting and no further OS Core change.
@@ -1458,7 +1521,8 @@ need no hosting and no further OS Core change.
 
    It also fixed false refusals of Unicode identifiers, a byte order mark,
    `env::{self as x}` and `$(#[$m:meta])*`.
-2. The shared API contract validator and its compatibility rules.
+2. **The shared API contract and its compatibility rules (§7.3).** Done:
+   `rose/tests/test_app_contract.py`.
 3. Offline migration checks.
 4. Ledger pairing of client and server artifacts.
 5. The injected crate source and server build plumbing, with a fake `cargo`,
@@ -1468,4 +1532,4 @@ need no hosting and no further OS Core change.
 8. Codegen and the client sign-in overlay.
 9. The library wire summary and its fixture for Home/App.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
-    until §7.6 is answered.
+    until §7.7 is answered.
