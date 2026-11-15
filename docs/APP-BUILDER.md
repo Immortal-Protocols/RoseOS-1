@@ -1688,7 +1688,9 @@ matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
   - It reads only `PORT` (decimal, 1 to 65535, default 8080). The adapter
     reads and checks `DATA_DIR`, `CHARIOT_APP_ID`,
     `CHARIOT_DEPLOYMENT_SHA256`, the optional `CHARIOT_REVISION_SHA256` and
-    the keyring file named by `CHARIOT_SEALING_KEY_FILE`.
+    the keyring file named by `CHARIOT_SEALING_KEY_FILE`, and looks up the
+    restore marker (`CHARIOT_RESTORE_STATE_PATH`, by default
+    `DATA_DIR/.chariot-restore.json`).
   - It calls `Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION,
     Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED })`,
     then `let (keys, why) = Keys::from_env();`, then `start(config, keys)`,
@@ -1700,9 +1702,16 @@ matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
     `rose server: sealing keys unavailable: <word>`. The word names the
     problem, never the path or a byte of the file. Sign-in then answers
     `auth_unavailable` and `/health` answers 503.
-  - **Not ready yet.** No restore is run, because the restore marker (§7.7
-    item 5) is still open. So the server stays honestly not ready even with
-    keys.
+  - **Readiness** is decided by the adapter, not by `main.rs`. `/health`
+    answers 200 only when three things hold:
+    - the keys are loaded;
+    - the migrations are done;
+    - no restore is indicated: nothing is at the marker's path, and only "not
+      found" counts as absent.
+
+    A marker of any kind, or a lookup that fails, keeps the server at 503 for
+    that whole run. Nothing in `main.rs` or the adapter runs, reads or
+    removes a restore (§7.7 item 5).
   - **Failures.** Any failure before serving prints `rose server: <reason>`
     and exits 1. The reason names the variable, never its value.
   - **Crates.** The runtime and the adapter come in as builder-owned path
@@ -1759,8 +1768,9 @@ reserved `src/<package>/rose/`:
     and says why. `ROSE_REQUIRE_ADAPTER_BUILD` turns that skip into a
     failure.
   - When the build does run, it checks every refusal before anything
-    listens, including the keyring reason printed before a refusal. No
-    server is started.
+    listens, including the keyring reason printed before a refusal and a
+    relative `CHARIOT_RESTORE_STATE_PATH`. No server is started, and no
+    restore marker is created.
 
 ### 7.6 Builder (planned)
 
