@@ -33,6 +33,8 @@ def main():
     results = []
     async def unused(ws, **kw): await ws.close()
     try:
+        model.preload()
+        assert model.wait_ready(60), 'local model preload did not become ready'
         with tempfile.TemporaryDirectory(prefix='rose-model-smoke-') as temp:
             remote = Remote(directory=Path(temp), name='synthetic-model-test', hosts=lambda: [])
             key = ec.generate_private_key(ec.SECP256R1())

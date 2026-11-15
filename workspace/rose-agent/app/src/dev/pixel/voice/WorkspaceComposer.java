@@ -54,7 +54,7 @@ final class WorkspaceComposer {
   else{request=text.trim();if(request.isEmpty()||request.codePointCount(0,request.length())>WorkspaceLayout.MAX_REQUEST)return -1;}
   generation++;phase=Phase.COMPOSING;pending=request;this.conversational=conversational;lastFailure=null;avoid=new java.util.ArrayList<>();
   trigger=text==null?"button":conversational?"conversational":"direct_text";
-  requestId=conversational&&routeRequestId!=null?routeRequestId:"page-"+generation;
+  requestId=conversational&&routeRequestId!=null?routeRequestId:"page-"+java.util.UUID.randomUUID();
   if(conversational){offer=Offer.PREPARING;offerRequest=request;}
   else if(offer==Offer.PREPARING){offer=Offer.NONE;offerRequest=null;}  // superseded from the page itself
   return generation;

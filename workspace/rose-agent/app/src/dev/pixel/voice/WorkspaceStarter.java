@@ -8,7 +8,7 @@ import rose.models.composer.LocalInference;
 import rose.models.composer.Refused;
 
 /**
- * Project 2: the page's starter layout, labelled NOT A MODEL. Until Models' on-phone runtime is on the phone,
+ * Project 2: the page's starter layout, labelled NOT A MODEL, used with server arrangement explicitly off.
  * Arrange and typed requests go through Models' real composer (rose.models.composer.Composer), with its
  * context selection, aliases, validation and typed failures, and this stands in for the model call only. It
  * ignores the request's words and always answers the same way:
@@ -17,18 +17,18 @@ import rose.models.composer.Refused;
  *   <li>a row of up to 4 direct actions (shortcuts, intent templates and launches).</li>
  * </ul>
  * It never offers a Rose task, so nothing that asks first appears without a model choosing it. The page
- * labels every layout it makes as "Starter layout · no on-phone model yet", and WorkspaceTiming records its
+ * labels every layout it makes as "Starter layout · server arrangement off", and WorkspaceTiming records its
  * results as not a model's.
  */
 final class WorkspaceStarter implements LocalInference {
  static final String ID="starter";
- static final String LABEL="Starter layout · no on-phone model yet";
+ static final String LABEL="Starter layout · server arrangement off";
  static final String TITLE="Your apps";
  private static final int GRID=8,ROW=4;
 
  @Override public Map<String,String> info(){
   Map<String,String> m=new LinkedHashMap<>();
-  m.put("id",ID);m.put("revision","n/a");m.put("quantization","n/a");m.put("runtime","none (no model on this phone)");
+  m.put("id",ID);m.put("revision","n/a");m.put("quantization","n/a");m.put("runtime","none (starter layout)");
   return m;
  }
 

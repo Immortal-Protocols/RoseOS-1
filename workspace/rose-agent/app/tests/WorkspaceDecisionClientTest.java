@@ -46,7 +46,7 @@ public final class WorkspaceDecisionClientTest {
  }
 
  public static void main(String[] args){
-  gate();body();replies();phoneStaysTheGate();route();
+  gate();body();replies();phoneStaysTheGate();route();cancellation();
   System.out.println("WorkspaceDecisionClientTest: "+checks+" checks passed (fake transport; nothing sent, no model)");
  }
 
@@ -56,6 +56,21 @@ public final class WorkspaceDecisionClientTest {
   WorkspaceDecisionClient.Outcome o=client(false,f).decide("r1",req);
   expect(o.kind==WorkspaceDecisionClient.Kind.NOT_SENT&&f.bodies.isEmpty(),"gate off: nothing is sent");
   expect(WorkspaceDecisionClient.result("r1",o).contains("\"failure\":\"model_unavailable\""),"and the page keeps its layout");
+ }
+
+ static void cancellation(){
+  WorkspaceSnapshot s=phone();String req=WorkspaceSnapshot.request("cancel","button",null,s,4000,null);
+  Fake before=new Fake();
+  expect(client(true,before).decide("cancel",req,()->true).kind==WorkspaceDecisionClient.Kind.NOT_SENT&&before.bodies.isEmpty(),"superseded queued work is not sent");
+  java.util.concurrent.atomic.AtomicBoolean stop=new java.util.concurrent.atomic.AtomicBoolean();
+  Fake duringSign=new Fake();
+  WorkspaceDecisionClient signing=new WorkspaceDecisionClient(new WorkspaceTaskClient.Gate(true),duringSign,(m,p)->{stop.set(true);return SIGNER.headers(m,p);});
+  expect(signing.decide("cancel",req,stop::get).kind==WorkspaceDecisionClient.Kind.NOT_SENT&&duringSign.bodies.isEmpty(),"cancellation immediately before sending is honored");
+  stop.set(false);
+  WorkspaceTaskClient.Transport wire=(p,h,b)->{stop.set(true);return new WorkspaceTaskClient.Response(200,serverResult("cancel",s.snapshotVersion,WorkspaceSnapshot.appId(CLOCK),WorkspaceSnapshot.appId(NOTES)));};
+  WorkspaceDecisionClient flying=new WorkspaceDecisionClient(new WorkspaceTaskClient.Gate(true),wire,SIGNER);
+  WorkspaceDecisionClient.Outcome result=flying.decide("cancel",req,stop::get);
+  expect(result.kind==WorkspaceDecisionClient.Kind.UNCERTAIN&&result.result==null,"a reply after supersession is not applied");
  }
 
  @SuppressWarnings("unchecked")

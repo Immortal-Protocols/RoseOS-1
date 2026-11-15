@@ -45,8 +45,18 @@ public final class WorkspaceTest {
  static String sections(String component,String prefix,int n){StringBuilder b=new StringBuilder();for(int i=0;i<n;i++)b.append(i==0?"":",").append("{\"component\":\"list\",\"title\":\""+prefix+i+"\",\"items\":[\"c:item"+i+"\"]}");return b.toString();}
 
  public static void main(String[] args)throws Exception{
-  contract();available();pins();undoAndRecents();storage();composer();
+  contract();available();pins();undoAndRecents();storage();composer();requestIdentity();
   System.out.println("WorkspaceTest: "+checks+" checks passed");
+ }
+
+ static void requestIdentity(){
+  WorkspaceState saved=new WorkspaceState();
+  WorkspaceComposer before=new WorkspaceComposer(saved);before.begin("cooking",false);String first=before.requestId();
+  WorkspaceComposer after=new WorkspaceComposer(WorkspaceState.fromJson(saved.toJson()));after.begin("work",false);String second=after.requestId();
+  expect(!first.equals(second),"new page requests do not reuse IDs after a process restart");
+  expect(first.length()<=64&&second.length()<=64,"IDs fit the server contract");
+  after.begin("work",false);expect(!second.equals(after.requestId()),"another page request gets a new ID");
+  after.begin("work",true,"conversation-id");expect("conversation-id".equals(after.requestId()),"conversation request identity is preserved");
  }
 
  static void contract()throws Exception{

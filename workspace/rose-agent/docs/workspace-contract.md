@@ -124,11 +124,13 @@ runs them all.
 
 The workspace's decisions come from the model in the Rose server (Nathan, 2026-11-14). Rose Agent runs no model.
 The contract was agreed with App Core on 2026-11-14. App Core owns the route; the Mac model worker owns the
-model behind it (`decide(request, deadline_s)`); this side owns the client and the renderer.
+model behind it (currently `WorkspaceModel.compose`); this side owns the client and the renderer.
 
 - **Route.** A signed rose-auth-v1 `POST /workspace/v1/compose`, device-scoped. The body is
   `{schemaVersion: 1, requestId, request}`, where `request` is exactly the phone's rose-layout-v1 request
   (`WorkspaceSnapshot.request`). A repeat of the same `(device, requestId, body)` returns the first result.
+  A different body for the same `(device, requestId)` is 400. Page-generated IDs are fresh across restarts;
+  conversational IDs continue to come from App Core.
 - **Replies.**
 
   | Reply | What the phone does |
@@ -144,7 +146,8 @@ model behind it (`decide(request, deadline_s)`); this side owns the client and t
   `WorkspaceLayout.check`, against the registry of the read the request was built from. An id the phone does
   not have is `unknown_ref`, and nothing is drawn. The server never makes the phone open anything.
 - **One attempt.** The call has the request's own deadline (4 s, `WorkspaceEngine.DEADLINE_MS`) plus the
-  transport's read timeout. There is no retry.
+  transport's read timeout. There is no retry. Superseded queued work is skipped before reading/sending;
+  a response received after supersession is discarded. An already-sent call can finish within its cap.
 - **Authorized route.** Nathan's current server-local direction and implementation approval enable the default
   route. `compose-route-enabled=false` remains an explicit opt-out; a preference-read failure stays closed.
   While off, the labelled starter arranges the page and nothing is sent.
@@ -157,8 +160,11 @@ model behind it (`decide(request, deadline_s)`); this side owns the client and t
   - Each timing record has `route`: `server` or `phone`. With `server`, `requestToResultMs` includes the
     network round trip, and the composer's own `timing` is the server's.
 - **Model integration.** The signed route now calls the local Mac worker in `rose/workspace_model.py`.
-  The worker respects cat-1's 4 s composition deadline, with bounded IPC headroom. Results are replayed by
-  device/request/body for 15 minutes in a bounded, process-local cache; no prompt is persisted. For a conversational request, the provider's 7 s wait covers the 4 s deadline plus the
+  Background preload runs during normal server startup. While still loading, the route returns 503 without
+  tying loading to a phone connection. The worker respects cat-1's 4 s composition deadline; its 5 s IPC
+  watchdog provides transport/recovery headroom and does not extend accepted inference time. Results are
+  replayed for 15 minutes in a bounded, device/request-scoped process-local cache; no prompt is persisted.
+  For a conversational request, the provider's 7 s wait covers the 4 s deadline plus the
   round trip, but a longer deadline would need that wait revisited.
 
 `app/tests/WorkspaceDecisionClientTest.java` checks the client with a fake transport. The separate opt-in

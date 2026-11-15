@@ -11,8 +11,21 @@ from fastapi import Request
 from .workspace_model import MAX_BODY
 
 def add_routes(app, remote, model, peer, refusal_headers, request_path):
-    # No request text is stored. Bounded process-local replay, scoped to device + requestId + body digest.
+    # No request text is stored. One device/requestId is bound to one body within the replay window.
     cache = OrderedDict()
+    pending = {}
+
+    async def decide(key, digest, inner, cancelled):
+        try:
+            result = await asyncio.to_thread(model.compose, inner, cancelled.is_set)
+            # An unavailable model can be retried with the same body, but cannot rebind the requestId.
+            stored = None if result.get('failure') == 'model_unavailable' else result
+            cache[key] = (time.monotonic() + 900, digest, stored)
+            while len(cache) > 128: cache.popitem(last=False)
+            return result
+        finally:
+            pending.pop(key, None)
+
     @app.post('/workspace/v1/compose')
     async def compose(request: Request):
         auth = remote.authenticate('POST', request_path(request.scope), request.headers, peer(request))
@@ -35,15 +48,25 @@ def add_routes(app, remote, model, peer, refusal_headers, request_path):
         inner = body['request']
         try: digest = hashlib.sha256(json.dumps(inner, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         except (ValueError, RecursionError): return JSONResponse(refusal, 400, headers=headers)
-        key = (auth.device.id, body['requestId'], digest)
+        key = (auth.device.id, body['requestId'])
         now = time.monotonic()
-        for old, (expiry, _) in list(cache.items()):
+        for old, (expiry, _, _) in list(cache.items()):
             if expiry <= now: del cache[old]
+        conflict = {'schemaVersion': 1, 'status': 'refused', 'reason': 'request_conflict'}
         if key in cache:
-            _, result = cache[key]; cache.move_to_end(key)
-            return JSONResponse(result, headers=headers)
-        cancelled = threading.Event()
-        work = asyncio.create_task(asyncio.to_thread(model.compose, inner, cancelled.is_set))
+            _, first_digest, result = cache[key]
+            if first_digest != digest: return JSONResponse(conflict, 400, headers=headers)
+            cache.move_to_end(key)
+            if result is not None: return JSONResponse(result, headers=headers)
+        if key in pending:
+            first_digest, work, cancelled = pending[key]
+            if first_digest != digest: return JSONResponse(conflict, 400, headers=headers)
+        else:
+            if len(pending) >= 128:
+                return JSONResponse({'schemaVersion': 1, 'status': 'unavailable'}, 503, headers=headers)
+            cancelled = threading.Event()
+            work = asyncio.create_task(decide(key, digest, inner, cancelled))
+            pending[key] = (digest, work, cancelled)
         try:
             while not work.done():
                 if await request.is_disconnected(): cancelled.set(); break
@@ -51,8 +74,6 @@ def add_routes(app, remote, model, peer, refusal_headers, request_path):
             result = await asyncio.shield(work)
             if result.get('failure') == 'model_unavailable':
                 return JSONResponse({'schemaVersion': 1, 'status': 'unavailable'}, 503, headers=headers)
-            cache[key] = (time.monotonic() + 900, result)
-            while len(cache) > 128: cache.popitem(last=False)
             return JSONResponse(result, headers=headers)
         except asyncio.CancelledError:
             cancelled.set()
