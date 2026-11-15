@@ -108,8 +108,9 @@ class Server(unittest.TestCase):
         self.assertEqual((main.count('var('), main.count('var(PORT_ENV)')), (3, 1))
         # Keys come only from the adapter's loader, which never stops start-up (no `?` on it).
         self.assertNotIn('Keys::from_env()?', main)
-        for invented in ('Keys::Supplied', 'Keys::Unavailable', 'restore', 'http://', 'https://', 'DATA_DIR"',
-                         'secret', 'CHARIOT_APP_ID"', 'KEY_FILE"'):
+        for invented in ('Keys::Supplied', 'Keys::Unavailable', 'http://', 'https://', 'DATA_DIR"',
+                         'secret', 'CHARIOT_APP_ID"', 'KEY_FILE"', 'RESTORE_STATE_PATH"', 'Restore::',
+                         'restore_done', '.chariot-restore.json"'):
             self.assertNotIn(invented, main)
 
     def test_main_reads_its_port_and_variables_strictly(self):
@@ -174,6 +175,8 @@ class Server(unittest.TestCase):
                     ({**ready, 'CHARIOT_DEPLOYMENT_SHA256': 'x'}, [keyless, 'CHARIOT_DEPLOYMENT_SHA256 is not valid']),
                     ({**ready, 'CHARIOT_REVISION_SHA256': 'x'}, [keyless, 'CHARIOT_REVISION_SHA256 is not valid']),
                     ({**ready, 'CHARIOT_APP_ID': 'two words'}, [keyless, 'CHARIOT_APP_ID is not valid']),
+                    ({**ready, 'CHARIOT_RESTORE_STATE_PATH': 'restore.json'},
+                     [keyless, 'CHARIOT_RESTORE_STATE_PATH is not valid']),
                     ({**ready, 'CHARIOT_APP_ID': 'two words', 'CHARIOT_SEALING_KEY_FILE': 'keys.json'},
                      ['rose server: sealing keys unavailable: not_absolute', 'CHARIOT_APP_ID is not valid'])):
                 run = subprocess.run([binary], env=case, capture_output=True, text=True, timeout=60)

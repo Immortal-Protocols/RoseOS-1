@@ -342,8 +342,13 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 
 MAIN_RS = '''//! The server's start-up (docs/APP-BUILDER.md §7.4, §7.7): OS Core's adapter opens and migrates the data, the
 //! runtime serves the contract's routes. The host passes `PORT` (read here) and, read by the adapter, `DATA_DIR`,
-//! `CHARIOT_APP_ID`, `CHARIOT_DEPLOYMENT_SHA256`, the optional `CHARIOT_REVISION_SHA256` and the sealing keyring
-//! `CHARIOT_SEALING_KEY_FILE`; the build passes `meta` and `migrations`. Nothing is made up.
+//! `CHARIOT_APP_ID`, `CHARIOT_DEPLOYMENT_SHA256`, the optional `CHARIOT_REVISION_SHA256`, the sealing keyring
+//! `CHARIOT_SEALING_KEY_FILE` and the optional `CHARIOT_RESTORE_STATE_PATH`; the build passes `meta` and
+//! `migrations`. Nothing is made up.
+//!
+//! Readiness is the adapter's: `/health` answers 200 only with the keys loaded, the migrations done and no restore
+//! indicated (nothing at the restore marker's path, by default `DATA_DIR/.chariot-restore.json`). A marker, or a
+//! lookup that fails, keeps it at 503; nothing here or in the adapter runs, reads or removes a restore.
 
 mod api;
 #[path = "../src/handlers/mod.rs"]
