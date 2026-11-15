@@ -49,7 +49,8 @@ cannot work until the host hosts it. Say so in your reply; never say the server 
   user's own database (server/migrations/shared/ only with "shared": true). Plain SQL, every statement ending
   in ';', with no BEGIN, COMMIT or SAVEPOINT, ATTACH, load_extension or TEMP objects. The pending migrations
   run once, in order, all in one transaction with foreign keys on, so PRAGMA foreign_keys changes nothing
-  there: never DROP or rebuild a table other tables reference (their rows would go with it); add or rename
+  there: never DROP or rebuild a table other tables reference (on phones that hold data the drop fails and
+  the server cannot start, or ON DELETE takes their rows); add or rename
   columns with ALTER TABLE, or rebuild the referencing tables in the same migration. The PRAGMAs a migration may
   use are foreign_keys, defer_foreign_keys, recursive_triggers, table_info, table_xinfo, index_list,
   index_info, index_xinfo, foreign_key_list, foreign_key_check, integrity_check and quick_check. A new

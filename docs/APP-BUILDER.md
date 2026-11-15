@@ -1932,8 +1932,9 @@ builder's too. A plain app's job is unchanged.
   server and says what would need one. It also tells the writer the server
   is not hosted (`RoseApi.serverUrl()` is null in every build), so its reply
   never claims the server runs or syncs, and that pending migrations share
-  one transaction with foreign keys on (a dropped or rebuilt parent table
-  takes its children's rows). It limits nothing about what the app does.
+  one transaction with foreign keys on (dropping or rebuilding a table
+  others reference then fails at start-up once phones hold data, or
+  deletes rows through `ON DELETE`). It limits nothing about what the app does.
   `rose/tests/test_app_writer_policy.py` reads the policy through node and
   checks each rule and name against the builder's own constants and its
   generated code; `app-build.test.mjs` checks the source is one plain
