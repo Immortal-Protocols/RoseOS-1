@@ -2,9 +2,16 @@
 //!
 //! **Delivery.** `CHARIOT_SEALING_KEY_FILE` names the systemd credential `rose-signin-keyring` (an absolute path,
 //! for example under `$CREDENTIALS_DIRECTORY`). The host passes the payload's bytes as they are; this is the only
-//! place they are read. The file must be a regular file readable by this user only, at most 16 KiB; it is read once
-//! at start and never re-read (a rotation takes effect on restart). Its path and contents never reach a log, an
-//! error or `Debug`.
+//! place they are read. The file must be a regular file the process can read and neither the group nor others can
+//! read (its owner is not checked: an app-owned `0400` file behind a read-only bind is the expected form), at most
+//! 16 KiB; it is opened without blocking (a FIFO or device there is refused, never waited on), read once at start
+//! and never re-read (a rotation takes effect on restart). Its path and contents never reach a log, an error or
+//! `Debug`.
+//!
+//! **Wiping, exactly.** The loader zeroes its own read buffer and decode buffer, and, after a successful parse, the
+//! strings of the parsed value. It cannot zero copies it does not own: the runtime JSON parser's intermediate
+//! buffers (and its partial values when the payload is malformed), and the key bytes handed to rose-signin, whose
+//! `Secret` redacts `Debug` but is not zeroed on drop.
 //!
 //! **Format** (`rose-signin-keyring/v1`, App Core's spec):
 //! `{"format":"rose-signin-keyring/v1","current":<u32>,"keys":[{"version":<u32>,"key":"<base64>"}]}`
@@ -40,7 +47,7 @@ pub enum KeyError {
     NotAbsolute,
     /// Missing, unreadable, or not a regular file.
     Unreadable,
-    /// Readable by the group or others.
+    /// Readable by the group or others (mode bits `0o044`).
     Exposed,
     TooLarge,
     /// Not UTF-8 or not JSON (including a repeated field).
@@ -169,12 +176,33 @@ pub fn parse(payload: &[u8]) -> Result<Keys, KeyError> {
     result
 }
 
+/// Opens for reading without waiting: a FIFO at the path would otherwise block the open, and start-up with it.
+/// The type is checked on the opened file afterwards; reads of a regular file ignore the flag.
+fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NONBLOCK | O_NOCTTY on Linux (every architecture the server targets).
+        options.custom_flags(0o4000 | 0o400);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Elsewhere, refuse anything but a regular file before opening (a narrow race, not a hang on Linux).
+        if !std::fs::metadata(path)?.is_file() {
+            return Err(std::io::Error::other("not a regular file"));
+        }
+    }
+    options.open(path)
+}
+
 /// Reads and parses the keyring file at `path`.
 pub fn load(path: &Path) -> Result<Keys, KeyError> {
     if !path.is_absolute() {
         return Err(KeyError::NotAbsolute);
     }
-    let file = std::fs::File::open(path).map_err(|_| KeyError::Unreadable)?;
+    let file = open_without_blocking(path).map_err(|_| KeyError::Unreadable)?;
     // Checked on the opened file, so what is checked is what is read.
     let meta = file.metadata().map_err(|_| KeyError::Unreadable)?;
     if !meta.is_file() {
@@ -183,7 +211,7 @@ pub fn load(path: &Path) -> Result<Keys, KeyError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o077 != 0 {
+        if meta.permissions().mode() & 0o044 != 0 {
             return Err(KeyError::Exposed);
         }
     }

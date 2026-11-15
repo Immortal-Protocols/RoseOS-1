@@ -193,9 +193,14 @@ fn the_file_is_absolute_regular_private_and_small() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for mode in [0o440, 0o404, 0o644, 0o600 | 0o002] {
+        for mode in [0o440, 0o404, 0o644, 0o640, 0o604] {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
             assert_eq!(keys::load(&path).err(), Some(KeyError::Exposed), "{mode:o}");
+        }
+        // Only reading by others is refused (the spec's rule); write or execute bits alone expose nothing.
+        for mode in [0o620, 0o602, 0o610, 0o601, 0o630] {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(keys::load(&path).is_ok(), "{mode:o}");
         }
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(keys::load(&path).is_ok(), "owner read-write is private");
@@ -209,6 +214,30 @@ fn the_file_is_absolute_regular_private_and_small() {
     assert!(keys::load(&file(&dir3.0, &big)).is_ok(), "exactly 16 KiB is allowed");
     let dir4 = Dir::new();
     assert_eq!(keys::load(&file(&dir4.0, &[0xff, 0xfe])).err(), Some(KeyError::NotJson));
+}
+
+/// A FIFO at the path is refused at once: an open that waited for a writer would hang start-up.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_fifo_is_refused_without_waiting() {
+    let dir = Dir::new();
+    let fifo = dir.0.join("rose-signin-keyring");
+    let made = std::process::Command::new("mkfifo")
+        .arg("-m")
+        .arg("600")
+        .arg(&fifo)
+        .status();
+    if !made.is_ok_and(|s| s.success()) {
+        eprintln!("mkfifo is not available; skipped");
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+    std::thread::spawn(move || tx.send(keys::load(&path).err()).unwrap());
+    let got = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("load returned instead of blocking");
+    assert_eq!(got, Some(KeyError::Unreadable));
 }
 
 #[test]

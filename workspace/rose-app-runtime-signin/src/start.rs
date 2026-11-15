@@ -85,7 +85,13 @@ impl Config {
         admission: Admission,
         migrations: Migrations,
     ) -> Result<Config, StartError> {
-        Self::from_lookup(app, issuer, admission, migrations, |name| std::env::var(name).ok())
+        // A variable that is set but not UTF-8 is kept as an empty value, which the checks refuse: it never reads
+        // as unset (an unreadable CHARIOT_REVISION_SHA256 must not switch the revision check off).
+        Self::from_lookup(app, issuer, admission, migrations, |name| match std::env::var(name) {
+            Ok(value) => Some(value),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => Some(String::new()),
+        })
     }
 
     /// [`Config::from_env`] over any variable lookup.

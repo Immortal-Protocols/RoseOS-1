@@ -1631,7 +1631,9 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
     - Strict UTF-8 JSON of at most 16 KiB, with no unknown or repeated field. Whitespace between tokens is allowed.
     - 1 to 64 keys with unique `u32` versions, and `current` among them.
     - Each key is standard padded base64, with no whitespace, of exactly 32 bytes.
-    - The file must be absolute, regular and readable by this user only. It is read once, and its buffers are wiped.
+    - The path must be absolute. The opened file must be a regular file that the server's process can read, and neither the group nor others may read it (mode bits `0o044` clear). Its owner isn't checked, so an app-owned `0400` file behind a read-only bind works.
+    - The file is opened without blocking, so a FIFO is refused rather than waited on. It is read once.
+    - The loader zeroes its own buffers. It can't zero the JSON parser's internal copies, or rose-signin's `Secret`, which redacts `Debug` but isn't zeroed on drop.
     - Its path and contents are never logged. Any problem leaves the server without a key, and a reason word says why.
   - **Server.** `Started::server` attaches the data and marks the migrations done.
 - **Not ready yet.** `restore_done` is never set (item 5), and no host delivers a keyring yet. So a server built on the adapter answers `503` until the restore executor is agreed and a keyring arrives.

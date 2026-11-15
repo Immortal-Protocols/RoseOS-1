@@ -363,6 +363,13 @@ fn a_binary_the_host_did_not_deploy_is_not_ready() {
         start(c, keys()),
         Err(StartError::Invalid("CHARIOT_REVISION_SHA256"))
     ));
+    // What from_env keeps for a set but non-UTF-8 value: refused, never read as "no revision check".
+    let mut c = config(&dir.0, Admission::Open, migrations(ACCOUNT_V1, None));
+    c.expected_revision = Some(String::new());
+    assert!(matches!(
+        start(c, keys()),
+        Err(StartError::Invalid("CHARIOT_REVISION_SHA256"))
+    ));
 }
 
 /// A started authenticator used directly through the runtime's `Auth`.
