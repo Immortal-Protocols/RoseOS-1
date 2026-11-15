@@ -739,3 +739,12 @@ test('Project 2: notifications reach the workspace only after Notification acces
  assert.match(page,/NOTIFICATIONS_DISCLOSURE="[^"]*titles[^"]*"\s*\+"[^"]*your own Rose server[^"]*Message text is never read/);
  assert.doesNotMatch(device+page,/setConsent\(activity,true\)[^;]*;[^\n]*setConsent|putBoolean\(CONSENT,true\)/,'nothing turns consent on except the person\'s Continue');
 });
+
+test('Project 2: Rose tasks are offered by default, each still asks first, and an explicit opt-out is kept',()=>{
+ const gate=read('../app/src/dev/pixel/voice/WorkspaceTaskGate.java'),page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
+ assert.match(gate,/getBoolean\(KEY,true\)/);
+ assert.match(gate,/catch\(RuntimeException e\)\{return false;\}/,'a preference that cannot be read keeps tasks off');
+ assert.match(gate,/static final List<WorkspaceSnapshot\.Task> TEMPLATES=WorkspaceTaskTemplates\.ALL;/);
+ // Only the person's "Ask Rose" on the confirm sheet starts a task.
+ assert.match(page,/setPositiveButton\("Ask Rose",\(d,w\)->hub\.startTask\(id\)\)/);
+});
