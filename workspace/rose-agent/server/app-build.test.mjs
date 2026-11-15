@@ -100,13 +100,13 @@ test('the policy forbids identity, version, signing and network changes and asks
    /Any other library\nfails the build/])assert.match(appBuildPolicy,phrase);
 });
 
-test('the policy offers a client-server app only when the turn says so, and says the server is not hosted',()=>{
+test('the policy offers a client-server app only when the turn says so, and never claims the server runs',()=>{
  // The names themselves are checked against the builder and its generated code in Python
  // (rose/tests/test_app_writer_policy.py); here, the sentences the writer's choices hang on.
  for(const phrase of [/A client-server app, only when this turn says the builder builds them/,
    /Otherwise write the app\nwithout a server and say in your reply what would need one/,
-   /The server is not hosted yet: RoseApi\.serverUrl\(\) is null in every build today/,
-   /never say the server runs, is reachable or syncs/,/Do not use the network yourself \(the app may\)/,
+   /RoseApi\.serverUrl\(\) is null until this app's host is recorded/,/so the app must work with null/,
+   /Never say in your reply that the server\nruns, is reachable or syncs/,/Do not use the network yourself \(the app may\)/,
    /all in one transaction with foreign keys off; then every reference is checked/,
    /ON DELETE actions do not fire there: delete\n  child rows yourself/,
    /never call one on the main thread/,/Never edit, rename or delete a migration that was delivered/])
