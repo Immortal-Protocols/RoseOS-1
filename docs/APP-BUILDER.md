@@ -1700,8 +1700,14 @@ matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
   - It calls `Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION,
     Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED })`,
     then `let (keys, why) = Keys::from_env();`, then `start(config, keys)`,
-    then `.server(routes::routes::<handlers::App>())`, and serves on
+    then `.server(routes::routes::<handlers::App>())` and
+    `.with_client_header("X-Chariot-Client-Address")`, and serves on
     `0.0.0.0:$PORT`.
+  - **Client address.** Chariot's gateway overwrites
+    `X-Chariot-Client-Address` on every request, and guest ingress admits
+    only the gateway (§7.7 item 6). So rate limits count by that header
+    when it holds exactly one IP address, and by the peer otherwise. A
+    generated server is meant to run only behind that gateway.
   - **Keys.** Only the adapter's loader reads the keyring
     (`rose-signin-keyring/v1`), and its result never stops start-up. When
     there is no usable keyring, `main.rs` prints

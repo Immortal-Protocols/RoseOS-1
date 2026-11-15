@@ -363,6 +363,9 @@ use std::sync::Arc;
 
 use rose_app_runtime_signin::{start, Config, Keys, Migrations};
 
+/// The header Chariot's gateway overwrites with the client's address on every request; guest ingress admits only
+/// the gateway (§7.7 item 6). Rate limits count by it when it holds exactly one IP address, by the peer otherwise.
+const CLIENT_HEADER: &str = "X-Chariot-Client-Address";
 /// The variable the host passes the port in, and the port when it passes none (§7.7).
 const PORT_ENV: &str = "PORT";
 const DEFAULT_PORT: u16 = 8080;
@@ -396,7 +399,10 @@ fn run() -> Result<(), String> {
         eprintln!("rose server: {why}");
     }
     let started = start(config, keys).map_err(|e| e.to_string())?;
-    let server = started.server(routes::routes::<handlers::App>()).map_err(|e| format!("routes: {e}"))?;
+    let server = started
+        .server(routes::routes::<handlers::App>())
+        .map_err(|e| format!("routes: {e}"))?
+        .with_client_header(CLIENT_HEADER);
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("listening on {PORT_ENV}: {e}"))?;
     Arc::new(server).serve(listener).map_err(|e| format!("serving: {e}"))
 }
