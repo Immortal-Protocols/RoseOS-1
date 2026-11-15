@@ -1398,18 +1398,28 @@ installed on phones.
   a list or a map breaks the cycle.
 - **Canonical digest.** The sha256 covers the canonical form: defaults
   spelled out, sorted keys, no whitespace. Key order and spelled-out defaults
-  don't change it.
+  don't change it, and the canonical form is itself a valid contract.
 
 **Revisions** (`check_update`) are judged by what an installed older client
-would trip on. Responses are compared by what the old client expects to
-read, and requests by what it still sends. Types are compared by shape, so
-renaming a type changes nothing.
+would trip on.
+- **Which versions.** A revision is compared with every contract delivered
+  since `api` last rose, not only the newest. So a field dropped in one
+  revision and brought back with another shape in the next still meets the
+  phones that kept the first.
+- **Directions.** Responses are compared by what the old client expects to
+  read, and requests by what it still sends.
+- **Matching.** Routes are matched by method and path, which is what an
+  installed client calls, and types by shape. Renaming either changes
+  nothing.
+- **Recursive types** are walked with a queue, each pair of types once per
+  comparison, so cost is bounded and recursion can't crash it.
 - **Additive, allowed as is:** new routes, types and response fields; new
   optional request fields; a request field dropped (servers ignore extras);
   a request field made optional, or its `max` raised; a response field made
   required, or an optional one dropped; an account route made public.
 - **Breaking:**
-  - a route removed or moved, or a public route that now needs sign-in;
+  - a method and path no longer served, or a public route that now needs
+    sign-in;
   - a response field removed, made optional or retyped, nested types
     included;
   - a new or newly required request field, a `max` lowered or added, or a

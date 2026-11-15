@@ -45,6 +45,7 @@ class Parse(unittest.TestCase):
         spelled = changed(lambda d: d['types']['Note']['fields'].__setitem__('id', {'type': 'int', 'optional': False}))
         self.assertEqual(C.parse(spelled).sha256, c.sha256)  # nor does spelling out a default
         self.assertNotEqual(C.parse(changed(lambda d: d.__setitem__('api', 2))).sha256, c.sha256)
+        self.assertEqual(C.parse(c.data).sha256, c.sha256)  # the canonical form is itself a valid contract
 
     def test_malformed_contracts_are_refused(self):
         F = lambda d: d['types']['Note']['fields']  # noqa: E731
@@ -76,6 +77,10 @@ class Parse(unittest.TestCase):
             'bare /app': lambda d: R(d)['listNotes'].__setitem__('path', '/app'),
             'same method and path': lambda d: R(d).__setitem__('again', dict(d['routes']['listNotes'])),
             'bad auth': lambda d: R(d)['listNotes'].__setitem__('auth', 'admin'),
+            'request as a list': lambda d: R(d)['addNote'].__setitem__('request', ['NewNote']),
+            'response as an object': lambda d: R(d)['listNotes'].__setitem__('response', {}),
+            'an optional entry': lambda d: F(d).__setitem__('x', {'type': 'map', 'of': {'type': 'int',
+                                                                                        'optional': True}}),
             'unknown response': lambda d: R(d)['listNotes'].__setitem__('response', 'Nope'),
             'no response': lambda d: R(d)['listNotes'].pop('response'),
             'GET with a body': lambda d: R(d)['listNotes'].__setitem__('request', 'NewNote'),
@@ -156,6 +161,7 @@ class Update(unittest.TestCase):
             'a type renamed, same shape': lambda d: (d['types'].__setitem__('Notes', d['types'].pop('NoteList')),
                                                     d['routes']['listNotes'].__setitem__('response', 'Notes')),
             'account route made public': lambda d: d['routes']['listNotes'].__setitem__('auth', 'public'),
+            'a route renamed, same call': lambda d: d['routes'].__setitem__('getNotes', d['routes'].pop('listNotes')),
             'a POST route gains an all-optional body': lambda d: (
                 d['types'].__setitem__('Opt', {'fields': {'x': {'type': 'int', 'optional': True}}}),
                 d['routes']['ping'].__setitem__('request', 'Opt')),
@@ -201,6 +207,47 @@ class Update(unittest.TestCase):
         # A recursive type compared with itself terminates and finds nothing.
         self.assertEqual(C.compare(C.parse(BASE), C.parse(BASE)), [])
 
+    def test_every_version_since_api_rose_is_still_served(self):
+        # Dropped in one revision, brought back with another shape in the next: phones on the first still break.
+        def contract(fields, req=None, api=1):
+            types = {'T': {'fields': fields}, 'E': {'fields': {}}}
+            routes = {'get': {'method': 'POST', 'path': '/app/x', 'response': 'T'}}
+            if req is not None:
+                types['Q'] = {'fields': req}
+                routes['put'] = {'method': 'POST', 'path': '/app/y', 'request': 'Q', 'response': 'E'}
+            return C.parse({'schemaVersion': 1, 'api': api, 'types': types, 'routes': routes})
+        v1 = contract({'id': 'int', 'x': {'type': 'string', 'optional': True}}, {'x': 'string'})
+        v2 = contract({'id': 'int'}, {})
+        self.assertEqual(C.check_update([v1], v2).breaking, ())  # each drop alone is additive
+        for v3 in (contract({'id': 'int', 'x': {'type': 'int', 'optional': True}}, {}),
+                   contract({'id': 'int'}, {'x': {'type': 'int', 'optional': True}}),
+                   contract({'id': 'int'}, {'x': {'type': 'string', 'optional': True, 'max': 5}})):
+            with self.subTest(v3.sha256[:8]):
+                self.assertEqual(C.check_update([v2], v3).breaking, ())  # fine against the last one alone
+                with self.assertRaises(C.ContractRefused) as caught:
+                    C.check_update([v1, v2], v3)
+                self.assertEqual(caught.exception.reason, 'breaking_without_major')
+        # After api rises, only the versions at the new level are kept compatible.
+        v4 = contract({'id': 'int', 'x': {'type': 'int', 'optional': True}}, {}, api=2)
+        self.assertTrue(C.check_update([v1, v2], v4).client_update_required)
+        v5 = contract({'id': 'int', 'x': {'type': 'int', 'optional': True}, 'y': 'int'}, {}, api=2)
+        self.assertEqual(C.check_update([v1, v2, v4], v5).breaking, ())
+        self.assertEqual(C.check_update([], v1), C.Update((), False))
+
+    def test_recursive_rings_and_large_contracts_are_compared_without_crashing(self):
+        import time
+
+        def ring(prefix, n, fields=1, routes=1):
+            types = {f'{prefix}{i}': {'fields': {f'f{j}': {'type': f'{prefix}{(i + j + 1) % n}', 'optional': True}
+                                                 for j in range(fields)}} for i in range(n)}
+            return C.parse({'schemaVersion': 1, 'api': 1, 'types': types,
+                            'routes': {f'r{k}': {'method': 'POST', 'path': f'/app/r{k}', 'request': f'{prefix}0',
+                                                 'response': f'{prefix}0'} for k in range(routes)}})
+        self.assertEqual(C.compare(ring('A', 37), ring('B', 31)), [])  # coprime rings: same shape
+        start = time.monotonic()
+        self.assertEqual(C.compare(ring('A', 64, 64, 128), ring('B', 64, 64, 128)), [])
+        self.assertLess(time.monotonic() - start, 30)
+
     def test_api_can_rise_without_a_break_but_never_fall(self):
         update = self.check(lambda d: None, api=3)
         self.assertEqual((update.breaking, update.client_update_required), ((), True))
@@ -211,7 +258,7 @@ class Update(unittest.TestCase):
     def test_the_refusal_says_what_breaks_and_what_to_do(self):
         with self.assertRaises(C.ContractRefused) as caught:
             self.check(lambda d: d['routes'].pop('about'))
-        self.assertIn('route about is removed', str(caught.exception))
+        self.assertIn('route about (GET /app/about) is removed or moved', str(caught.exception))
         self.assertIn('Raise api to 2', str(caught.exception))
 
 

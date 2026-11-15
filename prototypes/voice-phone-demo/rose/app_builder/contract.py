@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,8 +103,8 @@ def _field(spec, where: str, types: dict, depth: int = 0) -> dict:
     if not isinstance(kind, str) or not (kind in PRIMITIVES or kind in CONTAINERS or kind in types):
         raise _invalid(f'{where} has an unknown type {kind!r}')
     optional = spec.get('optional', False)
-    if type(optional) is not bool or depth and 'optional' in spec:
-        raise _invalid(f'{where}: optional is true or false, and only on a field itself')
+    if type(optional) is not bool or depth and optional:  # an entry is never optional; saying false is fine
+        raise _invalid(f'{where}: optional is true or false, and only a field itself can be optional')
     out = {'type': kind, 'optional': optional}
     if kind in CONTAINERS:
         if 'of' not in spec:
@@ -163,7 +164,8 @@ def parse(data) -> Contract:
         seen.add((method, path))
         if auth not in AUTH:
             raise _invalid(f'route {name}: auth is "account" or "public"')
-        if request is not None and request not in out_types or response not in out_types:
+        if request is not None and not (isinstance(request, str) and request in out_types) \
+                or not (isinstance(response, str) and response in out_types):
             raise _invalid(f'route {name}: request (optional) and response must name types')
         if method in BODYLESS and request is not None:
             raise _invalid(f'route {name}: {method} carries no request body')
@@ -215,78 +217,89 @@ def load(snapshot: Path) -> Contract:
 
 # Compatibility: what a phone still running the delivered version would see.
 
-def _fits(old_types, old, new_types, new, direction: str, where: str, out: list, seen: set):
-    """Does a value of `new`'s shape still work for an old client? direction is 'response' (the server sends the
-    new shape to an old client) or 'request' (an old client sends the old shape to the new server)."""
-    if old['type'] in PRIMITIVES or new['type'] in PRIMITIVES or old['type'] in CONTAINERS \
-            or new['type'] in CONTAINERS:
-        if old['type'] != new['type']:
-            out.append(f'{where} changes type from {old["type"]} to {new["type"]}')
-            return
-        if direction == 'request' and 'max' in new and new['max'] < old.get('max', MAX_LIMIT + 1):
-            out.append(f'{where} now allows at most {new["max"]}, fewer than older clients may send')
-        if old['type'] in CONTAINERS:
-            _fits(old_types, old['of'], new_types, new['of'], direction, f'{where} (entries)', out, seen)
-        return
-    key = (old['type'], new['type'], direction)
-    if key in seen:  # a recursive type, already being compared
-        return
-    seen.add(key)
-    old_fields, new_fields = old_types[old['type']]['fields'], new_types[new['type']]['fields']
-    if direction == 'response':  # every field an old client expects is still sent, with a shape it reads
-        for name, field in old_fields.items():
-            if name not in new_fields:
-                if not field['optional']:
-                    out.append(f'{where}.{name} is no longer sent')
+def _compare_shapes(old_types, new_types, items, out: list):
+    """Walk (old spec, new spec, direction, where) items with a queue, so a recursive type never recurses here.
+    direction is 'response' (the server sends the new shape to an old client) or 'request' (an old client sends
+    the old shape to the new server). Each (old type, new type, direction) pair is walked once per compare()."""
+    seen = set()
+    queue = deque(items)
+    while queue:
+        old, new, direction, where = queue.popleft()
+        if old['type'] in PRIMITIVES or new['type'] in PRIMITIVES or old['type'] in CONTAINERS \
+                or new['type'] in CONTAINERS:
+            if old['type'] != new['type']:
+                out.append(f'{where} changes type from {old["type"]} to {new["type"]}')
                 continue
-            if not field['optional'] and new_fields[name]['optional']:
-                out.append(f'{where}.{name} may now be missing')
-            _fits(old_types, field, new_types, new_fields[name], direction, f'{where}.{name}', out, seen)
-    else:  # every field the new server requires, an old client still sends, in a shape the server reads
-        for name, field in new_fields.items():
-            if name not in old_fields:
-                if not field['optional']:
-                    out.append(f'{where}.{name} is now required, and older clients do not send it')
-                continue
-            if not field['optional'] and old_fields[name]['optional']:
-                out.append(f'{where}.{name} is now required, and older clients may leave it out')
-            _fits(old_types, old_fields[name], new_types, field, direction, f'{where}.{name}', out, seen)
+            if direction == 'request' and 'max' in new and new['max'] < old.get('max', MAX_LIMIT + 1):
+                out.append(f'{where} now allows at most {new["max"]}, fewer than older clients may send')
+            if old['type'] in CONTAINERS:
+                queue.append((old['of'], new['of'], direction, f'{where} (entries)'))
+            continue
+        key = (old['type'], new['type'], direction)
+        if key in seen:
+            continue
+        seen.add(key)
+        old_fields, new_fields = old_types[old['type']]['fields'], new_types[new['type']]['fields']
+        if direction == 'response':  # every field an old client expects is still sent, in a shape it reads
+            for name, field in old_fields.items():
+                if name not in new_fields:
+                    if not field['optional']:
+                        out.append(f'{where}.{name} is no longer sent')
+                    continue
+                if not field['optional'] and new_fields[name]['optional']:
+                    out.append(f'{where}.{name} may now be missing')
+                queue.append((field, new_fields[name], direction, f'{where}.{name}'))
+        else:  # every field the new server requires, an old client still sends, in a shape the server reads
+            for name, field in new_fields.items():
+                if name not in old_fields:
+                    if not field['optional']:
+                        out.append(f'{where}.{name} is now required, and older clients do not send it')
+                    continue
+                if not field['optional'] and old_fields[name]['optional']:
+                    out.append(f'{where}.{name} is now required, and older clients may leave it out')
+                queue.append((old_fields[name], field, direction, f'{where}.{name}'))
 
 
 def compare(old: Contract, new: Contract) -> list[str]:
-    """What in `new` would break a client built against `old` (empty when nothing would)."""
-    out = []
+    """What in `new` would break a client built against `old` (empty when nothing would). An installed client calls
+    a method and a path, so routes are matched by those; renaming a route changes nothing."""
+    out, items = [], []
     ot, nt = old.data['types'], new.data['types']
+    by_call = {(r['method'], r['path']): r for r in new.data['routes'].values()}
     for name, route in old.data['routes'].items():
-        moved = new.data['routes'].get(name)
+        moved = by_call.get((route['method'], route['path']))
         if moved is None:
-            out.append(f'route {name} is removed')
+            out.append(f'route {name} ({route["method"]} {route["path"]}) is removed or moved')
             continue
-        if (route['method'], route['path']) != (moved['method'], moved['path']):
-            out.append(f'route {name} moves from {route["method"]} {route["path"]} to {moved["method"]} '
-                       f'{moved["path"]}')
         if route['auth'] == 'public' and moved['auth'] == 'account':
             out.append(f'route {name} now needs a signed-in user')
-        seen = set()
-        _fits(ot, {'type': route['response']}, nt, {'type': moved['response']}, 'response',
-              f'{name} response', out, seen)
+        items.append(({'type': route['response']}, {'type': moved['response']}, 'response', f'{name} response'))
         if route['request'] is not None and moved['request'] is not None:
-            _fits(ot, {'type': route['request']}, nt, {'type': moved['request']}, 'request',
-                  f'{name} request', out, seen)
+            items.append(({'type': route['request']}, {'type': moved['request']}, 'request', f'{name} request'))
         elif moved['request'] is not None:  # older clients send no body: only required fields matter
             required = [f for f, spec in nt[moved['request']]['fields'].items() if not spec['optional']]
             if required:
                 out.append(f'{name} request now needs a body ({", ".join(required)}), which older clients do '
                            'not send')
+    _compare_shapes(ot, nt, items, out)
     return out
 
 
-def check_update(old: Contract, new: Contract) -> Update:
-    """A revision's contract against the delivered one: refused if it lowers api, or breaks installed clients
-    without raising api."""
+def check_update(delivered, new: Contract) -> Update:
+    """A revision's contract against what was delivered: one contract, or every delivered contract in order. It is
+    refused if it lowers api, or if it would break a client of any version delivered since api last rose (a field
+    dropped in one revision and brought back with another shape in the next still meets the phones that kept the
+    first). Clients of older api levels have already been asked to update."""
+    history = [delivered] if isinstance(delivered, Contract) else list(delivered)
+    if not history:
+        return Update((), False)
+    old = history[-1]
     if new.api < old.api:
         raise ContractRefused(f'{FILE}: api cannot go down (from {old.api} to {new.api}).', 'api_lowered')
-    breaking = compare(old, new)
+    current = [c for c in history if c.api == old.api]
+    breaking = []
+    for contract in (current if new.api == old.api else [old]):
+        breaking.extend(b for b in compare(contract, new) if b not in breaking)
     if breaking and new.api == old.api:
         listed = '; '.join(breaking[:3]) + ('; …' if len(breaking) > 3 else '')
         raise ContractRefused(f'{FILE}: this change would break the app on phones that have not updated '
