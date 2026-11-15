@@ -406,11 +406,6 @@
     "minClientVersionCode": 2147483648
    },
    "why": "minClientVersionCode above 2^31-1"
-  },
-  {
-   "versionCode": 3,
-   "server": null,
-   "why": "null"
   }
  ],
  "clientReadable": [

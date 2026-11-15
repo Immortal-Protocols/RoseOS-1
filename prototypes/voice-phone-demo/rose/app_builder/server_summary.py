@@ -48,7 +48,7 @@ def readable(summary, version_code: int) -> bool:
     """Whether a served summary is one a client may act on (the rules §3.3 gives a phone): anything else is read
     as `unavailable`, which never blocks an install and never says an older client still works. Numbers are JSON
     integers (as the phone's parser types them, `Long`): `1.0` and `true` are refused, though Python compares them
-    equal to 1."""
+    equal to 1. The server never sends a JSON null; a client may read one as the field being absent."""
     if not isinstance(summary, dict) or type(summary.get('schemaVersion')) is not int \
             or summary['schemaVersion'] != SCHEMA_VERSION:
         return False

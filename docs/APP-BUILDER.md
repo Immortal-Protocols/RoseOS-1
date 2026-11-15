@@ -701,8 +701,9 @@ Rules for a client:
   2³¹−1, or a `minClientVersionCode` above the version's own `versionCode`.
   A JSON integer has no fraction or exponent, so `1.0` is refused, as is
   `true`; the phone's parser already types numbers this way (`Long`). The
-  same holds for `schemaVersion`. Only the summary is refused, never the
-  library.
+  same holds for `schemaVersion`. The server never sends `null`; a client
+  may read one as the field being absent. Only the summary is refused,
+  never the library.
 - `unavailable` never blocks an install and never says an older client
   still works.
 - It describes compatibility between a version's client and its server.
