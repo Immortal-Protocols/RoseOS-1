@@ -1140,7 +1140,11 @@ app-server client.
   - the config names `rose_app_build` as the default, and its definition is
     exactly the one passed, so an entry merged in from another config layer
     (an extra read path, network on) refuses;
-  - the thread start reports `activePermissionProfile.id = rose_app_build`;
+  - the thread start reports `activePermissionProfile.id = rose_app_build`,
+    with `extends` unset or `:workspace`, and every `runtimeWorkspaceRoots`
+    entry (the thread-scoped roots that `:workspace_roots` expands to) is
+    the job's `source`. An extra root would widen the writer's only writable
+    path;
   - `permissionProfile/list` for the job's cwd lists it with
     `allowed: true`.
 
@@ -1207,11 +1211,27 @@ Proof levels:
   bridge; Builder with the real bridge, compiled and signed with throwaway
   keys, including a writer that escapes the process group). The group stop is
   tested with a member that ignores SIGTERM, and with one that never goes away.
-- **Taken from the published permissions and app-server pages, not from a
-  binary or the generated schema:** the `permissions` fields on `thread/start`
-  and `turn/start`, `activePermissionProfile`, `permissionProfile/list`, the
-  `[permissions.<id>]` keys and tokens, and `--strict-config`. No Codex binary
-  exists in this container.
+- **Matched to the installed 0.167.1 experimental schema export** (excerpts
+  from Local Server, read from files with no runtime):
+  - `ThreadStartParams.permissions` and `TurnStartParams.permissions` are
+    `string | null` and exclude `sandbox` / `sandboxPolicy`. A turn's value
+    applies to that turn and later ones;
+  - `ThreadStartResponse.activePermissionProfile` is an optional
+    `{id, extends?} | null` (default `null`), and
+    `runtimeWorkspaceRoots` is an optional absolute-path list (default `[]`);
+  - `PermissionProfileListParams` takes an optional `cwd`, `cursor` and
+    `limit` (uint32). Its response has a required
+    `data: [{id, allowed, description?}]` and an optional, nullable
+    `nextCursor`;
+  - app-server parses each `-c key=value` as TOML and falls back to a raw
+    string on a parse failure; `--strict-config` rejects unknown fields.
+
+  The code follows these shapes, and a `null` anywhere refuses. The `-c`
+  profile value is valid TOML: a test parses it with `tomllib` back to
+  exactly the profile. If Codex ever took it as a raw string, the exact-match
+  check would refuse. The `[permissions.<id>]` keys and filesystem tokens
+  come from the published permissions page. No Codex binary exists in this
+  container.
 - **Known not to be guaranteed:** the installed 0.167.1 experimental
   `ConfigReadResponse` schema leaves `config` open (`additionalProperties`).
   It lists the legacy `sandbox_mode` and `sandbox_workspace_write`, and it has
@@ -1221,20 +1241,20 @@ Proof levels:
 
   Every point above fails closed: a missing, renamed or normalized field
   refuses every app build rather than weakening isolation. Nothing here claims
-  that the named profile equals what Codex enforces. Still to confirm on a
-  real 0.167.1, without running the writer or a model:
-  1. what `config/read` returns for `permissions` and `default_permissions`
-     with the writer's launch flags, and whether the profile comes back as
-     passed (if Codex fills in defaults or resolves `extends`, the
-     exact-match check refuses and must be revised to the observed form, not
-     loosened);
-  2. the `permissionProfile/list` params and response shape (`data`,
-     `nextCursor`, entry `id` and `allowed`);
-  3. the `activePermissionProfile` definition in the `thread/start` response,
-     and `permissions` in the `thread/start` and `turn/start` params;
-  4. that `--strict-config` accepts the inline-table `-c` value;
-  5. whether `config/read` resolves a selected `profile` into the top-level
-     keys, leaves it under `profiles`, or both. The check covers both forms.
+  that the named profile equals what Codex enforces. Still needed, from one
+  real 0.167.1 app-server started with the writer's launch flags (only
+  `config/read`, `thread/start` and `permissionProfile/list`; no turn, writer
+  or model):
+  1. what `config/read` returns for `permissions` and `default_permissions`.
+     If Codex fills in defaults or resolves `extends`, the exact-match check
+     refuses and must be revised to the observed form, not loosened;
+  2. that the inline-table profile is accepted under `--strict-config` as a
+     profile, not as a raw string;
+  3. whether `config/read` resolves a selected `profile` into the top-level
+     keys, leaves it under `profiles`, or both. The check covers both forms;
+  4. what `runtimeWorkspaceRoots` holds for the writer's thread. Both `[]` and
+     the job's `source` are accepted; whether `[]` means "the cwd" is not
+     defined by the schema.
 - **Live check before any enabling (Server Worker / Local Server):** a
   synthetic denial run under the profile, with no writer and no model. Reads
   of `ROSE_CONFIG_DIR`, home, `/tmp` and a sibling project must be refused;

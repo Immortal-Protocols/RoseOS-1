@@ -13,7 +13,7 @@ import {BasetenGateway,BASETEN_MODEL,BASETEN_PROVIDER} from './baseten/gateway.m
 import {CerebrasGateway,CEREBRAS_MODEL,CEREBRAS_PROVIDER} from './cerebras/gateway.mjs';
 import {EvaluationGateway,EVALUATION_PROVIDER} from './evaluation-gateway.mjs';
 import {researchConfig,verifyResearchMcp,supportsResearchVersion} from './life-research.mjs';
-import {appBuildConfig,appBuildLaunchArgs,verifyAppBuildProfile,supportsAppBuildVersion,APP_BUILD_PROFILE} from './app-build.mjs';
+import {appBuildConfig,appBuildLaunchArgs,verifyAppBuildProfile,checkActiveProfile,supportsAppBuildVersion,APP_BUILD_PROFILE} from './app-build.mjs';
 export class Codex extends EventEmitter {
  constructor(root,state,apiKeyFile=null,runtime={}){super();this.root=root;this.state=state;this.apiKeyFile=apiKeyFile;this.runtime=runtime;this.authMode=null;this.seq=0;this.pending=new Map();this.active=null;this.thread=null;this.starting=null;this.switchingTurns=new Set();this.endedTurns=new Set();this.provider='openai';this.providerThreads={};this.policyHashes={};this.memoryRevisions={};this.unstartedThread=false;}
  async init(){
@@ -192,8 +192,10 @@ export class Codex extends EventEmitter {
    config:isolated??{web_search:'disabled','features.fast_mode':true,'features.shell_tool':false,
     'features.apps':false,'features.multi_agent':false}});
   this.thread=r.thread.id;this.selectedModel=r.model;this.actualServiceTier=r.serviceTier;
-  if(this.runtime.appBuild&&r.activePermissionProfile?.id!==APP_BUILD_PROFILE)
-   throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});
+  if(this.runtime.appBuild){
+   try{checkActiveProfile(r,options.cwd??this.root);}
+   catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
+  }
   if(r.model!==model||!['fast','priority'].includes(r.serviceTier))
    throw Object.assign(Error('Requested Terra Fast mode was not selected'),{code:'model_mode_mismatch'});
   if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild){

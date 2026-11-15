@@ -1,13 +1,13 @@
 // app_build purpose (docs/APP-BUILDER.md §4A) against a fake Codex app-server; nothing here starts a real model.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Codex} from './codex.mjs';
-import {appBuildPolicy,appBuildConfig,appBuildCwd,appBuildLaunchArgs,appBuildProfile,checkAppBuildProfile,supportsAppBuildVersion,
+import {appBuildPolicy,appBuildConfig,appBuildCwd,appBuildLaunchArgs,appBuildProfile,checkAppBuildProfile,checkActiveProfile,supportsAppBuildVersion,
  APP_BUILD_PROFILE,APP_BUILD_ITEMS} from './app-build.mjs';
 import {researchConfig} from './life-research.mjs';
 
@@ -45,7 +45,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
    scenario==='paged'&&!m.params.cursor?{data:[{id:':read-only',allowed:true}],nextCursor:'2'}:{data:[entry]};
  }
  if(m.method==='thread/start')result={thread:{id:'build'},model:'gpt-6.1-terra',serviceTier:'priority',
-  ...(m.params.permissions?{activePermissionProfile:{id:scenario==='wrong_profile'?':workspace':m.params.permissions,extends:null}}:{})};
+  ...(m.params.permissions&&scenario!=='no_active'?{activePermissionProfile:{id:scenario==='wrong_profile'?':workspace':m.params.permissions,
+   extends:scenario==='wrong_parent'?':danger-full-access':':workspace'}}:{}),
+  runtimeWorkspaceRoots:scenario==='extra_root'?[m.params.cwd,'/']:[m.params.cwd]};
  if(m.method==='mcpServerStatus/list')result={data:[{runtimeStatus:'disabled',tools:{},resources:[],resourceTemplates:[]}]};
  if(m.method==='turn/interrupt'){out({id:m.id,result:{}});out({method:'turn/completed',params:{threadId:'build',turn:{id:'t1',status:'interrupted'}}});return;}
  if(m.method==='turn/start'){
@@ -318,7 +320,8 @@ test('SIGKILL always follows, even when the group already looks empty after SIGT
 test('the writer refuses unless exactly its permission profile is active, listed and allowed',async()=>{
  const f=fixture();
  try{
-  for(const scenario of ['legacy','merged','network','not_allowed','unlisted','wrong_profile','old_codex']){
+  for(const scenario of ['legacy','merged','network','not_allowed','unlisted','wrong_profile','no_active','wrong_parent',
+   'extra_root','old_codex']){
    writeFileSync(f.record,'');
    await withEnv(f.env(scenario),async()=>{
     const c=new Codex(f.source,join(f.dir,'unused'),null,{externalPhone:true,appBuild:true,model:'gpt-6.1-terra',dynamicTools:[]});
@@ -333,6 +336,28 @@ test('the writer refuses unless exactly its permission profile is active, listed
   });
   assert.equal(f.rows().filter(r=>r.method==='permissionProfile/list').length,2);
  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('the active-profile check takes only this profile, its own parent and the source as workspace root',()=>{
+ const cwd='/p/source',ok={id:APP_BUILD_PROFILE,extends:':workspace'};
+ for(const r of [{activePermissionProfile:ok,runtimeWorkspaceRoots:[cwd]},{activePermissionProfile:{id:APP_BUILD_PROFILE}},
+  {activePermissionProfile:{id:APP_BUILD_PROFILE,extends:null},runtimeWorkspaceRoots:[]}])
+  assert.doesNotThrow(()=>checkActiveProfile(r,cwd),JSON.stringify(r));
+ for(const r of [null,{},{activePermissionProfile:null},{activePermissionProfile:{id:':workspace'}},
+  {activePermissionProfile:{...ok,extends:':danger-full-access'}},{activePermissionProfile:ok,runtimeWorkspaceRoots:[cwd,'/']},
+  {activePermissionProfile:ok,runtimeWorkspaceRoots:['/p']},{activePermissionProfile:ok,runtimeWorkspaceRoots:'/p/source'}])
+  assert.throws(()=>checkActiveProfile(r,cwd),/app_build_isolation_unavailable/,JSON.stringify(r));
+});
+
+// Codex parses a -c value as TOML and, on a parse failure, falls back to a raw string; the definition must be valid
+// TOML that parses to exactly the profile. Checked with Python's tomllib where present (CI has it).
+test('the profile launch value is TOML that parses to exactly the profile',{skip:spawnSync('python3',['-c','import tomllib']).status!==0},()=>{
+ const args=appBuildLaunchArgs(),def=args.find(a=>a.startsWith(`permissions.${APP_BUILD_PROFILE}=`));
+ const dflt=args.find(a=>a.startsWith('default_permissions='));
+ const parse=v=>JSON.parse(spawnSync('python3',['-c','import json,sys,tomllib;print(json.dumps(tomllib.loads("x = "+sys.stdin.read())["x"]))'],
+  {input:v,encoding:'utf8'}).stdout);
+ assert.deepEqual(parse(def.slice(def.indexOf('=')+1)),JSON.parse(JSON.stringify(appBuildProfile)));
+ assert.equal(parse(dflt.slice(dflt.indexOf('=')+1)),APP_BUILD_PROFILE);
 });
 
 test('the profile check and the version gate refuse anything else',()=>{

@@ -168,6 +168,18 @@ export function checkAppBuildProfile(config) {
  if(canonical(config.permissions?.[APP_BUILD_PROFILE])!==canonical(appBuildProfile))throw Error('app_build_isolation_unavailable');
 }
 
+/** The thread/start response must report this profile active (activePermissionProfile, nullable in 0.167.1), with
+ * no parent other than the one defined here, and every thread-scoped workspace root (runtimeWorkspaceRoots, which
+ * materialize `:workspace_roots`, default []) must be the job's source: `:workspace_roots` is the writer's only
+ * writable path, so an extra root would widen it. */
+export function checkActiveProfile(response, cwd) {
+ const active=response?.activePermissionProfile;
+ if(!isObject(active)||active.id!==APP_BUILD_PROFILE)throw Error('app_build_isolation_unavailable');
+ if(active.extends!=null&&active.extends!==appBuildProfile.extends)throw Error('app_build_isolation_unavailable');
+ const roots=response.runtimeWorkspaceRoots??[];
+ if(!Array.isArray(roots)||roots.some(root=>root!==cwd))throw Error('app_build_isolation_unavailable');
+}
+
 /** permissionProfile/list for the job's cwd: the profile must be listed and allowed (selection, not enforcement). */
 export async function verifyAppBuildProfile(rpc, cwd) {
  let cursor;const seen=new Set();
