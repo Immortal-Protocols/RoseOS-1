@@ -21,10 +21,13 @@ ANDROID_JAR = Path(os.environ.get('ANDROID_SDK_ROOT', '/opt/roseos/android-sdk')
 
 
 class RoseAuthenticatorPackageTest(unittest.TestCase):
-    def test_no_permission_and_no_backup(self):
+    def test_no_network_permission_and_no_backup(self):
         manifest = (APP/'AndroidManifest.xml').read_text()
         self.assertIn('package="dev.pixel.rose.authenticator"', manifest)
-        self.assertNotIn('<uses-permission', manifest, 'no permission: no network, nothing else')
+        import re
+        self.assertEqual(re.findall(r'<uses-permission android:name="([^"]+)"', manifest),
+                         ['android.permission.HIDE_OVERLAY_WINDOWS'], 'only overlay hiding: no network, nothing else')
+        self.assertEqual(manifest.count('<uses-permission'), 1)
         self.assertIn('android:allowBackup="false"', manifest)
         self.assertIn('android:fullBackupContent="false"', manifest)
         rules = (APP/'res/xml/no_extraction.xml').read_text()
@@ -81,9 +84,15 @@ class RoseAuthenticatorPackageTest(unittest.TestCase):
         self.assertNotIn('getReferrer', activity)
         self.assertIn('Vault.displayable(e.issuer)', activity, 'link-supplied names cannot fake dialog lines')
         self.assertIn('setFilterTouchesWhenObscured(true)', activity)
+        # App overlays are hidden over the activity and both dialogs; partly covered touches are ignored; the delay
+        # starts again whenever the dialog window regains focus (a floating window does not pause the activity).
+        self.assertEqual(activity.count('setHideOverlayWindows(true)'), 3)
+        self.assertIn('FLAG_WINDOW_IS_PARTIALLY_OBSCURED', activity)
+        self.assertIn('addOnWindowFocusChangeListener', activity)
         # The delay is re-armed whenever the activity is shown again, and stopped while it is covered.
         self.assertIn('tick.removeCallbacks(enable);', activity)
         self.assertIn('arm();\n    }\n\n    @Override protected void onPause()', activity)
+        self.assertIn('disarm();\n        super.onPause();', activity)
         # A link to a resumed activity is asked about at once; a Recents relaunch does not replay its link.
         self.assertIn('if (resumed) ask();', activity)
         self.assertIn('FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY', activity)

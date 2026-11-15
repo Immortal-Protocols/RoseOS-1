@@ -14,6 +14,7 @@ import android.os.Looper;
 import android.os.PersistableBundle;
 import android.util.AtomicFile;
 import android.util.TypedValue;
+import android.view.MotionEvent;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -90,6 +91,8 @@ public final class AuthenticatorActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        // No app overlay may sit over this window or its dialogs (HIDE_OVERLAY_WINDOWS, a normal permission).
+        getWindow().setHideOverlayWindows(true);
         list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(16);
@@ -147,8 +150,7 @@ public final class AuthenticatorActivity extends Activity {
         resumed = false;
         tick.removeCallbacks(refresh);
         // Covered by another activity: the delay starts again when this one is shown.
-        tick.removeCallbacks(enable);
-        for (Button b : guarded) b.setEnabled(false);
+        disarm();
         super.onPause();
     }
 
@@ -220,6 +222,7 @@ public final class AuthenticatorActivity extends Activity {
                 .setNegativeButton("Cancel", (d, w) -> pending = null)
                 .setOnCancelListener(d -> pending = null)
                 .create();
+        dialog.getWindow().setHideOverlayWindows(true);
         dialog.show();
         final Button add = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
         dialog.setOnDismissListener(d -> {
@@ -233,14 +236,25 @@ public final class AuthenticatorActivity extends Activity {
     private void guard(Button b) {
         if (b == null) return;
         b.setFilterTouchesWhenObscured(true);
+        // Also ignore a touch while any other window covers part of the dialog (its text could be painted over).
+        b.setOnTouchListener((v, ev) -> (ev.getFlags() & MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED) != 0);
+        // A window over the dialog takes its focus without pausing the activity: start the delay again on return.
+        b.getViewTreeObserver().addOnWindowFocusChangeListener(focused -> {
+            if (focused) arm();
+            else disarm();
+        });
         guarded.add(b);
         arm();
     }
 
-    /** Disables every guarded button and enables them again after the delay, if this activity is still shown. */
-    private void arm() {
+    private void disarm() {
         tick.removeCallbacks(enable);
         for (Button b : guarded) b.setEnabled(false);
+    }
+
+    /** Disables every guarded button and enables them again after the delay, if this activity is still shown. */
+    private void arm() {
+        disarm();
         if (resumed && !guarded.isEmpty()) tick.postDelayed(enable, CONFIRM_DELAY_MS);
     }
 
@@ -352,6 +366,7 @@ public final class AuthenticatorActivity extends Activity {
                 })
                 .setNegativeButton("Cancel", null)
                 .create();
+        d.getWindow().setHideOverlayWindows(true);
         d.show();
         final Button remove = d.getButton(AlertDialog.BUTTON_POSITIVE);
         d.setOnDismissListener(x -> guarded.remove(remove));
