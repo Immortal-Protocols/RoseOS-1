@@ -1129,7 +1129,13 @@ fn a_panic_anywhere_answers_500_and_frees_its_slot() {
     let mut h = harness(Admission::Invite);
     h.server.max_connections = 1;
     let (server, addr) = listen(h.server);
+    // Each panic gives its slot back (the client sees the answer when the server stops writing, a moment before
+    // the thread ends, so each request waits for the slot to come back first).
     for _ in 0..3 {
+        assert!(
+            wait_until(|| server.open_connections() == 0),
+            "a slot was not given back"
+        );
         let out = exchange(addr, get("/app/me", Some("BOOM")).as_bytes());
         assert!(out.starts_with("HTTP/1.1 500") && out.contains("internal"), "{out}");
     }
@@ -1143,6 +1149,10 @@ fn a_panic_anywhere_answers_500_and_frees_its_slot() {
     server.max_connections = 1;
     let (server, addr) = listen(server);
     for _ in 0..3 {
+        assert!(
+            wait_until(|| server.open_connections() == 0),
+            "a slot was not given back"
+        );
         assert!(exchange(addr, get("/app/hello", None).as_bytes()).starts_with("HTTP/1.1 200"));
     }
     assert!(wait_until(|| server.open_connections() == 0));
