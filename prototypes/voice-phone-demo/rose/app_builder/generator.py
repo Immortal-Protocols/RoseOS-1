@@ -37,11 +37,18 @@ OPEN_MESSAGES = {
 }
 
 
-def prompt(kind: str, request: str, libraries=()) -> str:
+CLIENT_SERVER = ('\n\nThis builder builds client-server apps (rose-app.json, contract/ and server/), as your '
+                 'instructions describe.')
+
+
+def prompt(kind: str, request: str, libraries=(), client_server: bool = False) -> str:
     """The owner's request as the turn's text, with the libraries this builder provides (declared in
-    dependencies.json, never shipped). The policy itself is fixed by the bridge."""
+    dependencies.json, never shipped) and, when it can build them, that it builds client-server apps: the policy
+    (fixed by the bridge, the same for every job) offers one only when the turn says so."""
     provided = ('\n\nPure-Java libraries this builder provides (declare in dependencies.json only if needed): '
                 + ', '.join(libraries) + '.') if libraries else ''
+    if client_server:
+        provided += CLIENT_SERVER
     if kind == 'create':
         return ('Write this new app (the skeleton in the current directory is its starting point).' + provided
                 + '\n\n' + request)
@@ -53,12 +60,15 @@ def prompt(kind: str, request: str, libraries=()) -> str:
 
 class CodexGenerator:
     def __init__(self, timeout_s: float = 900.0, model: str = MODEL, command: list[str] | None = None, connect=None,
-                 libraries=None):
+                 libraries=None, client_server: bool = False):
         """``command`` is the bridge command line (for example one that runs it as a separate OS user); ``connect``
         replaces the client for tests: connect(on_event) -> object with request(op, session, **params) and close().
-        ``libraries`` lists the coordinates the builder's library store provides (its ``available``), if any."""
+        ``libraries`` lists the coordinates the builder's library store provides (its ``available``), if any.
+        ``client_server`` says the builder can build a client-server app (a host sets it only when it injects
+        the Builder's code generator, server isolation, Rust toolchain and builder crates); the turn then says so."""
         self.timeout_s, self.model = timeout_s, model
         self.libraries = libraries
+        self.client_server = client_server
         if connect is None:
             from ..codex_client import CodexClient
             connect = lambda on_event: CodexClient(on_event, command)
@@ -67,7 +77,7 @@ class CodexGenerator:
 
     def __call__(self, source: Path, kind: str, request: str, cancelled) -> str:
         available = self.libraries() if callable(self.libraries) else self.libraries
-        text = prompt(kind, request, sorted(available or ()))
+        text = prompt(kind, request, sorted(available or ()), self.client_server)
         events: queue.Queue = queue.Queue()
         session = 'app-build-' + uuid.uuid4().hex
         client = self.connect(events.put)

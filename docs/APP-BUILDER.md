@@ -1373,8 +1373,8 @@ folder is still refused.
 The tree adds a `contract/` folder (the API both halves share; required) and
 `server/`:
 - `server/src/**.rs`, with `server/src/handlers/mod.rs` required;
-- `server/assets/**` (data files, embedded in the server as `crate::assets::get("data/x.json")`, §7.6, once
-  the generated `main.rs` declares `mod assets;`);
+- `server/assets/**` (data files, embedded in the server and read with `crate::assets::get("data/x.json")`,
+  §7.6);
 - `server/migrations/account/NNNN_name.sql`, and `migrations/shared/` only
   when `shared` is true.
 
@@ -1858,8 +1858,8 @@ runs these steps before signing:
      the writer's `server/assets/` files by their path under it (with `/`),
      each `include_bytes!` of the build's own copy, so the bytes are exact.
      It is written on every client-server build (with no assets, `get`
-     answers `None`), so the generated `main.rs` can always declare it
-     (Home/App adds `mod assets;` next; until then nothing reaches it). At
+     answers `None`), so the generated `main.rs` always declares it
+     (`mod assets;`, §7.5). At
      most 1024 files and 64 MiB in all, within the app's own 64 MB; more is
      the writer's (`compile`, `assets_too_large`). A path under
      `server/src` or `server/assets` longer than 1024 bytes is the
@@ -1874,8 +1874,8 @@ runs these steps before signing:
      `java.net.URI` reads a host; no IP address), an optional port and a
      plain path, and a test checks the generated `HttpsTransport` accepts
      each of those. It is baked into the APK, so the first hosted version
-     needs a build after the record exists. `RoseApi.serverUrl()` is to
-     read it (Home/App, next).
+     needs a build after the record exists. The generated
+     `RoseApi.serverUrl()` returns it (§7.5).
 3. **Generated code.** The injected `codegen` writes the server's `rose/*.rs`
    files and the client's files under `src/<package>/rose/`. A generator
    that fails, or writes outside that folder (a `..`, `.` or empty path
@@ -1911,6 +1911,34 @@ crates that use crates.io crates, as the adapter does (without one, as
 `toolchain`). A generator's client file that cannot be written is the
 builder's too. A plain app's job is unchanged.
 
+- **The writer's policy** (`workspace/rose-agent/server/app-build.mjs`, the
+  fixed `app_build` instructions, §4A) describes a client-server app in the
+  shapes the builder checks and generates, so a Codex writer can produce one
+  when the owner's app needs its own server:
+  - `rose-app.json`, the contract and the migrations, with the rules above;
+  - `server/src/handlers/mod.rs` against the generated `Handlers`, with
+    the adapter's `AppData` and `rusqlite`, `Refusal` and `crate::assets`;
+  - the Android side through the generated `RoseApi.serverUrl()`, `Client`,
+    `RoseSignin` and `RoseSession`, off the main thread, with
+    `android.permission.INTERNET`;
+  - on a revision, the delivered migrations kept and the contract
+    compatible unless `api` rises.
+
+  The same text goes to every job, so it offers the profile only when the
+  turn says the builder builds client-server apps: `CodexGenerator(
+  client_server=True)`, which a host sets only once it injects the
+  Builder's code generator, isolation, Rust toolchain and builder crates
+  (no host does yet). Otherwise the writer builds the app without a
+  server and says what would need one. It also tells the writer the server
+  is not hosted (`RoseApi.serverUrl()` is null in every build), so its reply
+  never claims the server runs or syncs, and that pending migrations share
+  one transaction with foreign keys on (dropping or rebuilding a table
+  others reference then fails at start-up once phones hold data, or
+  deletes rows through `ON DELETE`). It limits nothing about what the app does.
+  `rose/tests/test_app_writer_policy.py` reads the policy through node and
+  checks each rule and name against the builder's own constants and its
+  generated code; `app-build.test.mjs` checks the source is one plain
+  template literal.
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:
   - the client as in Level 1;
