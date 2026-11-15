@@ -382,7 +382,7 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ApiReport.java \
  workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
  workspace/rose-builder/tests/ShareStateTest.java
-java -cp "$JAVA_TESTS/ShareState" dev.pixel.builder.ShareStateTest
+java -cp "$JAVA_TESTS/ShareState" dev.pixel.builder.ShareStateTest prototypes/voice-phone-demo/rose/tests/fixtures/share-summary-v1.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/FakeBuilderApi" \
  workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
  workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ShareState.java \
