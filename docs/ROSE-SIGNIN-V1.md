@@ -59,21 +59,24 @@ All requests go to the generated app's server endpoint over an authenticated, en
 
 | Step | Request | Server behaviour |
 |---|---|---|
-| Admission | App-specific (D7) | The app decides whether this account may be created (open sign-up or creator invite) before enrollment starts. |
-| Enroll 1 | `POST /signin/v1/enroll {account, passphrase, handle?}` | Checks the name and length policies and hashes the passphrase. Creates a 160-bit secret, 10 recovery codes and a 256-bit **enrollment handle**. Returns all three **once**, with the `otpauth://` URI. The account stays unconfirmed. For 15 minutes the pending enrollment belongs to whoever began it: a restart without its handle gets `enrollment_pending`, so a second caller cannot swap in their own secret. A confirmed account cannot be re-enrolled this way. |
+| Invite | Creator's owner tooling only: `create_invite(app, account)` | A single-use invite token for exactly that account, valid 7 days, stored as its SHA-256. It is never a public route: only the app's creator issues invites. |
+| Admission | `invite` in Enroll 1, or open sign-up (D7) | `Admission::Invite(token)` (the default) is checked before anything about the account, so without a valid invite every answer is `not_admitted`. It spends the invite at Enroll 1; if the enrollment is then refused (`already_enrolled`, `enrollment_pending`) or fails, the transaction rolls back and the invite survives. `Admission::Open` when the app opted into open sign-up. Restarting one's own pending enrollment with its handle needs no admission. |
+| Enroll 1 | `POST /signin/v1/enroll {account, passphrase, invite?, handle?}` | Checks the name and length policies and hashes the passphrase. Creates a 160-bit secret, 10 recovery codes and a 256-bit **enrollment handle**. Returns all three **once**, with the `otpauth://` URI. The account stays unconfirmed. For 15 minutes the pending enrollment belongs to whoever began it: a restart without its handle gets `enrollment_pending`, so a second caller cannot swap in their own secret. A confirmed account cannot be re-enrolled this way. |
 | Enroll 2 | `POST /signin/v1/enroll/confirm {account, handle, code}` | Needs the enrollment handle. A valid code proves the authenticator holds the secret, consumes that step, and confirms the account. Every failure, including a confirmed or unknown account, is `not_confirmed`. Attempts are rate-limited per account. |
 | Sign in | `POST /signin/v1/session {account, code, passphrase}` | Applies rate limits, checks both factors, and on success returns `{token, account}`. The token is 256 random bits, base32 encoded. |
 | Use | `Authorization: Bearer <token>` | The server looks up SHA-256(token) and checks absolute and idle expiry. |
 | Sign out | `DELETE /signin/v1/session` | Revokes this session. |
 | Sign out everywhere | `DELETE /signin/v1/sessions` | Revokes every session of the principal. It also runs after any factor change. |
-| Recover | D5 | A recovery code plus one remaining factor (see Decisions); routes and library support follow in the next change. |
+| Lost authenticator | `POST /signin/v1/recover/authenticator {account, recovery_code, passphrase}` | A recovery code plus the passphrase. On success: a new authenticator secret is **staged** (the account stays confirmed, so nobody can enroll over it), every session is revoked, and the response is like Enroll 1 (`otpauth://` URI, handle, new recovery codes). Enroll 2 with the handle and a code from the new authenticator replaces the old secret and signs out every session again. While the recovery is pending (15 minutes) the old authenticator, declared lost, is suspended: it neither signs in nor counts for passphrase recovery. If the recovery expires unconfirmed, the old authenticator works again. The recovery code is spent even if the passphrase is wrong. |
+| Forgotten passphrase | `POST /signin/v1/recover/passphrase {account, recovery_code, code, new_passphrase}` | A recovery code plus a fresh one-time code set a new passphrase. Every session is revoked; the response is the new recovery codes, shown once. Each of the two codes is spent whenever it is valid, even if the other is not. |
 
 **Errors.**
 - `401 {"error":"sign_in_failed"}` for any factor or account failure.
 - `429 {"error":"try_later","retry_after":N}` plus a `Retry-After` header when rate-limited.
 - `401 {"error":"session_invalid"}` for an unknown, expired or revoked token.
 - `503 {"error":"auth_unavailable"}` when the sealing key or the store is unavailable (`Unavailable`): nothing was written and no attempt was counted. Servers also report themselves not ready while `Authenticator::ready()` is false.
-- Enrollment errors: `passphrase_too_short`, `passphrase_too_long`, `invalid_name`, `enrollment_pending`, `already_enrolled`, `not_confirmed`, and `try_later` (confirmation rate limit).
+- Enrollment errors: `passphrase_too_short`, `passphrase_too_long`, `invalid_name`, `enrollment_pending`, `not_admitted` (no valid invite), `already_enrolled`, `not_confirmed`, and `try_later` (confirmation rate limit).
+- Recovery errors: `401 {"error":"recovery_failed"}` for a wrong recovery code or second factor, or no such confirmed account (indistinguishable); `try_later` when limited (the client limit always applies; the account limit is skipped when a valid recovery code is presented, as for sign-in); `passphrase_too_short` / `passphrase_too_long` for a new passphrase; `auth_unavailable`.
 - `already_enrolled` tells a would-be enroller that the name is taken. That is unavoidable under open sign-up; invite-only admission (D7) hides it from anyone without an invite.
 
 The HTTP shape above is the contract. The library (`rose_signin::flow::Authenticator`) implements the behaviour behind it, and App Core's generated server maps routes to it.
@@ -131,6 +134,7 @@ CREATE TABLE auth_account (
   pending_handle_hash BLOB,               -- SHA-256 of the enrollment handle while unconfirmed
   pending_since INTEGER NOT NULL,
   recovery_reissue INTEGER NOT NULL DEFAULT 0, -- set by a restore: a new recovery set at next sign-in
+  staged_otp_secret BLOB,                 -- migration 2: a recovered authenticator, until confirmed
   PRIMARY KEY (app, account));
 -- 80-bit codes, stored as SHA-256 over (app, account, code), length-prefixed, so a leaked table cannot be
 -- attacked across accounts at once.
@@ -140,6 +144,9 @@ CREATE TABLE auth_rate (key TEXT PRIMARY KEY, failures INTEGER NOT NULL, last_fa
 CREATE TABLE auth_session (token_hash BLOB PRIMARY KEY, app TEXT NOT NULL, account TEXT NOT NULL,
   created INTEGER NOT NULL, last_seen INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX auth_session_principal ON auth_session (app, account);
+-- migration 2: single-use invites (D7)
+CREATE TABLE auth_invite (app TEXT NOT NULL, account TEXT NOT NULL, token_hash BLOB NOT NULL,
+  expires INTEGER NOT NULL, PRIMARY KEY (app, account, token_hash));
 ```
 
 ## Restoring a backup
@@ -160,9 +167,9 @@ Known limitation: a passphrase or authenticator changed after the backup reverts
 | D2 | Length | At least 8 and at most 128 characters; digit-only values are allowed. The product says "passphrase". |
 | D3 | Where codes come from | Any standard authenticator app, or the RoseOS system authenticator. One on the same phone proves "this phone", not a separate device. |
 | D4 | Code profile | HMAC-SHA-1, 6 digits, 30 s, one step of skew: what authenticator apps generate. |
-| D5 | Recovery | A recovery code plus one remaining factor: code + passphrase re-enrolls the authenticator; code + a fresh one-time code sets a new passphrase. Both sign out every session and issue a new recovery set. **No creator reset**: an account with both factors lost stays locked, its data kept. Library support follows in the next change. |
+| D5 | Recovery | A recovery code plus one remaining factor: code + passphrase re-enrolls the authenticator; code + a fresh one-time code sets a new passphrase. Both sign out every session and issue a new recovery set. **No creator reset**: an account with both factors lost stays locked, its data kept. Implemented (`recover_authenticator`, `recover_passphrase`). |
 | D6 | Lockout | Decaying backoff; the account limit is skipped for attempts carrying a valid code; no hard lock. |
-| D7 | Account creation | Creator invites by default (single-use, bound to the account, expiring); open sign-up is a per-app opt-in. Library support follows in the next change. |
+| D7 | Account creation | Creator invites by default (single-use, bound to the account, expiring); open sign-up is a per-app opt-in. Implemented (`create_invite`, `Admission`). |
 | D8 | Native surface | `ACTION_VIEW` on the `otpauth://` URI; a RoseOS system authenticator claims it; plain system UI. |
 | D9 | Sealing key placement | The Chariot owner's (see Sealing). |
 | D10 | Session lifetimes | 30 days absolute, 7 days idle. |
@@ -171,7 +178,7 @@ Known limitation: a passphrase or authenticator changed after the backup reverts
 
 | Layer | State |
 |---|---|
-| Source + host tests | `workspace/rose-signin`: Rust library, `cargo test` with and without `--features sqlite` (shared vectors, flow, sealer, store conformance on memory and SQLite, two-connection concurrency, restore); Java client core, `java/test.sh` (the same vectors). Workflow: `.github/workflows/rose-signin.yml`. The Java core also runs in `scripts/test-local.sh`. |
+| Source + host tests | `workspace/rose-signin`: Rust library, `cargo test` with and without `--features sqlite` (shared vectors, flow, sealer, store conformance on memory and SQLite, two-connection concurrency, restore, invites and recovery); Java client core, `java/test.sh` (the same vectors). Workflow: `.github/workflows/rose-signin.yml`. The Java core also runs in `scripts/test-local.sh`. |
 | Build into RoseOS | The system authenticator is next OS Core work; building it into an image needs the authorized OS build route. |
 | Deployment | None. No Chariot endpoint exists for it, and the Rose server stays stopped. |
 | Phone proof | None. |

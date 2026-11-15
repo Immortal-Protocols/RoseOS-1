@@ -2,7 +2,7 @@
 //! SQLite-only concurrency, migration and restore checks. A store that passes these meets the flow's contract.
 
 use rose_signin::base32;
-use rose_signin::flow::{Authenticator, EnrollError, SignIn};
+use rose_signin::flow::{Admission, Authenticator, EnrollError, SignIn};
 use rose_signin::otp;
 use rose_signin::secret::{
     AeadSealer, OTP_SECRET, OpenError, SealContext, SealError, Sealer, Secret,
@@ -36,7 +36,7 @@ fn code(k: &[u8], t: u64) -> String {
 
 fn enroll<S: Store, K: Sealer>(a: &mut Authenticator<S, K>, account: &str) -> Vec<u8> {
     let e = a
-        .begin_enrollment("notes", account, PASS, None, T0)
+        .begin_enrollment("notes", account, PASS, Admission::Open, None, T0)
         .unwrap();
     let k = secret_of(&e.otpauth_uri);
     a.confirm_enrollment("notes", account, e.handle.expose(), &code(&k, T0), T0)
@@ -121,7 +121,7 @@ fn scenario_unavailable_key_writes_and_counts_nothing<S: Store>(store: S) {
         SignIn::Unavailable
     );
     assert_eq!(
-        b.begin_enrollment("notes", "bo", PASS, None, t)
+        b.begin_enrollment("notes", "bo", PASS, Admission::Open, None, t)
             .unwrap_err(),
         EnrollError::Unavailable
     );
@@ -269,7 +269,9 @@ fn scenario_restore<S: Store>(store: S) {
 
 fn scenario_restore_keeps_a_pending_enrollments_recovery_codes<S: Store>(store: S) {
     let mut a = Authenticator::new(store, sealer(), "Rose Notes").unwrap();
-    let e = a.begin_enrollment("notes", "bo", PASS, None, T0).unwrap();
+    let e = a
+        .begin_enrollment("notes", "bo", PASS, Admission::Open, None, T0)
+        .unwrap();
     let k = secret_of(&e.otpauth_uri);
     a.restore_after_backup(T0 + 60).unwrap();
     // The enroller confirms after the restore (past the skew), within the pending window.
@@ -289,6 +291,78 @@ fn scenario_restore_keeps_a_pending_enrollments_recovery_codes<S: Store>(store: 
         "notes",
         "bo",
         &e.recovery_codes[0]
+    ));
+}
+
+fn scenario_invites_are_single_use_and_survive_a_rollback<S: Store>(store: S) {
+    let sw = Switchable {
+        inner: sealer(),
+        on: std::cell::Cell::new(true),
+    };
+    let mut a = Authenticator::new(store, sw, "Rose Notes").unwrap();
+    let invite = a.create_invite("notes", "ana", T0).unwrap();
+    // The key is withdrawn mid-enrollment: the transaction rolls back and the invite survives.
+    let store = a.store;
+    let sw = Switchable {
+        inner: sealer(),
+        on: std::cell::Cell::new(false),
+    };
+    let mut b = Authenticator::new(store, sw, "Rose Notes").unwrap();
+    let r = b.begin_enrollment(
+        "notes",
+        "ana",
+        PASS,
+        Admission::Invite(invite.expose()),
+        None,
+        T0,
+    );
+    assert_eq!(r.unwrap_err(), EnrollError::Unavailable);
+    let store = b.store;
+    let mut c = Authenticator::new(store, sealer(), "Rose Notes").unwrap();
+    assert!(
+        c.begin_enrollment(
+            "notes",
+            "ana",
+            PASS,
+            Admission::Invite(invite.expose()),
+            None,
+            T0
+        )
+        .is_ok()
+    );
+    let r = c.begin_enrollment(
+        "notes",
+        "ana",
+        PASS,
+        Admission::Invite(invite.expose()),
+        None,
+        T0 + rose_signin::flow::PENDING_SECONDS,
+    );
+    assert_eq!(r.unwrap_err(), EnrollError::NotAdmitted, "single use");
+}
+
+fn scenario_authenticator_recovery_stages_until_confirmed<S: Store>(store: S) {
+    let mut a = Authenticator::new(store, sealer(), "Rose Notes").unwrap();
+    let e = a
+        .begin_enrollment("notes", "ana", PASS, Admission::Open, None, T0)
+        .unwrap();
+    let old = secret_of(&e.otpauth_uri);
+    a.confirm_enrollment("notes", "ana", e.handle.expose(), &code(&old, T0), T0)
+        .unwrap();
+    let r = a
+        .recover_authenticator("notes", "ana", &e.recovery_codes[0], PASS, "c", T0 + 30)
+        .unwrap();
+    let acct = a.store.account("notes", "ana").unwrap().unwrap();
+    assert!(acct.confirmed && acct.staged_otp_secret.is_some());
+    let new = secret_of(&r.otpauth_uri);
+    let t = T0 + 60;
+    a.confirm_enrollment("notes", "ana", r.handle.expose(), &code(&new, t), t)
+        .unwrap();
+    let acct = a.store.account("notes", "ana").unwrap().unwrap();
+    assert!(acct.staged_otp_secret.is_none() && acct.pending_handle_hash.is_none());
+    assert!(matches!(
+        a.sign_in("notes", "ana", &code(&new, t + 30), PASS, "c", t + 30),
+        SignIn::Ok { .. }
     ));
 }
 
@@ -364,6 +438,14 @@ macro_rules! conformance {
             #[test]
             fn restore_keeps_a_pending_enrollments_recovery_codes() {
                 scenario_restore_keeps_a_pending_enrollments_recovery_codes($make);
+            }
+            #[test]
+            fn invites_are_single_use_and_survive_a_rollback() {
+                scenario_invites_are_single_use_and_survive_a_rollback($make);
+            }
+            #[test]
+            fn authenticator_recovery_stages_until_confirmed() {
+                scenario_authenticator_recovery_stages_until_confirmed($make);
             }
             #[test]
             fn rotation_reseals() {

@@ -9,7 +9,7 @@ use crate::rate;
 use crate::session::{Principal, Record};
 
 /// The schema version this library writes. Migrations are applied in order and never edited once released.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const MIGRATIONS: &[&str] = &[
     // 1: rose-signin-v1
@@ -29,6 +29,10 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE auth_session (token_hash BLOB PRIMARY KEY, app TEXT NOT NULL, account TEXT NOT NULL,
        created INTEGER NOT NULL, last_seen INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
      CREATE INDEX auth_session_principal ON auth_session (app, account);",
+    // 2: single-use invites (D7)
+    "CREATE TABLE auth_invite (app TEXT NOT NULL, account TEXT NOT NULL, token_hash BLOB NOT NULL,
+       expires INTEGER NOT NULL, PRIMARY KEY (app, account, token_hash));
+     ALTER TABLE auth_account ADD COLUMN staged_otp_secret BLOB;",
 ];
 
 fn e(err: rusqlite::Error) -> StoreError {
@@ -120,7 +124,7 @@ impl Store for SqliteStore {
             .conn
             .query_row(
                 "SELECT knowledge_hash, sealed_otp_secret, last_used_step, confirmed, pending_handle_hash,
-                        pending_since, recovery_reissue
+                        pending_since, recovery_reissue, staged_otp_secret
                  FROM auth_account WHERE app = ?1 AND account = ?2",
                 params![app, account],
                 |r| {
@@ -133,6 +137,7 @@ impl Store for SqliteStore {
                         pending_handle_hash: pending.map(hash32).transpose()?,
                         pending_since: r.get::<_, i64>(5)? as u64,
                         recovery_reissue: r.get::<_, i64>(6)? != 0,
+                        staged_otp_secret: r.get(7)?,
                         recovery_hashes: vec![],
                     })
                 },
@@ -156,12 +161,13 @@ impl Store for SqliteStore {
         self.conn
             .execute(
                 "INSERT INTO auth_account (app, account, knowledge_hash, sealed_otp_secret, last_used_step, confirmed,
-                   pending_handle_hash, pending_since, recovery_reissue)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                   pending_handle_hash, pending_since, recovery_reissue, staged_otp_secret)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(app, account) DO UPDATE SET knowledge_hash = excluded.knowledge_hash,
                    sealed_otp_secret = excluded.sealed_otp_secret, last_used_step = excluded.last_used_step,
                    confirmed = excluded.confirmed, pending_handle_hash = excluded.pending_handle_hash,
-                   pending_since = excluded.pending_since, recovery_reissue = excluded.recovery_reissue",
+                   pending_since = excluded.pending_since, recovery_reissue = excluded.recovery_reissue,
+                   staged_otp_secret = excluded.staged_otp_secret",
                 params![
                     app,
                     account,
@@ -171,7 +177,8 @@ impl Store for SqliteStore {
                     a.confirmed as i64,
                     a.pending_handle_hash.map(|h| h.to_vec()),
                     a.pending_since as i64,
-                    a.recovery_reissue as i64
+                    a.recovery_reissue as i64,
+                    a.staged_otp_secret
                 ],
             )
             .map_err(e)?;
@@ -284,5 +291,40 @@ impl Store for SqliteStore {
             .execute("UPDATE auth_session SET revoked = 1", [])
             .map(|_| ())
             .map_err(e)
+    }
+
+    fn put_invite(
+        &mut self,
+        app: &str,
+        account: &str,
+        token_hash: [u8; 32],
+        expires: u64,
+    ) -> StoreResult<()> {
+        self.conn
+            .execute(
+                "INSERT INTO auth_invite (app, account, token_hash, expires) VALUES (?1, ?2, ?3, ?4)",
+                params![app, account, token_hash.to_vec(), expires as i64],
+            )
+            .map(|_| ())
+            .map_err(e)
+    }
+
+    fn take_invite(
+        &mut self,
+        app: &str,
+        account: &str,
+        token_hash: [u8; 32],
+        now: u64,
+    ) -> StoreResult<bool> {
+        let expires: Option<i64> = self
+            .conn
+            .query_row(
+                "DELETE FROM auth_invite WHERE app = ?1 AND account = ?2 AND token_hash = ?3 RETURNING expires",
+                params![app, account, token_hash.to_vec()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(e)?;
+        Ok(expires.is_some_and(|x| (now as i64) < x))
     }
 }

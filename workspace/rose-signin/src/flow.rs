@@ -15,6 +15,32 @@ use crate::{knowledge, recovery};
 
 /// How long an unconfirmed enrollment belongs to whoever began it.
 pub const PENDING_SECONDS: u64 = 15 * 60;
+/// How long a creator's invite stays usable.
+pub const INVITE_SECONDS: u64 = 7 * 86400;
+
+/// Who may start enrolling a new account (decision D7): the generated app passes `Invite` with the
+/// token the creator sent (the default), or `Open` when the app opted into open sign-up.
+/// Restarting one's own pending enrollment with its handle needs no admission.
+#[derive(Clone, Copy, Debug)]
+pub enum Admission<'a> {
+    Open,
+    Invite(&'a [u8]),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecoverError {
+    /// Wrong recovery code or second factor, or no such confirmed account: deliberately
+    /// indistinguishable.
+    Failed,
+    Limited {
+        retry_after: u64,
+    },
+    /// The new passphrase does not meet the length policy.
+    Knowledge(knowledge::Rejected),
+    /// The sealing key or the store is unavailable; nothing was written. HTTP 503
+    /// `auth_unavailable`.
+    Unavailable,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum EnrollError {
@@ -27,6 +53,8 @@ pub enum EnrollError {
     InvalidName,
     /// No pending enrollment for this handle, or the code did not match (also for confirmed accounts).
     NotConfirmed,
+    /// No valid invite for this account (missing, already used, expired or for another account).
+    NotAdmitted,
     Limited {
         retry_after: u64,
     },
@@ -65,6 +93,8 @@ pub struct Unavailable;
 /// Why an operation stops before committing.
 enum Abort {
     Unavailable,
+    /// Undo the operation's writes (for example an invite spent on an enrollment then refused).
+    Rollback,
 }
 
 impl From<StoreError> for Abort {
@@ -155,7 +185,16 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
         account: &str,
         a: &Account,
     ) -> Result<Option<Secret>, Abort> {
-        match self.sealer.open(&ctx(app, account), &a.sealed_otp_secret) {
+        self.open_sealed(app, account, &a.sealed_otp_secret)
+    }
+
+    fn open_sealed(
+        &mut self,
+        app: &str,
+        account: &str,
+        sealed: &[u8],
+    ) -> Result<Option<Secret>, Abort> {
+        match self.sealer.open(&ctx(app, account), sealed) {
             Ok(s) => Ok(Some(s)),
             Err(OpenError::KeyUnavailable) => Err(Abort::Unavailable),
             Err(OpenError::Integrity) => {
@@ -172,6 +211,7 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
         app: &str,
         account: &str,
         passphrase: &str,
+        admission: Admission,
         handle: Option<&[u8]>,
         now: u64,
     ) -> Result<Enrollment, EnrollError> {
@@ -179,15 +219,46 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
             return Err(EnrollError::InvalidName);
         }
         let knowledge_hash = knowledge::hash(passphrase).map_err(EnrollError::Knowledge)?;
+        let mut refused_slot: Option<EnrollError> = None;
+        let refused = &mut refused_slot;
         let result = self.transaction(|me| {
-            if let Some(a) = me.store.account(app, account)? {
-                if a.confirmed {
-                    return Ok(Err(EnrollError::AlreadyEnrolled));
+            let existing = me.store.account(app, account)?;
+            let restarting_own = existing.as_ref().is_some_and(|a| {
+                !a.confirmed
+                    && now < a.pending_since.saturating_add(PENDING_SECONDS)
+                    && handle_matches(a, handle)
+            });
+            // Admission comes before anything that depends on the account, so a caller without a
+            // valid invite learns nothing about it (only `NotAdmitted`). The invite is spent here;
+            // if the enrollment is then refused or fails, the transaction rolls back and it
+            // survives.
+            let invited = !restarting_own && matches!(admission, Admission::Invite(_));
+            if !restarting_own {
+                let admitted = match admission {
+                    Admission::Open => true,
+                    Admission::Invite(token) => {
+                        me.store
+                            .take_invite(app, account, session::key(token), now)?
+                    }
+                };
+                if !admitted {
+                    return Ok(Err(EnrollError::NotAdmitted));
                 }
-                if now < a.pending_since.saturating_add(PENDING_SECONDS)
-                    && !handle_matches(&a, handle)
-                {
-                    return Ok(Err(EnrollError::Pending));
+            }
+            if let Some(a) = &existing {
+                let refusal = if a.confirmed {
+                    Some(EnrollError::AlreadyEnrolled)
+                } else if now < a.pending_since.saturating_add(PENDING_SECONDS) && !restarting_own {
+                    Some(EnrollError::Pending)
+                } else {
+                    None
+                };
+                if let Some(err) = refusal {
+                    if invited {
+                        *refused = Some(err);
+                        return Err(Abort::Rollback);
+                    }
+                    return Ok(Err(err));
                 }
             }
             let secret = Secret::random(20);
@@ -207,6 +278,7 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
                     pending_handle_hash: Some(handle_hash),
                     pending_since: now,
                     recovery_reissue: false,
+                    staged_otp_secret: None,
                 },
             )?;
             Ok(Ok(Enrollment {
@@ -215,6 +287,9 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
                 recovery_codes: codes,
             }))
         });
+        if let Some(err) = refused_slot {
+            return Err(err);
+        }
         result.unwrap_or(Err(EnrollError::Unavailable))
     }
 
@@ -234,16 +309,21 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
             if wait > 0 {
                 return Ok(Err(EnrollError::Limited { retry_after: wait }));
             }
+            // A pending enrollment, or a confirmed account's staged authenticator recovery.
             let pending = me.store.account(app, account)?.filter(|a| {
-                !a.confirmed
+                (!a.confirmed || a.staged_otp_secret.is_some())
                     && now < a.pending_since.saturating_add(PENDING_SECONDS)
                     && handle_matches(a, Some(handle))
             });
             let Some(mut a) = pending else {
                 return Ok(Err(EnrollError::NotConfirmed));
             };
+            let target = a
+                .staged_otp_secret
+                .clone()
+                .unwrap_or_else(|| a.sealed_otp_secret.clone());
             let step = me
-                .open_secret(app, account, &a)?
+                .open_sealed(app, account, &target)?
                 .and_then(|s| otp::verify(s.expose(), me.otp, code, now, a.last_used_step));
             let Some(step) = step else {
                 let failed = me.rate.failed(me.store.rate(&key)?, now);
@@ -253,6 +333,15 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
             a.last_used_step = Some(step);
             a.confirmed = true;
             a.pending_handle_hash = None;
+            if let Some(staged) = a.staged_otp_secret.take() {
+                // Recovery completes: the new authenticator replaces the lost one, and every
+                // session (including any opened with the old one meanwhile) ends.
+                a.sealed_otp_secret = staged;
+                me.store.revoke_all(&Principal {
+                    app: app.to_string(),
+                    account: account.to_string(),
+                })?;
+            }
             me.store.put_account(app, account, &a)?;
             me.store.put_rate(&key, rate::State::default())?;
             Ok(Ok(()))
@@ -276,7 +365,10 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
         let result = self.transaction(|me| {
             let record = me.store.account(app, account)?.filter(|a| a.confirmed);
             let mut code_step = None;
-            if let Some(a) = &record {
+            if let Some(a) = record
+                .as_ref()
+                .filter(|a| !old_authenticator_suspended(a, now))
+            {
                 let faults = me.integrity_faults;
                 let secret = me.open_secret(app, account, a)?;
                 if me.integrity_faults > faults {
@@ -389,6 +481,197 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
             .map_err(|_| Unavailable)
     }
 
+    /// Issues a single-use invite for (app, account), valid for `INVITE_SECONDS` (D7). Only the
+    /// app's creator, through the generated server's owner tooling, calls this; the token goes to
+    /// the recipient, who enrolls with `Admission::Invite(token)`. An invite admits exactly the
+    /// account it names.
+    pub fn create_invite(
+        &mut self,
+        app: &str,
+        account: &str,
+        now: u64,
+    ) -> Result<Secret, EnrollError> {
+        if !valid_name(app) || !valid_name(account) {
+            return Err(EnrollError::InvalidName);
+        }
+        let result = self.transaction(|me| {
+            if me.store.account(app, account)?.is_some_and(|a| a.confirmed) {
+                return Ok(Err(EnrollError::AlreadyEnrolled));
+            }
+            let (token, hash) = session::mint();
+            me.store
+                .put_invite(app, account, hash, now.saturating_add(INVITE_SECONDS))?;
+            Ok(Ok(token))
+        });
+        result.unwrap_or(Err(EnrollError::Unavailable))
+    }
+
+    /// Whether a recovery code is one of the account's unused set (checked on a copy).
+    fn recovery_code_valid(app: &str, account: &str, a: &Account, typed: &str) -> bool {
+        let mut copy = a.recovery_hashes.clone();
+        recovery::consume(&mut copy, app, account, typed)
+    }
+
+    /// Lost authenticator (D5): a recovery code plus the passphrase stage a new authenticator
+    /// secret. Returns an `Enrollment` (new URI, handle and recovery codes); `confirm_enrollment`
+    /// with a code from the new authenticator completes it, replacing the old secret. The account
+    /// stays confirmed throughout (nobody can enroll over it), every session is revoked, and the
+    /// recovery code is spent even if the passphrase is wrong (one code buys one guess).
+    pub fn recover_authenticator(
+        &mut self,
+        app: &str,
+        account: &str,
+        recovery_code: &str,
+        passphrase: &str,
+        client: &str,
+        now: u64,
+    ) -> Result<Enrollment, RecoverError> {
+        let account_key = format!("r\u{0}{app}\u{0}{account}");
+        let client_key = format!("rc\u{0}{app}\u{0}{client}");
+        let result = self.transaction(|me| {
+            let record = me.store.account(app, account)?.filter(|a| a.confirmed);
+            let code_ok = record
+                .as_ref()
+                .is_some_and(|a| Self::recovery_code_valid(app, account, a, recovery_code));
+            if let Some(w) = me.limited(&account_key, &client_key, code_ok, now)? {
+                return Ok(Err(RecoverError::Limited { retry_after: w }));
+            }
+            let knowledge_ok = match &record {
+                Some(a) => knowledge::verify(passphrase, &a.knowledge_hash),
+                None => {
+                    knowledge::verify(passphrase, &me.decoy);
+                    false
+                }
+            };
+            let (Some(mut a), true) = (record, code_ok) else {
+                me.count_failure(&account_key, &client_key, now)?;
+                return Ok(Err(RecoverError::Failed));
+            };
+            recovery::consume(&mut a.recovery_hashes, app, account, recovery_code);
+            if !knowledge_ok {
+                me.store.put_account(app, account, &a)?;
+                me.count_failure(&account_key, &client_key, now)?;
+                return Ok(Err(RecoverError::Failed));
+            }
+            let secret = Secret::random(20);
+            let staged = me.sealer.seal(&ctx(app, account), &secret)?;
+            let (codes, hashes) = recovery::generate(app, account);
+            let (handle, handle_hash) = session::mint();
+            a.staged_otp_secret = Some(staged);
+            a.recovery_hashes = hashes;
+            a.recovery_reissue = false;
+            a.pending_handle_hash = Some(handle_hash);
+            a.pending_since = now;
+            me.store.put_account(app, account, &a)?;
+            me.store.put_rate(&account_key, rate::State::default())?;
+            me.store.revoke_all(&Principal {
+                app: app.to_string(),
+                account: account.to_string(),
+            })?;
+            let uri = otp::otpauth_uri(&me.issuer, account, secret.expose(), me.otp);
+            Ok(Ok(Enrollment {
+                handle,
+                otpauth_uri: Secret::new(uri.into_bytes()),
+                recovery_codes: codes,
+            }))
+        });
+        result.unwrap_or(Err(RecoverError::Unavailable))
+    }
+
+    /// Forgotten passphrase (D5): a recovery code plus a fresh one-time code set a new passphrase.
+    /// Returns the new recovery codes (shown once); every session is revoked. The recovery code
+    /// and the one-time code are each spent whenever valid, even if the other is not.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recover_passphrase(
+        &mut self,
+        app: &str,
+        account: &str,
+        recovery_code: &str,
+        code: &str,
+        new_passphrase: &str,
+        client: &str,
+        now: u64,
+    ) -> Result<Vec<String>, RecoverError> {
+        let knowledge_hash = knowledge::hash(new_passphrase).map_err(RecoverError::Knowledge)?;
+        let account_key = format!("r\u{0}{app}\u{0}{account}");
+        let client_key = format!("rc\u{0}{app}\u{0}{client}");
+        let result = self.transaction(|me| {
+            let record = me.store.account(app, account)?.filter(|a| a.confirmed);
+            let code_ok = record
+                .as_ref()
+                .is_some_and(|a| Self::recovery_code_valid(app, account, a, recovery_code));
+            if let Some(w) = me.limited(&account_key, &client_key, code_ok, now)? {
+                return Ok(Err(RecoverError::Limited { retry_after: w }));
+            }
+            let Some(mut a) = record else {
+                me.count_failure(&account_key, &client_key, now)?;
+                return Ok(Err(RecoverError::Failed));
+            };
+            let faults = me.integrity_faults;
+            let step = if old_authenticator_suspended(&a, now) {
+                None
+            } else {
+                me.open_secret(app, account, &a)?
+                    .and_then(|s| otp::verify(s.expose(), me.otp, code, now, a.last_used_step))
+            };
+            if me.integrity_faults > faults {
+                return Ok(Err(RecoverError::Failed));
+            }
+            if code_ok {
+                recovery::consume(&mut a.recovery_hashes, app, account, recovery_code);
+            }
+            if let Some(s) = step {
+                a.last_used_step = Some(s);
+            }
+            if !(code_ok && step.is_some()) {
+                me.store.put_account(app, account, &a)?;
+                me.count_failure(&account_key, &client_key, now)?;
+                return Ok(Err(RecoverError::Failed));
+            }
+            let (codes, hashes) = recovery::generate(app, account);
+            a.knowledge_hash = knowledge_hash;
+            a.recovery_hashes = hashes;
+            a.recovery_reissue = false;
+            me.store.put_account(app, account, &a)?;
+            me.store.put_rate(&account_key, rate::State::default())?;
+            me.store.revoke_all(&Principal {
+                app: app.to_string(),
+                account: account.to_string(),
+            })?;
+            Ok(Ok(codes))
+        });
+        result.unwrap_or(Err(RecoverError::Unavailable))
+    }
+
+    /// The wait before another recovery attempt: the client limit always; the account limit only
+    /// without a valid recovery code (an 80-bit secret an attacker cannot hold), as for sign-in.
+    fn limited(
+        &mut self,
+        account_key: &str,
+        client_key: &str,
+        code_ok: bool,
+        now: u64,
+    ) -> Result<Option<u64>, Abort> {
+        let mut wait = self.rate.wait(self.store.rate(client_key)?, now);
+        if !code_ok {
+            wait = wait.max(self.rate.wait(self.store.rate(account_key)?, now));
+        }
+        Ok((wait > 0).then_some(wait))
+    }
+
+    fn count_failure(
+        &mut self,
+        account_key: &str,
+        client_key: &str,
+        now: u64,
+    ) -> Result<(), Abort> {
+        let a = self.rate.failed(self.store.rate(account_key)?, now);
+        self.store.put_rate(account_key, a)?;
+        let c = self.rate.failed(self.store.rate(client_key)?, now);
+        self.store.put_rate(client_key, c)?;
+        Ok(())
+    }
+
     /// Run once after the database is restored from a backup, before serving requests. A backup brings back state
     /// that later operations had retired, so this, in one transaction: revokes every session (tokens revoked after
     /// the backup would otherwise work again); moves every account's replay marker past every step the server could
@@ -418,6 +701,14 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
         })
         .map_err(|_| Unavailable)
     }
+}
+
+/// While an authenticator recovery is staged and fresh, the old authenticator (declared lost) no
+/// longer counts as a factor: whoever holds it can neither sign in nor advance the used-code marker
+/// that the new authenticator's confirmation checks. If the recovery expires unconfirmed, the old
+/// authenticator works again.
+fn old_authenticator_suspended(a: &Account, now: u64) -> bool {
+    a.staged_otp_secret.is_some() && now < a.pending_since.saturating_add(PENDING_SECONDS)
 }
 
 fn handle_matches(a: &Account, handle: Option<&[u8]>) -> bool {

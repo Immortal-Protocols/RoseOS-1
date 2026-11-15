@@ -1,6 +1,6 @@
 //! The rose-signin-v1 server flow and its security properties.
 
-use rose_signin::flow::{Authenticator, EnrollError, PENDING_SECONDS, SignIn};
+use rose_signin::flow::{Admission, Authenticator, EnrollError, PENDING_SECONDS, SignIn};
 use rose_signin::secret::{AeadSealer, Secret};
 use rose_signin::session::Principal;
 use rose_signin::store::{Memory, Store};
@@ -46,7 +46,9 @@ fn wrong(k: &[u8], t: u64) -> &'static str {
 }
 
 fn enrolled(a: &mut Auth, app: &str, account: &str) -> Vec<u8> {
-    let e = a.begin_enrollment(app, account, PASS, None, T0).unwrap();
+    let e = a
+        .begin_enrollment(app, account, PASS, Admission::Open, None, T0)
+        .unwrap();
     let k = secret_of(&e.otpauth_uri);
     a.confirm_enrollment(app, account, e.handle.expose(), &code(&k, T0), T0)
         .unwrap();
@@ -124,7 +126,9 @@ fn a_code_is_never_accepted_twice_even_after_a_wrong_passphrase() {
     assert!(a.validate(&tok, t + 31).unwrap().is_some());
     // The enrollment's own confirming code cannot sign in either.
     let mut b = auth();
-    let e = b.begin_enrollment("notes", "bo", PASS, None, T0).unwrap();
+    let e = b
+        .begin_enrollment("notes", "bo", PASS, Admission::Open, None, T0)
+        .unwrap();
     let kb = secret_of(&e.otpauth_uri);
     b.confirm_enrollment("notes", "bo", e.handle.expose(), &code(&kb, T0), T0)
         .unwrap();
@@ -137,7 +141,9 @@ fn a_code_is_never_accepted_twice_even_after_a_wrong_passphrase() {
 #[test]
 fn an_unconfirmed_enrollment_cannot_sign_in() {
     let mut a = auth();
-    let e = a.begin_enrollment("notes", "ana", PASS, None, T0).unwrap();
+    let e = a
+        .begin_enrollment("notes", "ana", PASS, Admission::Open, None, T0)
+        .unwrap();
     let k = secret_of(&e.otpauth_uri);
     assert_eq!(
         a.sign_in("notes", "ana", &code(&k, T0), PASS, "c", T0),
@@ -155,8 +161,15 @@ fn a_confirmed_account_cannot_be_re_enrolled_by_anyone() {
     enrolled(&mut a, "notes", "ana");
     let late = T0 + 10 * PENDING_SECONDS;
     assert_eq!(
-        a.begin_enrollment("notes", "ana", "attacker passphrase", None, late)
-            .unwrap_err(),
+        a.begin_enrollment(
+            "notes",
+            "ana",
+            "attacker passphrase",
+            Admission::Open,
+            None,
+            late
+        )
+        .unwrap_err(),
         EnrollError::AlreadyEnrolled
     );
 }
@@ -164,17 +177,27 @@ fn a_confirmed_account_cannot_be_re_enrolled_by_anyone() {
 #[test]
 fn a_pending_enrollment_belongs_to_whoever_began_it() {
     let mut a = auth();
-    let victim = a.begin_enrollment("notes", "ana", PASS, None, T0).unwrap();
+    let victim = a
+        .begin_enrollment("notes", "ana", PASS, Admission::Open, None, T0)
+        .unwrap();
     // A second caller cannot replace it while it is pending...
     assert_eq!(
-        a.begin_enrollment("notes", "ana", "attacker passphrase", None, T0 + 60)
-            .unwrap_err(),
+        a.begin_enrollment(
+            "notes",
+            "ana",
+            "attacker passphrase",
+            Admission::Open,
+            None,
+            T0 + 60
+        )
+        .unwrap_err(),
         EnrollError::Pending
     );
     let guessed = a.begin_enrollment(
         "notes",
         "ana",
         "attacker passphrase",
+        Admission::Open,
         Some(b"guessed handle"),
         T0 + 60,
     );
@@ -193,7 +216,14 @@ fn a_pending_enrollment_belongs_to_whoever_began_it() {
     );
     // The enroller restarts with its handle; only the new handle confirms.
     let again = a
-        .begin_enrollment("notes", "ana", PASS, Some(victim.handle.expose()), T0 + 90)
+        .begin_enrollment(
+            "notes",
+            "ana",
+            PASS,
+            Admission::Open,
+            Some(victim.handle.expose()),
+            T0 + 90,
+        )
         .unwrap();
     let k2 = secret_of(&again.otpauth_uri);
     assert_eq!(
@@ -223,7 +253,9 @@ fn a_pending_enrollment_belongs_to_whoever_began_it() {
 #[test]
 fn an_abandoned_enrollment_expires() {
     let mut a = auth();
-    let first = a.begin_enrollment("notes", "ana", PASS, None, T0).unwrap();
+    let first = a
+        .begin_enrollment("notes", "ana", PASS, Admission::Open, None, T0)
+        .unwrap();
     let late = T0 + PENDING_SECONDS;
     let k = secret_of(&first.otpauth_uri);
     assert_eq!(
@@ -231,7 +263,8 @@ fn an_abandoned_enrollment_expires() {
         Err(EnrollError::NotConfirmed)
     );
     assert!(
-        a.begin_enrollment("notes", "ana", PASS, None, late).is_ok(),
+        a.begin_enrollment("notes", "ana", PASS, Admission::Open, None, late)
+            .is_ok(),
         "anyone admitted may start over once it expired"
     );
 }
@@ -254,7 +287,9 @@ fn confirm_does_not_reveal_which_accounts_exist() {
 #[test]
 fn confirm_attempts_are_limited() {
     let mut a = auth();
-    let e = a.begin_enrollment("notes", "ana", PASS, None, T0).unwrap();
+    let e = a
+        .begin_enrollment("notes", "ana", PASS, Admission::Open, None, T0)
+        .unwrap();
     let k = secret_of(&e.otpauth_uri);
     for i in 0..5 {
         let t = T0 + i;
@@ -282,7 +317,7 @@ fn the_knowledge_factor_is_hashed_and_length_checked() {
     assert!(!h.contains(PASS));
     assert!(knowledge::verify(PASS, &h) && !knowledge::verify("correct horsf", &h));
     let mut a = auth();
-    let r = a.begin_enrollment("notes", "ana", "1234", None, T0);
+    let r = a.begin_enrollment("notes", "ana", "1234", Admission::Open, None, T0);
     assert_eq!(
         r.unwrap_err(),
         EnrollError::Knowledge(knowledge::Rejected::TooShort)
@@ -490,7 +525,7 @@ fn names_that_break_the_otpauth_label_are_refused() {
     let long = "x".repeat(129);
     for bad in ["", "ana:admin", "line\nbreak", long.as_str()] {
         assert_eq!(
-            a.begin_enrollment("notes", bad, PASS, None, T0)
+            a.begin_enrollment("notes", bad, PASS, Admission::Open, None, T0)
                 .unwrap_err(),
             EnrollError::InvalidName,
             "{bad:?}"
