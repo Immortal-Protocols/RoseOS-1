@@ -1631,7 +1631,12 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
 
   Handlers reach the data as `ctx.data` (`AppData`), and `account(principal)` opens only this app's principal's own file.
   - **SQLite in handlers.** The adapter re-exports its `rusqlite` (0.32, bundled, the version in rose-signin's lock). Handlers name `rose_app_runtime_signin::rusqlite::{Connection, params, OptionalExtension}`, and the generated server declares no rusqlite of its own.
-- **Migrations.** The builder-embedded lists run forward only. Each one runs in one immediate transaction with its `user_version`. A database above the list is refused and left untouched, at start-up and on open.
+- **Migrations.** The builder-embedded lists run forward only. All pending ones run in one immediate transaction with their `user_version`s. A database above the list is refused and left untouched, at start-up and on open.
+  - **Foreign keys.** They follow SQLite's documented schema-change procedure. They are switched off outside the transaction, because inside one a migration's `PRAGMA foreign_keys` has no effect.
+    - **The check.** After the pending migrations, the bare `PRAGMA foreign_key_check` covers every table, and the adapter also checks that no foreign key points at a table that no longer exists. Both must pass before the commit. So a parent table can be rebuilt under existing children without losing them or failing.
+    - **A violation** rolls back every pending migration and refuses the database (`DataError::ForeignKeys`, which names the table only). The database stays at its old version and nothing is lost. At start-up, `start()` returns the error and the server does not start.
+    - **No `ON DELETE` or `ON UPDATE` actions** act during migrations, so a migration deletes or re-keys child rows itself.
+    - **Handlers** never get the connection the migrations ran on. If migrations ran, they get a fresh connection that enforces foreign keys.
 - **Start-up.** `start` opens and migrates the sign-in store, the shared database and every existing account file. It then measures `revision_sha256` from the binary.
   - **Environment.** `Config::from_env` reads `DATA_DIR`, `CHARIOT_APP_ID` and `CHARIOT_DEPLOYMENT_SHA256` (echoed as passed). When the host also sets `CHARIOT_REVISION_SHA256`, a binary that measures differently is held not ready.
   - **Keys.** `Keys::from_env()` loads the keyring from `CHARIOT_SEALING_KEY_FILE`, the absolute path of an app-owned `0400` file the host exposes by a read-only bind mount. The format is `rose-signin-keyring/v1`: `{"format","current","keys":[{"version","key"}]}`.
