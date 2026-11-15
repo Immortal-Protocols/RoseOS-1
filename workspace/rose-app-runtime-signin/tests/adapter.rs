@@ -851,7 +851,10 @@ fn app_data_is_shareable_across_request_threads() {
         t.join().unwrap().unwrap();
     }
     assert_eq!(version(&d.account_path("ana")), 2);
-    data::migrate(&Connection::open(d.account_path("ana")).unwrap(), ACCOUNT_V2).unwrap();
+    assert_eq!(
+        data::migrate(&Connection::open(d.account_path("ana")).unwrap(), ACCOUNT_V2).unwrap(),
+        0
+    );
     assert_eq!(version(&d.account_path("ana")), 2, "idempotent");
 }
 
