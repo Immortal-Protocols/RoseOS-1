@@ -379,13 +379,13 @@ class Builder:
                 shutil.rmtree(work)
             libraries = self._libraries(snapshot, work, project_id, package)
             level2 = None
-            client_source, builder_files = snapshot, frozenset()
             if profile.name == CLIENT_SERVER:
                 level2 = self._client_server(snapshot, work, project_id, package, profile, cancelled)
-                client_source, builder_files = level2['client_source'], level2['builder_files']
-            unsigned, log = toolchain.build(client_source, work, package, code, name, self.tools, cancelled, libraries,
-                                            builder_files=builder_files,
-                                            builder_packages=level2['packages'] if level2 else frozenset())
+                unsigned, log = toolchain.build(level2['client_source'], work, package, code, name, self.tools,
+                                                cancelled, libraries, builder_files=level2['builder_files'],
+                                                builder_packages=level2['packages'])
+            else:  # a plain app's build is called exactly as before Level 2
+                unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
             self._step(job, 'signing', 'signing', 'Signing the app.')
             keys = self.root / 'keys' / project_id
