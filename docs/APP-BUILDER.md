@@ -1850,7 +1850,11 @@ reserved `src/<package>/rose/`:
     401 `session_invalid` forgets the token.
 - `RoseSignin`: enroll, confirm, sign in, recover authenticator, recover
   passphrase and sign out, over the `/signin/v1/*` routes.
-- `RoseSession`: keeps only the bearer token, in `getNoBackupFilesDir()`.
+- `RoseSession`: of the session it keeps only the bearer token, in
+  `getNoBackupFilesDir()`. It also opens, copies or draws the enrollment URI;
+  `qr(uri, pixelsPerModule)` returns it as a QR code `Bitmap`.
+- `RoseQr`: the QR encoder `qr` draws with, a generated port of
+  `rose/qr.py` (byte mode, level M, versions 1 to 20).
 - `RoseSigninCore.java`, copied byte for byte at the pin above. The builder
   refuses to run if the file's SHA-256 has changed.
 
