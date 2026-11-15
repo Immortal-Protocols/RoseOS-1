@@ -202,6 +202,29 @@ def _note(note, request: str) -> str:
     return request[:200]
 
 
+# The builder's own server files, which a code generator may not write (rose.app_builder.server_build).
+BUILDER_SERVER_FILES = ('rose/migrations.rs', 'rose/meta.rs', 'rose/assets.rs')
+ROSE_SERVER = 'RoseServer.java'  # the builder's client file under src/<package>/rose/: the hosted base URL
+# What RoseApi.HttpsTransport accepts, narrowed: https, a lower-case DNS host, an optional port, a plain path.
+HOSTED_URL = re.compile(r'https://(?=[^/:]{1,253}(?:[:/]|$))[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+                        r'(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*'
+                        r'(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]'
+                        r'|6553[0-5]))?'
+                        r"(?:/[A-Za-z0-9._~!$&'()*+,;=:@/-]*)?")
+
+
+def rose_server_java(package: str, url: str | None) -> str:
+    """``src/<package>/rose/RoseServer.java``, written by the builder on every client-server build: the hosted base
+    URL, or null when the app is not hosted yet. The generated client reads it (``RoseApi.serverUrl()``)."""
+    value = 'null' if url is None else '"' + url.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    return (f'package {package}.rose;\n\n'
+            '/** Written by the Rose app builder from the hosting record. Generated; not the app\'s code. */\n'
+            'final class RoseServer {\n'
+            '    private RoseServer() {}\n'
+            f'    static final String URL = {value};\n'
+            '}\n')
+
+
 def client_tree_ignore(snapshot: Path):
     """copytree's ignore for a client-server app's client tree: the server's parts at the top of the snapshot only
     (a writer's own folder named server/ or contract/ further down is the app's)."""
@@ -212,7 +235,7 @@ def client_tree_ignore(snapshot: Path):
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
                  resolver=None, *, codegen=None, server_isolation=None, rust_tools=None, crate_source=None,
-                 server_crates=None, server_crate_deps=None):
+                 server_crates=None, server_crate_deps=None, server_url=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
@@ -226,7 +249,10 @@ class Builder:
           ``crate_source`` (rose.app_builder.crates.CrateSource; only an app that declares crates needs one);
         - ``server_crates``: the builder's own crates the server depends on (name -> folder: the runtime and its
           adapter, both named by the builder's own generated code, so both required), and ``server_crate_deps``
-          the path crates those depend on (rose-signin)."""
+          the path crates those depend on (rose-signin);
+        - ``server_url(project_id) -> str | None``: the app's hosted https base URL from the hosting record (§7.7),
+          which only owner tooling writes; None (the default) means it is not hosted yet. It is baked into the
+          client (``RoseServer.URL``), so the first hosted version needs a build after the record exists."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         if tools.cache is None:  # the Java system image, made once per toolchain, in this builder's own storage
@@ -237,6 +263,7 @@ class Builder:
         self.codegen, self.server_isolation, self.rust_tools = codegen, server_isolation, rust_tools
         self.crate_source = crate_source
         self.server_crates, self.server_crate_deps = dict(server_crates or {}), dict(server_crate_deps or {})
+        self.server_url = server_url
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -462,16 +489,18 @@ class Builder:
         except Exception:
             raise toolchain.StepFailed('toolchain', 'The builder could not generate the app\'s server and API '
                                        'client code.') from None
-        if any(k in server_files for k in ('rose/migrations.rs', 'rose/meta.rs')):
-            raise toolchain.StepFailed('toolchain', 'The builder\'s server code generator wrote a file the builder '
-                                       'writes itself.')
+        prefix = f'src/{package.replace(".", "/")}/rose/'
+        if any(k in server_files for k in BUILDER_SERVER_FILES) or prefix + ROSE_SERVER in client_files:
+            raise toolchain.StepFailed('toolchain', 'The builder\'s code generator wrote a file the builder writes '
+                                       'itself.')
         server_files['rose/migrations.rs'] = server_build.migrations_rs(current, profile.server.shared)
         server_files['rose/meta.rs'] = server_build.meta_rs(package, project['name'], profile.server.admission)
-        prefix = f'src/{package.replace(".", "/")}/rose/'
+        server_files['rose/assets.rs'] = server_build.assets_rs(snapshot)
         if any(not isinstance(k, str) or not isinstance(v, str) or not k.startswith(prefix)
                or any(part in ('', '.', '..') for part in k[len(prefix):].split('/')) for k, v in client_files.items()):
             raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote outside its own '
                                        'folder.')
+        client_files[prefix + ROSE_SERVER] = rose_server_java(package, self._hosted_url(project_id))
         # The client's tree: the writer's checked app without the server's parts, plus the builder's own files.
         client = work / 'client'
         shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot))
@@ -497,6 +526,21 @@ class Builder:
         return {'client_source': client, 'builder_files': frozenset(client_files), 'packages': frozenset(packages),
                 'server': built,
                 'locks': locks, 'contract': canonical.decode('utf-8')}
+
+    def _hosted_url(self, project_id: str) -> str | None:
+        """The app's hosted base URL from the injected hosting record, or None when it is not hosted yet. A record
+        the generated client would refuse is the builder's failure, here, never the user's first tap."""
+        if self.server_url is None:
+            return None
+        try:
+            url = self.server_url(project_id)
+        except Exception:
+            raise toolchain.StepFailed('toolchain', 'The builder could not read this app\'s hosting record.',
+                                       retryable=True) from None
+        if url is not None and not (isinstance(url, str) and HOSTED_URL.fullmatch(url)):
+            raise toolchain.StepFailed('toolchain', 'This app\'s hosting record is not an https address the app '
+                                       'can use, so the app was not built.')
+        return url
 
     def _libraries(self, snapshot: Path, work: Path, project_id: str, package: str) -> list:
         """The verified libraries the app declares (none when it declares none). A coordinate the last delivered

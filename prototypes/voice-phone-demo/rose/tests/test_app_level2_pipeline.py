@@ -35,7 +35,7 @@ INTERNET = '<uses-permission android:name="android.permission.INTERNET"/>'
 
 
 def client_server_app(contract=CONTRACT, migration='CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT);\n',
-                      profile=None, handlers='pub fn hello() {}\n'):
+                      profile=None, handlers='pub fn hello() {}\n', assets=None):
     """A generator that writes a minimal client-server app over the skeleton."""
     def generate(source, kind, request, cancelled):
         manifest = source / 'AndroidManifest.xml'
@@ -50,6 +50,9 @@ def client_server_app(contract=CONTRACT, migration='CREATE TABLE notes (id INTEG
         (source / 'server/src/handlers/mod.rs').write_text(handlers)
         (source / 'server/migrations/account').mkdir(parents=True, exist_ok=True)
         (source / 'server/migrations/account/0001_notes.sql').write_text(migration)
+        for path, data in (assets or {}).items():
+            (source / 'server/assets' / path).parent.mkdir(parents=True, exist_ok=True)
+            (source / 'server/assets' / path).write_bytes(data)
     return generate
 
 
@@ -64,12 +67,15 @@ class Codegen:
     def server_files(self, contract):
         if self.broken:
             raise RuntimeError('generator bug')
-        files = {'rose/main.rs': 'mod meta;\nmod migrations;\n#[path = "../src/handlers/mod.rs"]\nmod handlers;\n\n'
+        files = {'rose/main.rs': 'mod assets;\nmod meta;\nmod migrations;\n#[path = "../src/handlers/mod.rs"]\n'
+                                 'mod handlers;\n\n'
                                  'fn main() {\n    handlers::hello();\n'
                                  '    let account: &[&str] = migrations::ACCOUNT;\n'
                                  '    let shared: Option<&[&str]> = migrations::SHARED;\n'
                                  '    let _ = (account.len(), shared, meta::APP, meta::ISSUER, meta::ADMISSION);\n'
-                                 '    let _ = rose_app_runtime::json::parse(b"1");\n' + self.main_extra + '}\n'}
+                                 '    let _ = rose_app_runtime::json::parse(b"1");\n'
+                                 '    std::hint::black_box(assets::get(&std::env::args().next().unwrap_or_default()));\n'
+                                 + self.main_extra + '}\n'}
         if self.writes:
             files[self.writes] = '// not the generator\'s\n'
         return files
@@ -226,6 +232,53 @@ class HonestFailures(Base):
                 _, job = self.run_job(b)
                 self.assertFailed(job, 'compile', 'is not a folder')
 
+    def test_the_builders_own_files_are_its_own(self):
+        for codegen in (Codegen(writes='rose/assets.rs'),
+                        Codegen(client=lambda pkg: {pkg + 'rose/RoseServer.java': 'package x;\n'})):
+            with self.subTest(writes=codegen.writes, client=bool(codegen.client)):
+                b = self.fresh(client_server_app(), codegen=codegen)
+                _, job = self.run_job(b)
+                self.assertFailed(job, 'toolchain', 'writes itself')
+
+    def client_tree(self, b):
+        """Run one job, stopping it at the server build, and return the client tree's RoseServer.java."""
+        seen = {}
+
+        def build(snapshot, work, *args, **kw):
+            seen.update(server=Path(work).parent / 'client', files=kw['generated'])
+            raise server_build.BuildFailed('toolchain', 'server_build', 'stopped here by the test')
+        with mock.patch.object(server_build, 'build', build):
+            _, job = self.run_job(b)
+        self.assertFailed(job, 'toolchain', 'stopped here by the test')
+        java = next(seen['server'].glob('src/**/rose/RoseServer.java'))
+        return java.read_text(), seen['files']
+
+    def test_the_hosted_address_is_the_records_or_none(self):
+        text, files = self.client_tree(self.builder(client_server_app(), codegen=Codegen()))
+        self.assertIn('static final String URL = null;', text)  # not hosted yet: nothing is guessed
+        self.assertIn('pub fn get(path: &str)', files['rose/assets.rs'])  # always written, so main.rs can use it
+        asked = []
+        record = lambda project: asked.append(project) or 'https://notes.example.org/app'
+        text, _ = self.client_tree(self.fresh(client_server_app(), codegen=Codegen(), server_url=record))
+        self.assertIn('static final String URL = "https://notes.example.org/app";', text)
+        self.assertEqual(len(asked), 1)
+        for value, words in (('http://notes.example.org', 'not an https address'),
+                             ('https://notes.example.org/?q=1', 'not an https address'),
+                             ('https://user@notes.example.org', 'not an https address'),
+                             ('https://Notes.example.org', 'not an https address'),
+                             ('https://notes.example.org/a"b', 'not an https address'),
+                             ('https://notes.example.org/\\u0022', 'not an https address'),
+                             (b'https://notes.example.org', 'not an https address'),
+                             (RuntimeError('record unreadable'), 'could not read')):
+            def read(project, value=value):
+                if isinstance(value, Exception):
+                    raise value
+                return value
+            with self.subTest(value=value):
+                b = self.fresh(client_server_app(), codegen=Codegen(), server_url=read)
+                _, job = self.run_job(b)
+                self.assertFailed(job, 'toolchain', words)
+
     def test_a_contract_too_large_to_keep_is_refused_before_anything_is_built(self):
         # Between the file's size (251 bytes) and its normalised form's (353): the limit is on what the ledger keeps.
         with mock.patch.object(service, 'MAX_CONTRACT', 300):
@@ -328,6 +381,38 @@ class Pieces(unittest.TestCase):
         self.assertLessEqual(len(server_build._issuer('é' * 200).encode()), 128)
         with self.assertRaises(ValueError):
             server_build.meta_rs('a.b', 'x', 'anyone')
+
+    def test_assets_are_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for n in range(3):
+                (Path(tmp) / f'server/assets/d{n}').mkdir(parents=True)
+                (Path(tmp) / f'server/assets/d{n}/f.bin').write_bytes(b'x' * 10)
+            self.assertEqual(server_build.assets_rs(Path(tmp)).count('include_bytes!'), 3)
+            for limit, value in (('MAX_ASSETS', 2), ('MAX_ASSET_BYTES', 29)):
+                with self.subTest(limit=limit), mock.patch.object(server_build, limit, value), \
+                        self.assertRaises(server_build.BuildFailed) as caught:
+                    server_build.assets_rs(Path(tmp))
+                self.assertEqual((caught.exception.category, caught.exception.reason), ('compile', 'assets_too_large'))
+
+    @unittest.skipUnless(HAS_CARGO or os.environ.get('ROSE_REQUIRE_CARGO'), 'needs a Rust toolchain')
+    def test_embedded_assets_are_the_files_bytes(self):
+        assets = {'a.txt': b'hi\r\n', 'data/x "y"\\z.json': bytes(range(256)), 'empty': b''}
+        with tempfile.TemporaryDirectory() as tmp:
+            snap, server = Path(tmp) / 'snap', Path(tmp) / 'server'
+            for path, data in assets.items():
+                (snap / 'server/assets' / path).parent.mkdir(parents=True, exist_ok=True)
+                (snap / 'server/assets' / path).write_bytes(data)
+            (server / 'rose').mkdir(parents=True)
+            server_build._copy_tree(snap / 'server/assets', server / server_build.ASSETS, 'server/assets')
+            (server / 'rose/assets.rs').write_text(server_build.assets_rs(snap), newline='')
+            names = ', '.join(server_build._str(p) for p in sorted(assets) + ['missing'])
+            (server / 'rose/main.rs').write_text(
+                'mod assets;\nfn main() { for p in [' + names + '] { match assets::get(p) { '
+                'Some(b) => { for x in b { print!("{:02x}", x); } println!(":"); } None => println!("none") } } }\n')
+            subprocess.run(['rustc', '--edition', '2021', '-D', 'warnings', '-o', str(server / 'm'),
+                            str(server / 'rose/main.rs')], check=True, capture_output=True)
+            out = subprocess.run([str(server / 'm')], capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(out, [assets[p].hex() + ':' for p in sorted(assets)] + ['none'])
 
     @unittest.skipUnless(HAS_CARGO or os.environ.get('ROSE_REQUIRE_CARGO'), 'needs a Rust toolchain')
     def test_embedded_sql_is_byte_for_byte_the_checked_sql(self):
@@ -519,7 +604,8 @@ class EndToEnd(Base):
         crates, deps = self.crates()
         isolation = Passthrough()
         main = '    rose_app_runtime_signin::touch(std::env::args().count() > 99);\n'
-        b = self.builder(client_server_app(), codegen=Codegen(main_extra=main),
+        asset = b'rose-asset-7f3a9c bytes \x00\xff'
+        b = self.builder(client_server_app(assets={'data/hello.bin': asset}), codegen=Codegen(main_extra=main),
                          server_isolation=isolation, rust_tools=self.tools(), server_crates=crates,
                          server_crate_deps=deps)
         out, job = self.run_job(b)
@@ -534,6 +620,7 @@ class EndToEnd(Base):
             self.assertNotIn(folder, job['logTail'] or '')
         for name in ('rose-app-runtime', 'rose-app-runtime-signin', 'test-signin'):
             self.assertIn(f'/rose-crates/{name}/'.encode(), elf)
+        self.assertIn(asset, elf)  # server/assets, embedded by rose/assets.rs
         # The APK holds the builder's generated client files, the sign-in core in its own package.
         package = b.projects()[0]['packageName'].replace('.', '/')
         apk = next(p for p in (self.root / 'artifacts').glob('*.apk'))
@@ -541,6 +628,7 @@ class EndToEnd(Base):
             dex = b''.join(z.read(n) for n in z.namelist() if n.startswith('classes') and n.endswith('.dex'))
         self.assertIn(f'L{package}/rose/Api;'.encode(), dex)
         self.assertIn(b'Ldev/pixel/rosesignin/Core;', dex)
+        self.assertIn(f'L{package}/rose/RoseServer;'.encode(), dex)  # the builder's own client file
         self.assertEqual(b.ledger.profile(project), L.CLIENT_SERVER)
         server = b.ledger.server(project, 1)
         self.assertEqual(server['size'], (self.root / 'artifacts' / f'{server["sha256"]}.server').stat().st_size)

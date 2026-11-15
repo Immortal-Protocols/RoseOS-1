@@ -1373,7 +1373,7 @@ folder is still refused.
 The tree adds a `contract/` folder (the API both halves share; required) and
 `server/`:
 - `server/src/**.rs`, with `server/src/handlers/mod.rs` required;
-- `server/assets/**` (data files);
+- `server/assets/**` (data files, embedded in the server: `crate::assets::get("data/x.json")`, §7.6);
 - `server/migrations/account/NNNN_name.sql`, and `migrations/shared/` only
   when `shared` is true.
 
@@ -1795,8 +1795,9 @@ runs these steps before signing:
    keeps (512 KiB); a larger one is the writer's (`compile`), refused
    before anything is built.
 2. **Migrations.** They are checked against the delivered lock and in the
-   sandbox, then embedded in two builder-owned files, which a generator
-   may not write:
+   sandbox, then embedded in builder-owned files, which a generator may
+   not write (it is the builder's failure, `toolchain`); the builder writes
+   its other files with them:
    - `rose/migrations.rs`, in the adapter's shape: `ACCOUNT: &[&str]` and
      `SHARED: Option<&[&str]>` (`None` unless the app declares shared
      data). The statement at index `i` takes a database from version `i`
@@ -1812,6 +1813,22 @@ runs these steps before signing:
        nothing is left;
      - `ADMISSION`: `rose_app_runtime::signin::Admission`, from
        `rose-app.json`.
+   - `rose/assets.rs`: `pub fn get(path: &str) -> Option<&'static [u8]>`,
+     the writer's `server/assets/` files by their path under it (with `/`),
+     each `include_bytes!` of the build's own copy, so the bytes are exact.
+     It is written on every client-server build (with no assets, `get`
+     answers `None`), so the generated `main.rs` can always declare it. At
+     most 1024 files and 64 MiB in all; more is the writer's (`compile`,
+     `assets_too_large`).
+   - `src/<package>/rose/RoseServer.java` (the client's):
+     `static final String URL`, the app's hosted https base URL, or `null`
+     when it is not hosted yet. It comes from the injected `server_url`
+     (the hosting record, which only owner tooling writes; slice 10), never
+     guessed. A record the generated client would refuse (anything but
+     https with a lower-case DNS host, an optional port and a plain path)
+     fails the build as the builder's (`toolchain`). It is baked into the
+     APK, so the first hosted version needs a build after the record
+     exists. The generated `RoseApi.serverUrl()` reads it (Home/App).
 3. **Generated code.** The injected `codegen` writes the server's `rose/*.rs`
    files and the client's files under `src/<package>/rose/`. A generator
    that fails, or writes outside that folder (a `..`, `.` or empty path
@@ -2103,6 +2120,12 @@ the server does.
 - **Publication** uses Chariot's existing creator auth, by sha256, never the
   phone or the APK. The publication adapter isn't finished, and there is no
   live URL or credential.
+- **Client base URL.** The builder bakes the hosted base URL into each
+  client-server APK as `RoseServer.URL` (§7.6), from the injected
+  `server_url` hosting record. No record is defined or written yet, so every
+  build carries `null` and the generated client reports that the app is not
+  hosted. The record's form, and who writes it, is slice 10's to agree with
+  the Chariot owner.
 
 - **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
   on every request, and guest ingress admits only the gateway (Chariot's
