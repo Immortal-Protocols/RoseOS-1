@@ -205,9 +205,10 @@ def _note(note, request: str) -> str:
 # The builder's own server files, which a code generator may not write (rose.app_builder.server_build).
 BUILDER_SERVER_FILES = ('rose/migrations.rs', 'rose/meta.rs', 'rose/assets.rs')
 ROSE_SERVER = 'RoseServer.java'  # the builder's client file under src/<package>/rose/: the hosted base URL
-# What RoseApi.HttpsTransport accepts, narrowed: https, a lower-case DNS host, an optional port, a plain path.
-HOSTED_URL = re.compile(r'https://(?=[^/:]{1,253}(?:[:/]|$))[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
-                        r'(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*'
+# What RoseApi.HttpsTransport accepts, narrowed: https, a lower-case DNS name (no IP address: as java.net.URI reads
+# a host, its last label starts with a letter), an optional port, a plain path.
+HOSTED_URL = re.compile(r'https://(?=[^/:]{1,253}(?:[:/]|$))(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*'
+                        r'[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?'
                         r'(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]'
                         r'|6553[0-5]))?'
                         r"(?:/[A-Za-z0-9._~!$&'()*+,;=:@/-]*)?")

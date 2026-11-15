@@ -48,6 +48,7 @@ ENTRY = 'rose/main.rs'
 ASSETS = 'rose-assets'  # the build's copy of the writer's server/assets, next to rose/ and src/
 MAX_ASSETS = 1024  # files in server/assets
 MAX_ASSET_BYTES = 64 * 1024 * 1024  # all of them together, embedded in the binary
+MAX_COPIED_PATH = 1024  # bytes of a path under server/src or server/assets, so the build's copy always fits
 GENERATED = re.compile(r'rose/(?:[a-z][a-z0-9_]{0,63}/){0,4}[a-z][a-z0-9_]{0,63}\.rs')
 TRIPLE = re.compile(r'[a-z0-9_]+(?:-[a-z0-9_.]+){1,3}')
 
@@ -453,8 +454,19 @@ def _copy_tree(src: Path, dst: Path, label: str = 'server/src'):
     """The writer's server/src (or server/assets), plain files and folders only (rose.app_builder.appprofile has
     checked the tree)."""
     dst.mkdir(mode=0o700)
+    try:
+        _copy_files(src, dst, label)
+    except OSError:  # the builder's own folders lengthen every path; one the snapshot held may not fit here
+        raise BuildFailed('toolchain', 'layout_unbuildable', f'The builder could not copy {label} into the build.')\
+            from None
+
+
+def _copy_files(src: Path, dst: Path, label: str):
     for here, dirs, files in os.walk(src):
         rel = Path(here).relative_to(src)
+        if any(len((rel / name).as_posix().encode()) > MAX_COPIED_PATH for name in (*dirs, *files)):
+            raise BuildFailed('compile', 'layout_invalid', f'A path in {label} is longer than {MAX_COPIED_PATH} '
+                              'bytes.')
         for d in dirs:
             if not stat.S_ISDIR(os.lstat(Path(here) / d).st_mode):
                 raise BuildFailed('compile', 'layout_invalid', f'{label}/{rel / d} is not a plain folder.')

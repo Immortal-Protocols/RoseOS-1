@@ -1373,7 +1373,8 @@ folder is still refused.
 The tree adds a `contract/` folder (the API both halves share; required) and
 `server/`:
 - `server/src/**.rs`, with `server/src/handlers/mod.rs` required;
-- `server/assets/**` (data files, embedded in the server: `crate::assets::get("data/x.json")`, §7.6);
+- `server/assets/**` (data files, embedded in the server as `crate::assets::get("data/x.json")`, §7.6, once
+  the generated `main.rs` declares `mod assets;`);
 - `server/migrations/account/NNNN_name.sql`, and `migrations/shared/` only
   when `shared` is true.
 
@@ -1734,8 +1735,9 @@ reserved `src/<package>/rose/`:
   trailing data, lone surrogates and nesting deeper than 64.
 - `RoseTypes`: one class per contract type, the same shapes as the server.
 - `RoseApi`: `Client(transport, tokens)` with one method per route.
-  `HttpsTransport(baseUrl)` takes the base URL from the caller, and the builder
-  never writes one in. It accepts `https` only, with no user info, query or
+  `HttpsTransport(baseUrl)` takes the base URL from the caller: the
+  builder-written `RoseServer.URL` (§7.6), which `RoseApi.serverUrl()` is to
+  return once Home/App's codegen reads it. It accepts `https` only, with no user info, query or
   fragment, and does not follow redirects. Errors come back as
   `RoseApi.Error(status, word, retryAfterSeconds)`. A 401 `session_invalid`
   forgets the token.
@@ -1817,18 +1819,24 @@ runs these steps before signing:
      the writer's `server/assets/` files by their path under it (with `/`),
      each `include_bytes!` of the build's own copy, so the bytes are exact.
      It is written on every client-server build (with no assets, `get`
-     answers `None`), so the generated `main.rs` can always declare it. At
-     most 1024 files and 64 MiB in all; more is the writer's (`compile`,
-     `assets_too_large`).
+     answers `None`), so the generated `main.rs` can always declare it
+     (Home/App adds `mod assets;` next; until then nothing reaches it). At
+     most 1024 files and 64 MiB in all, within the app's own 64 MB; more is
+     the writer's (`compile`, `assets_too_large`). A path under
+     `server/src` or `server/assets` longer than 1024 bytes is the
+     writer's too (`layout_invalid`), so the build's copy always fits.
    - `src/<package>/rose/RoseServer.java` (the client's):
      `static final String URL`, the app's hosted https base URL, or `null`
      when it is not hosted yet. It comes from the injected `server_url`
      (the hosting record, which only owner tooling writes; slice 10), never
-     guessed. A record the generated client would refuse (anything but
-     https with a lower-case DNS host, an optional port and a plain path)
-     fails the build as the builder's (`toolchain`). It is baked into the
-     APK, so the first hosted version needs a build after the record
-     exists. The generated `RoseApi.serverUrl()` reads it (Home/App).
+     guessed. A record the generated client would refuse fails the build as
+     the builder's (`toolchain`): the builder takes only https with a
+     lower-case DNS name whose last label starts with a letter (as
+     `java.net.URI` reads a host; no IP address), an optional port and a
+     plain path, and a test checks the generated `HttpsTransport` accepts
+     each of those. It is baked into the APK, so the first hosted version
+     needs a build after the record exists. `RoseApi.serverUrl()` is to
+     read it (Home/App, next).
 3. **Generated code.** The injected `codegen` writes the server's `rose/*.rs`
    files and the client's files under `src/<package>/rose/`. A generator
    that fails, or writes outside that folder (a `..`, `.` or empty path
