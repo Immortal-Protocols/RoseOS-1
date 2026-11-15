@@ -268,31 +268,45 @@ fn a_store_at_another_schema_is_not_migrated() {
     let c = config(&dir.0, Admission::Invite);
     started(&dir.0, Admission::Invite);
     let path = dir.0.join("auth.sqlite3");
-    let version = |p: &Path| -> i64 {
-        Connection::open(p)
-            .unwrap()
-            .query_row("SELECT value FROM auth_meta WHERE key = 'schema_version'", [], |r| {
-                r.get(0)
-            })
-            .unwrap()
+    let db = || Connection::open(&path).unwrap();
+    let version = || -> i64 {
+        db().query_row("SELECT value FROM auth_meta WHERE key = 'schema_version'", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
     };
-    let current = version(&path);
-    for other in [current - 1, current + 1] {
-        Connection::open(&path)
-            .unwrap()
-            .execute("UPDATE auth_meta SET value = ?1 WHERE key = 'schema_version'", [other])
-            .unwrap();
-        assert_eq!(
-            invite(&c, "ana", T0),
-            Err(InviteError::StoreUnavailable),
-            "version {other}"
-        );
-        assert_eq!(
-            version(&path),
-            other,
-            "left at {other}: the server migrates, not the invite"
-        );
-    }
+    let has_invites = || -> bool {
+        db().query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'auth_invite')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        version(),
+        2,
+        "this test builds the store one version older than rose-signin 23062a04's"
+    );
+    // A genuine version-1 store (what an older build left): no invite table, no staged secret.
+    db().execute_batch(
+        "DROP TABLE auth_invite;
+         ALTER TABLE auth_account DROP COLUMN staged_otp_secret;
+         UPDATE auth_meta SET value = 1 WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    assert_eq!(invite(&c, "ana", T0), Err(InviteError::StoreUnavailable));
+    assert_eq!(
+        version(),
+        1,
+        "not migrated: the server migrates at its start, not the invite"
+    );
+    assert!(!has_invites(), "no table created");
+    // A newer store is refused as well (rose-signin itself would refuse it too).
+    db().execute_batch("UPDATE auth_meta SET value = 3 WHERE key = 'schema_version';")
+        .unwrap();
+    assert_eq!(invite(&c, "ana", T0), Err(InviteError::StoreUnavailable));
+    assert_eq!(version(), 3);
 }
 
 #[test]
