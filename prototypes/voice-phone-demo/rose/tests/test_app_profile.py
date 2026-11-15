@@ -147,14 +147,12 @@ class Layout(Base):
         for rel in ('server/src/x.c', 'server/assets/lib.so', 'server/assets/run.sh', 'contract/gen.py'):
             with self.subTest(rel):
                 path = self.put(rel)
-                with self.assertRaises(template.TemplateRefused):
-                    P.check(self.root, PKG)
+                self.refused('template_refused')
                 path.unlink()
 
     def test_links_under_server_are_refused(self):
         os.symlink('/etc', self.root / 'server/assets')
-        with self.assertRaises(template.TemplateRefused):
-            P.check(self.root, PKG)
+        self.refused('template_refused')
 
     def test_the_builders_client_package_is_reserved(self):
         path = self.put(f'src/{PKG.replace(".", "/")}/rose/Api.java', f'package {PKG}.rose;\nclass Api {{}}\n')
@@ -166,8 +164,38 @@ class Layout(Base):
 
     def test_internet_is_needed_to_reach_the_server(self):
         manifest = self.root / 'AndroidManifest.xml'
-        manifest.write_text(manifest.read_text().replace(INTERNET, '  <application'))
+        good = manifest.read_text()
+        manifest.write_text(good.replace(INTERNET, '  <application'))
         self.refused('missing_internet')
+        sdk23 = good.replace('<uses-permission android:name', '<uses-permission-sdk-23 android:name')
+        manifest.write_text(sdk23)
+        P.check(self.root, PKG)  # Android applies it from API 23, below minSdk 26
+        nested = good.replace(INTERNET, '  <application').replace(
+            '<activity android:name=".MainActivity" android:exported="true">',
+            '<activity android:name=".MainActivity" android:exported="true">\n'
+            '      <uses-permission android:name="android.permission.INTERNET"/>')
+        manifest.write_text(nested)
+        self.refused('missing_internet')  # Android ignores it there
+        manifest.write_text(good.replace('INTERNET"/>', 'INTERNET" android:maxSdkVersion="25"/>'))
+        self.refused('missing_internet')  # not in force on any phone it installs on
+
+    def test_contract_is_a_folder(self):
+        shutil.rmtree(self.root / 'contract')
+        self.refused('layout_invalid')
+        self.put('contract', '{}')
+        self.refused('layout_invalid')
+
+    def test_a_folder_named_like_source_is_refused_not_a_crash(self):
+        self.put('server/src/handlers/v1.rs/x.rs', 'pub fn x() {}')
+        self.refused('layout_invalid')
+
+    def test_level1_checks_carry_a_reason_here(self):
+        self.put('server/src/x.c')
+        error = self.refused('template_refused')
+        self.assertFalse(error.dependency)
+        (self.root / 'server/src/x.c').unlink()
+        self.put('server/assets/lib.so')
+        self.assertTrue(self.refused('template_refused').dependency)
 
     def test_server_source_is_scanned(self):
         self.put('server/src/handlers/mod.rs', 'pub struct App;\nconst K: &str = include_str!("/etc/hostname");\n')
@@ -190,6 +218,18 @@ class RustScan(unittest.TestCase):
         '#![cfg_attr(unix, link(name = "z"))]', 'global_asm!(".incbin \\"/etc/passwd\\"")',
         'core::arch::asm!("nop")', 'naked_asm!("ret")',
         'macro_rules! m { ($i:ident) => { $i!("x") } } m!(include_str);',
+        # found by review: a macro handed the name, renamed native macros, invisible separators, built attributes
+        'macro_rules! m { ($e:ident) => { $e!("HOME") } } fn f() { let x: &str = m!(env); }',
+        'macro_rules! m { ($e:ident) => { $e!(".byte 0") } } m!(global_asm);',
+        'use std::arch::asm as a; fn f() { unsafe { a!("nop"); } }',
+        'use std::arch::global_asm as g; g!(".incbin \\"/etc/passwd\\"");',
+        'use std::{env as e};', 'use ::core::env as e;',
+        'fn f() { let _ = env\u200e!("HOME"); }', '#\u200e[path = "/etc/x.rs"] mod m;',
+        '#[link\u200f(name = "z")] extern "C" {}', 'unsafe { core::arch::asm\u200f!("nop"); }',
+        'macro_rules! p { ($a:meta) => { #[$a] mod m; } } p!(path = "/etc/x.rs");',
+        '#![debugger_visualizer(gdb_script_file = "/etc/passwd")]',
+        '#![cfg_attr(unix, debugger_visualizer(natvis_file = "x.natvis"))]',
+        'fn f(asm: u8) {}',  # disclosed: the native macro names are refused by name, like include
     ]
     ALLOWED = [
         'std::env::var("X")', 'use std::env;', 'let a = env::args();', 'use std::env::{var, args};',
@@ -200,6 +240,14 @@ class RustScan(unittest.TestCase):
         "fn f<'a>(x: &'a str) -> &'a str { x }", "let c = '!'; let q = '\\''; let b = b'\"';",
         'break; crate::x(); let brand = 1; let cr = 2;', 'let x = 1..2; let y = 1.5e3; let z = 0x1F_u8;',
         'let e = my.env; let s = std::fs::read("data");',
+        # found by review: comparisons, casts and the app's own env module are not env! or a rename
+        'fn f(cfg: &Cfg) -> bool { cfg.env != Env::Prod }', 'fn f(env: &str) -> bool { env != "prod" }',
+        'fn f(env: u8) -> u32 { env as u32 }', 'mod env { pub fn x() {} } use self::env as settings;',
+        'use crate::env::{self as settings};', 'macro_rules! m { ($x:expr) => { $crate::f($x) } }',
+        "let c = '\\u{1F600}'; let d = '\\x7f'; let e = b'\\\\'; let s = r###\"a\"## b\"###;",
+        'let t = tuple.0.1; let n = 1e10 + 0b1010 as f64 + 1_000u64 as f64 + 1.0f32 as f64;',
+        "async fn f() -> Result<(), E> { g().await?; Ok(()) }", '#[link_section = ".x"] static S: u8 = 0;',
+        'fn main()\u200e{}',
     ]
 
     def test_host_reads_and_native_code_are_refused(self):
@@ -217,7 +265,7 @@ class RustScan(unittest.TestCase):
         self.assertIn('line 6', hit)  # the comment and the string each span a line break
 
     def test_unterminated_code_is_unreadable(self):
-        for text in ('/* a /* b */', '"open', "r#\"open\"", "let c = '"):
+        for text in ('/* a /* b */', '"open', "r#\"open\"", "let c = '", 'let x = 1\u200b;', 'a\u00a0b'):
             with self.subTest(text):
                 with self.assertRaises(SyntaxError):
                     P.rust_refusals(text)

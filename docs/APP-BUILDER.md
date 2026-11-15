@@ -1261,7 +1261,8 @@ folder is still refused.
   user's own.
 - `admission`: `invite` or `open`.
 
-The tree adds `contract/` (the API both halves share) and `server/`:
+The tree adds a `contract/` folder (the API both halves share; required) and
+`server/`:
 - `server/src/**.rs`, with `server/src/handlers/mod.rs` required;
 - `server/assets/**` (data files);
 - `server/migrations/account/NNNN_name.sql`, and `migrations/shared/` only
@@ -1281,25 +1282,44 @@ app may do. Each has a stable `reason`:
 | `server/Cargo.toml`, `Cargo.lock`, `build.rs`, `.cargo/` or `rust-toolchain*` | `server_build_file` | dependency |
 | Anything else outside the layout above | `layout_invalid` | compile |
 | A file in `src/<package>/rose/`, or any Java `package <package>.rose…` | `reserved_path` | compile |
-| A manifest without `android.permission.INTERNET` | `missing_internet` | compile |
+| A manifest without `android.permission.INTERNET` in force from minSdk, as a `<uses-permission>` or `<uses-permission-sdk-23>` child of `<manifest>` | `missing_internet` | compile |
+| A Level 1 check failing on the project (links, modes, sizes, git names, forbidden suffixes) | `template_refused` | compile, or dependency for library files |
 | Server Rust that reads the builder's machine while compiling, or brings in native code | `forbidden_construct` | compile |
 | Server Rust that isn't UTF-8 or doesn't lex | `source_unreadable` | compile |
 
 The Level 1 checks on links, modes, sizes, git names and forbidden suffixes
-(`.c`, `.so`, `.sh`, `.py`, …) also cover `server/` and `contract/`.
+(`.c`, `.so`, `.sh`, `.py`, …) also cover `server/` and `contract/`. A plain
+app without `rose-app.json` keeps the Level 1 refusals exactly as before.
 
 The Rust scan lexes the source as rustc does, so comments, strings, raw
-strings, character literals and lifetimes are not code. It refuses:
-- **File and environment reads at compile time:** `include!`, `include_str!`,
-  `include_bytes!`, `env!`, `option_env!`, a renamed `env`, and `#[path]`,
-  including inside `cfg_attr`. The names are refused wherever they appear, so
-  an item named `include` is refused too. Data files go in `server/assets/`.
-- **Native code:** `asm!`, `global_asm!`, `naked_asm!` and `#[link(..)]`.
+strings, character literals and lifetimes are not code. It uses rustc's
+whitespace set, including U+200E and U+200F. Any other character no Rust token
+starts with is `source_unreadable`. It refuses:
+- **File and environment reads at compile time:**
+  - `include!`, `include_str!`, `include_bytes!` and `option_env!`, by name
+    wherever they appear, so an item named `include` is refused too;
+  - `env!` as a call (`env != x` is a comparison and is allowed);
+  - importing `std::env` or `core::env` under another name;
+  - `#[path]` and `#[debugger_visualizer]`, also inside `cfg_attr`.
 
-`std::env::var`, `std::fs`, `std::net`, `unsafe` and `extern "C"` are
-allowed. The scan is a second line of defence: macros from declared crates
-and build-time code are not covered. The boundary is build isolation
-(blocker 3).
+  Data files go in `server/assets/`.
+- **Native code:** `asm`, `global_asm`, `naked_asm` and `llvm_asm` by name,
+  so renaming imports can't hide them and an item with one of those names is
+  refused too. `#[link(..)]` is refused as well.
+- **Macros that hide either:**
+  - a `macro_rules!` body that calls a macro named by its argument (`$x!(..)`,
+    not `$crate::..`);
+  - an attribute built from a macro argument (`#[$a]`).
+
+Allowed: `std::env::var`, the app's own `env` module, `env as u32`,
+`std::fs`, `std::net`, `unsafe`, `extern "C"` and `#[link_section]`.
+
+The scan is a second line of defence. It does not cover:
+- macros and build-time code from declared crates;
+- tokens that local macros recombine (for example the name and the `!`
+  passed separately).
+
+The boundary is build isolation (blocker 3).
 
 ### 7.3 Server profile (planned; next slices)
 
@@ -1387,7 +1407,13 @@ the generated server's job, through a versioned API and the stable base URL.
 Each slice is source only, offline, and tested before merging. Slices 2–5
 need no hosting and no further OS Core change.
 1. **The profile declaration and checks (§7.2).** Done:
-   `rose/tests/test_app_profile.py`.
+   `rose/tests/test_app_profile.py`. An adversarial review found these
+   evasions of the scan, which are now refused and tested:
+   - a macro handed the name;
+   - renamed native macros;
+   - invisible separators;
+   - macro-built attributes;
+   - `#[debugger_visualizer]`.
 2. The shared API contract validator and its compatibility rules.
 3. Offline migration checks.
 4. Ledger pairing of client and server artifacts.

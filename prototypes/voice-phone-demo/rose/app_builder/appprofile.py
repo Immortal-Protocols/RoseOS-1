@@ -126,11 +126,18 @@ def check(snapshot: Path, package: str, bound: str | None = None) -> Profile:
     if profile.name == APP_V1:
         template.check(snapshot, package)
         return profile
-    template.check(snapshot, package, extra_top=SERVER_TOP)  # links, modes, sizes and suffixes cover server/ too
+    try:  # links, modes, sizes and forbidden suffixes cover server/ and contract/ too
+        template.check(snapshot, package, extra_top=SERVER_TOP)
+    except template.TemplateRefused as refused:
+        raise ProfileRefused(str(refused), 'template_refused', dependency=refused.dependency) from None
+    contract = snapshot / 'contract'
+    if not contract.is_dir() or contract.is_symlink():
+        raise ProfileRefused('A client-server app needs a contract/ folder (the API both halves share).',
+                             'layout_invalid')
     _server_tree(snapshot, profile.server)
     _reserved(snapshot, package)
     _internet(snapshot)
-    for path in sorted((snapshot / 'server' / 'src').rglob('*.rs')):
+    for path in sorted(p for p in (snapshot / 'server' / 'src').rglob('*.rs') if p.is_file()):
         name = path.relative_to(snapshot)
         try:
             text = path.read_bytes().decode('utf-8')
@@ -160,6 +167,9 @@ def _server_tree(snapshot: Path, decl: ServerDecl):
     if not (snapshot / HANDLERS).is_file():
         raise ProfileRefused(f'{HANDLERS} is missing: it holds the server\'s handlers.', 'layout_invalid')
     for path in (server / 'src').rglob('*'):
+        if path.is_dir() and path.suffix == '.rs':
+            raise ProfileRefused(f'{path.relative_to(snapshot)} is a folder with a source file name.',
+                                 'layout_invalid')
         if path.is_file() and path.suffix != '.rs':
             raise ProfileRefused(f'{path.relative_to(snapshot)} is not Rust source; data files go in '
                                  'server/assets/.', 'layout_invalid')
@@ -196,7 +206,12 @@ def _reserved(snapshot: Path, package: str):
 def _internet(snapshot: Path):
     import xml.etree.ElementTree as ET
     root = ET.parse(snapshot / 'AndroidManifest.xml').getroot()  # template.check has parsed it already
-    if not any(p.get(template.ANDROID + 'name') == INTERNET for p in root.iter('uses-permission')):
+
+    def applies(p):  # as Android reads it: a direct child of <manifest>, in force from minSdk
+        top = p.get(template.ANDROID + 'maxSdkVersion')
+        return p.get(template.ANDROID + 'name') == INTERNET and (top is None or top.isdigit()
+                                                                 and int(top) >= template.MIN_SDK)
+    if not any(applies(p) for p in [*root.findall('uses-permission'), *root.findall('uses-permission-sdk-23')]):
         raise ProfileRefused(f'A client-server app must declare {INTERNET} to reach its server.',
                              'missing_internet')
 
@@ -206,6 +221,9 @@ def _internet(snapshot: Path):
 HOST_READS = {'include': 'include!', 'include_str': 'include_str!', 'include_bytes': 'include_bytes!',
               'option_env': 'option_env!'}
 NATIVE_MACROS = ('asm', 'global_asm', 'naked_asm', 'llvm_asm')
+FILE_ATTRIBUTES = ('debugger_visualizer',)  # embeds a file from the builder's machine in the binary
+RUST_SPACE = '\t\n\x0b\x0c\r \x85\u200e\u200f\u2028\u2029'
+PUNCT = set('!#$%&()*+,-./:;<=>?@[]^{|}~')
 
 
 def _literal_prefix(text: str, i: int) -> bool:
@@ -262,7 +280,8 @@ def _tokens(text: str) -> list[tuple[str, str, int]]:
         if c == '\n':
             line += 1
             i += 1
-        elif c.isspace():
+        elif c in RUST_SPACE:  # rustc's Pattern_White_Space: U+200E and U+200F separate tokens too
+            line += c in '\x85\u2028\u2029'
             i += 1
         elif text.startswith('//', i):
             end = text.find('\n', i)
@@ -327,13 +346,15 @@ def _tokens(text: str) -> list[tuple[str, str, int]]:
                 j += 1
             out.append(('literal', 'number', line))
             i = j
-        else:
+        elif c in PUNCT:
             if text.startswith('::', i):
                 out.append(('punct', '::', line))
                 i += 2
             else:
                 out.append(('punct', c, line))
                 i += 1
+        else:  # rustc refuses it too, or it would read as something this scan cannot follow
+            raise SyntaxError(f'the character U+{ord(c):04X} on line {line}')
     return out
 
 
@@ -346,34 +367,65 @@ def rust_refusals(text: str) -> list[str]:
     def at(k, kind, value):
         return k < len(toks) and toks[k][0] == kind and toks[k][1] == value
 
+    def invoked(k):  # toks[k] is called as a macro: `name!` but not `name != x`
+        return at(k + 1, 'punct', '!') and not at(k + 2, 'punct', '=')
+
     for k, (kind, value, line) in enumerate(toks):
         if kind == 'ident':
             if value in HOST_READS:
                 hits.append(f'{HOST_READS[value]} reads a file or setting on the builder\'s machine while '
                             f'compiling (line {line}); put data files in server/assets/ (an item named '
                             f'{value!r} is refused too)')
-            elif value == 'env' and at(k + 1, 'punct', '!'):
+            elif value in NATIVE_MACROS:  # by name, so a renaming import or a macro argument cannot hide it
+                hits.append(f'{value}! is native code (line {line}); generated servers are Rust only (an item '
+                            f'named {value!r} is refused too)')
+            elif value == 'env' and invoked(k):
                 hits.append(f'env! reads the builder\'s environment while compiling (line {line}); '
                             'std::env::var reads the server\'s own environment when it runs')
-            elif value == 'env' and at(k + 1, 'ident', 'as'):
-                hits.append(f'renaming env would hide the env! macro (line {line})')
-            elif value == 'env' and at(k + 1, 'punct', '::') and at(k + 2, 'punct', '{'):
-                depth, j = 0, k + 2
-                while j < len(toks):
-                    depth += at(j, 'punct', '{') - at(j, 'punct', '}')
-                    if at(j, 'ident', 'self') and at(j + 1, 'ident', 'as'):
-                        hits.append(f'renaming env would hide the env! macro (line {line})')
-                        break
-                    if depth == 0:
-                        break
-                    j += 1
-            elif value in NATIVE_MACROS and at(k + 1, 'punct', '!'):
-                hits.append(f'{value}! is native code (line {line}); generated servers are Rust only')
-        elif kind == 'punct' and value == '#':
+        elif kind == 'punct' and value == '$' and k + 1 < len(toks) and toks[k + 1][0] == 'ident' \
+                and toks[k + 1][1] != 'crate' and invoked(k + 1):
+            hits.append(f'a macro that calls the macro its argument names (line {line}) could call env! or '
+                        'include_str! without naming them; call the macro by name')
+        if kind == 'punct' and value == '#':
             j = k + 1 + at(k + 1, 'punct', '!')
             if at(j, 'punct', '['):
                 _attribute(toks, j + 1, _closing(toks, j), hits)
+        elif kind == 'ident' and value == 'use':
+            _renamed_env(toks, k, hits)
     return hits
+
+
+def _renamed_env(toks, start: int, hits: list):
+    """In the `use` item at toks[start], an import of std's or core's env under another name (`env as e`,
+    `env::{self as e}`) would let env! be called without its name. The app's own `env` modules, and casts, are
+    not imports from std or core, and stay allowed."""
+    end = start
+    while end < len(toks) and toks[end] != ('punct', ';', toks[end][2]):
+        end += 1
+    stack, path = [], []
+    k = start + 1
+    while k < end:
+        kind, value, line = toks[k]
+        if kind == 'punct' and value == '{':
+            stack.append(list(path))
+        elif kind == 'punct' and value == '}':
+            path = stack.pop() if stack else []
+        elif kind == 'punct' and value == ',':
+            path = list(stack[-1]) if stack else []
+        elif kind == 'ident' and value not in ('as', 'self'):
+            path.append(value)
+        if kind == 'ident' and value == 'env' and path[:-1] in (['std'], ['core']):
+            following = toks[k + 1] if k + 1 < end else None
+            renamed = following is not None and following[1] == 'as'
+            if following is not None and following[1] == '::' and k + 2 < end and toks[k + 2][1] == '{':
+                close = _closing(toks, k + 2)
+                renamed = any(toks[j][1] == 'self' and j + 1 < close and toks[j + 1][1] == 'as'
+                              for j in range(k + 3, min(close, end)))
+            if renamed:
+                hits.append(f'renaming {path[0]}::env would hide the env! macro (line {line})')
+        if kind == 'ident' and value == 'as' and k + 1 < end:
+            k += 1  # the new name is not a path segment
+        k += 1
 
 
 def _closing(toks, j: int) -> int:
@@ -391,9 +443,18 @@ def _closing(toks, j: int) -> int:
 
 def _attribute(toks, start: int, end: int, hits: list):
     """One attribute's tokens in [start, end): `path = ..` and `link(..)` are refused, also inside cfg_attr."""
-    if start >= end or toks[start][0] != 'ident':
+    if start >= end:
+        return
+    if toks[start][0] == 'punct' and toks[start][1] == '$':
+        hits.append(f'an attribute built by a macro (line {toks[start][2]}) could be #[path] or #[link]; write '
+                    'the attribute itself')
+        return
+    if toks[start][0] != 'ident':
         return
     name, line = toks[start][1], toks[start][2]
+    if name in FILE_ATTRIBUTES:
+        hits.append(f'#[{name}] embeds a file from the builder\'s machine in the server (line {line})')
+        return
     following = toks[start + 1][1] if start + 1 < end and toks[start + 1][0] == 'punct' else None
     if name == 'path' and following == '=':
         hits.append(f'#[path] can compile a file from anywhere on the builder\'s machine (line {line}); keep '
