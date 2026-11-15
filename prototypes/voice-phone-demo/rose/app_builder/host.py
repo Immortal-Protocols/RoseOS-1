@@ -35,7 +35,7 @@ from .service import Builder
 
 SCHEMA_VERSION = 1
 KEYS = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk', 'javaHome',
-        'buildTimeoutS', 'keyCreation', 'writer', 'backup', 'libraryStore'}
+        'buildTimeoutS', 'keyCreation', 'writer', 'backup', 'libraryStore', 'clientServer'}
 REQUIRED = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk'}
 RECEIPT_MAX = 200
 NO_WRITER = 'No app writer is set up on this builder host, so nothing was written.'
@@ -49,6 +49,15 @@ class ConfigError(ValueError):
 class Command:
     argv: tuple
     timeout_s: float
+
+
+@dataclass(frozen=True)
+class ClientServerConfig:
+    rust_toolchain: Path
+    rust_toolchain_sha256: str
+    bubblewrap: Path
+    crate_store: Path
+    runtime_root: Path
 
 
 @dataclass(frozen=True)
@@ -66,6 +75,7 @@ class HostConfig:
     writer: Command | None = None
     backup: Command | None = None
     library_store: Path | None = None
+    client_server: ClientServerConfig | None = None
 
 
 def _path(value, name: str) -> Path:
@@ -136,7 +146,76 @@ def parse_config(data) -> HostConfig:
         java_home=None if data.get('javaHome') is None else _path(data['javaHome'], 'javaHome'),
         build_timeout_s=_seconds(data.get('buildTimeoutS'), 'buildTimeoutS', 600.0), key_creation=key_creation,
         writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
-        library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'))
+        library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'),
+        client_server=_client_server_config(data.get('clientServer')))
+
+
+def _client_server_config(value) -> ClientServerConfig | None:
+    if value is None:
+        return None
+    keys = {'rustToolchain', 'rustToolchainSha256', 'bubblewrap', 'crateStore', 'runtimeRoot'}
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ConfigError('clientServer must contain rustToolchain, rustToolchainSha256, bubblewrap, crateStore '
+                          'and runtimeRoot')
+    digest = value['rustToolchainSha256']
+    if not isinstance(digest, str) or not dependencies.SHA256.fullmatch(digest):
+        raise ConfigError('clientServer.rustToolchainSha256 must be an owner-supplied lowercase SHA-256')
+    return ClientServerConfig(
+        _path(value['rustToolchain'], 'clientServer.rustToolchain'), digest,
+        _path(value['bubblewrap'], 'clientServer.bubblewrap'),
+        _path(value['crateStore'], 'clientServer.crateStore'),
+        _path(value['runtimeRoot'], 'clientServer.runtimeRoot'))
+
+
+def _facility_path(path: Path, name: str, *, directory: bool = True) -> Path:
+    """Owner-supplied facilities use the canonical absolute paths isolation preserves."""
+    try:
+        if (not path.is_absolute() or path.resolve(strict=True) != path or
+                not (path.is_dir() if directory else path.is_file())):
+            raise ValueError
+    except (OSError, ValueError, RuntimeError):
+        raise ConfigError(f'clientServer.{name} must be an existing canonical absolute '
+                          + ('directory' if directory else 'file')) from None
+    return path
+
+
+def client_server_facilities(config: ClientServerConfig | None, timeout_s: float) -> dict:
+    """Compose existing Level 2 inputs, without executing tools or supplying any defaults/pins.
+
+    Full crate digest/archive/manifest/dependency validation remains the server build's job. The host checks
+    configured facilities before constructing a writer or listener; it never silently drops a broken opt-in.
+    """
+    if config is None:
+        return {}
+    from . import codegen, crates, server_build
+    from .providers.host import BubblewrapIsolation, PinnedRustTools
+
+    rust = _facility_path(config.rust_toolchain, 'rustToolchain')
+    tools = PinnedRustTools(rust, expected_sha256=config.rust_toolchain_sha256, timeout_s=timeout_s)
+    if missing := tools.available():
+        raise ConfigError('clientServer.rustToolchain: ' + missing)
+    bwrap = _facility_path(config.bubblewrap, 'bubblewrap', directory=False)
+    if not os.access(bwrap, os.X_OK):
+        raise ConfigError('clientServer.bubblewrap must be executable')
+    store = _facility_path(config.crate_store, 'crateStore')
+    _facility_path(store / 'index.json', 'crateStore/index.json', directory=False)
+    source = crates.RecordedCrates(store)
+    try:
+        catalog = source.crates()
+    except (OSError, ValueError, RecursionError):
+        raise ConfigError('clientServer.crateStore must contain a readable recorded crate index') from None
+    for crate in catalog:
+        _facility_path(crate.path, 'crateStore/' + crate.path.name, directory=False)
+    root = _facility_path(config.runtime_root, 'runtimeRoot')
+    paths = {}
+    for name in (*server_build.BUILDER_CRATES, 'rose-signin'):
+        folder = _facility_path(root / name, 'runtimeRoot/' + name)
+        _facility_path(folder / 'Cargo.toml', 'runtimeRoot/' + name + '/Cargo.toml', directory=False)
+        _facility_path(folder / 'src/lib.rs', 'runtimeRoot/' + name + '/src/lib.rs', directory=False)
+        paths[name] = folder
+    return dict(codegen=codegen, rust_tools=tools, server_isolation=BubblewrapIsolation(bwrap), crate_source=source,
+                server_crates={name: paths[name] for name in server_build.BUILDER_CRATES},
+                server_crate_deps={'rose-signin': paths['rose-signin']})
 
 
 def load_config(path: Path) -> HostConfig:
@@ -264,6 +343,7 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
     from ..remote import Remote, add_pairing_api, build_remote_app
 
     resolver = library_store(config.library_store)
+    level2 = client_server_facilities(config.client_server, config.build_timeout_s)
     for directory in (config.root, config.remote_dir):
         if directory.is_symlink():
             raise ConfigError(f'{directory} must not be a symbolic link')
@@ -276,7 +356,8 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
         if config.writer is not None:
             from .generator import CodexGenerator
             generate = CodexGenerator(timeout_s=config.writer.timeout_s, command=list(config.writer.argv),
-                                      libraries=resolver.available if resolver is not None else None)
+                                      libraries=resolver.available if resolver is not None else None,
+                                      client_server=config.client_server is not None)
         else:
             generate = no_writer
     if backup is None and config.backup is not None:
@@ -285,7 +366,7 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
                             key_creation=config.key_creation)
     ledger = Ledger(config.root)
     builder = Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
-                      server_url=ledger.native_host_endpoint)
+                      server_url=ledger.native_host_endpoint, **level2)
     remote = Remote(directory=config.remote_dir, port=config.port, name=config.name,
                     hosts=lambda: list(config.hosts))
     remote_app = build_remote_app(SimpleNamespace(app_builder=builder, phone=None), remote, voice=False)
