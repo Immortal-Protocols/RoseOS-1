@@ -1545,9 +1545,30 @@ needing older clients to update, through the library's minClientVersionCode
   `toolchain` or `dependency` failure, never a skipped half.
 - **One version.** A version pairs the client APK and the server ELF, each by
   sha256, from one source revision, recorded in one ledger transaction.
-- **Migrations** are checked offline against every delivered version. They
-  are append-only and byte-identical, and they are applied to a fresh and to
-  an upgraded database.
+- **Migrations** (`app_builder/migrations.py`; source, called nowhere) are
+  checked offline before anything is built:
+  - **Layout.** Each scope, `account` (every user's own database) and
+    `shared`, is numbered `0001…` with none missing (`migration_gap`). Files
+    are UTF-8, at most 256 KB each, and at most 1000 per scope.
+  - **The lock.** Every migration of every delivered version must still be
+    there under its number, with the same name and bytes. New ones may only
+    follow (`migration_removed`, `migration_changed`). The ledger records
+    each version's lock (slice 4).
+  - **A sandbox.** The migrations are applied in an in-memory SQLite, one
+    transaction each as the runtime does, with foreign keys on and a step
+    budget. An authorizer refuses anything that could touch the builder's
+    files or the server's own settings: `ATTACH` (and `VACUUM INTO`, which
+    attaches), `DETACH`, transaction control, `load_extension`, any other
+    database, and every PRAGMA outside a short list (`foreign_keys`,
+    `table_info` and the like).
+  - **Fresh and upgrade runs.** The set is applied from an empty database.
+    It is also applied as an upgrade: the delivered set first, then two
+    default rows seeded into every table that takes them, then the new
+    migrations. So a change that only fails over a phone's data, such as a
+    unique index over duplicates, is caught and says so. Integrity and
+    foreign key checks follow each run.
+  - **Results.** Any failure is `migration_sql`, naming the file. Only
+    generated SQL runs, never generated Rust, and nothing is written to disk.
 
 ### 7.7 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
 
@@ -1633,7 +1654,8 @@ need no hosting and no further OS Core change.
    `env::{self as x}` and `$(#[$m:meta])*`.
 2. **The shared API contract and its compatibility rules (§7.3).** Done:
    `rose/tests/test_app_contract.py`.
-3. Offline migration checks.
+3. **Offline migration checks (§7.6).** Done:
+   `rose/tests/test_app_migrations.py`.
 4. Ledger pairing of client and server artifacts.
 5. The injected crate source and server build plumbing, with a fake `cargo`,
    then a real build of a dependency-free fixture.
