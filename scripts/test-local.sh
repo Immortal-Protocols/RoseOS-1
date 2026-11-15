@@ -326,6 +326,7 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceHttp.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTaskTracker.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceDecisionClient.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceAbort.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceInputs.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceNotices.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTaskTemplates.java \
  workspace/rose-agent/app/tests/WorkspaceTest.java workspace/rose-agent/app/tests/WorkspaceSnapshotTest.java \
  workspace/rose-agent/app/tests/WorkspaceEngineTest.java workspace/rose-agent/app/tests/WorkspaceAgentTest.java \
  workspace/rose-agent/app/tests/WorkspaceReplayTest.java workspace/rose-agent/app/tests/WorkspaceRecoveryTest.java \

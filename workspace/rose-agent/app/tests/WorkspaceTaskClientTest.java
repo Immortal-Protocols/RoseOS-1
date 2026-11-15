@@ -43,7 +43,7 @@ public final class WorkspaceTaskClientTest {
  static final String ACCEPTED="{\"schemaVersion\":1,\"status\":\"accepted\",\"taskId\":null}";
 
  public static void main(String[] args)throws Exception{
-  body();gate();replies();retries();
+  body();gate();replies();retries();notMounted();templates();
   System.out.println("WorkspaceTaskClientTest: "+checks+" checks passed (fake transport; nothing sent)");
  }
 
@@ -138,5 +138,38 @@ public final class WorkspaceTaskClientTest {
   Fake unsigned=new Fake().then(200,ACCEPTED);
   WorkspaceTaskClient.Outcome s=new WorkspaceTaskClient(new WorkspaceTaskClient.Gate(true),unsigned,broken).start("tap-9",GROCERY,true);
   expect(s.kind==WorkspaceTaskClient.Kind.UNCERTAIN&&unsigned.bodies.isEmpty(),"a request that cannot be signed is never sent unsigned");
+ }
+ /** A server started without --workspace-tasks has no route: 404 is a definite "not on", never retried, never uncertain. */
+ static void notMounted(){
+  Fake f=new Fake().then(404,"{\"detail\":\"Not Found\"}").then(200,ACCEPTED);
+  WorkspaceTaskClient.Outcome o=client(true,f).start("tap-404",GROCERY,true);
+  expect(o.kind==WorkspaceTaskClient.Kind.NOT_OFFERED&&f.bodies.size()==1,"404: not offered, one attempt");
+  expect("Rose tasks aren't turned on for your Rose server".equals(o.status())&&!o.started(),"says so, and never started");
+  WorkspaceTaskTracker t=new WorkspaceTaskTracker();t.tapped("task:grocery","tap-404");t.replied("tap-404",o);
+  expect("Rose tasks aren't turned on for your Rose server".equals(t.line("task:grocery"))&&!t.mayAskAgain("task:grocery")&&t.lostReplies().isEmpty(),"the card says so, with no Ask again and nothing to look up");
+ }
+
+ /** The page's tasks: the approved HiFi's, each sendable within App Core's limits, ask-first, offered as task: actions. */
+ @SuppressWarnings("unchecked")
+ static void templates(){
+  expect(WorkspaceTaskTemplates.ALL.size()==3,"three tasks");
+  java.util.Set<String> labels=new java.util.HashSet<>();
+  for(WorkspaceSnapshot.Task t:WorkspaceTaskTemplates.ALL){
+   WorkspaceSnapshot.Task withTarget=new WorkspaceSnapshot.Task(t.templateId,t.label,t.ask,t.goal,ROSE);
+   String b=WorkspaceTaskClient.body("tap-t",withTarget,true);
+   expect(b!=null,"sendable within App Core's limits: "+t.templateId);
+   Map<String,Object> m=(Map<String,Object>)MiniJson.parse(b);
+   expect(("task:"+t.templateId).equals(m.get("actionId"))&&t.label.equals(m.get("label"))&&t.goal.equals(m.get("goal")),"its own id, label and goal");
+   expect(t.goal.contains("Ask before")||t.goal.contains("ask before"),"its goal tells Rose to ask before acting: "+t.templateId);
+   expect(t.ask.endsWith("?"),"its sheet asks a question");
+   labels.add(t.label);
+  }
+  expect(labels.equals(new java.util.HashSet<>(java.util.Arrays.asList("Add missing items to grocery list","Summarise prep notes","Plan a quiet Saturday"))),"the HiFi's own task names");
+  List<WorkspaceSnapshot.Task> offered=new ArrayList<>();for(WorkspaceSnapshot.Task t:WorkspaceTaskTemplates.ALL)offered.add(new WorkspaceSnapshot.Task(t.templateId,t.label,t.ask,t.goal,ROSE));
+  WorkspaceSnapshot s=WorkspaceSnapshot.build(java.util.Arrays.asList(ROSE),java.util.Collections.<WorkspaceSnapshot.Shortcut>emptyList(),java.util.Collections.<WorkspaceSnapshot.Template>emptyList(),
+   offered,new java.util.HashSet<String>(),0,java.util.Calendar.getInstance());
+  int tasks=0;for(Map<String,Object> a:(List<Map<String,Object>>)s.snapshot.get("actions"))if("agent_task".equals(a.get("kind"))){tasks++;expect(Boolean.TRUE.equals(a.get("requiresConfirmation")),"asks first");}
+  expect(tasks==3,"all three offered to the composer as agent_task actions");
+  expect(!WorkspaceLayout.json(s.snapshot).contains("Check the owner"),"the goal never enters the snapshot");
  }
 }

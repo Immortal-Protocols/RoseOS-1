@@ -65,7 +65,7 @@ final class WorkspaceTaskClient {
  /** The four rose-auth-v1 headers for one POST, from LocalRoseAuth.headers with this phone's key. */
  interface Signer { Map<String,String> headers(String method,String path)throws Exception; }
 
- enum Kind { STARTED, ALREADY_STARTED, REFUSED, UNAVAILABLE, NOT_AUTHORIZED, UNCERTAIN, NOT_SENT, SENDING }
+ enum Kind { STARTED, ALREADY_STARTED, REFUSED, UNAVAILABLE, NOT_AUTHORIZED, UNCERTAIN, NOT_SENT, SENDING, NOT_OFFERED }
 
  /** What the page shows for the tap. started is never shown as done; the task's own events say that. */
  static final class Outcome {
@@ -80,6 +80,7 @@ final class WorkspaceTaskClient {
     case UNCERTAIN:return "Not sure it started · check Rose's work";
     case NOT_AUTHORIZED:return "Couldn't start · this phone isn't paired";
     case NOT_SENT:return "Rose tasks aren't available on this phone yet";
+    case NOT_OFFERED:return "Rose tasks aren't turned on for your Rose server";
     case SENDING:return "Asking Rose…";
     default:return "Couldn't start";
    }
@@ -116,6 +117,9 @@ final class WorkspaceTaskClient {
   Map<String,Object> m=null;
   try{Object o=MiniJson.parse(r.body==null?"":r.body);if(o instanceof Map){@SuppressWarnings("unchecked") Map<String,Object> x=(Map<String,Object>)o;m=x;}}catch(RuntimeException ignored){}
   if(r.status==401)return new Outcome(Kind.NOT_AUTHORIZED,m!=null&&m.get("error") instanceof String?(String)m.get("error"):null,null,attempts);
+  // The route answers only 200, 400, 503 and 401 when mounted, so a 404 means the Rose server was started without
+  // --workspace-tasks: nothing was started, definitely. It is never retried.
+  if(r.status==404)return new Outcome(Kind.NOT_OFFERED,"not_on_this_server",null,attempts);
   if(m==null||!Long.valueOf(1).equals(m.get("schemaVersion")))return new Outcome(Kind.UNCERTAIN,"unreadable_reply",null,attempts);
   Object status=m.get("status");Object taskId=m.get("taskId");String id=taskId instanceof String?(String)taskId:null;
   Object reason=m.get("reason");String why=reason instanceof String?(String)reason:null;
