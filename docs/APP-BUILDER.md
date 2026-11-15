@@ -59,8 +59,8 @@ directory beside it in `repo.git`), outside
    commit, never from a failed attempt. If nothing has been delivered yet, it
    starts from the skeleton with the original description plus the change.
    So a failed first build is never a dead end.
-4. **Generate.** A per-job Codex thread with `sandbox: workspace-write`, cwd =
-   that project's source and no access to `ROSE_CONFIG_DIR`, writes code into a
+4. **Generate.** A per-job Codex thread under the `rose_app_build` permission
+   profile (§4A), cwd = that project's source, writes code into a
    fixed skeleton: Java 17 source level (§2.2), android.jar APIs plus
    declared pure-Java JAR libraries (§2.1), aapt v1 resources,
    min API 26 and target 35. It cannot change the package,
@@ -1095,7 +1095,7 @@ app-server client.
 
 - **Bridge purpose `app_build`.** No dynamic tools. `cwd` is the project's
   absolute `source` path. The thread is `ephemeral`, uses `approvalPolicy:
-  never` and `sandbox: workspace-write`, with network access off. Web search,
+  never` and the `rose_app_build` permission profile, with network off. Web search,
   apps, MCP servers, memories, hooks, plugins, multi-agent and image tools are
   disabled and re-verified after thread start, the same way the
   `public_research` purpose is today. Model and tier follow the producer's
@@ -1108,12 +1108,40 @@ app-server client.
 - **Turns and cancel.** One turn per job, bounded by the build timeout. Cancel
   and shutdown use the bridge's existing `interrupt` op. The builder then
   resets the source as it does today.
-- **Read isolation is not provided by Codex.** `workspace-write` limits where
-  Codex may write, not what it may read. Keeping the generator out of
-  `ROSE_CONFIG_DIR` (pairing keys, TLS, provider tokens, the project signing
-  keys) needs the generator to run as a separate OS user, or in a container
-  that only mounts the project source. That is blocker 3 below: it belongs to
-  the Server Worker, and nothing here claims it.
+- **Read isolation is a Codex permission profile.** The legacy
+  `workspace-write` sandbox limits writes, not reads. Codex 0.167.1's
+  experimental permission profiles (opted into by the `experimentalApi`
+  capability the bridge already sends) can also deny reads. The writer defines
+  and selects its own profile, `rose_app_build`, and nothing else:
+  - it extends `:workspace` (which keeps `.git`, `.agents`, `.codex` and
+    `.aws` read-only). It denies `:root`, `:tmpdir` and `:slash_tmp`, allows
+    `:minimal` (the runtime Codex needs) for reading, and allows
+    `:workspace_roots` `.`, which is the job's `source` cwd, for writing.
+    Network is off. So `ROSE_CONFIG_DIR` (pairing keys, TLS, provider tokens,
+    the project signing keys), home and every other project fall under the
+    `:root` deny;
+  - it is defined only by launch flags, `--strict-config -c
+    default_permissions="rose_app_build" -c permissions.rose_app_build={…}`.
+    No user or shared config file is written;
+  - there is no legacy fallback. Thread start carries `permissions` and no
+    `sandbox`, and each turn carries `permissions` and no `sandboxPolicy`.
+    The base options' `danger-full-access` is removed for this purpose, and a
+    test pins that.
+
+  Before the turn, the writer refuses (`app_build_isolation_unavailable`, then
+  surfaced as `research_isolation_unavailable`) unless all of these hold:
+  - the version is a released `codex-cli` 0.167.1 or later;
+  - the effective config has no `sandbox_mode` or `sandbox_workspace_write`
+    (either would make the legacy sandbox win);
+  - the config names `rose_app_build` as the default, and its definition is
+    exactly the one passed, so an entry merged in from another config layer
+    (an extra read path, network on) refuses;
+  - the thread start reports `activePermissionProfile.id = rose_app_build`;
+  - `permissionProfile/list` for the job's cwd lists it with
+    `allowed: true`.
+
+  A profile that is selected and allowed is not yet proved enforced. That is
+  why blocker 3 stays open until the live check below.
 - **Shared code.** `codex.mjs` also carries the research and character-life
   isolation checks. The `app_build` purpose sits beside them; their launch
   arguments, thread parameters and turns are unchanged, and a test pins that.
@@ -1121,11 +1149,9 @@ app-server client.
 **Implemented** (source only):
 
 - `workspace/rose-agent/server/app-build.mjs`: the fixed policy, the thread
-  config and the per-turn sandbox. The config is the research isolation with web
-  search off and the shell kept, plus `sandbox_workspace_write` network off and
-  no temporary directories. Every turn carries
-  `sandboxPolicy: {type: workspaceWrite, writableRoots: [], networkAccess:
-  false, excludeTmpdirEnvVar: true, excludeSlashTmp: true}`. The cwd must be an
+  config, the `rose_app_build` profile and its launch flags, and the profile,
+  version and listing checks. The config is the research isolation with web
+  search off and the shell kept; it sets no sandbox keys. The cwd must be an
   absolute `…/source` path.
 - The bridge `open` with `purpose: app_build`:
   - refuses any tool or other cwd;
@@ -1177,14 +1203,39 @@ Proof levels:
   bridge; Builder with the real bridge, compiled and signed with throwaway
   keys, including a writer that escapes the process group). The group stop is
   tested with a member that ignores SIGTERM, and with one that never goes away.
-- **Assumed, not verified:** the app-server field names `sandbox:
-  workspace-write`, the turn's `sandboxPolicy` and the
-  `sandbox_workspace_write.*` config keys come from the Codex app-server
-  contract. No Codex binary exists in this container. Whether a real
-  `codex-cli` 0.167.x honours them (writes outside the project and network
-  refused) needs a live check by the Server Worker before any enabling.
-- **Not done:** any real model turn, read isolation (blocker 3) and any host
-  wiring.
+- **Taken from the published permissions and app-server pages, not from a
+  binary or the generated schema:** the `permissions` fields on `thread/start`
+  and `turn/start`, `activePermissionProfile`, `permissionProfile/list`, the
+  `[permissions.<id>]` keys and tokens, and `--strict-config`. No Codex binary
+  exists in this container.
+- **Known not to be guaranteed:** the installed 0.167.1 experimental
+  `ConfigReadResponse` schema leaves `config` open (`additionalProperties`).
+  It lists the legacy `sandbox_mode` and `sandbox_workspace_write`, and it has
+  no `permissions` or `default_permissions` property. So whether `config/read`
+  returns the profile at all, verbatim or normalized, is neither defined by
+  the schema nor observed (Local Server).
+
+  Every point above fails closed: a missing, renamed or normalized field
+  refuses every app build rather than weakening isolation. Nothing here claims
+  that the named profile equals what Codex enforces. Still to confirm on a
+  real 0.167.1, without running the writer or a model:
+  1. what `config/read` returns for `permissions` and `default_permissions`
+     with the writer's launch flags, and whether the profile comes back as
+     passed (if Codex fills in defaults or resolves `extends`, the
+     exact-match check refuses and must be revised to the observed form, not
+     loosened);
+  2. the `permissionProfile/list` params and response shape (`data`,
+     `nextCursor`, entry `id` and `allowed`);
+  3. the `activePermissionProfile` definition in the `thread/start` response,
+     and `permissions` in the `thread/start` and `turn/start` params;
+  4. that `--strict-config` accepts the inline-table `-c` value.
+- **Live check before any enabling (Server Worker / Local Server):** a
+  synthetic denial run under the profile, with no writer and no model. Reads
+  of `ROSE_CONFIG_DIR`, home, `/tmp` and a sibling project must be refused;
+  writes outside `source`, and any network, must fail; a write inside
+  `source` must succeed. Until then the profile is selected, not proved.
+- **Not done:** any real model turn, the live enforcement check of read
+  isolation (blocker 3) and any host wiring.
 
 ## 6. Standalone builder host (source only; not configured, deployed or enabled)
 
@@ -1342,14 +1393,17 @@ test, and no model was called.
    35.0.0 and JDK 21 with recorded hashes), or a separate builder is
    authorized. A separate builder is a provisioning decision; no new paid
    infrastructure is assumed.
-3. **Build isolation on that host (Server Worker).** Source now asks Codex for
-   `workspace-write` scoped to the project with network off (§4A). That part is
-   unverified against a real Codex binary. Read access to `ROSE_CONFIG_DIR`
-   (pairing, TLS, provider tokens, project keys) is not blocked by Codex at
-   all. The writer needs a separate OS user or a container that mounts only
-   the project source, launched through `CodexGenerator(command=...)`.
-   Enabling it is a security-relevant runtime change, applied only by the
-   Server Worker when authorized.
+3. **Build isolation on that host (Server Worker).** Source now runs the
+   writer under the `rose_app_build` permission profile (§4A). It denies reads
+   outside the project source and the minimal runtime, allows writes only in
+   the source, turns network off and refuses to start unless that exact
+   profile is active and allowed. Enforcement is unverified against a real
+   Codex binary: the synthetic denial check in §4A must pass on the host
+   before enabling. If it fails, the writer stays off, with no broad-read
+   fallback. The alternative is a separate OS user or a container that mounts
+   only the project source, launched through `CodexGenerator(command=...)`.
+   Enabling is a security-relevant runtime change, applied only by the Server
+   Worker when authorized.
 4. **Runtime (Nathan).** Nathan has asked for the Rose server to run again and
    for deployment (2026-11-15). The Server Worker and the Chariot operator
    restart and deploy; the builder host runs separately (§6).

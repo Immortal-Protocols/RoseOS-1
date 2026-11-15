@@ -110,20 +110,82 @@ not do. Never claim it was built, installed or tested.`;
 export const APP_BUILD_ITEMS = ['agentMessage','reasoning','userMessage','plan','commandExecution','fileChange'];
 export const APP_BUILD_ITEM_BUDGET = 400;
 
-// The writer's sandbox for every turn: writable only at the thread's cwd, no network, no temporary directories.
-export const appBuildSandbox = {type:'workspaceWrite',writableRoots:[],networkAccess:false,
- excludeTmpdirEnvVar:true,excludeSlashTmp:true};
+// The writer's read isolation: one named Codex permission profile (beta, Codex 0.167.1 and later; docs: permissions,
+// app-server "experimental API opt-in"). It reads only the platform's minimal runtime (":minimal"), writes only the
+// thread's workspace root (its cwd, the job's source), denies the filesystem root, both temporary directories and
+// the network, and keeps ":workspace"'s read-only .git, .agents, .codex and .aws. Defined on the app-server command
+// line under --strict-config, selected by id on thread/start and every turn/start, never with the legacy sandbox.
+export const APP_BUILD_PROFILE = 'rose_app_build';
+export const appBuildProfile = Object.freeze({
+ extends:':workspace',
+ filesystem:Object.freeze({':root':'deny',':minimal':'read',':tmpdir':'deny',':slash_tmp':'deny',
+  ':workspace_roots':Object.freeze({'.':'write'})}),
+ network:Object.freeze({enabled:false}),
+});
+
+function tomlInline(value) {
+ if(typeof value==='string')return JSON.stringify(value);
+ if(typeof value==='boolean')return String(value);
+ return '{'+Object.entries(value).map(([k,v])=>JSON.stringify(k)+' = '+tomlInline(v)).join(', ')+'}';
+}
+
+/** The app-server arguments that define the profile and make it the default; --strict-config refuses unknown keys. */
+export function appBuildLaunchArgs() {
+ return ['--strict-config','-c',`default_permissions=${JSON.stringify(APP_BUILD_PROFILE)}`,
+  '-c',`permissions.${APP_BUILD_PROFILE}=${tomlInline(appBuildProfile)}`];
+}
+
+/** Codex 0.167.1 or later, released: the version whose permission-profile API was checked. Anything else is refused. */
+export function supportsAppBuildVersion(value) {
+ const m=/^codex-cli (\d+)\.(\d+)\.(\d+)(-[A-Za-z0-9.-]+)?\s*$/.exec(value);
+ if(!m||m[4])return false;  // a pre-release of 0.167.1 is not 0.167.1
+ const [major,minor,patch]=m.slice(1,4).map(Number);
+ return major>0||minor>167||(minor===167&&patch>=1);
+}
+
+function canonical(v){
+ if(v===null||typeof v!=='object')return JSON.stringify(v);
+ if(Array.isArray(v))return '['+v.map(canonical).join(',')+']';
+ return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
+}
+
+/** The effective configuration must select exactly this profile, as defined here: no legacy sandbox (which takes
+ * precedence over profiles), and no other layer adding to it (profile entries merge across layers). */
+export function checkAppBuildProfile(config) {
+ if(!config||typeof config!=='object'||Array.isArray(config))throw Error('app_build_isolation_unavailable');
+ if(config.sandbox_mode!==undefined||config.sandbox_workspace_write!==undefined)throw Error('app_build_isolation_unavailable');
+ if(config.default_permissions!==APP_BUILD_PROFILE)throw Error('app_build_isolation_unavailable');
+ if(canonical(config.permissions?.[APP_BUILD_PROFILE])!==canonical(appBuildProfile))throw Error('app_build_isolation_unavailable');
+}
+
+/** permissionProfile/list for the job's cwd: the profile must be listed and allowed (selection, not enforcement). */
+export async function verifyAppBuildProfile(rpc, cwd) {
+ let cursor;const seen=new Set();
+ for(let page=0;page<16;page++){
+  const result=await rpc('permissionProfile/list',{cwd,limit:100,...(cursor?{cursor}:{})});
+  if(!Array.isArray(result?.data))throw Error('app_build_isolation_unavailable');
+  const entry=result.data.find(p=>p?.id===APP_BUILD_PROFILE);
+  if(entry){
+   if(entry.allowed!==true)throw Error('app_build_isolation_unavailable');
+   return;
+  }
+  if(!result.nextCursor)break;
+  cursor=result.nextCursor;
+  if(typeof cursor!=='string'||cursor.length>4096||seen.has(cursor))throw Error('app_build_isolation_unavailable');
+  seen.add(cursor);
+ }
+ throw Error('app_build_isolation_unavailable');
+}
 
 /** Thread config for app_build: the research isolation (no MCP servers, apps, memories, hooks, plugins, sub-agents,
  * image views or project docs) with web search off and the sandboxed shell kept, because writing source needs it.
- * The same refusals apply: any enabled MCP server, custom instructions file or unknown shape fails closed. */
+ * The same refusals apply: any enabled MCP server, custom instructions file or unknown shape fails closed, and so does
+ * any configuration that does not select exactly the writer's permission profile (checkAppBuildProfile). */
 export function appBuildConfig(config) {
+ checkAppBuildProfile(config);  // read isolation by the named profile, never the legacy sandbox settings
  const out=researchConfig(config);
  out.web_search='disabled';
  out['features.shell_tool']=true;
- out['sandbox_workspace_write.network_access']=false;
- out['sandbox_workspace_write.exclude_tmpdir_env_var']=true;
- out['sandbox_workspace_write.exclude_slash_tmp']=true;
  return out;
 }
 

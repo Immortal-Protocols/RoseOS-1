@@ -225,10 +225,20 @@ FAKE_CODEX = textwrap.dedent('''\
      const m=JSON.parse(line);if(m.id===undefined)return;let result={};
      if(m.method==='account/read')result={account:{type:'chatgpt'}};
      if(m.method==='model/list')result={data:[{id:'gpt-6.1-terra',serviceTiers:[{id:'priority'}]}]};
-     if(m.method==='config/read')result={config:{mcp_servers:{node_repl:{enabled:false}}}};
+     if(m.method==='config/read'){
+      // A profile-aware Codex: the writer's profile is defined only by its strict-config launch flags, and
+      // read back as exactly what was passed (the inline table in its JSON-compatible form).
+      result={config:{mcp_servers:{node_repl:{enabled:false}}}};const a=process.argv,def='permissions.rose_app_build=';
+      const arg=a.find(x=>x.startsWith(def));
+      if(a.includes('--strict-config')&&a.includes('default_permissions="rose_app_build"')&&arg)
+       Object.assign(result.config,{default_permissions:'rose_app_build',
+        permissions:{rose_app_build:JSON.parse(arg.slice(def.length).replaceAll('" = ','":'))}});
+     }
+     if(m.method==='permissionProfile/list')result={data:[{id:':workspace',allowed:true},{id:'rose_app_build',allowed:true}]};
      if(m.method==='thread/start'){
       fs.writeFileSync(path.join(process.cwd(),'..','thread-start.json'),JSON.stringify(m.params));
-      result={thread:{id:'build'},model:'gpt-6.1-terra',serviceTier:'priority'};
+      result={thread:{id:'build'},model:'gpt-6.1-terra',serviceTier:'priority',
+       activePermissionProfile:m.params.permissions?{id:m.params.permissions}:null};
      }
      if(m.method==='mcpServerStatus/list')result={data:[{runtimeStatus:'disabled',tools:{},resources:[],resourceTemplates:[]}]};
      if(m.method==='turn/interrupt'){out({id:m.id,result:{}});
@@ -292,10 +302,13 @@ class RealBridge(unittest.TestCase):
         self.assertEqual((self.source / 'README.md').read_text(), 'Tip calculator\n')
         import json
         start = json.loads((self.source.parent / 'thread-start.json').read_text())
-        self.assertEqual((start['cwd'], start['sandbox'], start['ephemeral']), (str(self.source.resolve()),
-                                                                                'workspace-write', True))
+        self.assertEqual((start['cwd'], start['permissions'], start['ephemeral']), (str(self.source.resolve()),
+                                                                                    'rose_app_build', True))
         self.assertIn('Java 17 source level', start['developerInstructions'])
-        self.assertFalse(start['config']['sandbox_workspace_write.network_access'])
+        # The permission profile is the writer's only isolation: no legacy sandbox field or key goes with it.
+        self.assertNotIn('sandbox', start)
+        self.assertEqual([k for k in start['config'] if k.startswith('sandbox')], [])
+        self.assertEqual(start['config']['web_search'], 'disabled')
 
     def test_cancel_interrupts_and_confirms_the_stop(self):
         os.environ['ROSE_TEST_SCENARIO'] = 'hang'
