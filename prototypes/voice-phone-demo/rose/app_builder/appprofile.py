@@ -192,9 +192,14 @@ def _reserved(snapshot: Path, package: str):
     """The client's `<package>.rose` package is the builder's sign-in and API code; the writer cannot add to it,
     by its folder or by a package clause written anywhere else."""
     reserved = snapshot / 'src' / Path(*package.split('.')) / 'rose'
-    if reserved.exists():
+    if os.path.lexists(reserved):
         raise ProfileRefused(f'{reserved.relative_to(snapshot)} is written by the builder (sign-in and the API '
                              'client).', 'reserved_path')
+    for folder in reversed(reserved.parents):  # the folders the builder writes it in: a folder, or not there yet
+        if folder.is_relative_to(snapshot / 'src') and os.path.lexists(folder) \
+                and not stat.S_ISDIR(os.lstat(folder).st_mode):
+            raise ProfileRefused(f'{folder.relative_to(snapshot)} is not a folder; the builder writes its sign-in and '
+                                 f'API client in {reserved.relative_to(snapshot)}.', 'reserved_path')
     for java in snapshot.glob('src/**/*.java'):
         text = template.unicode_escapes(java.read_text(encoding='utf-8', errors='replace'))
         code = re.sub(r'/\*.*?\*/|//[^\n]*', ' ', text, flags=re.S)

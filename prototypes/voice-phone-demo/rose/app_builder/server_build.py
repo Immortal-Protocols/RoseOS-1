@@ -40,6 +40,7 @@ from .toolchain import StepFailed, run
 
 TARGET = 'x86_64-unknown-linux-musl'  # §7.7: a static x86-64 musl ELF
 PACKAGE = 'rose-app-server'
+RUNTIME = 'rose-app-runtime'  # the builder's own rose/meta.rs names it; a host injects it as a path crate
 EDITION = '2021'
 ENTRY = 'rose/main.rs'
 GENERATED = re.compile(r'rose/(?:[a-z][a-z0-9_]{0,63}/){0,4}[a-z][a-z0-9_]{0,63}\.rs')
@@ -266,7 +267,8 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         st = None
     if st is None or not stat.S_ISREG(st.st_mode):
         raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'Cargo finished without the server binary.')
-    if _holds_any(elf, [str(p).encode() for p in (work, Path(cache), *((vendor,) if vendor is not None else ()))]):
+    builder_paths = (work, Path(cache), *((vendor,) if vendor is not None else ()), *own)
+    if _holds_any(elf, [str(p).encode() for p in builder_paths]):
         raise BuildFailed('dependency', 'build_path_embedded', 'The server binary holds a path from the builder\'s '
                           'machine (a crate\'s macro or build script put it there), so it was not used.')
     try:
@@ -453,12 +455,13 @@ def _write(path: Path, text: str):
         stream.write(text)
 
 
-def _raw(text: str) -> str:
-    """A Rust raw string literal holding exactly ``text``."""
-    hashes = 1
-    while '"' + '#' * hashes in text:
-        hashes += 1
-    return 'r' + '#' * hashes + '"' + text + '"' + '#' * hashes
+_ESCAPES = {'\\': '\\\\', '"': '\\"', '\n': '\\n', '\r': '\\r', '\t': '\\t'}
+
+
+def _str(text: str) -> str:
+    """A Rust string literal holding exactly ``text``, on one line. Not a raw string: rustc turns a raw string's CRLF
+    into LF and refuses a bare CR, so SQL holding either would not be the SQL that was checked and locked."""
+    return '"' + ''.join(_ESCAPES.get(c) or (c if c.isprintable() else f'\\u{{{ord(c):x}}}') for c in text) + '"'
 
 
 def migrations_rs(current: dict, shared: bool) -> str:
@@ -472,7 +475,7 @@ def migrations_rs(current: dict, shared: bool) -> str:
         listed = sorted(current.get(scope, []), key=lambda m: m.number)
         if [m.number for m in listed] != list(range(1, len(listed) + 1)):
             raise ValueError(f'{scope} migrations must be numbered 1..n')
-        rows = ''.join(f'    // {m.number:04d}_{m.name}.sql\n    {_raw(m.sql)},\n' for m in listed)
+        rows = ''.join(f'    // {m.number:04d}_{m.name}.sql\n    {_str(m.sql)},\n' for m in listed)
         if const == 'SHARED':
             value = f'Some(&[\n{rows}])' if shared else 'None'
             out.append(f'pub const SHARED: Option<&[&str]> = {value};')
@@ -499,6 +502,6 @@ def meta_rs(app: str, issuer: str, admission: str) -> str:
         raise ValueError('admission is invite or open')
     variant = 'Invite' if admission == 'invite' else 'Open'
     return ('//! The server\'s identity for sign-in, written by the builder. Generated; not the app\'s code.\n\n'
-            f'pub const APP: &str = {_raw(app)};\n'
-            f'pub const ISSUER: &str = {_raw(_issuer(issuer))};\n'
+            f'pub const APP: &str = {_str(app)};\n'
+            f'pub const ISSUER: &str = {_str(_issuer(issuer))};\n'
             f'pub const ADMISSION: rose_app_runtime::signin::Admission = rose_app_runtime::signin::Admission::{variant};\n')
