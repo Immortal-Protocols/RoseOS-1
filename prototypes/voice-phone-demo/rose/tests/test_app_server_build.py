@@ -688,6 +688,12 @@ class FakeCargo(Tmp):
             def command(self, argv, env, *, writable, readonly):
                 return [str(self.tmp / 'no-such-bwrap'), *argv], env
         Missing.tmp = self.tmp
+        class Explains(Passthrough):
+            def command(self, argv, env, *, writable, readonly):
+                raise S.BuildFailed('toolchain', 'build_isolation_unavailable', 'Linux build isolation is unavailable.')
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(isolation=Explains())
+        self.assertEqual(caught.exception.summary, 'Linux build isolation is unavailable.')  # kept as the provider said
         for isolation in (Broken(), Missing()):
             with self.subTest(isolation=type(isolation).__name__):
                 with self.assertRaises(S.BuildFailed) as caught:

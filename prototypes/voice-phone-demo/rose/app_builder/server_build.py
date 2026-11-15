@@ -203,6 +203,8 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         try:
             argv, wrapped = isolation.command([str(tools.cargo), '--config', str(cargo_home / 'config.toml'), *args],
                                               dict(env), writable=work, readonly=readonly)
+        except BuildFailed:
+            raise  # the provider's own account of why it cannot isolate (rose.app_builder.providers.host)
         except Exception:
             raise BuildFailed('toolchain', 'build_isolation_unavailable',
                               'The server was not built: the build isolation could not prepare the build.') from None
