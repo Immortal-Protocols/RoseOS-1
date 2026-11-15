@@ -5,7 +5,12 @@ The generated Rust is compiled and run against App Core's runtime crate (workspa
 machine's own cargo, offline. The generated Java is compiled with javac and run against a fake transport, and the
 Android parts against the SDK's android.jar. A cross-language check sends a Java-built request through the generated
 Rust handlers and reads the reply in Java. ROSE_REQUIRE_CARGO and ROSE_REQUIRE_APP_BUILD make a missing tool a failure
-rather than a skip (CI sets both). Every contract here is the test's own; no URL, key or account is real."""
+rather than a skip (CI sets both). Every contract here is the test's own; no URL, key or account is real.
+
+The generated start-up (rose/main.rs) builds on OS Core's adapter (workspace/rose-app-runtime-signin), whose crates
+(rose-signin's lock, with rusqlite) come only by that crate's own route. Its build here runs only where they are
+already in the offline cache; otherwise it is skipped and says why, and nothing is downloaded.
+ROSE_REQUIRE_ADAPTER_BUILD makes their absence a failure."""
 import copy
 import hashlib
 import json
@@ -23,6 +28,7 @@ from rose.app_builder import server_build as S
 
 REPO = Path(__file__).resolve().parents[4]
 RUNTIME = Path(os.environ.get('ROSE_APP_RUNTIME', REPO / 'workspace/rose-app-runtime'))
+ADAPTER = Path(os.environ.get('ROSE_APP_RUNTIME_SIGNIN', REPO / 'workspace/rose-app-runtime-signin'))
 PACKAGE = 'com.example.notes'
 
 CONTRACT = {
@@ -79,10 +85,91 @@ class Server(unittest.TestCase):
         self.files = G.server_files(self.contract)
 
     def test_files_are_the_builders_generated_modules(self):
-        self.assertEqual(sorted(self.files), ['rose/api.rs', 'rose/routes.rs', 'rose/wire.rs'])
+        self.assertEqual(sorted(self.files), ['rose/api.rs', 'rose/main.rs', 'rose/routes.rs', 'rose/wire.rs'])
         self.assertTrue(all(S.GENERATED.fullmatch(k) for k in self.files))
-        # The crate root binds OS Core's authenticator and the host's identity: not generated until that is agreed.
-        self.assertNotIn(S.ENTRY, self.files)
+        self.assertIn(S.ENTRY, self.files)
+        # The builder's own modules: codegen never writes them.
+        self.assertNotIn('rose/meta.rs', self.files)
+        self.assertNotIn('rose/migrations.rs', self.files)
+
+    def test_main_takes_everything_from_the_host_and_the_build(self):
+        main = self.files['rose/main.rs']
+        for line in ('mod api;', '#[path = "../src/handlers/mod.rs"]\nmod handlers;', 'mod meta;', 'mod migrations;',
+                     'mod routes;', 'mod wire;', 'use rose_app_runtime_signin::{start, Config, Keys, Migrations};',
+                     'Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED }',
+                     'Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, &app_id, migrations)',
+                     'start(config, Keys::Unavailable)', 'started.server(routes::routes::<handlers::App>())',
+                     'const APP_ID_ENV: &str = "CHARIOT_APP_ID";', 'const PORT_ENV: &str = "PORT";',
+                     'const DEFAULT_PORT: u16 = 8080;', 'TcpListener::bind(("0.0.0.0", port))'):
+            self.assertIn(line, main)
+        # The only variables it reads itself; DATA_DIR and CHARIOT_DEPLOYMENT_SHA256 are the adapter's.
+        self.assertEqual(main.count('std::env::var('), 1)
+        self.assertEqual((main.count('var('), main.count('var(APP_ID_ENV)'), main.count('var(PORT_ENV)')), (4, 1, 1))
+        for invented in ('Keys::Supplied', 'restore', 'http://', 'https://', 'DATA_DIR"', 'secret'):
+            self.assertNotIn(invented, main)
+
+    def test_main_reads_its_port_and_variables_strictly(self):
+        # main.rs's own parts that need only std, compiled and run alone (the adapter's build is the next test).
+        require('ROSE_REQUIRE_CARGO', 'rustc')
+        main = G.MAIN_RS
+        own = main[main.index('/// The variable the host passes its app id'):main.index('fn run()')]
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'startup.rs'
+            source.write_text(own + STARTUP_CHECKS, encoding='utf-8')
+            built = subprocess.run(['rustc', '--edition', '2021', '-D', 'warnings', '-o', str(Path(tmp) / 'startup'),
+                                    str(source)], capture_output=True, text=True, timeout=300)
+            self.assertEqual(built.returncode, 0, built.stderr[-4000:])
+            run = subprocess.run([str(Path(tmp) / 'startup')], env={'PATH': os.environ.get('PATH', '')},
+                                 capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stderr[-4000:])
+            self.assertIn('start-up checks passed', run.stdout)
+
+    def test_main_builds_against_the_adapter(self):
+        require('ROSE_REQUIRE_CARGO', 'cargo')
+        required = os.environ.get('ROSE_REQUIRE_ADAPTER_BUILD')
+        if not (RUNTIME / 'Cargo.toml').is_file() or not (ADAPTER / 'Cargo.toml').is_file():
+            if required:
+                self.fail(f'the runtime or the adapter crate is missing ({RUNTIME}, {ADAPTER})')
+            self.skipTest('the adapter crate (workspace/rose-app-runtime-signin) is not in this checkout')
+        offline = subprocess.run(['cargo', 'metadata', '--offline', '--locked', '--format-version', '1',
+                                  '--manifest-path', str(ADAPTER / 'Cargo.toml')], capture_output=True, text=True,
+                                 timeout=300)
+        if offline.returncode != 0:
+            if required:
+                self.fail('the adapter\'s crates are not in the offline cache: ' + offline.stderr[-2000:])
+            self.skipTest('the adapter\'s crates (rose-signin\'s lock, rusqlite) are not in the offline cache; '
+                          'they come only by the adapter\'s own route, and nothing is downloaded here')
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = Path(tmp) / 'server'
+            write_tree(crate, self.files)
+            write_tree(crate, {'Cargo.toml': ADAPTER_CARGO.replace('@RUNTIME@', json.dumps(str(RUNTIME)))
+                               .replace('@ADAPTER@', json.dumps(str(ADAPTER))),
+                               'rose/meta.rs': META_RS, 'rose/migrations.rs': MIGRATIONS_RS,
+                               'src/handlers/mod.rs': RUST_WRITER})
+            env = {**os.environ, 'CARGO_TARGET_DIR': str(crate / 'target'), 'CARGO_NET_OFFLINE': 'true'}
+            built = subprocess.run(['cargo', 'build', '--offline', '--quiet'], cwd=crate, env=env,
+                                   capture_output=True, text=True, timeout=900)
+            self.assertEqual(built.returncode, 0, built.stderr[-4000:])
+            self.assertNotIn('warning', built.stderr, built.stderr[-4000:])
+            binary = str(crate / 'target/debug/rose-app-server')
+            data = Path(tmp) / 'data'
+            data.mkdir()
+            host = {'PATH': os.environ.get('PATH', '')}
+            ready = {**host, 'CHARIOT_APP_ID': 'app-1', 'DATA_DIR': str(data),
+                     'CHARIOT_DEPLOYMENT_SHA256': '0' * 64}
+            # Every case stops before anything listens: no server is started here.
+            for case, words in (
+                    (host, 'CHARIOT_APP_ID is not set'),
+                    ({**ready, 'PORT': 'http'}, 'PORT is not a port'),
+                    ({**ready, 'PORT': '+80'}, 'PORT is not a port'),
+                    ({**ready, 'PORT': '0'}, 'PORT is not a port'),
+                    ({**ready, 'PORT': '65536'}, 'PORT is not a port'),
+                    ({k: v for k, v in ready.items() if k != 'DATA_DIR'}, 'DATA_DIR is not set'),
+                    ({**ready, 'CHARIOT_DEPLOYMENT_SHA256': 'x'}, 'CHARIOT_DEPLOYMENT_SHA256 is not valid'),
+                    ({**ready, 'CHARIOT_APP_ID': 'two words'}, "the host's app id is not valid")):
+                run = subprocess.run([binary], env=case, capture_output=True, text=True, timeout=60)
+                self.assertEqual((run.returncode, run.stderr.strip()), (1, f'rose server: {words}'), case)
+            self.assertEqual(list(data.iterdir()), [])  # refused before the adapter opened anything
 
     def test_same_contract_same_bytes(self):
         reordered = json.loads(json.dumps(CONTRACT), object_pairs_hook=lambda kv: dict(reversed(kv)))
@@ -238,6 +325,51 @@ path = "rose/main.rs"
 rose-app-runtime = { path = @RUNTIME@ }
 
 [workspace]
+'''
+
+STARTUP_CHECKS = textwrap.dedent('''
+    fn main() {
+        assert_eq!(APP_ID_ENV, "CHARIOT_APP_ID");
+        assert_eq!(port(None), Ok(8080));
+        assert_eq!(port(Some("443".into())), Ok(443));
+        assert_eq!(port(Some("65535".into())), Ok(65535));
+        for bad in ["", "0", "00", "+80", "-1", "65536", " 80", "80 ", "8o", "0x50", "\\u{0660}"] {
+            assert_eq!(port(Some(bad.into())), Err("PORT is not a port".to_string()), "{:?}", bad);
+        }
+        assert_eq!(var("ROSE_CODEGEN_CHECK_UNSET"), Ok(None));
+        println!("start-up checks passed");
+    }
+''')
+
+ADAPTER_CARGO = '''[package]
+name = "rose-app-server"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "rose-app-server"
+path = "rose/main.rs"
+
+[dependencies]
+rose-app-runtime = { path = @RUNTIME@ }
+rose-app-runtime-signin = { path = @ADAPTER@ }
+
+[workspace]
+'''
+
+# The builder's own modules, in the shapes App Core's builder writes them (server_build.meta_rs, migrations_rs).
+META_RS = '''pub const APP: &str = "com.example.notes";
+pub const ISSUER: &str = "Notes";
+pub const ADMISSION: rose_app_runtime::signin::Admission = rose_app_runtime::signin::Admission::Invite;
+'''
+
+MIGRATIONS_RS = '''pub const ACCOUNT: &[&str] = &[
+    // 0001_notes.sql
+    "CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL);",
+];
+
+pub const SHARED: Option<&[&str]> = None;
 '''
 
 RUST_WRITER = textwrap.dedent('''\
