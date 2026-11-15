@@ -72,6 +72,7 @@ def main():
                'bindingSources': {str(p.relative_to(ROOT)): digest(p) for p in [*sources, RUNTIME / 'native/rose_composer.cpp', RUNTIME / 'native/CMakeLists.txt']}}
     receipt['tools'] = {name: run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout.splitlines()[0]
                         for name, command in [('java', [java, '-version']), ('cmake', ['cmake', '--version']), ('cxx', [os.environ.get('CXX', 'c++'), '--version'])]}
+    shutil.copyfile(source / 'LICENSE', out / 'llama.cpp-LICENSE.txt')
     config = out / 'worker.json'; config.write_text(json.dumps(receipt, indent=2) + '\n')
     print('Prepared local worker: ' + str(config))
     print('Discovered at the default path on the next authorized Rose start, or select with ROSE_WORKSPACE_MODEL_CONFIG.')

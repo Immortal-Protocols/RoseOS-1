@@ -756,7 +756,7 @@ mere submission.
 
 The decision model runs in Rose server, not the client. Once the phone receives the above intent (or a page
 button/text request), it posts its existing rose-layout-v1 request and current snapshot to
-`POST /workspace/v1/compose` on the paired TLS listener, signed with the same rose-auth-v1 headers as `/hello`.
+`POST /workspace/v1/compose` in #818's envelope `{schemaVersion:1, requestId, request}` on the paired TLS listener, signed with the same rose-auth-v1 headers as `/hello`.
 The server returns a validated rose-layout-v1 result. The phone checks it again, retains pins/undo and reports
 shown/prepared through the unchanged outer contract. No Project 1 build dependency, new listener, cloud model
 endpoint or renderer format is added. Direct page requests now require the paired Rose server. Model setup

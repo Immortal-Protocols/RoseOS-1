@@ -92,6 +92,24 @@ class RouteTests(unittest.TestCase):
   a=self.client.post('/workspace/v1/compose',json=body,headers=self.headers())
   b=self.client.post('/workspace/v1/compose',json=body,headers=self.headers())
   self.assertEqual(a.json(),b.json());self.assertEqual(len(self.calls),1)
+ def test_changed_body_is_a_new_decision(self):
+  for text in ('one','two'):
+   body={'schemaVersion':1,'requestId':'same','request':{'requestId':'same','prompt':text}}
+   self.assertEqual(self.client.post('/workspace/v1/compose',json=body,headers=self.headers()).status_code,200)
+  self.assertEqual(len(self.calls),2)
+ def test_device_scope_prevents_cross_device_replay(self):
+  body={'schemaVersion':1,'requestId':'same','request':{'requestId':'same'}}
+  self.client.post('/workspace/v1/compose',json=body,headers=self.headers())
+  self.key=ec.generate_private_key(ec.SECP256R1())
+  public=self.key.public_key().public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)
+  self.device=hashlib.sha256(public).hexdigest();self.remote.devices.enroll(public,'other','test','100.64.0.3')
+  self.client.post('/workspace/v1/compose',json=body,headers=self.headers())
+  self.assertEqual(len(self.calls),2)
+ def test_model_absent_is_503(self):
+  self.server.workspace_model.compose=lambda body,cancel:{'contract':'rose-layout-v1','requestId':body.get('requestId'),'status':'failed','failure':'model_unavailable'}
+  body={'schemaVersion':1,'requestId':'one','request':{'requestId':'one'}}
+  result=self.client.post('/workspace/v1/compose',json=body,headers=self.headers())
+  self.assertEqual(result.status_code,503);self.assertEqual(result.json()['status'],'unavailable')
  def test_bad_envelope_never_reaches_model(self):
   for body in ({'requestId':'one'},{'schemaVersion':True,'requestId':'one','request':{'requestId':'one'}},{'schemaVersion':1,'requestId':'one','request':{'requestId':'other'}}):
    self.assertEqual(self.client.post('/workspace/v1/compose',json=body,headers=self.headers()).status_code,400)

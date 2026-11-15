@@ -33,7 +33,8 @@ def add_routes(app, remote, model, peer, refusal_headers, request_path):
                 or body['requestId'] != body['request'].get('requestId')):
             return JSONResponse(refusal, 400, headers=headers)
         inner = body['request']
-        digest = hashlib.sha256(json.dumps(inner, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+        try: digest = hashlib.sha256(json.dumps(inner, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+        except (ValueError, RecursionError): return JSONResponse(refusal, 400, headers=headers)
         key = (auth.device.id, body['requestId'], digest)
         now = time.monotonic()
         for old, (expiry, _) in list(cache.items()):
