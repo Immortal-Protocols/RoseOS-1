@@ -2328,8 +2328,8 @@ canonical bytes with the version, in the same transaction
   manifest. Slice 10's fake host test holds the two to `check`, as the
   Chariot adapter will.
 - **Not Chariot's wire format:** the fields stay App Core's schema version 1.
-  Further fields (item 1 below) are the Chariot owner's to agree, and nothing
-  relies on the manifest as Chariot's format until they are.
+  Chariot's deploy takes its own body, which the deploy plan (below) maps from
+  this manifest.
 
 **The binary check** (`check_elf`, also run by every server build). It
 reads the ELF's own headers, every offset bounded by the file, and accepts
@@ -2448,6 +2448,39 @@ the server does.
     `clientServer` configuration is supplied (§6). Production DNS, TLS and
     ingress for an endpoint are unverified.
 
+- **The deploy plan (App Core's handoff to Chariot's deploy).** Chariot's
+  agreed owner calls (ProtocolsBackend #2564, `chariot/docs/native-app-hosts.md`)
+  deploy a native server in two steps. First
+  `PUT /v1/app-hosts/{host}/artifacts/{sha256}` with the raw static musl ELF
+  (at most 64 MiB). Then `POST /v1/app-hosts/{host}/deploy` with
+  `{sha256, args, port, health_path, data_schema}`. Chariot computes its own
+  `deployment_sha256` from those; App Core's manifest is not sent.
+  `python -m rose.app_builder.server_delivery plan --ledger DIR --project ID
+  [--version N]` reads the builder's records and prints that plan for one
+  delivered version, the newest by default:
+  - `hostId` and `endpoint` come from the native host record.
+  - `artifact` is `{path, sha256, size, target}`. The stored ELF is re-hashed,
+    and must still be the one the version recorded.
+  - `deploy` is `{sha256, args: [], port: 8080, health_path: "/health",
+    data_schema}`. `args` is always empty, because the generated server
+    serves only with no arguments. `data_schema` is
+    `1 + account × 10000 + shared` over the manifest's highest migration
+    numbers: one integer per schema, at least 1.
+  - **Refused (exit 3):** a version with no server, or with no manifest (built
+    for another target); a server over 64 MiB; no native host recorded; or a
+    stored binary that is missing or changed. The other statuses follow
+    `owner_records`: `usage` 2, `not_found` 4 (no such ledger, project or
+    version), `error` 6.
+  - **It only reads.** It uploads, deploys, records and contacts nothing, and
+    holds no credential. Chariot's owner tooling makes both calls with its
+    own creator authentication and its own Idempotency-Key, then reads
+    `HostView`; a running host is not a ready app.
+  - **Schema changes.** Chariot v1 refuses (409) a deploy whose
+    `data_schema` differs from the active one. So a version that adds a
+    migration can't be deployed over an older one until §7.7 item 4
+    (schema-changing deploys) is done.
+  - `rose/tests/test_app_server_delivery.py` checks each case, and that every
+    plan's `deploy` body is within Chariot's `DeployNative` bounds.
 - **Creator invites (agreed source contract; the guest channel is
   unbound).** Chariot's source is ProtocolsBackend #2564 at `814fd66c`
   (`chariot/docs/native-invites.md`, `hosting/native_invites.py`). It runs the
