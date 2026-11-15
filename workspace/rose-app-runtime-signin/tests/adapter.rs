@@ -61,6 +61,7 @@ fn config(dir: &Path, admission: Admission, m: Migrations) -> Config {
         app_id: "6f1c2a0e-1b7d-4c55-9a7e-2f3b4c5d6e7f".into(),
         data_dir: dir.to_path_buf(),
         deployment_sha256: DEPLOYMENT.into(),
+        expected_revision: None,
         migrations: m,
     }
 }
@@ -271,8 +272,8 @@ fn revision_is_the_binary_and_the_identity_is_never_made_up() {
     };
     assert!(bad(&|c| c.deployment_sha256 = "".into()).contains("CHARIOT_DEPLOYMENT_SHA256"));
     assert!(bad(&|c| c.deployment_sha256 = DEPLOYMENT.to_uppercase()).contains("CHARIOT_DEPLOYMENT_SHA256"));
-    assert!(bad(&|c| c.app_id = "".into()).contains("app id"));
-    assert!(bad(&|c| c.app_id = "has space".into()).contains("app id"));
+    assert!(bad(&|c| c.app_id = "".into()).contains("CHARIOT_APP_ID"));
+    assert!(bad(&|c| c.app_id = "has space".into()).contains("CHARIOT_APP_ID"));
     assert!(bad(&|c| c.data_dir = "relative/dir".into()).contains("DATA_DIR"));
     assert!(bad(&|c| c.app = "a:b".into()).contains("app name"));
     assert!(bad(&|c| c.issuer = "".into()).contains("issuer"));
@@ -289,32 +290,78 @@ fn revision_is_the_binary_and_the_identity_is_never_made_up() {
 }
 
 #[test]
-fn the_environment_supplies_only_the_data_dir_and_the_deployment_hash() {
+fn the_environment_supplies_the_data_dir_app_id_deployment_and_revision() {
     let m = migrations(ACCOUNT_V1, None);
     let env = |pairs: &'static [(&'static str, &'static str)]| {
         move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string())
     };
-    let c = Config::from_lookup(
+    let all: &'static [(&'static str, &'static str)] = &[
+        ("DATA_DIR", "/data"),
+        ("CHARIOT_APP_ID", "app-1"),
+        ("CHARIOT_DEPLOYMENT_SHA256", DEPLOYMENT),
+    ];
+    let c = Config::from_lookup("notes", "Rose Notes", Admission::Invite, m, env(all)).unwrap();
+    assert_eq!(
+        (c.data_dir, c.deployment_sha256, c.app_id, c.expected_revision),
+        (PathBuf::from("/data"), DEPLOYMENT.into(), "app-1".into(), None)
+    );
+    let with_revision = Config::from_lookup(
         "notes",
         "Rose Notes",
         Admission::Invite,
-        "app-1",
         m,
-        env(&[("DATA_DIR", "/data"), ("CHARIOT_DEPLOYMENT_SHA256", DEPLOYMENT)]),
+        env(&[
+            ("DATA_DIR", "/data"),
+            ("CHARIOT_APP_ID", "app-1"),
+            ("CHARIOT_DEPLOYMENT_SHA256", DEPLOYMENT),
+            ("CHARIOT_REVISION_SHA256", DEPLOYMENT),
+        ]),
     )
     .unwrap();
-    assert_eq!(
-        (c.data_dir, c.deployment_sha256, c.app_id),
-        (PathBuf::from("/data"), DEPLOYMENT.into(), "app-1".into())
+    assert_eq!(with_revision.expected_revision.as_deref(), Some(DEPLOYMENT));
+    let missing = |pairs| Config::from_lookup("notes", "Rose Notes", Admission::Invite, m, env(pairs));
+    for (pairs, name) in [
+        (&all[1..], "DATA_DIR"),
+        (&[all[0], all[2]][..], "CHARIOT_APP_ID"),
+        (&all[..2], "CHARIOT_DEPLOYMENT_SHA256"),
+    ] {
+        let pairs: &'static [(&'static str, &'static str)] = Box::leak(pairs.to_vec().into_boxed_slice());
+        assert!(
+            matches!(missing(pairs), Err(StartError::Missing(n)) if n == name),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_binary_the_host_did_not_deploy_is_not_ready() {
+    let dir = Dir::new();
+    let exe = identity::file_sha256(&std::env::current_exe().unwrap()).unwrap();
+    let mut c = config(&dir.0, Admission::Open, migrations(ACCOUNT_V1, None));
+    c.expected_revision = Some(exe.clone());
+    let same = start(c, keys()).unwrap();
+    assert!(same.revision_matches && same.auth.ready());
+
+    let mut c = config(&dir.0, Admission::Open, migrations(ACCOUNT_V1, None));
+    c.expected_revision = Some(DEPLOYMENT.into());
+    let other = start(c, keys()).unwrap();
+    assert!(
+        !other.revision_matches && !other.auth.ready(),
+        "held whatever the sealer says"
     );
-    let missing = |pairs| Config::from_lookup("notes", "Rose Notes", Admission::Invite, "app-1", m, env(pairs));
+    assert_eq!(
+        other.identity.revision_sha256, exe,
+        "the measured revision is still reported"
+    );
+    let server = other.server(routes()).unwrap();
+    server.readiness.restore_done.store(true, Ordering::SeqCst);
+    assert_eq!(call(&server, request("GET", "/health", None, None)).0, 503);
+
+    let mut c = config(&dir.0, Admission::Open, migrations(ACCOUNT_V1, None));
+    c.expected_revision = Some("not a hash".into());
     assert!(matches!(
-        missing(&[("DATA_DIR", "/data")]),
-        Err(StartError::Missing("CHARIOT_DEPLOYMENT_SHA256"))
-    ));
-    assert!(matches!(
-        missing(&[("CHARIOT_DEPLOYMENT_SHA256", DEPLOYMENT)]),
-        Err(StartError::Missing("DATA_DIR"))
+        start(c, keys()),
+        Err(StartError::Invalid("CHARIOT_REVISION_SHA256"))
     ));
 }
 

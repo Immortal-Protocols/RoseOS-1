@@ -28,6 +28,8 @@ const MAX_ENCODED: usize = 256;
 pub struct SigninAuth {
     app: String,
     inner: Authenticator,
+    /// Held not ready by start-up (a binary the host did not deploy), whatever the sealer says.
+    held: bool,
 }
 
 impl std::fmt::Debug for SigninAuth {
@@ -38,7 +40,8 @@ impl std::fmt::Debug for SigninAuth {
     }
 }
 
-/// A request's handle, token or invite as rose-signin's bytes (the text itself), in a zeroized secret; None when
+/// A request's handle, token or invite as rose-signin's bytes (the text itself), in a `Secret` (redacted `Debug`;
+/// rose-signin does not zero it on drop); None when
 /// it is too long or not base32, which no minted value is.
 fn presented(text: &str) -> Option<Secret> {
     if text.is_empty() || text.len() > MAX_ENCODED || base32::decode(text).is_none() {
@@ -106,7 +109,13 @@ impl SigninAuth {
         Ok(SigninAuth {
             app: app.to_string(),
             inner,
+            held: false,
         })
+    }
+
+    /// Keeps this authenticator not ready for the rest of the process (no sign-in route serves).
+    pub fn hold(&mut self) {
+        self.held = true;
     }
 
     pub fn app(&self) -> &str {
@@ -130,7 +139,7 @@ impl SigninAuth {
 
 impl Auth for SigninAuth {
     fn ready(&self) -> bool {
-        self.inner.ready()
+        !self.held && self.inner.ready()
     }
 
     fn begin_enrollment(
