@@ -10,8 +10,10 @@ The plan maps App Core's manifest (rose.app_builder.server_manifest) onto Chario
    most 64 MiB), then
 2. ``POST /v1/app-hosts/{hostId}/deploy`` with ``deploy`` as its body: ``{sha256, args: [], port, health_path,
    data_schema}``. The generated server serves only with no arguments (``invite <account>`` is its one other
-   command), so ``args`` is always empty. ``data_schema`` is ``1 + account * 10000 + shared`` over the manifest's
-   highest migration numbers: one integer per schema, at least 1, changed by any new migration.
+   command), so ``args`` is always empty. ``data_schema`` is ``1 + auth * 100000000 + account * 10000 + shared``
+   (agreed with Chariot, #2566): ``account`` and ``shared`` are the manifest's highest migration numbers, and
+   ``auth`` is rose-signin's own store schema at the manifest's pinned sign-in revision. It is one integer per
+   schema of all three databases, changed by any new migration or sign-in store version.
 
 This module only reads: it opens the ledger read-only (Ledger.reader) and records, uploads, deploys and contacts
 nothing, and holds no credential. Chariot's owner
@@ -41,18 +43,32 @@ from .ledger import CLIENT_SERVER, Ledger
 
 MAX_HOSTED_ELF = 64 * 1024 * 1024  # Chariot's artifact limit (NativeArtifact.size_bytes)
 SCHEMA_SCALE = 10000  # server_manifest.MAX_SCHEMA is 9999, so (account, shared) maps one to one
+AUTH_SCALE = 100_000_000  # account * 10000 + shared is at most 99_999_999, so (auth, account, shared) maps one to one
+# rose-signin's store schema (store::sqlite::SCHEMA_VERSION) at each sign-in revision a manifest may name. The
+# manifest admits only server_manifest.SIGNIN_REVISION, and a test holds this to the rose-signin source.
+AUTH_SCHEMA = {'23062a04': 2}
+# auth is at least 1, so every tag is above AUTH_SCALE and none equals a tag of the earlier 1 + account*10000 +
+# shared encoding (at most 100_000_000). At most 2**31 - 1 until Chariot confirms a wider integer.
+MAX_DATA_SCHEMA = 2**31 - 1
 
 
 class Refused(Exception):
     pass
 
 
-def data_schema(schema: dict) -> int:
-    """Chariot's one ``data_schema`` integer for the manifest's ``{account, shared?}``: 1 + account*10000 + shared."""
+def data_schema(schema: dict, signin_revision: str) -> int:
+    """Chariot's one ``data_schema`` integer for the manifest's ``{account, shared?}`` and the sign-in store schema
+    at ``signin_revision``: 1 + auth*100000000 + account*10000 + shared."""
     account, shared = schema['account'], schema.get('shared', 0)
     if not (0 <= account <= server_manifest.MAX_SCHEMA and 0 <= shared <= server_manifest.MAX_SCHEMA):
         raise Refused('the manifest schema is out of range')
-    return 1 + account * SCHEMA_SCALE + shared
+    auth = AUTH_SCHEMA.get(signin_revision)
+    if auth is None:
+        raise Refused("the sign-in store schema of this server's rose-signin revision is not known")
+    value = 1 + auth * AUTH_SCALE + account * SCHEMA_SCALE + shared
+    if not (auth >= 1 and value <= MAX_DATA_SCHEMA):
+        raise Refused('the sign-in store schema is out of range')
+    return value
 
 
 def plan(ledger: Ledger, root: Path, project: str, version_code: int | None = None) -> dict:
@@ -93,7 +109,7 @@ def plan(ledger: Ledger, root: Path, project: str, version_code: int | None = No
             'artifact': {'path': str(path.resolve()), 'sha256': elf['sha256'], 'size': elf['size'],
                          'target': elf['target']},
             'deploy': {'sha256': elf['sha256'], 'args': [], 'port': m['listen']['default'],
-                       'health_path': m['health'], 'data_schema': data_schema(m['schema'])},
+                       'health_path': m['health'], 'data_schema': data_schema(m['schema'], m['signin']['revision'])},
             'manifestSha256': hashlib.sha256(data).hexdigest()}
 
 
