@@ -110,7 +110,7 @@ class Elf(Tmp):
         header_cases = {
             'no program headers': (tiny_elf(phnum=0), 'cannot read'),
             'too many program headers': (tiny_elf(phnum=M.MAX_PHNUM + 1, extra=bytes(56 * 600)), 'cannot read'),
-            'program headers inside the ELF header': (tiny_elf(phoff=8), 'outside the file'),
+            'program headers inside the ELF header': (tiny_elf(phoff=8), 'program headers outside the file'),
             'two dynamic sections': (tiny_elf(e_type=M.ET_DYN, second_dynamic=[(M.DT_NULL, 0)]), 'two dynamic'),
             # Whichever of the two holds the needed library, neither is read alone.
             'a needed library in the second': (tiny_elf(e_type=M.ET_DYN, second_dynamic=[(M.DT_NEEDED, 1),
