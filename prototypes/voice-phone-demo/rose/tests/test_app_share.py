@@ -4,6 +4,10 @@ id is pinned); fixtures/share-summary-v1.json is the contract Home/App's ShareSt
 import copy
 import hashlib
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -42,6 +46,12 @@ class Provenance(unittest.TestCase):
                 with self.subTest(case['case']):
                     want = {k: CHARIOT[case['answerFrom']][k] for k in ('status', 'headers', 'json')}
                     self.assertEqual(case['answer'], want)  # verbatim, not edited
+                    record = case['record']  # and the lookup it answers is this record's
+                    if not case.get('recordDiffers'):  # a mismatch case pairs a record with another's answer
+                        self.assertEqual(CHARIOT[case['answerFrom']]['path'],
+                                         f'/apps/{record["hostedAppId"]}/releases/{record["versionCode"]}/metadata')
+            elif case.get('answer') is not None:
+                self.assertIn('DERIVED', case.get('comment', ''), case['case'])  # anything else says so
 
     def test_the_record_is_the_hosted_release_it_describes(self):
         published = CHARIOT['published']['json']
@@ -60,7 +70,8 @@ class Summary(unittest.TestCase):
 
     def test_the_required_cases_are_there(self):
         for name in ('published', 'absent', 'storage-unavailable', 'never-mapped', 'no-answer', 'hash-differs',
-                     'size-differs', 'signer-differs', 'package-differs', 'version-differs', 'app-differs'):
+                     'size-differs', 'signer-differs', 'package-differs', 'version-differs', 'app-differs',
+                     'record-unsigned', 'derived-null-signer', 'derived-storage-unavailable-for-long'):
             self.assertIn(name, CASES)
 
     def test_links_are_passed_through_as_hosting_returned_them(self):
@@ -78,6 +89,21 @@ class Summary(unittest.TestCase):
                 changed = copy.deepcopy(answer)
                 del changed['json'][field]
                 self.assertEqual(S.summary(record, changed)['status'], 'unavailable')
+        keys = {'package_name': 'packageName', 'signer_sha256': 'signerSha256'}
+        for field in ('package_name', 'signer_sha256', 'sha256'):  # missing on both sides is no match
+            with self.subTest(both_null=field):
+                changed, rec = copy.deepcopy(answer), copy.deepcopy(record)
+                changed['json'][field] = None
+                if field == 'sha256':
+                    rec['apk']['sha256'] = None
+                else:
+                    rec[keys[field]] = None
+                self.assertNotEqual(S.summary(rec, changed)['status'], 'published')
+        for value in (True, 1.0, 0):
+            with self.subTest(version=value):
+                rec = copy.deepcopy(record)
+                rec['versionCode'] = value
+                self.assertNotEqual(S.summary(rec, answer)['status'], 'published')
         for body in (None, [], 'x', {'links': []}):
             with self.subTest(body=body):
                 self.assertEqual(S.summary(record, {'status': 200, 'headers': {}, 'json': body})['status'],
@@ -91,14 +117,51 @@ class Summary(unittest.TestCase):
             with self.subTest(case['case']):
                 self.assertFalse(served_ok(case['share']))
 
-    def test_the_link_rule_matches_the_phones(self):
-        good = 'https://downloads.example.invalid/apps/x/releases/1?a=b'
-        self.assertEqual(S.link(good), good)
-        for bad in ('http://downloads.example.invalid/x', 'https://downloads.example.invalid/x#y', 'https://',
-                    'https://u:p@h/x', 'https://h/a b', 'https://h/é', 'https://h/' + 'a' * 2048, '', None, 7,
-                    'ftp://h/x', 'https:///x'):
+    LINKS_GOOD = ['https://downloads.example.invalid/apps/x/releases/1?a=b', 'https://h', 'https://h:443/x',
+                  'https://1.2.3.4/x', 'https://h/%41?x=%7e', 'https://h.example./x', "https://h/a-b_c~d!$&'()*+,;=:@"]
+    LINKS_BAD = ['http://downloads.example.invalid/x', 'https://downloads.example.invalid/x#y', 'https://',
+                 'https://u:p@h/x', 'https://h/a b', 'https://h/\u00e9', 'https://h/' + 'a' * 2048, '', 'ftp://h/x',
+                 'https:///x', 'https://my_host.example.invalid/r/1', 'https://-bad.example/x', 'https://a.b-.c/x',
+                 'https://example..com/x', 'https://1.2.3.4.5/x', 'https://exa%41mple.com/x', 'https://[v1.x]/x',
+                 'https://[::1]/x', 'https://example.com:abc/x', 'https://example.com:-1/x', 'https://h/r/1%zz',
+                 'https://example.com/a%2', 'https://h/r\\1', 'https://example.com/a|b', 'https://h/r/{1}',
+                 'https://example.com/a^b', 'https://example.com/a`b', 'https://example.com/a"b',
+                 'https://example.com/a<b>', 'https://example.com/a[b]', 'https://h/x?y#z', 'https://256.1.1.1/x']
+
+    def test_the_link_rule(self):
+        served = [c['share'][k] for c in DOC['cases'] for k in ('versionUrl', 'latestUrl') if k in c['share']]
+        for good in self.LINKS_GOOD + served:
+            with self.subTest(good=good):
+                self.assertEqual(S.link(good), good)
+        for bad in self.LINKS_BAD + [None, 7]:
             with self.subTest(bad=bad):
                 self.assertIsNone(S.link(bad))
+
+    @unittest.skipUnless(shutil.which('java') or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs a JDK')
+    def test_the_phone_accepts_every_link_the_server_does(self):
+        # The phone's own ShareState.link, compiled from workspace/rose-builder: whatever the server would call
+        # published, the phone must show as a link (the server may be stricter; it is never looser).
+        builder = Path(__file__).resolve().parents[4] / 'workspace/rose-builder/src/dev/pixel/builder'
+        sources = [builder / f'{n}.java' for n in ('ShareState', 'ShareMessage', 'BuilderWire', 'Json', 'BuilderApi',
+                                                  'ApiReport', 'BuildJob', 'InstallPlan')]
+        corpus = self.LINKS_GOOD + self.LINKS_BAD + ['https://h/' + c for c in "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"]
+        corpus += ['https://' + h + '/x' for h in ('a', 'a1', '1a', 'a-b', 'a.b', 'A.B', 'x.1', '1.2.3', 'h.', 'a..b')]
+        corpus = [u for u in corpus if '\n' not in u]
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / 'LinkProbe.java'
+            harness.write_text('package dev.pixel.builder;\npublic final class LinkProbe { public static void '
+                               'main(String[] a) throws Exception { java.io.BufferedReader r = new java.io.'
+                               'BufferedReader(new java.io.InputStreamReader(System.in, "UTF-8")); String s; while '
+                               '((s = r.readLine()) != null) System.out.println(ShareState.link(s) != null); } }\n')
+            subprocess.run(['javac', '-encoding', 'UTF-8', '-d', tmp, str(harness), *map(str, sources)], check=True,
+                           capture_output=True)
+            out = subprocess.run(['java', '-cp', tmp, 'dev.pixel.builder.LinkProbe'], input='\n'.join(corpus) + '\n',
+                                 capture_output=True, text=True, encoding='utf-8', check=True).stdout.split()
+        self.assertEqual(len(out), len(corpus))
+        for url, phone in zip(corpus, out):
+            with self.subTest(url=url):
+                if S.link(url) is not None:
+                    self.assertEqual(phone, 'true', 'the server would publish a link the phone refuses')
 
 
 class Caching(unittest.TestCase):
@@ -118,6 +181,9 @@ class Caching(unittest.TestCase):
         self.assertEqual(S.backoff_seconds(CASES['storage-unavailable']['answer']), 60)  # retry-after: 60
         self.assertEqual(S.backoff_seconds({'status': 503, 'headers': {'retry-after': '999999'}}), S.MAX_BACKOFF_S)
         self.assertEqual(S.backoff_seconds({'status': 503, 'headers': {'retry-after': 'soon'}}), 60)
+        for digits in ('\u00b2', '\u0661\u0662\u0660', '\U0001d7d7'):  # not ASCII: unreadable, never a crash
+            with self.subTest(digits=digits):
+                self.assertEqual(S.backoff_seconds({'status': 503, 'headers': {'retry-after': digits}}), 60)
         self.assertEqual(S.backoff_seconds(CASES['published']['answer']), 0)
 
 

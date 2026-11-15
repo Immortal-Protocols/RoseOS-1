@@ -629,20 +629,31 @@ share.
 | Hosting's answer | `share` |
 |---|---|
 | no hosted app id recorded for the project (no lookup made) | `{schemaVersion: 1, status: "unpublished"}` |
+| the builder's record for the version is incomplete (no signer yet, or a field of the wrong kind) | `unavailable`: "this version can't be checked against the hosted copy yet" |
 | `200` whose `app_id`, `package_name`, `version_code`, `signer_sha256`, `sha256` and `size_bytes` all equal the builder's record, with plain absolute https `release` and `latest` links | `{schemaVersion: 1, status: "published", versionUrl, latestUrl}` |
 | `200` that differs from the record in any of those fields | `unavailable`: "the hosted copy doesn't match this version" |
-| `200` the server can't read (links missing or not plain https, wrong types) | `unavailable`: "the app's download host answered something this server can't read" |
+| `200` the server can't read (a link missing or not a plain https URL; any of the six fields missing, null or of the wrong kind) | `unavailable`: "the app's download host answered something this server can't read" |
 | `404` | `unpublished` |
-| `503` | `unavailable`: "the app's download storage is unavailable right now" |
+| `503` | `unavailable`: "the app's download storage is unavailable right now; try again in a minute". With a `Retry-After` over 90 s, it ends "try again later" instead |
 | any other status, or no answer | `unavailable`: "the app's download host could not be reached" |
 
 - **Caching.** A `200` stands for its `max-age`, at most 600 s, because
   hosting can't revoke a release yet. `404` and `503` are never kept. After a
   `503` the server waits its `Retry-After` (at most 1 hour) before asking that
   host again.
-- **Links.** The server's link rule is the phone's `ShareState.link`: https,
-  a host, no credentials, fragment, spaces or non-ASCII, and at most 2048
-  characters.
+- **Identity fields.** Each identity field must be of its own kind on both
+  sides: non-empty text, 64 lower-case hex digests, a versionCode of at least
+  1, and a size. So two missing values never count as a match.
+- **Links.** The server's link rule is at least as strict as the phone's
+  `ShareState.link`:
+  - https, at most 2048 ASCII characters;
+  - a valid host name or IPv4 address, and an all-digit port if any;
+  - no credentials, fragment or IPv6;
+  - only RFC 3986 characters, with `%` only as a valid escape.
+
+  A test compiles the phone's own `ShareState` and checks that it accepts
+  every link the server would publish.
+- **Retry-After** counts in ASCII digits only.
 - **Fixture.** `rose/tests/fixtures/share-summary-v1.json` lists each
   recorded version, hosting's answer and the `share` served, plus
   `clientUnreadable` values a phone must not read as links.
