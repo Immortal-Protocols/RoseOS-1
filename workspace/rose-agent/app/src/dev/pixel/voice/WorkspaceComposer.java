@@ -21,6 +21,9 @@ final class WorkspaceComposer {
 
  private final WorkspaceState state;
  private Phase phase=Phase.IDLE;
+ /** Whether the request composing now is decided by the Rose server (true) or by the phone's starter (false). */
+ private boolean server;
+ static final String COMPOSING_SERVER="Composing with Rose…",COMPOSING_PHONE="Arranging on this phone…";
  private int generation;
  private String pending,requestId,trigger;private boolean conversational;
  private Offer offer=Offer.NONE;private String offerRequest;
@@ -113,9 +116,12 @@ final class WorkspaceComposer {
   return "model_unavailable".equals(failure)?"unavailable":"rejected";
  }
 
+ /** Who decides the request now composing (WorkspaceHub.start): the Rose server, or the phone's starter. */
+ void routed(boolean server){this.server=server;}
+
  /** The status line (fixed height on the page; only its text changes). */
  String status(){
-  if(phase==Phase.COMPOSING)return "Composing with Rose…";
+  if(phase==Phase.COMPOSING)return server?COMPOSING_SERVER:COMPOSING_PHONE;
   if(phase==Phase.FAILED)return "Couldn't arrange · kept your last layout";
   String r=state.request();
   return r==null?"":ARRANGE.equals(r)?"Best guess":"“"+r+"”";

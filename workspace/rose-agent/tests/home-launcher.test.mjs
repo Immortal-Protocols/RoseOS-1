@@ -700,7 +700,7 @@ test('Project 2: the Rose server decides behind the compose route; Rose Agent ru
  const start=hub.slice(hub.indexOf('private void start(int gen){'),hub.indexOf('private void finish('));
  assert.match(start,/final WorkspaceDecisionClient decider=WorkspaceDecisionGate\.enabled\(app\)/);
  assert.match(start,/if\(cancelled\.get\(\)\)return WorkspaceEngine\.failed\(requestId,"cancelled"\);/);
- assert.match(start,/if\(decider!=null\)return WorkspaceDecisionClient\.result\(requestId,decider\.decide\(requestId,request,cancelled::get\)\);/);
+ assert.match(start,/if\(decider!=null\)return WorkspaceDecisionClient\.result\(requestId,decider\.decide\(requestId,request,cancelled::get,abort\)\);/);
  // A server decision returns as text into the same finish() path, so the phone's own check is always applied.
  assert.match(start,/finish\(gen,requestId,done,text,at\)/);
  assert.match(hub,/boolean model\(\)\{return WorkspaceDecisionGate\.enabled\(app\)\|\|WorkspaceTiming\.isModel\(engine\.modelId\(\)\);\}/);
@@ -708,4 +708,17 @@ test('Project 2: the Rose server decides behind the compose route; Rose Agent ru
  const gate=read('../app/src/dev/pixel/voice/WorkspaceDecisionGate.java');
  assert.match(gate,/getBoolean\(KEY,true\)/);
  assert.doesNotMatch(hub+page,/compose-route-enabled",true|putBoolean\(WorkspaceDecisionGate/,'the authorized default does not overwrite an explicit preference');
+});
+
+test('Project 2: a superseded compose request in flight is stopped, and the status line names who composes',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java'),transport=read('../app/src/dev/pixel/voice/WorkspaceTaskTransport.java');
+ const start=hub.slice(hub.indexOf('private void start(int gen){'),hub.indexOf('private void finish('));
+ // The previous request's socket is closed before the next one starts, and the new request carries its own abort.
+ assert.match(start,/inFlight\.fire\(\);inFlight=new WorkspaceAbort\(\);final WorkspaceAbort abort=inFlight;/);
+ assert.match(start,/decider\.decide\(requestId,request,cancelled::get,abort\)/);
+ assert.match(start,/composer\.routed\(decider!=null\);/);
+ // The transport attaches the raw socket before it connects, detaches it when done, and never fails over once stopped.
+ assert.match(transport,/if\(abort!=null&&!abort\.attach\(raw\)\)throw new IOException\("stopped"\);/);
+ assert.match(transport,/finally\{if\(abort!=null\)abort\.detach\(raw\);/);
+ assert.match(transport,/if\(abort!=null\)\{abort\.detach\(raw\);if\(abort\.fired\(\)\)throw e;\}/);
 });

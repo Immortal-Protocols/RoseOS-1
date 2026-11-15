@@ -53,6 +53,8 @@ final class WorkspaceHub {
  private final ExecutorService taskWorker=Executors.newSingleThreadExecutor();
  private final Handler main=new Handler(Looper.getMainLooper());
  private AtomicBoolean cancel=new AtomicBoolean();
+ /** Stops the compose request in flight when a newer one supersedes it (main thread only). */
+ private WorkspaceAbort inFlight=new WorkspaceAbort();
  private Listener listener;
  /** The pager is on the workspace (pageShown) and Home's window is visible (windowVisible): only both together is on screen. */
  private boolean pageShown,windowVisible,reading;
@@ -204,6 +206,8 @@ final class WorkspaceHub {
 
  private void start(int gen){
   cancel.set(true);cancel=new AtomicBoolean();final AtomicBoolean cancelled=cancel;
+  // A superseded request still in flight is stopped now, so the worker and the server's model move on to this one.
+  inFlight.fire();inFlight=new WorkspaceAbort();final WorkspaceAbort abort=inFlight;
   final String requestId=composer.requestId(),trigger=composer.trigger(),prompt=composer.prompt();
   final List<String> avoid=composer.avoid();
   final Set<String> pinned=pinnedIds();
@@ -212,6 +216,7 @@ final class WorkspaceHub {
    ?new WorkspaceDecisionClient(WorkspaceDecisionGate.gate(app),new WorkspaceTaskTransport(app),WorkspaceTaskTransport.signer(app)):null;
   timing.requested(requestId,trigger,System.nanoTime());
   timing.routed(requestId,decider!=null?WorkspaceTiming.SERVER:WorkspaceTiming.PHONE);
+  composer.routed(decider!=null);
   if(listener!=null)listener.busy();
   worker.execute(()->{
    // Anything at all, an Error such as running out of memory included, still ends this request
@@ -222,7 +227,7 @@ final class WorkspaceHub {
     read[0]=WorkspaceSources.read(app,pinned);
     String request=WorkspaceSnapshot.request(requestId,trigger,prompt,read[0].snapshot,WorkspaceEngine.DEADLINE_MS,avoid);
     // A server decision is only passed on: finish() checks it against this read's registry, like any result.
-    if(decider!=null)return WorkspaceDecisionClient.result(requestId,decider.decide(requestId,request,cancelled::get));
+    if(decider!=null)return WorkspaceDecisionClient.result(requestId,decider.decide(requestId,request,cancelled::get,abort));
     return engine.compose(request,cancelled::get);
    });
    final WorkspaceSources.Read done=read[0];final long at=System.nanoTime();
