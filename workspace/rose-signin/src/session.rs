@@ -11,7 +11,7 @@ pub struct Policy {
     pub idle_seconds: u64,
 }
 
-/// 30 days absolute, 7 days idle (decision D10 sets the final values).
+/// 30 days absolute, 7 days idle (decision D10).
 pub const V1: Policy = Policy {
     absolute_seconds: 30 * 86400,
     idle_seconds: 7 * 86400,
