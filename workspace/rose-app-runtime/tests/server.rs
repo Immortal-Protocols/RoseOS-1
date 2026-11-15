@@ -360,6 +360,7 @@ fn health_carries_only_the_identity_and_waits_for_readiness() {
     assert_eq!(
         v,
         Value::obj([
+            ("status", Value::str("ok")),
             ("app_id", Value::str(identity().app_id)),
             ("revision_sha256", Value::str("a".repeat(64))),
             ("deployment_sha256", Value::str("b".repeat(64)))
@@ -382,7 +383,9 @@ fn health_carries_only_the_identity_and_waits_for_readiness() {
                 .store(false, std::sync::atomic::Ordering::SeqCst),
         }
         let (status, _, not_ready) = send(&h, &get("/health", None));
-        assert_eq!((status, not_ready.as_str()), (503, body.as_str()), "step {step}");
+        // The same identity either way; only the status says not ready.
+        let expected = body.replacen(r#""status":"ok""#, r#""status":"not_ready""#, 1);
+        assert_eq!((status, not_ready.as_str()), (503, expected.as_str()), "step {step}");
         // Nothing else is served until it is ready, and nothing reaches the authenticator.
         let (status, _, other) = send(
             &h,
@@ -1199,4 +1202,63 @@ fn failing_to_accept_never_stops_the_server() {
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
     assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+}
+
+#[test]
+fn not_ready_health_says_so_with_the_same_identity() {
+    let h = harness(Admission::Invite);
+    h.script.lock().unwrap().ready = false;
+    let (status, _, body) = send(&h, &get("/health", None));
+    assert_eq!(status, 503);
+    let v = json::parse(body.as_bytes()).unwrap();
+    assert_eq!(v.get("status"), Some(&Value::str("not_ready")));
+    assert_eq!(v.get("app_id"), Some(&Value::str(identity().app_id)));
+    assert_eq!(v.get("deployment_sha256"), Some(&Value::str("b".repeat(64))));
+}
+
+#[test]
+fn the_hosts_client_header_counts_only_when_the_server_is_told_to_trust_it() {
+    let sign_in = |extra: &str| {
+        let body = r#"{"account":"a","code":"1","passphrase":"p"}"#;
+        format!("POST /signin/v1/session HTTP/1.1\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len())
+    };
+    // Not told: the header is the client's own words, and the peer counts.
+    let h = harness(Admission::Invite);
+    send(&h, &sign_in("X-Chariot-Client-Address: 198.51.100.4\r\n"));
+    assert!(calls(&h)[0].contains(" 203.0.113.7 "), "{:?}", calls(&h));
+    // Told: one address in it counts; anything else falls back to the peer.
+    let h = harness(Admission::Invite);
+    let h = Harness {
+        server: h.server.with_client_header("X-Chariot-Client-Address"),
+        ..h
+    };
+    for (header, counted) in [
+        ("X-Chariot-Client-Address: 198.51.100.4\r\n", "198.51.100.4"),
+        ("x-chariot-client-address:  2001:db8::1 \r\n", "2001:db8::1"),
+        ("X-Chariot-Client-Address: not-an-address\r\n", "203.0.113.7"),
+        ("X-Chariot-Client-Address: 198.51.100.4, 10.0.0.1\r\n", "203.0.113.7"),
+        (
+            "X-Chariot-Client-Address: 198.51.100.4\r\nX-Chariot-Client-Address: 198.51.100.5\r\n",
+            "203.0.113.7",
+        ),
+        ("", "203.0.113.7"),
+    ] {
+        send(&h, &sign_in(header));
+        let last = calls(&h).last().cloned().unwrap();
+        assert!(last.contains(&format!(" {counted} ")), "{header:?}: {last}");
+    }
+    // Only the header it was told about: another host's name leaves Chariot's to the client.
+    let h = harness(Admission::Invite);
+    let h = Harness {
+        server: h.server.with_client_header("X-Other-Client"),
+        ..h
+    };
+    for (header, counted) in [
+        ("X-Chariot-Client-Address: 198.51.100.4\r\n", "203.0.113.7"),
+        ("X-Other-Client: 198.51.100.9\r\n", "198.51.100.9"),
+    ] {
+        send(&h, &sign_in(header));
+        let last = calls(&h).last().cloned().unwrap();
+        assert!(last.contains(&format!(" {counted} ")), "{header:?}: {last}");
+    }
 }

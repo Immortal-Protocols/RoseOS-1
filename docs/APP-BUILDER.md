@@ -1597,8 +1597,9 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   - A handler reaches the adapter's databases through `ctx.data`
     (`Server::with_data`), which it downcasts. This keeps the core free of a
     database dependency.
-- **Readiness.** `/health` carries exactly `app_id`, `revision_sha256` and
-  `deployment_sha256` (§7.7), all supplied at start-up and none made up.
+- **Readiness.** `/health` carries exactly `status` (`ok` or `not_ready`),
+  `app_id`, `revision_sha256` and `deployment_sha256` (§7.7). The three
+  identity fields are supplied at start-up, and none is made up.
   It answers `200` only when the authenticator, the migrations and any
   restore are all ready, and `503` until then. Every other route answers
   `503 not_ready` until then.
@@ -1607,9 +1608,14 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   passphrase, code, key, account name or client address. The `Debug` output
   of requests, responses, principals, sign-in calls and their results shows
   no header value, body, account, token or code.
-- **Client address.** Rate limits count by the peer address until §7.7
-  item 6 says which proxy header carries the client. Behind one proxy every
-  client shares that address. This is a known limit, not a decision.
+- **Client address.** Rate limits count by the peer's address, unless the
+  server is given its host's client header (`Server::with_client_header`,
+  Chariot's `X-Chariot-Client-Address`, §7.7). The header is then used
+  when it holds exactly one IP address, and the peer otherwise. It is never
+  trusted by default. No generated server is given it yet (the adapter's
+  `Started::server` and the generated `main.rs` do not call it), so behind
+  Chariot's gateway every client of a generated server still shares the
+  gateway's address. This is a known limit until `main.rs` opts in.
 
 **The adapter (slice 7b)** (`workspace/rose-app-runtime-signin`, OS Core; source, built on by nothing yet) binds `Auth` to rose-signin `23062a04`.
 
@@ -2074,14 +2080,17 @@ the server does.
   ready, migrations are done and any restore has run, and `503` until then.
   It carries the same identity fields either way, and no secrets, request
   data or account information. The wire keys are the host's own, in
-  snake_case (Chariot owner, relayed by Chief). The generated server will
-  write them as they are, with no adapter in between:
-  - `app_id`: the Chariot host's UUID. It is not the builder's `projectId`.
+  snake_case (Chariot's guest contract, `native-app-hosts.md`), and the
+  runtime writes them as they are, with no adapter in between:
+  - `status`: `ok` when ready. When not ready it is `not_ready`; that word
+    is App Core's, since the contract names only the ready body.
+  - `app_id`: the Chariot host's UUID, from `CHARIOT_APP_ID`. It is not the builder's `projectId`.
     The builder's ledger keeps an explicit mapping from `projectId` to the
     hosted app id and the hosted APK app id, written only from owner tooling
     or publisher results, never guessed.
   - `revision_sha256`: measured by the server itself, by hashing its own ELF
-    at start.
+    at start. If the host's `CHARIOT_REVISION_SHA256` differs, the server
+    stays not ready.
   - `deployment_sha256`: the authoritative value is the
     `CHARIOT_DEPLOYMENT_SHA256` the host passes, which the server echoes. Any
     hash the server computes itself over its args, port and schema is
@@ -2090,29 +2099,63 @@ the server does.
   phone or the APK. The publication adapter isn't finished, and there is no
   live URL or credential.
 
+- **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
+  on every request, and guest ingress admits only the gateway (Chariot's
+  boundary to enforce). A server given `Server::with_client_header` counts
+  rate limits by that header when it holds exactly one IP address, and by
+  the peer otherwise. Without it, only the peer counts, so the header is
+  never trusted by default.
+- **Sealing key (D9): agreed, in source, enabled nowhere.** Chariot resolves
+  a pinned Secret Manager version on the host. It hands the payload,
+  opaque, to the server as an app-owned 0400 regular file, bound read-only
+  into the service's namespace at the absolute path in
+  `CHARIOT_SEALING_KEY_FILE`, outside `DATA_DIR`, backups and the ELF. The
+  server never sees the descriptor or its credentials.
+
+  The file is `rose-signin-keyring/v1` (App Core's spec; OS Core's loader):
+  - **Shape:** `{"format":"rose-signin-keyring/v1","current":<u32>,"keys":[{"version":<u32>,"key":"<base64>"}]}`.
+  - **Encoding:** strict UTF-8 JSON, at most 16 KiB. Unknown or repeated
+    fields are refused.
+  - **Keys:** 1 to 64, with unique u32 versions and `current` among them.
+    Each `key` is standard padded base64 with no whitespace, decoding to
+    exactly 32 bytes.
+  - **The file:** the loader takes it only as a regular file the process can
+    read and no group or other user can read.
+  - **Reading:** once, at start, never logged. The loader wipes its own
+    buffers. The JSON parser's copies and rose-signin's `Secret` are not
+    zeroized; `Secret` only redacts its `Debug` output.
+  - **Hand-off:** the keys go to `AeadSealer` as current plus retained
+    versions.
+  - **Failure and rotation:** a missing or bad file means not ready (`503`),
+    with no fallback key. Rotation is a restart.
+
 Still open for the Chariot owner (App Core's proposal in brackets):
 1. Further manifest fields [resources, shutdown grace].
-2. The name of the variable that carries the host's app id to the server
-   [for example `CHARIOT_APP_ID`].
-3. Sealing key (D9). A pinned Secret Manager descriptor is a
-   recommendation only. Delivering the key to the server (for example as a
-   key file the host resolves) has no agreed consumer contract and no
-   implementation on either side. Until it does, no server can be ready,
-   and nothing here is deployable. [App Core's proposal: Chariot resolves
-   the descriptor at start into a read-only key file outside the ELF,
-   `DATA_DIR` and backups; the server never holds the descriptor's
-   credentials; no key means not ready. The server hands the keys to
-   rose-signin's `AeadSealer`, which already takes host-supplied keys, so
-   no OS Core change is needed.]
+2. App id variable: settled, `CHARIOT_APP_ID`.
+3. Sealing key: settled, as above. A real key, its permissions and its
+   delivery on a live host are not exercised.
 4. Schema-changing deploys, which return a conflict today [the manifest
    states `schema: {from, to}`; the owner confirms; Chariot snapshots
    `DATA_DIR` first; the server migrates forward only and is ready only
    afterwards; rollback restores the snapshot and the previous ELF].
-5. Restore. The marker is reserved and there is no executor yet [the
-   server runs `restore_after_backup` once, then removes the marker before
-   it reports ready; App Core makes no restore claim until Chariot has a
-   restore executor].
-6. Client address for rate limits [one header only the proxy sets].
+5. Restore: a v1 rule is agreed, and reconciliation stays open. The
+   marker is `CHARIOT_RESTORE_STATE_PATH`, which defaults to
+   `DATA_DIR/.chariot-restore.json`.
+   - **Chariot** blocks startup while anything is at that path, malformed
+     or a dangling link included. It has no executor.
+   - **The adapter (OS Core)** checks for presence only, without following a
+     link. Nothing there means no restore is indicated, so `restore_done`
+     is set. Anything there means it stays not ready. It never reads,
+     removes or completes a marker.
+   - [Reconciliation, once an executor exists: the executor writes the
+     marker before it replaces a database. The adapter runs rose-signin's
+     `restore_after_backup(now)` and writes a completion receipt binding
+     the marker's sha256 to `revision_sha256`. Chariot verifies the receipt
+     and removes the marker.]
+6. Client address: the header is agreed, `X-Chariot-Client-Address`
+   (above), and the runtime can use it. It is not yet wired into generated
+   servers: Home/App's `main.rs` is to call
+   `.with_client_header("X-Chariot-Client-Address")`.
 7. Rollback [keep the previous ELF; report the running sha256].
 8. Process and logs [SIGTERM within a grace period; no secrets in logs].
 
