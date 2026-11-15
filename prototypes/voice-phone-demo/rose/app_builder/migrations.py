@@ -179,6 +179,13 @@ def _statements(sql: str):
         raise SyntaxError('the last statement does not end with ;')
 
 
+# A foreign key whose parent table does not exist (left by a dropped or renamed table), which foreign_key_check does
+# not report while the child table is empty: the adapter's own query (rose-app-runtime-signin data.rs).
+DANGLING_PARENT = ("SELECT m.name FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f WHERE m.type = 'table' "
+                   "AND NOT EXISTS (SELECT 1 FROM sqlite_master AS p WHERE p.type = 'table' "
+                   "AND p.name = f.\"table\" COLLATE NOCASE) LIMIT 1")
+
+
 def _quote(name: str) -> str:
     return '"' + str(name).replace('"', '""') + '"'
 
@@ -220,11 +227,15 @@ class _Sandbox:
                     self.db.set_authorizer(None)
             try:
                 broken = self.db.execute('PRAGMA foreign_key_check').fetchone()
+                dangling = None if broken else self.db.execute(DANGLING_PARENT).fetchone()
             except sqlite3.Error as error:
                 raise self._refused(f'Checking references after {batch[-1].file}', error) from None
             if broken is not None:
                 raise MigrationRefused(f'After {batch[-1].file}, a row of table {str(broken[0])[:64]} references a '
                                        'row that is gone; the update would be refused at start-up.', 'migration_sql')
+            if dangling is not None:
+                raise MigrationRefused(f'After {batch[-1].file}, table {str(dangling[0])[:64]} references a table '
+                                       'that is gone; the update would be refused at start-up.', 'migration_sql')
             self.db.execute('COMMIT')
         finally:
             if self.db.in_transaction:

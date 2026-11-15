@@ -177,6 +177,20 @@ class Sandbox(Base):
                 refused = self.refused('migration_sql', delivered)
                 self.assertIn('a row of table items references a row that is gone', str(refused))
 
+    def test_a_reference_to_a_table_that_is_gone_is_refused(self):
+        # A rename-first rebuild: SQLite moves the children's reference to the renamed table, which is then
+        # dropped. foreign_key_check sees nothing while items is empty (a new install), so the parent is checked.
+        self.put('account', '0001_a.sql', 'CREATE TABLE lists (id INTEGER PRIMARY KEY);\n'
+                                          'CREATE TABLE items (id INTEGER PRIMARY KEY, list_id INTEGER REFERENCES '
+                                          'lists(id));')
+        delivered = self.locks()
+        self.put('account', '0002_rebuild.sql', 'ALTER TABLE lists RENAME TO lists_old;\n'
+                                                'CREATE TABLE lists (id INTEGER PRIMARY KEY, name TEXT);\n'
+                                                'INSERT INTO lists (id) SELECT id FROM lists_old;\n'
+                                                'DROP TABLE lists_old;')
+        self.assertIn('table items references a table that is gone', str(self.refused('migration_sql')))
+        self.assertIn('references a', str(self.refused('migration_sql', delivered)))
+
     def test_seeded_children_point_at_seeded_parents(self):
         self.put('account', '0001_a.sql', 'CREATE TABLE items (id INTEGER PRIMARY KEY, list_id TEXT '
                                           'REFERENCES lists(code), body TEXT);\n'  # the child first, nullable

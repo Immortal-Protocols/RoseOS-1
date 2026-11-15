@@ -105,7 +105,7 @@ class WriterPolicy(unittest.TestCase):
         self.assertEqual(set(re.split(r', | and ', listed)), migrations.PRAGMAS)
         self.says('names of a-z, 0-9 and \'_\'', 'numbered with no gap',
                   'all in one transaction with foreign keys off; then every reference is checked',
-                  'ON DELETE actions do not fire there: delete child rows yourself')
+                  'ON DELETE actions do not fire there: delete child rows yourself', 'ON UPDATE does not act either')
         self.assertTrue(migrations.NAME.fullmatch('0001_add_notes.sql'))
         for bad in ('0001_add-notes.sql', '0001_Notes.sql', '1_notes.sql'):
             self.assertIsNone(migrations.NAME.fullmatch(bad), bad)
