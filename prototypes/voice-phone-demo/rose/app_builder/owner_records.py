@@ -15,8 +15,14 @@ provisions nothing, opens no connection and reads no credential. DIR must alread
 (builder.sqlite3); none is created. The ledger checks every value (Ledger.record_native_host, record_hosted_app), in
 one transaction, so it is safe while the builder runs; a build already running keeps the endpoint it read.
 
-Output is one line of JSON on stdout. Exit status: 0 recorded (or already so), 2 usage, 3 refused by the ledger,
-4 no such ledger or project, 5 the ledger was busy (nothing recorded; try again).
+Output is one line of JSON on stdout with a `status`; `ok` and `refused` also carry `projectId`, `nativeHost` and
+`hostedAppId`, and every status but `ok` carries `message`. Status and exit code:
+- `ok`, 0: recorded, or already so;
+- `usage`, 2;
+- `refused`, 3: the ledger refused the value;
+- `not_found`, 4: no such ledger or project;
+- `busy`, 5: another writer held the ledger; nothing was recorded; try again;
+- `error`, 6: the ledger could not be opened or written (read-only, full, I/O); nothing was recorded; not a retry.
 """
 from __future__ import annotations
 
@@ -55,6 +61,12 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _busy(e: sqlite3.Error) -> bool:
+    """Only another writer holding the ledger is worth a retry; a read-only or full ledger is not."""
+    return isinstance(e, sqlite3.OperationalError) and \
+        (getattr(e, 'sqlite_errorcode', 0) & 0xff) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
 def _state(ledger: Ledger, project: str) -> dict:
     return {'projectId': project, 'nativeHost': ledger.native_host(project), 'hostedAppId': ledger.hosted_app(project)}
 
@@ -72,7 +84,11 @@ def main(argv=None, out=sys.stdout) -> int:
     if not (Path(a.ledger) / 'builder.sqlite3').is_file():
         say('not_found', message='no builder ledger there')
         return 4
-    ledger = Ledger(Path(a.ledger))
+    try:
+        ledger = Ledger(Path(a.ledger))
+    except (OSError, sqlite3.Error) as e:
+        say('error', message=f'the ledger could not be opened; nothing was recorded: {e}')
+        return 6
     try:
         if ledger.project(a.project) is None:
             say('not_found', message='no such project in this ledger')
@@ -87,9 +103,12 @@ def main(argv=None, out=sys.stdout) -> int:
         except LedgerError as e:
             say('refused', message=str(e), **_state(ledger, a.project))
             return 3
-        except sqlite3.OperationalError:  # the builder holds the ledger's write lock: nothing was recorded
-            say('busy', message='the ledger is busy; nothing was recorded; try again')
-            return 5
+        except sqlite3.Error as e:  # rolled back: nothing was recorded
+            if _busy(e):
+                say('busy', message='the ledger is busy; nothing was recorded; try again')
+                return 5
+            say('error', message=f'the ledger could not be written; nothing was recorded: {e}')
+            return 6
         say('ok', **_state(ledger, a.project))
         return 0
     finally:

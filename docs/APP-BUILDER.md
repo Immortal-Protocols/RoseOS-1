@@ -2319,14 +2319,17 @@ the server does.
     - `DIR` must already hold a builder ledger; none is created.
     - A replaced host or a changed domain names the record it replaces
       (`--replaces-*`, both together).
-    - Output is one line of JSON:
-      `{status, projectId, nativeHost, hostedAppId}` (`message` when not
-      `ok`). Exit status:
-      - 0: recorded, or already so;
-      - 2: usage;
-      - 3: refused by the ledger;
-      - 4: no such ledger or project;
-      - 5: busy, nothing recorded, try again.
+    - Output is one line of JSON with a `status`. `ok` and `refused` also
+      carry `projectId`, `nativeHost` and `hostedAppId`; every status but
+      `ok` carries `message`. Status and exit code:
+      - `ok`, 0: recorded, or already so;
+      - `usage`, 2;
+      - `refused`, 3: the ledger refused the value;
+      - `not_found`, 4: no such ledger or project;
+      - `busy`, 5: another writer held the ledger; nothing recorded; try
+        again;
+      - `error`, 6: the ledger could not be opened or written (read-only,
+        full, I/O); nothing recorded; not a retry.
     - Each record is one write transaction (`BEGIN IMMEDIATE`), so the tool
       is safe while the builder runs. A build already running keeps the
       endpoint it read.

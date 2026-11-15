@@ -155,6 +155,42 @@ class AnotherProcess(Base):
         self.assertEqual((code, json.loads(out.getvalue())['status']), (5, 'busy'))
         self.assertIsNone(holder.native_host(self.project))
 
+    def test_a_ledger_that_cannot_be_written_is_an_error_not_busy(self):
+        # SQLite's own read-only refusal (mode=ro), not lock contention: nothing recorded, and no retry advised.
+        uri = (self.dir / 'builder.sqlite3').as_uri() + '?mode=ro'
+        with unittest.mock.patch('sqlite3.connect', lambda *a, **k: _connect(uri, uri=True, **{
+                n: v for n, v in k.items() if n != 'uri'})):
+            code, out = self.native()
+        self.assertEqual((code, out['status']), (6, 'error'))
+        self.assertIn('readonly', out['message'])
+        self.assertIsNone(self.run_tool('show', '--ledger', str(self.dir), '--project', self.project)[1]['nativeHost'])
+
+    def test_a_ledger_that_cannot_be_opened_is_an_error(self):
+        def refuse(*a, **k):
+            raise sqlite3.OperationalError('unable to open database file')
+        with unittest.mock.patch('sqlite3.connect', refuse):
+            code, out = self.native()
+        self.assertEqual((code, out['status']), (6, 'error'))
+
+    def test_a_failed_commit_leaves_no_transaction_open(self):
+        ledger = L.Ledger(self.dir)
+        self.addCleanup(ledger.close)
+        real = ledger.db
+
+        class FailingCommit:
+            in_transaction = property(lambda self: real.in_transaction)
+
+            def execute(self, sql, *args):
+                if sql == 'COMMIT':
+                    raise sqlite3.OperationalError('disk I/O error')
+                return real.execute(sql, *args)
+        ledger.db = FailingCommit()
+        with self.assertRaises(sqlite3.OperationalError):
+            ledger.record_hosted_app(self.project, APK)
+        ledger.db = real
+        self.assertFalse(real.in_transaction)
+        self.assertIsNone(ledger.hosted_app(self.project))
+
 
 if __name__ == '__main__':
     unittest.main()

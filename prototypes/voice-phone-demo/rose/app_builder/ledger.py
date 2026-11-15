@@ -171,10 +171,11 @@ class Ledger:
         self.db.execute('BEGIN IMMEDIATE')
         try:
             yield
+            self.db.execute('COMMIT')
         except BaseException:
-            self.db.execute('ROLLBACK')
+            if self.db.in_transaction:  # a failed COMMIT too: never leave the connection mid-transaction
+                self.db.execute('ROLLBACK')
             raise
-        self.db.execute('COMMIT')
 
     # Projects and jobs.
 
