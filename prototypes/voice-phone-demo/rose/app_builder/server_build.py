@@ -30,6 +30,7 @@ import json
 import os
 import re
 import stat
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -199,9 +200,7 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         _write(path, text)
     path_crates = {k: Path(os.path.realpath(v)) for k, v in (path_crates or {}).items()}
     dependent = {k: Path(os.path.realpath(v)) for k, v in (dependent_path_crates or {}).items()}
-    for name, folder in {**path_crates, **dependent}.items():
-        if not (folder / 'Cargo.toml').is_file():
-            raise BuildFailed('toolchain', 'rust_toolchain_unavailable', f'The builder\'s crate {name} is missing.')
+    _check_path_crates({**path_crates, **dependent})
     _write(server / 'Cargo.toml', cargo_toml(declared, path_crates))
     if previous_lock is not None:
         _write(server / 'Cargo.lock', previous_lock)
@@ -294,6 +293,30 @@ def _holds_any(path: Path, needles: list[bytes]) -> bool:
                 return True
             tail = data[-keep:] if keep else b''
     return False
+
+
+def _check_path_crates(crates: dict[str, Path]):
+    """Every builder crate is there, and every path its own Cargo.toml depends on is another of them, at the same
+    canonical folder: one package each (the adapter's `../rose-app-runtime` is the runtime the server uses), all
+    read-only to the build. A crate depending on a folder outside them is the host's set-up, refused here."""
+    folders = {folder: name for name, folder in crates.items()}
+    for name, folder in crates.items():
+        try:
+            manifest = tomllib.loads((folder / 'Cargo.toml').read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
+                              f'The builder\'s crate {name} is missing or unreadable.') from None
+        tables = [manifest.get('dependencies'), manifest.get('build-dependencies')]
+        tables += [t.get(k) for t in (manifest.get('target') or {}).values() if isinstance(t, dict)
+                   for k in ('dependencies', 'build-dependencies')]
+        for table in tables:
+            for dep, spec in (table or {}).items():
+                if isinstance(spec, dict) and 'path' in spec:
+                    target = Path(os.path.realpath(folder / str(spec['path'])))
+                    if folders.get(target) is None:
+                        raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
+                                          f'The builder\'s crate {name} depends on {dep} at a folder the build '
+                                          'was not given as one of its crates.')
 
 
 def _refused(refused: crate_set.Refused) -> BuildFailed:

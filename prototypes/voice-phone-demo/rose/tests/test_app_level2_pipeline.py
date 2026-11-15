@@ -183,6 +183,30 @@ class Pieces(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     server_build.cargo_toml([], {bad: Path('/x')})
 
+    def test_builder_crates_depend_only_on_each_other(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def crate(folder, deps=''):
+                (root / folder / 'src').mkdir(parents=True)
+                (root / folder / 'Cargo.toml').write_text(f'[package]\nname = "{folder}"\nversion = "0.1.0"\n\n'
+                                                          f'[dependencies]\n{deps}')
+                return root / folder
+            runtime = crate('rose-app-runtime')
+            adapter = crate('rose-app-runtime-signin', 'rose-app-runtime = { path = "../rose-app-runtime" }\n'
+                                                       'rose-signin = { path = "../rose-signin", features = ["sqlite"] }\n')
+            signin = crate('rose-signin', 'sha2 = "0.10"\n')
+            other = crate('elsewhere-runtime')
+            server_build._check_path_crates({'rose-app-runtime': runtime, 'rose-app-runtime-signin': adapter,
+                                             'rose-signin': signin})
+            for crates in ({'rose-app-runtime': other, 'rose-app-runtime-signin': adapter, 'rose-signin': signin},
+                           {'rose-app-runtime': runtime, 'rose-app-runtime-signin': adapter},
+                           {'rose-app-runtime': root / 'missing'}):
+                with self.subTest(crates=sorted(crates)):
+                    with self.assertRaises(server_build.BuildFailed) as caught:
+                        server_build._check_path_crates({k: Path(os.path.realpath(v)) for k, v in crates.items()})
+                    self.assertEqual(caught.exception.category, 'toolchain')
+
     def test_only_the_builders_own_files_keep_another_package(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp)
