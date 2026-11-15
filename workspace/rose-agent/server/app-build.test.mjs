@@ -171,6 +171,7 @@ test('a real child launch: workspace-write in the project, no network per turn, 
    if(runtime.appBuild){
     assert.equal(start.permissions,APP_BUILD_PROFILE);
     assert.equal('sandbox' in start,false);  // never together with permissions
+    assert.deepEqual(start.runtimeWorkspaceRoots,[f.source]);  // the one writable root, named, never defaulted
     for(const arg of appBuildLaunchArgs())assert.ok(args.includes(arg),arg);
     assert.equal(start.config.web_search,'disabled');
     assert.equal(start.config['features.shell_tool'],true);
@@ -186,6 +187,7 @@ test('a real child launch: workspace-write in the project, no network per turn, 
    }else{
     assert.equal(start.sandbox,'read-only');
     assert.equal('permissions' in start,false);
+    assert.equal('runtimeWorkspaceRoots' in start,false);
     assert.equal('sandboxPolicy' in turn,false);
     assert.equal(args.includes('--strict-config'),false);
     if(runtime.publicResearch){assert.deepEqual(start.environments,[]);assert.equal(start.config.web_search,'live');}

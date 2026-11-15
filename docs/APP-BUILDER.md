@@ -1124,7 +1124,11 @@ app-server client.
     default_permissions="rose_app_build" -c permissions.rose_app_build={…}`.
     No user or shared config file is written;
   - there is no legacy fallback. Thread start carries `permissions` and no
-    `sandbox`, and each turn carries `permissions` and no `sandboxPolicy`.
+    `sandbox`, and each turn carries `permissions` and no `sandboxPolicy`;
+  - thread start names the one workspace root itself, as
+    `runtimeWorkspaceRoots: [source]`. The schema allows the field to be
+    omitted, `null` or `[]`, but does not define what those mean, so the
+    writer never relies on them.
     The base options' `danger-full-access` is removed for this purpose, and a
     test pins that.
 
@@ -1252,9 +1256,14 @@ Proof levels:
      profile, not as a raw string;
   3. whether `config/read` resolves a selected `profile` into the top-level
      keys, leaves it under `profiles`, or both. The check covers both forms;
-  4. what `runtimeWorkspaceRoots` holds for the writer's thread. Both `[]` and
-     the job's `source` are accepted; whether `[]` means "the cwd" is not
-     defined by the schema.
+  4. what `runtimeWorkspaceRoots` the response reports when the request names
+     `[source]`. Both `[source]` and `[]` are accepted, and neither is wider.
+
+  A first bounded inspection (installed 0.167.1 under `codex sandbox` with a
+  fresh `CODEX_HOME`, `--strict-config`, network denied, `initialize` only)
+  exited before answering `initialize`, cause unverified. It reached no
+  `config/read`, profile listing or thread, so all four items stay
+  unobserved.
 - **Live check before any enabling (Server Worker / Local Server):** a
   synthetic denial run under the profile, with no writer and no model. Reads
   of `ROSE_CONFIG_DIR`, home, `/tmp` and a sibling project must be refused;

@@ -187,7 +187,10 @@ export class Codex extends EventEmitter {
   // are exclusive, and the base options' danger-full-access must never reach an app build).
   const {sandbox:_baseSandbox,...unsandboxed}=options;
   const r=await this.rpc('thread/start',{...(this.runtime.appBuild?unsandboxed:options),model,modelProvider:'openai',ephemeral:true,
-   ...(this.runtime.appBuild?{permissions:APP_BUILD_PROFILE}:{sandbox:'read-only'}),serviceTier:this.serviceTier,
+   // The writer names its one workspace root (what `:workspace_roots` expands to) rather than leaving it to the
+   // default, whose meaning when omitted is not defined by the 0.167.1 schema.
+   ...(this.runtime.appBuild?{permissions:APP_BUILD_PROFILE,runtimeWorkspaceRoots:[options.cwd??this.root]}:{sandbox:'read-only'}),
+   serviceTier:this.serviceTier,
    ...((this.runtime.publicResearch||this.runtime.characterLife)?{environments:[]}:{}),
    config:isolated??{web_search:'disabled','features.fast_mode':true,'features.shell_tool':false,
     'features.apps':false,'features.multi_agent':false}});

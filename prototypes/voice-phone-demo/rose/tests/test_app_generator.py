@@ -307,6 +307,7 @@ class RealBridge(unittest.TestCase):
         self.assertIn('Java 17 source level', start['developerInstructions'])
         # The permission profile is the writer's only isolation: no legacy sandbox field or key goes with it.
         self.assertNotIn('sandbox', start)
+        self.assertEqual(start['runtimeWorkspaceRoots'], [str(self.source.resolve())])
         self.assertEqual([k for k in start['config'] if k.startswith('sandbox')], [])
         self.assertEqual(start['config']['web_search'], 'disabled')
 
