@@ -1555,27 +1555,35 @@ needing older clients to update, through the library's minClientVersionCode
   example `RecordedCrates`, a host-owned `index.json` of
   `name@version → sha256` plus one `<sha256>.crate` file each. Nothing
   downloads a crate, and filling the set is the host's job (blocker 6).
+  No index is an empty set. An index that can't be read, or that lists an
+  entry the builder can't use, is a broken set (`crate_set_invalid`), never
+  a smaller one.
   - **Checked before use.** The whole set is unpacked once into a read-only
     cargo directory source, which the builder then reuses. Each crate must
     meet all of these:
     - its file is read without following a link, and hashes to the digest
       the set records;
     - it is a gzip tar of plain files and folders only, all under
-      `<name>-<version>/`;
+      `<name>-<version>/`, with no link, sparse or special file;
     - it has no absolute path, no `.`, `..` or empty segment, no control
       character, and no entry listed twice;
-    - it stays within bounds on file size, entry count and unpacked bytes;
+    - it stays within bounds on file size, on entry count, and on the
+      bytes actually written to disk;
     - its own `Cargo.toml` names exactly that crate and version.
 
     A crate that fails refuses the whole set (`crate_set_invalid`,
     category `toolchain`). The host fixes its set; the builder never quietly
-    builds without the crate.
+    builds without the crate. Builds of one set take turns through a lock
+    file, so it is unpacked once and never replaced while another build
+    uses it.
   - **The lock.** Cargo resolves dependencies of dependencies from the set,
     starting from the last delivered version's `Cargo.lock`. A rebuild
     therefore keeps the versions that version used, and only adds or drops
     what the declaration changed. Every crate the resulting lock names must
     be in the set with the set's digest. A crate any delivered version used
-    must also keep that version's digest (`crate_changed`).
+    must also keep that version's digest (`crate_changed`). The only
+    packages without a source may be the server itself and the builder's
+    own crates, and every declared crate must appear as the set's.
   - **Not decided here: which crates are safe.** A crate's build script and
     procedural macros run while the server compiles, like any server
     operator's dependencies. The boundary for that is build isolation
@@ -1602,7 +1610,23 @@ needing older clients to update, through the library's minClientVersionCode
   - `HOME`, `CARGO_HOME`, the target folder and `TMPDIR` are all inside the
     job;
   - the network is off;
-  - the job's and the set's paths are remapped out of the binary.
+  - the builder's own cargo config is passed with `--config`, which outranks
+    every file;
+  - the job's and the set's paths are remapped in what rustc compiles for
+    the target.
+
+  Cargo also reads a `.cargo/config.toml` in any folder above where it
+  runs, ahead of `CARGO_HOME`'s. Such a file could replace the crate set or
+  wrap rustc, so a build under one doesn't start
+  (`build_isolation_unavailable`). A crate's procedural macro or build
+  script runs on the build machine and could still write a builder path
+  into the binary. A binary holding the job's or the set's path is refused
+  (`build_path_embedded`).
+
+  Rustc's diagnostics are read from cargo's JSON messages and counted by the
+  package they belong to, never by their words. So text in the writer's own
+  code, such as a string or a `compile_error!`, can't make its failure look
+  like the toolchain's or a crate's.
 
   The toolchain is a Rust toolchain's own folder, never rustup's proxies.
   The product target is `x86_64-unknown-linux-musl` (§7.7).
@@ -1612,12 +1636,14 @@ needing older clients to update, through the library's minClientVersionCode
   | `reason` | Category | When |
   |---|---|---|
   | `build_isolation_unavailable` | toolchain | The host supplied no isolation |
+  | `build_isolation_unavailable` | toolchain | A cargo config sits in a folder above the job |
   | `rust_toolchain_unavailable` | toolchain | No cargo or rustc, no standard library for the target, no linker, or cargo wrote no lock or binary |
   | `crate_set_invalid` | toolchain | The set can't be read, or a crate in it fails the checks above |
   | `no_crate_source` | dependency | Crates are declared and the host has no set |
   | `crate_unavailable` | dependency | A declared crate, or one it needs, isn't in the set, or no version in the set fits |
   | `crate_changed` | dependency | A crate differs from the set's digest or from a delivered version's |
-  | `crate_compile` | dependency | A crate didn't compile |
+  | `crate_compile` | dependency | A crate, or its build script, failed |
+  | `build_path_embedded` | dependency | The binary holds the job's or the set's path |
   | `server_compile` | compile | The writer's server code didn't compile |
   | `server_build` | compile | Any other cargo failure |
 

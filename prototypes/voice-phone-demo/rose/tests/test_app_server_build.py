@@ -19,7 +19,9 @@ import sys
 import tarfile
 import tempfile
 import textwrap
+import threading
 import unittest
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -46,6 +48,35 @@ def crate_bytes(name, version, deps=None, lib='pub fn v() -> u32 { 1 }\n', extra
             tar.addfile(info, io.BytesIO(data) if data is not None else None)
     raw = buf.getvalue()
     return gzip.compress(raw, mtime=0) if compress else raw
+
+
+def corrupt_deflate():
+    """A crate whose deflate stream is sound for its first header and breaks inside file data (a reserved block)."""
+    raw = crate_bytes('aa', '1.0.0', extra=[entry('aa-1.0.0/noise', data=os.urandom(200000))], compress=False)
+    co = zlib.compressobj(9, zlib.DEFLATED, -15)
+    body = co.compress(raw[:60000]) + co.flush(zlib.Z_FULL_FLUSH) + b'\x07'
+    return b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff' + body
+
+
+def sparse_crate(realsize):
+    """A crate with one GNU sparse member: 512 bytes stored, ``realsize`` bytes once its holes are filled."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w', format=tarfile.GNU_FORMAT) as tar:
+        for path, text in (('Cargo.toml', '[package]\nname = "aa"\nversion = "1.0.0"\n'), ('src/lib.rs', '')):
+            info = tarfile.TarInfo(f'aa-1.0.0/{path}')
+            info.size = len(text)
+            tar.addfile(info, io.BytesIO(text.encode()))
+        info = tarfile.TarInfo('aa-1.0.0/big.bin')
+        info.type, info.size = tarfile.GNUTYPE_SPARSE, 512
+        header = bytearray(info.tobuf(tarfile.GNU_FORMAT, 'utf-8', 'surrogateescape'))
+        # GNU sparse header: one region (offset, numbytes) at 386, isextended at 482, realsize at 483.
+        header[386:398] = b'%011o\0' % (realsize - 512)
+        header[398:410] = b'%011o\0' % 512
+        header[483:495] = b'%011o\0' % realsize
+        header[148:156] = b' ' * 8
+        header[148:156] = b'%06o\0 ' % sum(header[:512])
+        buf.write(bytes(header[:512]) + b'z' * 512)
+    return gzip.compress(buf.getvalue(), mtime=0)
 
 
 def entry(name, kind=tarfile.REGTYPE, data=b'x', link=''):
@@ -85,14 +116,23 @@ class CrateSet(Tmp):
         good = crate_bytes('aa', '1.0.0')
         s = store(self.tmp / 's', {'aa@1.0.0': good})
         self.assertEqual([c.key for c in s.crates()], ['aa@1.0.0'])
-        (self.tmp / 's/index.json').write_text(json.dumps({'schemaVersion': 1, 'crates': {
-            'aa@1.0.0': hashlib.sha256(good).hexdigest(), 'aa@^1': '0' * 64, 'Bad@1.0.0': '0' * 64,
-            'bb@1.0.0': 'not-a-digest', 'cc@1.0.0': 7}}))
-        self.assertEqual([c.key for c in s.crates()], ['aa@1.0.0'])  # only well-formed entries
-        for text in ('', 'nope', json.dumps({'schemaVersion': 2, 'crates': {}}), json.dumps([1])):
-            (self.tmp / 's/index.json').write_text(text)
-            self.assertEqual(s.crates(), [])
-        self.assertEqual(C.RecordedCrates(self.tmp / 'missing').crates(), [])
+        self.assertEqual(C.RecordedCrates(self.tmp / 'missing').crates(), [])  # no set yet: nothing in it
+        # A set that cannot be read is broken, never quietly smaller.
+        digest = hashlib.sha256(good).hexdigest()
+        for bad in ({'aa@^1': '0' * 64}, {'Bad@1.0.0': '0' * 64}, {'bb@1.0.0': 'not-a-digest'}, {'cc@1.0.0': 7},
+                    {'dd@1.0.0-' + 'a' * 60: '0' * 64}, {'e' * 65 + '@1.0.0': '0' * 64}):
+            with self.subTest(bad=bad):
+                (self.tmp / 's/index.json').write_text(json.dumps({'schemaVersion': 1,
+                                                                    'crates': {'aa@1.0.0': digest, **bad}}))
+                with self.assertRaises(C.Refused) as caught:
+                    C.check_declared(['aa@1.0.0'], s)
+                self.assertEqual(caught.exception.reason, 'crate_set_invalid')
+        for text in ('', 'nope', json.dumps({'schemaVersion': 2, 'crates': {}}), json.dumps([1]), '[' * 100000):
+            with self.subTest(text=text[:20]):
+                (self.tmp / 's/index.json').write_text(text)
+                with self.assertRaises(C.Refused) as caught:
+                    C.check_declared([], s)
+                self.assertEqual(caught.exception.reason, 'crate_set_invalid')
 
     def test_declared_crates_must_be_in_the_set(self):
         with self.assertRaises(C.Refused) as caught:
@@ -161,7 +201,8 @@ class Vendor(Tmp):
             with self.assertRaises(C.Refused) as caught:
                 self.vendor({key: data})
         self.assertEqual(caught.exception.reason, 'crate_set_invalid')
-        self.assertEqual([p.name for p in (self.tmp / 'cache').iterdir()], [])  # nothing half unpacked is kept
+        kept = [p.name for p in (self.tmp / 'cache').iterdir() if not p.name.startswith('.lock-')]
+        self.assertEqual(kept, [])  # nothing half unpacked is kept
         shutil.rmtree(self.tmp / 's')
         return str(caught.exception)
 
@@ -192,15 +233,56 @@ class Vendor(Tmp):
             'not gzip': crate_bytes('aa', '1.0.0', compress=False),
             'not a tar': gzip.compress(b'just bytes' * 100),
             'truncated': crate_bytes('aa', '1.0.0')[:40],
+            'a sparse file': crate_bytes('aa', '1.0.0', extra=[entry('aa-1.0.0/big', tarfile.GNUTYPE_SPARSE)]),
+            'a contiguous file': crate_bytes('aa', '1.0.0', extra=[entry('aa-1.0.0/x', tarfile.CONTTYPE)]),
+            'corrupt deflate data': corrupt_deflate(),
         }
         for label, data in cases.items():
             with self.subTest(label):
                 self.refused(data)
 
+    def test_a_sparse_file_cannot_write_past_the_bound(self):
+        data = sparse_crate(300 * 1024 * 1024)
+        self.assertLess(len(data), 4096)
+        self.assertIn('sparse', self.refused(data))
+
+    def test_concurrent_builds_of_one_set_share_one_complete_folder(self):
+        crates = {f'c{i}@1.0.0': crate_bytes(f'c{i}', '1.0.0') for i in range(40)}
+        s = store(self.tmp / 's', crates)
+        results, errors = [], []
+
+        def go():
+            try:
+                results.append(C.vendor(C.RecordedCrates(self.tmp / 's'), self.tmp / 'cache'))
+            except Exception as error:  # every caller must succeed
+                errors.append(error)
+        unpacked, real = [], C._unpack
+
+        def counted(crate, folder):
+            unpacked.append(crate.key)
+            return real(crate, folder)
+        threads = [threading.Thread(target=go) for _ in range(6)]
+        with mock.patch.object(C, '_unpack', counted):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(unpacked), sorted(crates))  # once: a build never replaces a set another one uses
+        self.assertEqual(len(set(results)), 1)
+        self.assertEqual(sorted(p.name for p in results[0].iterdir() if p.is_dir()), sorted(
+            f'c{i}-1.0.0' for i in range(40)))
+        self.assertEqual([p.name for p in (self.tmp / 'cache').iterdir() if p.name.startswith('.staging')], [])
+        self.assertEqual(C.vendor(s, self.tmp / 'cache'), results[0])
+
     def test_bounds(self):
         bomb = crate_bytes('aa', '1.0.0', extra=[entry('aa-1.0.0/zeros', data=b'\0' * (3 * 1024 * 1024))])
         self.assertLess(len(bomb), 64 * 1024)
         self.assertIn('unpacks to more than', self.refused(bomb, MAX_UNPACKED=1024 * 1024))
+        # What reaches the disk is bounded too, not only what the archive stream holds.
+        big = crate_bytes('aa', '1.0.0', extra=[entry('aa-1.0.0/a', data=b'a' * 600 * 1024),
+                                                entry('aa-1.0.0/b', data=b'b' * 600 * 1024)])
+        self.assertIn('unpacks to more than', self.refused(big, MAX_UNPACKED=1024 * 1024))
         many = crate_bytes('aa', '1.0.0', extra=[entry(f'aa-1.0.0/f{i}') for i in range(30)])
         self.assertIn('entries', self.refused(many, MAX_ENTRIES=10))
         self.assertIn('larger', self.refused(crate_bytes('aa', '1.0.0'), MAX_CRATE=100))
@@ -251,10 +333,14 @@ class Lock(unittest.TestCase):
         self.by_key = {'aa@1.0.0': C.Crate('aa', '1.0.0', Path('/x'), self.digest)}
 
     def test_the_lock_is_held_to_the_set_and_to_delivered_versions(self):
-        self.assertEqual(C.check_lock(LOCK.format(aa=self.digest), self.by_key),
+        good = LOCK.format(aa=self.digest)
+        self.assertEqual(C.check_lock(good, self.by_key, root=S.PACKAGE, declared=['aa@1.0.0']),
                          [C.Locked('aa', '1.0.0', self.digest)])
-        self.assertEqual(C.check_lock(LOCK.format(aa=self.digest), self.by_key, {'aa@1.0.0': self.digest}),
+        self.assertEqual(C.check_lock(good, self.by_key, {'aa@1.0.0': self.digest}, root=S.PACKAGE),
                          [C.Locked('aa', '1.0.0', self.digest)])
+        patched = good.replace('source = "registry+https://github.com/rust-lang/crates.io-index"\n', '')
+        self.assertEqual(C.check_lock(patched.replace('checksum = "' + self.digest + '"\n', ''), self.by_key,
+                                      root=S.PACKAGE, path_crates={'aa'}), [])  # the builder's own path crate
         cases = {
             'crate_changed': [(LOCK.format(aa='b' * 64), None), (LOCK.format(aa=self.digest),
                                                                  {'aa@1.0.0': 'c' * 64})],
@@ -263,11 +349,17 @@ class Lock(unittest.TestCase):
                                                                        'crates.io-index', 'git+https://x/y'), None)],
             'crate_set_invalid': [('[[package', None), ('package = 3', None), ('[[package]]\nname = 3\n', None)],
         }
+        # A crate patched in from a path (an outside config's [patch]) has no source and is not the builder's.
+        cases['crate_unavailable'].append((LOCK.format(aa=self.digest).replace(
+            'source = "registry+https://github.com/rust-lang/crates.io-index"\n', ''), None))
+        with self.assertRaises(C.Refused) as caught:  # declared, and not built from the set
+            C.check_lock(LOCK.format(aa=self.digest), self.by_key, root=S.PACKAGE, declared=['bb@1.0.0'])
+        self.assertEqual(caught.exception.reason, 'crate_unavailable')
         for reason, texts in cases.items():
             for text, locked in texts:
                 with self.subTest(reason=reason, text=text[:40]):
                     with self.assertRaises(C.Refused) as caught:
-                        C.check_lock(text, self.by_key, locked)
+                        C.check_lock(text, self.by_key, locked, root=S.PACKAGE)
                     self.assertEqual(caught.exception.reason, reason)
 
 
@@ -277,12 +369,16 @@ from pathlib import Path
 record = Path(os.environ['FAKE_RECORD'])
 calls = json.loads(record.read_text()) if record.exists() else []
 manifest = Path(sys.argv[sys.argv.index('--manifest-path') + 1])
-calls.append({'argv': sys.argv[1:], 'env': dict(os.environ), 'cwd': os.getcwd(),
+args = sys.argv[1:]
+config = None
+if args[:1] == ['--config']:
+    config, args = args[1], args[2:]
+calls.append({'argv': sys.argv[1:], 'configArg': config, 'env': dict(os.environ), 'cwd': os.getcwd(),
               'lockBefore': (manifest.parent / 'Cargo.lock').read_text() if (manifest.parent / 'Cargo.lock').exists()
               else None, 'config': (Path(os.environ['CARGO_HOME']) / 'config.toml').read_text(),
               'cargoToml': manifest.read_text()})
 record.write_text(json.dumps(calls))
-step = sys.argv[1]
+step = args[0]
 fail = os.environ.get('FAKE_FAIL_' + step.upper())
 if fail:
     sys.stderr.write(fail.replace('@WORK@', str(manifest.parent.parent)))
@@ -294,7 +390,8 @@ elif step == 'build':
     target = sys.argv[sys.argv.index('--target') + 1]
     out = Path(os.environ['CARGO_TARGET_DIR']) / target / 'release' / 'rose-app-server'
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(b'\\x7fELF fake server')
+    out.write_bytes(os.environ.get('FAKE_ELF', '\\x7fELF fake server').replace('@WORK@', str(manifest.parent.parent))
+                    .encode())
 '''
 
 
@@ -373,10 +470,12 @@ class FakeCargo(Tmp):
         result, isolation = self.build()
         metadata, build = self.calls()
         work = self.tmp / 'work1'
-        self.assertEqual(metadata['argv'], ['metadata', '--offline', '--format-version', '1', '--manifest-path',
-                                            str(work / 'server/Cargo.toml')])
-        self.assertEqual(build['argv'], ['build', '--offline', '--frozen', '--release', '--target', S.TARGET,
-                                         '--manifest-path', str(work / 'server/Cargo.toml')])
+        config = ['--config', str(work / 'cargo-home/config.toml')]  # outranks any cargo config file
+        self.assertEqual(metadata['argv'], config + ['metadata', '--offline', '--format-version', '1',
+                                                     '--manifest-path', str(work / 'server/Cargo.toml')])
+        self.assertEqual(build['argv'], config + ['build', '--offline', '--frozen', '--release', '--target', S.TARGET,
+                                                  '--message-format', 'json', '--manifest-path',
+                                                  str(work / 'server/Cargo.toml')])
         env = {k: v for k, v in build['env'].items() if not k.startswith('FAKE_')}
         vendor = isolation.calls[0]['readonly'][1]
         self.assertEqual(env, {
@@ -428,9 +527,16 @@ class FakeCargo(Tmp):
         with self.assertRaises(S.BuildFailed) as caught:
             self.build(locked={'aa@1.0.0': 'f' * 64})
         self.assertEqual((caught.exception.category, caught.exception.reason), ('dependency', 'crate_changed'))
-        self.assertEqual([c['argv'][0] for c in self.calls()], ['metadata'])  # never built
+        self.assertEqual([c['argv'][2] for c in self.calls()], ['metadata'])  # never built
 
     def test_cargo_failures_map_to_categories(self):
+        def rustc(package, message, spans=True, notes=()):
+            return json.dumps({'reason': 'compiler-message', 'package_id': package, 'message': {
+                'level': 'error', 'message': message, 'spans': [{'file_name': 'x.rs'}] if spans else [],
+                'children': [{'message': n} for n in notes], 'rendered': f'error: {message}\n --> @WORK@/x.rs'}})
+        own = 'path+file://@WORK@/server#rose-app-server@0.0.0'
+        dep = 'registry+https://github.com/rust-lang/crates.io-index#serde@1.0.219'
+        done = 'error: could not compile `rose-app-server` (bin "rose-app-server") due to 1 previous error'
         cases = [
             ('metadata', 'error: no matching package named `dd` found\nlocation searched: directory source',
              'dependency', 'crate_unavailable', 'dd'),
@@ -439,15 +545,31 @@ class FakeCargo(Tmp):
             ('build', 'error: checksum for `aa v1.0.0` changed between lock files', 'dependency', 'crate_changed', ''),
             ('build', 'error: the listed checksum of `@WORK@/x/src/lib.rs` has changed:', 'dependency',
              'crate_changed', ''),
-            ('build', 'error[E0463]: can\'t find crate for `std`\n  = note: the `x86_64-unknown-linux-musl` target '
-                      'may not be installed', 'toolchain', 'rust_toolchain_unavailable', ''),
-            ('build', 'error: linker `cc` not found', 'toolchain', 'rust_toolchain_unavailable', ''),
-            ('build', 'error[E0308]: mismatched types\n --> @WORK@/server/src/handlers/mod.rs:1:2\n'
-                      'error: could not compile `rose-app-server` (bin "rose-app-server") due to 1 previous error',
+            ('build', rustc(own, "can't find crate for `std`", spans=False, notes=[
+                'the `x86_64-unknown-linux-musl` target may not be installed']) + '\n' + done,
+             'toolchain', 'rust_toolchain_unavailable', ''),
+            ('build', rustc(own, 'linker `cc` not found', spans=False) + '\n' + done, 'toolchain',
+             'rust_toolchain_unavailable', ''),
+            ('build', rustc(own, 'mismatched types') + '\n' + done, 'compile', 'server_compile', ''),
+            # Older cargo's package id form.
+            ('build', rustc('rose-app-server 0.0.0 (path+file://@WORK@/server)', 'mismatched types') + '\n' + done,
              'compile', 'server_compile', ''),
+            ('build', rustc(dep, 'mismatched types') + '\nerror: could not compile `serde` (lib) due to 1 previous '
+                                                       'error', 'dependency', 'crate_compile', 'serde'),
+            # The writer's own diagnostics cannot pick the category, whatever their words.
+            ('build', rustc(own, 'may not be installed') + '\n' + done, 'compile', 'server_compile', ''),
+            ('build', rustc(own, 'no matching package named `serde` found') + '\n' + done, 'compile',
+             'server_compile', ''),
+            ('build', rustc(own, 'linking with `cc` failed') + '\n' + done, 'compile', 'server_compile', ''),
+            ('build', rustc(own, 'could not compile `tokio`') + '\n' + done, 'compile', 'server_compile', ''),
+            ('build', 'error: failed to run custom build command for `dd v1.0.0`\n\nCaused by:\n  process didn\'t '
+                      'exit successfully', 'dependency', 'crate_compile', 'dd'),
+            ('metadata', 'error: failed to select a version for `aa`.\n    ... required by package `bb v1.0.0`',
+             'dependency', 'crate_unavailable', 'aa'),
             ('build', 'error: could not compile `serde` (lib) due to 3 previous errors', 'dependency', 'crate_compile',
              'serde'),
-            ('build', 'Segmentation fault', 'compile', 'server_build', ''),
+            ('build', '{"reason": "build-finished", "success": false}\nSegmentation fault', 'compile',
+             'server_build', ''),
         ]
         for step, text, category, reason, named in cases:
             with self.subTest(text=text[:50]):
@@ -457,6 +579,7 @@ class FakeCargo(Tmp):
                 self.assertEqual((failed.category, failed.reason), (category, reason))
                 self.assertIn(named, failed.summary)
                 self.assertNotIn(str(self.tmp), failed.log)  # the job's paths are redacted
+                self.assertNotIn('{"reason"', failed.log)  # rendered for the owner, not raw JSON
                 self.assertNotIn(str(self.tmp), failed.summary)
 
     def test_timeouts_and_cancellation_are_the_jobs_own(self):
@@ -468,6 +591,38 @@ class FakeCargo(Tmp):
         with self.assertRaises(S.StepFailed) as caught:
             self.build(cancelled=lambda: True, tools=S.RustTools(self.toolchain, timeout_s=60))
         self.assertEqual(caught.exception.category, 'cancelled')
+
+    def test_a_cargo_config_above_the_job_stops_the_build(self):
+        for name in ('config.toml', 'config'):
+            with self.subTest(name=name):
+                outer = self.tmp / f'outer-{name}'
+                (outer / '.cargo').mkdir(parents=True)
+                (outer / '.cargo' / name).write_text('[build]\nrustc-wrapper = "/bin/true"\n')
+                with self.assertRaises(S.BuildFailed) as caught:
+                    S.build(self.snap, outer / 'jobs/work', [], None, self.tools, Passthrough(),
+                            cache=self.tmp / 'c', generated={S.ENTRY: MAIN})
+                self.assertEqual((caught.exception.category, caught.exception.reason),
+                                 ('toolchain', 'build_isolation_unavailable'))
+        self.assertFalse(self.record.exists())
+
+    def test_a_binary_holding_a_builder_path_is_refused(self):
+        env = {'FAKE_RECORD': str(self.record), 'FAKE_LOCK': LOCK.format(aa=self.digest),
+               'FAKE_ELF': '\x7fELF ... @WORK@/server/src ...'}
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(isolation=Passthrough(env))
+        self.assertEqual(caught.exception.reason, 'build_path_embedded')
+        env['FAKE_ELF'] = f'\x7fELF {self.tmp / "cache"}/vendor-x/aa-1.0.0'  # the crate set's folder too
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(isolation=Passthrough(env))
+        self.assertEqual(caught.exception.reason, 'build_path_embedded')
+        self.assertTrue(S._holds_any(self._file(b'ab' * 700000 + b'NEEDLE'), [b'NEEDLE']))  # across chunks
+        self.assertTrue(S._holds_any(self._file(b'x' * ((1 << 20) - 3) + b'NEEDLE'), [b'NEEDLE']))
+        self.assertFalse(S._holds_any(self._file(b'NEEDL' + b'x' * (1 << 20)), [b'NEEDLE']))
+
+    def _file(self, data):
+        path = self.tmp / f'blob{len(data)}'
+        path.write_bytes(data)
+        return path
 
     def test_a_missing_binary_or_lock_is_the_toolchains_fault(self):
         cargo = self.toolchain / 'bin/cargo'
@@ -569,6 +724,51 @@ class RealCargo(Tmp):
             self.build(snap, ['bb@1.0.0'], short, main=main)
         self.assertEqual((caught.exception.category, caught.exception.reason), ('dependency', 'crate_unavailable'))
         self.assertIn('aa', caught.exception.summary)
+
+    def test_the_writers_words_cannot_choose_the_failure(self):
+        for words in ('may not be installed', 'no matching package named `serde` found', 'linking with `cc` failed',
+                      'could not compile `tokio`', 'failed to run custom build command for `dd v1.0.0`'):
+            with self.subTest(words=words):
+                snap = snapshot(self.tmp / f'spoof{self.n}', handlers=(
+                    f'pub fn hello() -> &\'static str {{ let _x: u32 = "{words}"; compile_error!("{words}"); }}\n'))
+                with self.assertRaises(S.BuildFailed) as caught:
+                    self.build(snap)
+                self.assertEqual((caught.exception.category, caught.exception.reason), ('compile', 'server_compile'))
+                self.assertIn(words, caught.exception.log)  # still shown to the owner, as the writer's error
+
+    def test_a_crate_failing_is_the_crates(self):
+        source = store(self.tmp / 'set', {
+            'dd@1.0.0': crate_bytes('dd', '1.0.0', extra=[entry('dd-1.0.0/build.rs', data=b'fn main() { panic!("no"); }')],
+                                    manifest='[package]\nname = "dd"\nversion = "1.0.0"\nbuild = "build.rs"\n'),
+            'ee@1.0.0': crate_bytes('ee', '1.0.0', lib='pub fn v() -> u32 { "not a number" }\n'),
+        })
+        snap = snapshot(self.tmp / 'snap')
+        for crate in ('dd', 'ee'):
+            with self.subTest(crate=crate):
+                with self.assertRaises(S.BuildFailed) as caught:
+                    self.build(snap, [f'{crate}@1.0.0'], source, main=f'fn main() {{ {crate}::v; }}\n')
+                self.assertEqual((caught.exception.category, caught.exception.reason), ('dependency', 'crate_compile'))
+                self.assertIn(crate, caught.exception.summary)
+
+    def test_a_cargo_config_above_the_job_never_applies(self):
+        outer = self.tmp / 'home'
+        (outer / '.cargo').mkdir(parents=True)
+        (outer / '.cargo/config.toml').write_text('[build]\nrustc-wrapper = "/bin/false"\n')
+        with self.assertRaises(S.BuildFailed) as caught:
+            S.build(snapshot(self.tmp / 'snap'), outer / 'builder/work', [], None, self.tools, Passthrough(),
+                    cache=self.tmp / 'cache', generated={S.ENTRY: MAIN})
+        self.assertEqual(caught.exception.reason, 'build_isolation_unavailable')
+
+    def test_a_crate_macro_that_writes_a_builder_path_into_the_binary_is_refused(self):
+        source = store(self.tmp / 'set', {'pm@1.0.0': crate_bytes(
+            'pm', '1.0.0', manifest='[package]\nname = "pm"\nversion = "1.0.0"\nedition = "2021"\n\n[lib]\n'
+                                    'proc-macro = true\n',
+            lib='use proc_macro::TokenStream;\n#[proc_macro]\npub fn here(_: TokenStream) -> TokenStream {\n'
+                '    format!("{:?}", std::env::current_dir().unwrap().display().to_string()).parse().unwrap()\n}\n')})
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(snapshot(self.tmp / 'snap'), ['pm@1.0.0'], source,
+                       main='fn main() { println!("{}", pm::here!()); }\n')
+        self.assertEqual((caught.exception.category, caught.exception.reason), ('dependency', 'build_path_embedded'))
 
 
 if __name__ == '__main__':

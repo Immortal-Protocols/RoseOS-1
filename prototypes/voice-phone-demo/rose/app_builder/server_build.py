@@ -14,9 +14,14 @@ builds offline, from the snapshot and the host's crate set only:
 5. ``cargo build --offline --frozen --release --target <target>`` builds the one binary.
 
 Cargo runs with a scrubbed environment: nothing inherited, HOME, CARGO_HOME, the target folder and TMPDIR all inside
-the job, the network off, and the job's paths remapped in the binary. Failures map to the job's categories with a
-stable ``reason``; the summary is safe to show the owner and the log has the job's paths redacted. The manifest and
-ELF checks are the next slice; this returns the binary and its digest.
+the job, and the network off. Cargo also reads a ``.cargo/config.toml`` in any folder above where it runs, ahead of
+CARGO_HOME's, so the build refuses to start under one, and the builder's own config is passed with ``--config``,
+which outranks every file. The job's and the set's paths are remapped in what rustc compiles for the target; a
+crate's procedural macro or build script runs on the build machine and could still write one into the binary, so a
+binary that holds one is refused (``build_path_embedded``). Failures map to the job's categories with a stable
+``reason``: rustc's diagnostics are read from cargo's JSON messages, by the package they belong to, so text in the
+writer's code (a string, a ``compile_error!``) cannot choose the category. The summary is safe to show the owner and
+the log has the job's paths redacted. The manifest and remaining ELF checks are the next slice.
 """
 from __future__ import annotations
 
@@ -80,7 +85,7 @@ class RustTools:
 
 class Isolation:
     """Runs one build command so that it can write only ``writable``, read only ``readonly`` (and the system's own
-    libraries and linker), and reach no network. The builder host provides it (docs/APP-BUILDER.md §5, blocker 3);
+    libraries and linker), and reach no network, with no cargo configuration in any folder above ``writable``. The builder host provides it (docs/APP-BUILDER.md §5, blocker 3);
     returns the command and environment to run in its place."""
 
     def command(self, argv: list[str], env: dict[str, str], *, writable: Path,
@@ -152,6 +157,10 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
     except crate_set.Refused as refused:
         raise _refused(refused) from None
     work = Path(work)
+    for folder in (work / 'server').resolve().parents:
+        if any(os.path.lexists(folder / '.cargo' / name) for name in ('config', 'config.toml')):
+            raise BuildFailed('toolchain', 'build_isolation_unavailable', 'The server was not built: a cargo '
+                              'configuration in a folder above the job would apply to it.')
     server, home, cargo_home, target_dir, tmp = (work / n for n in ('server', 'home', 'cargo-home', 'target', 'tmp'))
     for folder in (server, home, cargo_home, target_dir, tmp):
         folder.mkdir(mode=0o700, parents=True)
@@ -175,7 +184,8 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
     manifest = str(server / 'Cargo.toml')
 
     def cargo(*args):
-        argv, wrapped = isolation.command([str(tools.cargo), *args], dict(env), writable=work, readonly=readonly)
+        argv, wrapped = isolation.command([str(tools.cargo), '--config', str(cargo_home / 'config.toml'), *args],
+                                          dict(env), writable=work, readonly=readonly)
         try:
             return run(argv, server, home, tools, cancelled, 'cargo', redact=redact, env=wrapped)
         except StepFailed as failed:
@@ -190,10 +200,11 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'Cargo did not write the server\'s lock.') \
             from None
     try:
-        used = crate_set.check_lock(lock_text, by_key, locked)
+        used = crate_set.check_lock(lock_text, by_key, locked, root=PACKAGE, declared=declared)
     except crate_set.Refused as refused:
         raise _refused(refused) from None
-    cargo('build', '--offline', '--frozen', '--release', '--target', tools.target, '--manifest-path', manifest)
+    cargo('build', '--offline', '--frozen', '--release', '--target', tools.target, '--message-format', 'json',
+          '--manifest-path', manifest)
     elf = target_dir / tools.target / 'release' / PACKAGE
     try:
         st = os.lstat(elf)
@@ -201,7 +212,22 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         st = None
     if st is None or not stat.S_ISREG(st.st_mode):
         raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'Cargo finished without the server binary.')
+    if _holds_any(elf, [str(p).encode() for p in (work, Path(cache), *((vendor,) if vendor is not None else ()))]):
+        raise BuildFailed('dependency', 'build_path_embedded', 'The server binary holds a path from the builder\'s '
+                          'machine (a crate\'s macro or build script put it there), so it was not used.')
     return ServerBuild(elf, _sha256(elf), st.st_size, tools.target, lock_text, used)
+
+
+def _holds_any(path: Path, needles: list[bytes]) -> bool:
+    keep = max(len(n) for n in needles) - 1
+    tail = b''
+    with open(path, 'rb') as f:
+        while chunk := f.read(1 << 20):
+            data = tail + chunk
+            if any(n in data for n in needles):
+                return True
+            tail = data[-keep:] if keep else b''
+    return False
 
 
 def _refused(refused: crate_set.Refused) -> BuildFailed:
@@ -209,31 +235,83 @@ def _refused(refused: crate_set.Refused) -> BuildFailed:
     return BuildFailed(category, refused.reason, str(refused))
 
 
-# Cargo's own wording, newest first where two could both appear. A summary names only what cargo named.
+# Cargo's own wording. Only cargo's own lines and rustc's spanless messages are read as text: rustc quotes the
+# writer's source in its diagnostics, so a diagnostic counts by the package it belongs to, never by its words.
 _CRATE_NAME = r'`([A-Za-z0-9_-]{1,64})`'
+_TOOLCHAIN = re.compile(r"can't find crate for `(?:std|core)`|linker `[^`]*` not found|linking with `[^`]*` failed|"
+                        r'may not be installed')
+
+
+def _messages(log: str) -> tuple[list[str], list[dict]]:
+    """Cargo's own text lines, and rustc's errors from cargo's JSON messages (``--message-format json``)."""
+    text, errors = [], []
+    for line in log.splitlines():
+        if line.startswith('{'):
+            try:
+                message = json.loads(line)
+            except ValueError:
+                message = None
+            if isinstance(message, dict) and 'reason' in message:
+                body = message.get('message')
+                if message['reason'] == 'compiler-message' and isinstance(body, dict) \
+                        and str(body.get('level', '')).startswith('error') and isinstance(body.get('message'), str):
+                    errors.append({'package': str(message.get('package_id', '')), 'message': body['message'],
+                                   'spanless': not body.get('spans'), 'notes': ' '.join(
+                                       str(c.get('message', '')) for c in body.get('children') or []
+                                       if isinstance(c, dict)),
+                                   'rendered': str(body.get('rendered') or body['message'])})
+                continue
+        text.append(line)
+    return text, errors
+
+
+def _package_name(package_id: str) -> tuple[str, bool]:
+    """(crate name, is the server itself) from a cargo package id, in its current (``source#name@version``) or
+    older (``name version (source)``) form."""
+    if '#' in package_id:
+        source, _, rest = package_id.partition('#')
+        name = rest.rsplit('@', 1)[0] if '@' in rest else source.rstrip('/').rsplit('/', 1)[-1]
+    else:
+        name, _, rest = package_id.partition(' ')
+        source = rest.rsplit('(', 1)[-1]
+    return name, source.startswith('path+') and name == PACKAGE
 
 
 def classify(log: str) -> BuildFailed:
     """The job's failure for a cargo run that failed, from what cargo printed."""
-    tail = log[-4000:]
-    if m := re.search(r'no matching package named ' + _CRATE_NAME, log):
+    text, errors = _messages(log)
+    shown = '\n'.join(text + [e['rendered'] for e in errors])[-4000:]
+    cargo_text = '\n'.join(text)
+    for error in errors:
+        if error['spanless'] and _TOOLCHAIN.search(error['message'] + ' ' + error['notes']):
+            return BuildFailed('toolchain', 'rust_toolchain_unavailable',
+                               'The builder\'s Rust toolchain could not build for its target.', log=shown)
+    for error in errors:
+        name, own = _package_name(error['package'])
+        if not own:
+            shown_name = name if re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name) else 'a crate'
+            return BuildFailed('dependency', 'crate_compile', f'The crate {shown_name} did not compile.', log=shown)
+    if errors:
+        return BuildFailed('compile', 'server_compile', 'The server\'s Rust code did not compile.', log=shown)
+    if m := re.search(r'no matching package named ' + _CRATE_NAME, cargo_text):
         return BuildFailed('dependency', 'crate_unavailable',
-                           f'The crate {m.group(1)} is not in this builder\'s crate set.', log=tail)
-    if m := re.search(r'failed to select a version for the requirement ' + r'`([A-Za-z0-9_-]{1,64}) ', log):
+                           f'The crate {m.group(1)} is not in this builder\'s crate set.', log=shown)
+    if m := re.search(r'failed to select a version for (?:the requirement )?`([A-Za-z0-9_-]{1,64})[` ]', cargo_text):
         return BuildFailed('dependency', 'crate_unavailable',
-                           f'No version of the crate {m.group(1)} in this builder\'s crate set fits.', log=tail)
-    if re.search(r'checksum for `[^`]*` changed between lock files|the listed checksum of .* has changed', log):
+                           f'No version of the crate {m.group(1)} in this builder\'s crate set fits.', log=shown)
+    if re.search(r'checksum for `[^`]*` changed between lock files|the listed checksum of .* has changed', cargo_text):
         return BuildFailed('dependency', 'crate_changed',
-                           'A crate is not the one this server\'s lock names, so it was not used.', log=tail)
-    if re.search(r"can't find crate for `(?:std|core)`|linker `[^`]*` not found|error: linking with|"
-                 r'may not be installed', log):
+                           'A crate is not the one this server\'s lock names, so it was not used.', log=shown)
+    if m := re.search(r'failed to run custom build command for `([A-Za-z0-9_-]{1,64}) ', cargo_text):
+        return BuildFailed('dependency', 'crate_compile', f'The crate {m.group(1)}\'s build script failed.', log=shown)
+    if _TOOLCHAIN.search(cargo_text):
         return BuildFailed('toolchain', 'rust_toolchain_unavailable',
-                           'The builder\'s Rust toolchain could not build for its target.', log=tail)
-    if m := re.search(r'could not compile `([A-Za-z0-9_-]{1,64})`', log):
+                           'The builder\'s Rust toolchain could not build for its target.', log=shown)
+    if m := re.search(r'could not compile `([A-Za-z0-9_-]{1,64})`', cargo_text):
         if m.group(1) == PACKAGE:
-            return BuildFailed('compile', 'server_compile', 'The server\'s Rust code did not compile.', log=tail)
-        return BuildFailed('dependency', 'crate_compile', f'The crate {m.group(1)} did not compile.', log=tail)
-    return BuildFailed('compile', 'server_build', 'The server did not build.', log=tail)
+            return BuildFailed('compile', 'server_compile', 'The server\'s Rust code did not compile.', log=shown)
+        return BuildFailed('dependency', 'crate_compile', f'The crate {m.group(1)} did not compile.', log=shown)
+    return BuildFailed('compile', 'server_build', 'The server did not build.', log=shown)
 
 
 def _copy_tree(src: Path, dst: Path):

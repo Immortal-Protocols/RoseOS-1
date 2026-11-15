@@ -23,16 +23,19 @@ the host chooses its set.
 """
 from __future__ import annotations
 
+import fcntl
 import gzip
 import hashlib
 import io
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import tarfile
 import tomllib
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +49,7 @@ MAX_CRATE = 16 * 1024 * 1024  # bytes of one .crate file (crates.io accepts 10 M
 MAX_UNPACKED = 128 * 1024 * 1024  # unpacked bytes of one crate
 MAX_ENTRIES = 20000  # entries in one crate
 MAX_PATH = 512
+MAX_KEY = 64  # characters of a crate name, and of a version (the ledger records both)
 CHECKSUM_FILE = '.cargo-checksum.json'
 VENDOR_RECIPE = 1  # bump when vendor() lays crates out differently, so an older cached directory is never reused
 
@@ -94,25 +98,35 @@ class CrateSource:
 
 class RecordedCrates(CrateSource):
     """A host-owned directory: ``index.json`` ``{"schemaVersion": 1, "crates": {"<name>@<version>": "<sha256>"}}``
-    and one file ``<sha256>.crate`` per crate. An index that cannot be read is a set with nothing in it."""
+    and one file ``<sha256>.crate`` per crate. No index is a set with nothing in it; an index that cannot be read,
+    or that lists an entry this cannot use, is a broken set (ValueError, ``crate_set_invalid``), never a smaller one."""
 
     def __init__(self, root: Path):
         self.root = Path(root)
 
     def crates(self) -> list[Crate]:
         try:
-            data = json.loads((self.root / 'index.json').read_text(encoding='utf-8'))
-        except (OSError, ValueError, RecursionError):
+            text = (self.root / 'index.json').read_text(encoding='utf-8')
+        except FileNotFoundError:
             return []
+        data = json.loads(text)  # anything unreadable raises, and _index reports the set as broken
         crates = data.get('crates') if isinstance(data, dict) and data.get('schemaVersion') == SCHEMA_VERSION else None
         if not isinstance(crates, dict):
-            return []
+            raise ValueError('index.json is not {"schemaVersion": 1, "crates": {...}}')
         out = []
         for key, digest in sorted(crates.items()):
-            if isinstance(key, str) and CRATE.fullmatch(key) and isinstance(digest, str) and SHA256.fullmatch(digest):
-                name, version = key.split('@', 1)
-                out.append(Crate(name, version, self.root / f'{digest}.crate', digest))
+            if not (isinstance(key, str) and _key_ok(key) and isinstance(digest, str) and SHA256.fullmatch(digest)):
+                raise ValueError('index.json lists an entry without a valid name, version or digest')
+            name, version = key.split('@', 1)
+            out.append(Crate(name, version, self.root / f'{digest}.crate', digest))
         return out
+
+
+def _key_ok(key: str) -> bool:
+    if not CRATE.fullmatch(key):
+        return False
+    name, version = key.split('@', 1)
+    return len(name) <= MAX_KEY and len(version) <= MAX_KEY
 
 
 def check_declared(declared, source: CrateSource | None) -> dict[str, Crate]:
@@ -138,7 +152,8 @@ def _index(source: CrateSource) -> dict[str, Crate]:
         raise Refused(f'The builder\'s crate set has more than {MAX_SET} crates.', 'crate_set_invalid')
     by_key = {}
     for crate in crates:
-        if not isinstance(crate, Crate) or not CRATE.fullmatch(crate.key) or not isinstance(crate.sha256, str) \
+        if not isinstance(crate, Crate) or not isinstance(crate.name, str) or not isinstance(crate.version, str) \
+                or not _key_ok(crate.key) or not isinstance(crate.sha256, str) \
                 or not SHA256.fullmatch(crate.sha256):
             raise Refused('The builder\'s crate set has an entry without a valid name, version or digest.',
                           'crate_set_invalid')
@@ -160,19 +175,26 @@ def vendor(source: CrateSource, cache: Path) -> Path:
     final = cache / f'vendor-{digest}'
     if _valid_vendor(final, digest):
         return final
-    _discard(final)
-    staging = cache / f'.staging-{digest}-{os.getpid()}'
-    _discard(staging)
-    staging.mkdir(mode=0o700)
+    # One builder of a set at a time, threads and processes alike: each open of the lock file is its own flock.
+    fd = os.open(cache / f'.lock-{digest}', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
     try:
-        for key in sorted(by_key):
-            _unpack(by_key[key], staging)
-        (staging / '.rose-vendor').write_text(digest, encoding='utf-8')
-        _read_only(staging)
-        os.rename(staging, final)
-    except BaseException:
-        _discard(staging)
-        raise
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        if _valid_vendor(final, digest):  # another build finished it while this one waited
+            return final
+        _discard(final)  # a folder without its marker is a build that never finished
+        staging = cache / f'.staging-{digest}-{secrets.token_hex(8)}'
+        staging.mkdir(mode=0o700)
+        try:
+            for key in sorted(by_key):
+                _unpack(by_key[key], staging)
+            (staging / '.rose-vendor').write_text(digest, encoding='utf-8')
+            _read_only(staging)
+            os.rename(staging, final)
+        except BaseException:
+            _discard(staging)
+            raise
+    finally:
+        os.close(fd)  # releases the lock
     return final
 
 
@@ -256,7 +278,7 @@ def _unpack(crate: Crate, vendor_dir: Path):
     root.mkdir(mode=0o700)
     files: dict[str, str] = {}
     seen = set()
-    count = 0
+    count = written = 0
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz, \
                 tarfile.open(fileobj=_Bounded(gz, MAX_UNPACKED + 1024 * 1024, too_big), mode='r|') as tar:
@@ -284,14 +306,17 @@ def _unpack(crate: Crate, vendor_dir: Path):
                 if member.isdir():
                     target.mkdir(mode=0o700, parents=True, exist_ok=True)
                     continue
-                if not member.isreg():
-                    bad('has a link or special file')
+                if member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE) or member.issparse():
+                    bad('has a link, sparse or special file')  # a sparse file's holes are never read, only written
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 h = hashlib.sha256()
                 fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
                 try:
                     stream = tar.extractfile(member)
                     while chunk := stream.read(1 << 20):
+                        written += len(chunk)
+                        if written > MAX_UNPACKED:  # what reaches the disk, not only what the stream held
+                            too_big()
                         h.update(chunk)
                         os.write(fd, chunk)
                 finally:
@@ -299,7 +324,7 @@ def _unpack(crate: Crate, vendor_dir: Path):
                 files[rel] = h.hexdigest()
     except Refused:
         raise
-    except (tarfile.TarError, OSError, EOFError, gzip.BadGzipFile, ValueError):
+    except (tarfile.TarError, OSError, EOFError, gzip.BadGzipFile, ValueError, zlib.error):
         bad('is not a readable .crate archive')
     _check_manifest(root / 'Cargo.toml', crate, bad)
     (root / CHECKSUM_FILE).write_text(json.dumps({'files': files, 'package': crate.sha256}, sort_keys=True),
@@ -318,10 +343,12 @@ def _check_manifest(path: Path, crate: Crate, bad):
         bad(f'has a Cargo.toml that does not name {crate.key}')
 
 
-def check_lock(lock_text: str, by_key: dict[str, Crate], locked: dict[str, str] | None = None) -> list[Locked]:
+def check_lock(lock_text: str, by_key: dict[str, Crate], locked: dict[str, str] | None = None, *, root: str,
+               declared=(), path_crates=frozenset()) -> list[Locked]:
     """The crates a server's Cargo.lock uses, once each is in the set with the set's digest and, for one an earlier
     delivered version used (``locked``: ``name@version`` -> sha256), with that version's digest (``crate_changed``).
-    Packages with no source are the server itself and the builder's own path crates."""
+    The only packages without a source are ``root`` (the server) and ``path_crates`` (the builder's own); anything
+    else replaced a crate from outside the set. Every ``declared`` crate must be in the lock as the set's."""
     locked = locked or {}
     try:
         lock = tomllib.loads(lock_text)
@@ -335,9 +362,12 @@ def check_lock(lock_text: str, by_key: dict[str, Crate], locked: dict[str, str] 
         if not isinstance(package, dict) or not isinstance(package.get('name'), str) \
                 or not isinstance(package.get('version'), str):
             raise Refused('The server\'s Cargo.lock could not be read.', 'crate_set_invalid')
-        if 'source' not in package:
-            continue
         key = f'{package["name"]}@{package["version"]}'
+        if 'source' not in package:
+            if package['name'] != root and package['name'] not in path_crates:
+                raise Refused(f'The crate {key} comes from somewhere other than this builder\'s crate set.',
+                              'crate_unavailable')
+            continue
         if package['source'] != REGISTRY:
             raise Refused(f'The crate {key} comes from somewhere other than this builder\'s crate set.',
                           'crate_unavailable')
@@ -350,4 +380,9 @@ def check_lock(lock_text: str, by_key: dict[str, Crate], locked: dict[str, str] 
             raise Refused(f'The crate {key} is not the one this app\'s server was last built with, so it was not '
                           'used.', 'crate_changed')
         out.append(Locked(package['name'], package['version'], crate.sha256))
+    used = {c.key for c in out}
+    for key in declared:
+        if key not in used:
+            raise Refused(f'The crate {key} is declared and was not built from this builder\'s crate set.',
+                          'crate_unavailable')
     return sorted(out, key=lambda c: (c.name, c.version))
