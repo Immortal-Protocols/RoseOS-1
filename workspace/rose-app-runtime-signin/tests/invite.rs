@@ -78,7 +78,10 @@ fn an_invite_admits_its_account_once_and_needs_no_keyring() {
     let dir = Dir::new();
     let mut auth = started(&dir.0, Admission::Invite);
     // The invite itself is given no keys and reads no keyring.
-    let token = invite(&config(&dir.0, Admission::Invite), "ana", T0).unwrap();
+    let token = invite(&config(&dir.0, Admission::Invite), "ana", T0)
+        .unwrap()
+        .as_str()
+        .to_string();
     assert_eq!(token.len(), 52);
     assert!(token.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()));
     assert_eq!(
@@ -103,7 +106,10 @@ fn an_invite_admits_its_account_once_and_needs_no_keyring() {
 fn an_invite_expires_after_seven_days() {
     let dir = Dir::new();
     let mut auth = started(&dir.0, Admission::Invite);
-    let token = invite(&config(&dir.0, Admission::Invite), "ana", T0).unwrap();
+    let token = invite(&config(&dir.0, Admission::Invite), "ana", T0)
+        .unwrap()
+        .as_str()
+        .to_string();
     assert_eq!(
         auth.begin_enrollment("ana", PASS, Some(&token), false, None, T0 + 7 * 86400 + 1)
             .unwrap_err(),
@@ -151,7 +157,7 @@ fn no_invite_while_a_restore_is_indicated() {
         std::fs::remove_file(&c.restore_marker).unwrap();
     }
     assert_eq!(
-        invite(&c, "ana", T0).map(|t| t.len()),
+        invite(&c, "ana", T0).map(|t| t.as_str().len()),
         Ok(52),
         "issued once the marker is gone"
     );
@@ -170,7 +176,7 @@ fn refusals_name_the_problem_and_nothing_else() {
     assert_eq!(invite(&relative, "ana", T0), Err(InviteError::StoreUnavailable));
 
     // An enrolled account needs no invite.
-    let token = invite(&c, "ana", T0).unwrap();
+    let token = invite(&c, "ana", T0).unwrap().as_str().to_string();
     let e = auth
         .begin_enrollment("ana", PASS, Some(&token), false, None, T0)
         .unwrap();
@@ -193,11 +199,21 @@ fn refusals_name_the_problem_and_nothing_else() {
 }
 
 #[test]
+fn the_token_redacts_itself() {
+    let dir = Dir::new();
+    started(&dir.0, Admission::Invite);
+    let token = invite(&config(&dir.0, Admission::Invite), "ana", T0).unwrap();
+    let shown = format!("{token:?} {:?}", Ok::<_, InviteError>(token.clone()));
+    assert!(!shown.contains(token.as_str()), "{shown}");
+    assert_eq!(format!("{token:?}"), "InviteToken(<redacted>)");
+}
+
+#[test]
 fn open_sign_up_accepts_an_invite_harmlessly() {
     let dir = Dir::new();
     started(&dir.0, Admission::Open);
     assert_eq!(
-        invite(&config(&dir.0, Admission::Open), "ana", T0).map(|t| t.len()),
+        invite(&config(&dir.0, Admission::Open), "ana", T0).map(|t| t.as_str().len()),
         Ok(52)
     );
 }
@@ -215,7 +231,7 @@ fn an_invite_waits_for_a_busy_store_instead_of_failing() {
     let issued = invite(&config(&dir.0, Admission::Invite), "bob", T0);
     release.join().unwrap();
     assert_eq!(
-        issued.map(|t| t.len()),
+        issued.map(|t| t.as_str().len()),
         Ok(52),
         "waited for the writer instead of failing"
     );

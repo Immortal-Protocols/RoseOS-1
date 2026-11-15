@@ -1711,7 +1711,7 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
     - Its path and contents are never logged. Any problem leaves the server without a key, and a reason word says why.
   - **Server.** `Started::server` attaches the data and marks the migrations done.
 - **The creator's invite** (D7). `rose_app_runtime_signin::invite(&config, account, now)` issues the token a default `invite` app needs to admit anyone.
-  - **The token.** It is the 52-character text the invitee enrolls with: single use, valid 7 days, admitting exactly that account.
+  - **The token.** It is the 52-character text the invitee enrolls with: single use, valid 7 days, admitting exactly that account. It comes back as `InviteToken`, whose `Debug` is `<redacted>` and which has no `Display`. Only `as_str()` gives the text.
   - **The store.** It opens the existing sign-in store under `DATA_DIR` and never creates one. It reads no keyring: `CHARIOT_SEALING_KEY_FILE` is never consulted, because an invite is only its hash and expiry. It waits for a busy store, so it runs safely beside a serving server.
   - **Restore.** It refuses while a restore marker is present, by the start-up rule, so no token is issued into a store that is about to be replaced.
   - **Refusals.** `InviteError` (`invalid_name`, `already_enrolled`, `not_found`, `restore_pending`, `store_unavailable`) names the problem, never the account or a token. Admission isn't consulted.

@@ -16,6 +16,24 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::start::{AUTH_STORE, Config, Restore, restore_state};
 
+/// The invite's text: 52 base32 characters, what the invitee enrolls with. It is a credential: `Debug` prints
+/// `<redacted>`, there is no `Display`, and only [`InviteToken::as_str`] gives the text (for the one place it is
+/// printed, the `invite` command's stdout).
+#[derive(Clone, PartialEq, Eq)]
+pub struct InviteToken(String);
+
+impl InviteToken {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for InviteToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InviteToken(<redacted>)")
+    }
+}
+
 /// Why no invite was issued. It names the problem, never the account or a token. The words are what the generated
 /// server's `invite` command prints (Home's generated main.rs maps each to an exit code).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +74,7 @@ impl std::error::Error for InviteError {}
 /// A single-use invite for `account` in the app `config` describes, as the text the invitee enrolls with. It reads
 /// no keyring (`CHARIOT_SEALING_KEY_FILE` is never consulted), refuses while a restore is indicated, and opens only an
 /// existing store. Admission is not consulted: an invite under open sign-up is harmless and simply unused.
-pub fn invite(config: &Config, account: &str, now: u64) -> Result<String, InviteError> {
+pub fn invite(config: &Config, account: &str, now: u64) -> Result<InviteToken, InviteError> {
     if !flow::valid_name(account) {
         return Err(InviteError::InvalidName);
     }
@@ -88,7 +106,9 @@ pub fn invite(config: &Config, account: &str, now: u64) -> Result<String, Invite
     let mut auth =
         flow::Authenticator::new(store, sealer, &config.issuer).map_err(|_| InviteError::StoreUnavailable)?;
     match auth.create_invite(&config.app, account, now) {
-        Ok(token) => String::from_utf8(token.expose().to_vec()).map_err(|_| InviteError::StoreUnavailable),
+        Ok(token) => String::from_utf8(token.expose().to_vec())
+            .map(InviteToken)
+            .map_err(|_| InviteError::StoreUnavailable),
         Err(EnrollError::AlreadyEnrolled) => Err(InviteError::AlreadyEnrolled),
         Err(EnrollError::InvalidName) => Err(InviteError::InvalidName),
         Err(_) => Err(InviteError::StoreUnavailable),
