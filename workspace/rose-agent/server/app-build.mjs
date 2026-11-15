@@ -29,8 +29,9 @@ generates the server's plumbing and the app's API client from your contract and 
 the contract, the migrations, the handlers and the Android app. The Java, manifest and library rules above are
 for the Android app (its server is Rust); the file rules (no scripts, native code or library files, files up
 to 4 MB) hold in every folder, and server/src holds only .rs files.
-The server is not hosted yet: RoseApi.serverUrl() is null in every build today, so the app's server features
-cannot work until the host hosts it. Say so in your reply; never say the server runs, is reachable or syncs.
+RoseApi.serverUrl() is null until this app's host is recorded, and the build bakes in whatever is recorded then,
+so the app must work with null (show that its server is not set up yet). Never say in your reply that the server
+runs, is reachable or syncs; whether it is hosted is not yours to know.
 - rose-app.json: {"schemaVersion": 1, "profile": "client-server-v1", "server": {"crates": [], "shared": false,
   "admission": "invite"}}. "shared": true adds one database shared by all users. "admission" is "invite" or
   "open" (anyone may enrol). "crates" lists exact "name@x.y.z" Rust crates, only ones the turn lists as

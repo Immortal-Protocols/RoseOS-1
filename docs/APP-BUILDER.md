@@ -1350,9 +1350,9 @@ test, and no model was called.
    the project source, launched through `CodexGenerator(command=...)`.
    Enabling it is a security-relevant runtime change, applied only by the
    Server Worker when authorized.
-4. **Runtime (Nathan).** The Rose server is stopped at Nathan's request. No
-   endpoint, build or install can be exercised until he asks the Server Worker
-   to restart it and a deployment is authorized.
+4. **Runtime (Nathan).** Nathan has asked for the Rose server to run again and
+   for deployment (2026-11-15). The Server Worker and the Chariot operator
+   restart and deploy; the builder host runs separately (§6).
 5. **Device proof (device owner handback).** Install, revise and data-retaining
    update must be shown on a stock-Android phone and a RoseOS phone,
    separately. No harness exists for packages other than Rose Agent. One
@@ -1401,10 +1401,9 @@ Owners:
 - **Chariot owner:** hosting (§7.7).
 - **Home/App:** the builder's phone UI.
 
-Nothing here is built into a job, hosted, deployed or run on a phone. What
-exists in source is §7.2's checks, §7.3's contract, and §7.6's migration
-checks, ledger records, crate set and server build. None of it is called by
-the builder yet.
+The builder's job runs all of it (§7.6), and the standalone host injects
+its inputs (§6). What remains is operational: a real musl build on the
+builder host, a provisioned native host, and the deploy (§7.7).
 
 ### 7.1 Facts the design rests on
 
@@ -2091,9 +2090,10 @@ builder's too. A plain app's job is unchanged.
   Builder's code generator, isolation, Rust toolchain and builder crates
   (the standalone host does so only with explicit `clientServer`, §6).
   Otherwise the writer builds the app without a
-  server and says what would need one. It also tells the writer the server
-  is not hosted (`RoseApi.serverUrl()` is null in every build), so its reply
-  never claims the server runs or syncs, and that pending migrations share
+  server and says what would need one. It also tells the writer that
+  `RoseApi.serverUrl()` is null until the app's host is recorded, so the app
+  must work with null and its reply never claims the server runs or syncs,
+  and that pending migrations share
   one transaction with foreign keys off before every reference is checked
   (so `ON DELETE` does not fire in a migration, a rebuild is fine when the
   referenced rows stay, and a broken reference refuses the update at
@@ -2328,8 +2328,8 @@ canonical bytes with the version, in the same transaction
   manifest. Slice 10's fake host test holds the two to `check`, as the
   Chariot adapter will.
 - **Not Chariot's wire format:** the fields stay App Core's schema version 1.
-  Further fields (item 1 below) are the Chariot owner's to agree, and nothing
-  relies on the manifest as Chariot's format until they are.
+  Chariot's deploy takes its own body, which the deploy plan (below) maps from
+  this manifest.
 
 **The binary check** (`check_elf`, also run by every server build). It
 reads the ELF's own headers, every offset bounded by the file, and accepts
@@ -2448,6 +2448,50 @@ the server does.
     `clientServer` configuration is supplied (§6). Production DNS, TLS and
     ingress for an endpoint are unverified.
 
+- **The deploy plan (App Core's handoff to Chariot's deploy).** Chariot's
+  agreed owner calls (ProtocolsBackend #2564, `chariot/docs/native-app-hosts.md`)
+  deploy a native server in two steps. First
+  `PUT /v1/app-hosts/{host}/artifacts/{sha256}` with the raw static musl ELF
+  (at most 64 MiB). Then `POST /v1/app-hosts/{host}/deploy` with
+  `{sha256, args, port, health_path, data_schema}`. Chariot computes its own
+  `deployment_sha256` from those; App Core's manifest is not sent.
+  `python -m rose.app_builder.server_delivery plan --ledger DIR --project ID
+  [--version N]` reads the builder's records and prints that plan for one
+  delivered version, the newest by default:
+  - `hostId` and `endpoint` come from the native host record.
+  - `artifact` is `{path, sha256, size, target}`. The stored ELF is re-hashed,
+    and must still be the one the version recorded.
+  - `deploy` is `{sha256, args: [], port: 8080, health_path: "/health",
+    data_schema}`. `args` is always empty, because the generated server
+    serves only with no arguments. `data_schema` is
+    `1 + account × 10000 + shared` over the manifest's highest migration
+    numbers: one integer per schema, at least 1.
+  - **Refused (exit 3):** a version with no server, or with no manifest (built
+    for another target); a server over 64 MiB; no native host recorded; or a
+    stored binary that is missing or changed. The other statuses follow
+    `owner_records`: `usage` 2, `not_found` 4 (no such ledger, project or
+    version), `error` 6.
+  - **It only reads.** It opens the ledger read-only (`Ledger.reader`,
+    SQLite `mode=ro`: no directory mode, pragma or schema is touched). It
+    uploads, deploys, records and contacts nothing, and holds no credential.
+    Chariot's owner tooling makes both calls with its own creator
+    authentication and its own Idempotency-Key, then reads `HostView`; a
+    running host is not a ready app.
+  - **Readiness needs the host's sealing key (D9).** The server reports
+    ready only with its keyring loaded, so a host with no sealing-key binding
+    stays at 503 and the deploy never becomes ready. That is the designed
+    fail-closed path, not a plan error.
+  - **No data snapshot yet.** Chariot v1's pre-deploy `.backup` covers only
+    `CHARIOT_SQLITE_PATH` (`DATA_DIR/app.sqlite`), which the generated server
+    never creates. Its data is `auth.sqlite3`, `accounts/*.sqlite3` and
+    `shared.sqlite3` under `DATA_DIR`. So a deploy today replaces the code with
+    no snapshot of that data, and a rollback restores no database (item 9).
+  - **Schema changes.** Chariot v1 refuses (409) a deploy whose
+    `data_schema` differs from the active one. So a version that adds a
+    migration can't be deployed over an older one until §7.7 item 4
+    (schema-changing deploys) is done.
+  - `rose/tests/test_app_server_delivery.py` checks each case, and that every
+    plan's `deploy` body is within Chariot's `DeployNative` bounds.
 - **Creator invites (agreed source contract; the guest channel is
   unbound).** Chariot's source is ProtocolsBackend #2564 at `814fd66c`
   (`chariot/docs/native-invites.md`, `hosting/native_invites.py`). It runs the
@@ -2556,6 +2600,13 @@ Still open for the Chariot owner (App Core's proposal in brackets):
    generated `main.rs` calls `.with_client_header(..)` (§7.5).
 7. Rollback [keep the previous ELF; report the running sha256].
 8. Process and logs [SIGTERM within a grace period; no secrets in logs].
+9. Pre-deploy data snapshot [with the service stopped, back up every regular,
+   non-symlinked `*.sqlite3` under `DATA_DIR` (`auth.sqlite3`,
+   `shared.sqlite3`, `accounts/*.sqlite3`) with `sqlite3 -readonly .backup`
+   into `backups/pre-<deployment>/<relative path>`. Use the symlink refusal
+   Chariot already applies to `app.sqlite`, and refuse a symlinked
+   `accounts/`. Item 4's "snapshot `DATA_DIR` first" is the same need for
+   schema-changing deploys].
 
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.

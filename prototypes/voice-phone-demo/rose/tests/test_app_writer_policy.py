@@ -180,8 +180,8 @@ class WriterPolicy(unittest.TestCase):
                 check(SAMPLE, edited(change))
 
     def test_the_server_is_said_not_to_be_hosted(self):
-        self.says('The server is not hosted yet: RoseApi.serverUrl() is null in every build today',
-                  'never say the server runs, is reachable or syncs')
+        self.says("RoseApi.serverUrl() is null until this app's host is recorded",
+                  'so the app must work with null', 'Never say in your reply that the server')
 
     def test_it_sets_no_rule_on_what_an_app_does(self):
         # The owner's rule: the policy describes shapes and isolation, never what an app may store or do.
