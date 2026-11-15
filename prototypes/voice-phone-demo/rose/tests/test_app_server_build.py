@@ -27,6 +27,9 @@ from unittest import mock
 
 from rose.app_builder import crates as C
 from rose.app_builder import server_build as S
+from rose.tests.test_app_server_manifest import tiny_elf
+
+ET_DYN = 3
 
 
 def crate_bytes(name, version, deps=None, lib='pub fn v() -> u32 { 1 }\n', extra=(), manifest=None, top=None,
@@ -411,8 +414,8 @@ elif step == 'build':
     target = sys.argv[sys.argv.index('--target') + 1]
     out = Path(os.environ['CARGO_TARGET_DIR']) / target / 'release' / 'rose-app-server'
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(os.environ.get('FAKE_ELF', '\\x7fELF fake server').replace('@WORK@', str(manifest.parent.parent))
-                    .encode())
+    out.write_bytes(Path(os.environ['FAKE_ELF_FILE']).read_bytes()  # a static executable, plus any extra bytes
+                    + os.environ.get('FAKE_ELF', '').replace('@WORK@', str(manifest.parent.parent)).encode())
 '''
 
 
@@ -450,6 +453,8 @@ class FakeCargo(Tmp):
         (self.toolchain / 'bin/rustc').write_text('')
         self.tools = S.RustTools(self.toolchain, timeout_s=60)
         self.record = self.tmp / 'record.json'
+        self.elf_file = self.tmp / 'tiny.elf'
+        self.elf_file.write_bytes(tiny_elf())
         self.snap = snapshot(self.tmp / 'snap')
         self.set = store(self.tmp / 'set', {'aa@1.0.0': crate_bytes('aa', '1.0.0')})
         self.digest = self.set.crates()[0].sha256
@@ -457,7 +462,8 @@ class FakeCargo(Tmp):
 
     def build(self, isolation=None, fail=None, lock=None, **kw):
         self.n += 1
-        env = {'FAKE_RECORD': str(self.record), 'FAKE_LOCK': lock or LOCK.format(aa=self.digest)}
+        env = {'FAKE_RECORD': str(self.record), 'FAKE_LOCK': lock or LOCK.format(aa=self.digest),
+               'FAKE_ELF_FILE': str(self.elf_file)}
         for step, text in (fail or {}).items():
             env['FAKE_FAIL_' + step.upper()] = text
         isolation = isolation or Passthrough(env)
@@ -504,7 +510,7 @@ class FakeCargo(Tmp):
             'CARGO_HOME': str(work / 'cargo-home'), 'CARGO_TARGET_DIR': str(work / 'target'),
             'TMPDIR': str(work / 'tmp'), 'LANG': 'C.UTF-8', 'RUSTC': str(self.toolchain / 'bin/rustc'),
             'CARGO_NET_OFFLINE': 'true', 'CARGO_INCREMENTAL': '0', 'CARGO_TERM_COLOR': 'never',
-            'CARGO_ENCODED_RUSTFLAGS': f'--remap-path-prefix={work}=/rose-build\x1f'
+            'CARGO_ENCODED_RUSTFLAGS': f'-Ctarget-feature=+crt-static\x1f--remap-path-prefix={work}=/rose-build\x1f'
                                        f'--remap-path-prefix={vendor}=/rose-crates'})
         self.assertEqual([(c['writable'], c['readonly']) for c in isolation.calls],
                          [(work, (self.toolchain, vendor))] * 2)
@@ -520,8 +526,8 @@ class FakeCargo(Tmp):
         self.assertEqual((work / 'server/src/handlers/mod.rs').read_text(), HANDLERS)
         self.assertEqual((work / 'server/rose/main.rs').read_text(), MAIN)
         self.assertEqual(result.target, S.TARGET)
-        self.assertEqual(result.sha256, hashlib.sha256(b'\x7fELF fake server').hexdigest())
-        self.assertEqual(result.record(), {'sha256': result.sha256, 'size': 16, 'target': S.TARGET})
+        self.assertEqual(result.sha256, hashlib.sha256(tiny_elf()).hexdigest())
+        self.assertEqual(result.record(), {'sha256': result.sha256, 'size': len(tiny_elf()), 'target': S.TARGET})
         self.assertEqual(result.crates, [C.Locked('aa', '1.0.0', self.digest)])
         self.assertEqual(result.cargo_lock, LOCK.format(aa=self.digest))
 
@@ -651,11 +657,11 @@ class FakeCargo(Tmp):
 
     def test_a_binary_holding_a_builder_path_is_refused(self):
         env = {'FAKE_RECORD': str(self.record), 'FAKE_LOCK': LOCK.format(aa=self.digest),
-               'FAKE_ELF': '\x7fELF ... @WORK@/server/src ...'}
+               'FAKE_ELF_FILE': str(self.elf_file), 'FAKE_ELF': ' ... @WORK@/server/src ...'}
         with self.assertRaises(S.BuildFailed) as caught:
             self.build(isolation=Passthrough(env))
         self.assertEqual(caught.exception.reason, 'build_path_embedded')
-        env['FAKE_ELF'] = f'\x7fELF {self.tmp / "cache"}/vendor-x/aa-1.0.0'  # the crate set's folder too
+        env['FAKE_ELF'] = f' {self.tmp / "cache"}/vendor-x/aa-1.0.0'  # the crate set's folder too
         with self.assertRaises(S.BuildFailed) as caught:
             self.build(isolation=Passthrough(env))
         self.assertEqual(caught.exception.reason, 'build_path_embedded')
@@ -667,6 +673,17 @@ class FakeCargo(Tmp):
         path = self.tmp / f'blob{len(data)}'
         path.write_bytes(data)
         return path
+
+    def test_the_binary_must_be_a_static_x86_64_executable(self):
+        for data, category, reason in ((tiny_elf(interp=True), 'dependency', 'server_not_static'),
+                                       (tiny_elf(e_type=ET_DYN, needed=True), 'dependency', 'server_not_static'),
+                                       (tiny_elf(machine=183), 'toolchain', 'server_binary_invalid'),
+                                       (b'not an executable at all', 'toolchain', 'server_binary_invalid')):
+            with self.subTest(reason=reason, size=len(data)):
+                self.elf_file.write_bytes(data)
+                with self.assertRaises(S.BuildFailed) as caught:
+                    self.build()
+                self.assertEqual((caught.exception.category, caught.exception.reason), (category, reason))
 
     def test_a_missing_binary_or_lock_is_the_toolchains_fault(self):
         cargo = self.toolchain / 'bin/cargo'
