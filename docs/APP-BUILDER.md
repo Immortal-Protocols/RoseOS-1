@@ -1924,9 +1924,20 @@ builder's too. A plain app's job is unchanged.
   - on a revision, the delivered migrations kept and the contract
     compatible unless `api` rises.
 
-  It offers the profile; it limits nothing about what the app does. The
-  same text goes to every job. A JS test (`app-build.test.mjs`) checks each
-  name it uses.
+  The same text goes to every job, so it offers the profile only when the
+  turn says the builder builds client-server apps: `CodexGenerator(
+  client_server=True)`, which a host sets only once it injects the
+  Builder's code generator, isolation, Rust toolchain and builder crates
+  (no host does yet). Otherwise the writer builds the app without a
+  server and says what would need one. It also tells the writer the server
+  is not hosted (`RoseApi.serverUrl()` is null in every build), so its reply
+  never claims the server runs or syncs, and that pending migrations share
+  one transaction with foreign keys on (a dropped or rebuilt parent table
+  takes its children's rows). It limits nothing about what the app does.
+  `rose/tests/test_app_writer_policy.py` reads the policy through node and
+  checks each rule and name against the builder's own constants and its
+  generated code; `app-build.test.mjs` checks the source is one plain
+  template literal.
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:
   - the client as in Level 1;

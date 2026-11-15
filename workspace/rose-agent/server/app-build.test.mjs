@@ -100,16 +100,27 @@ test('the policy forbids identity, version, signing and network changes and asks
    /Any other library\nfails the build/])assert.match(appBuildPolicy,phrase);
 });
 
-test('the policy can describe a client-server app in the shapes the builder checks and generates',()=>{
- // Each phrase is a name the builder or its generated code really uses (docs/APP-BUILDER.md §7).
- for(const phrase of [/also writes rose-app\.json, contract\/ and server\//,/"profile": "client-server-v1"/,
-   /contract\/api\.json/,/server\/migrations\/account\/0001_name\.sql/,/server\/src\/handlers\/mod\.rs/,
-   /pub struct App;/,/impl crate::api::Handlers for App/,/rose_app_runtime_signin::AppData/,
-   /rose_app_runtime_signin::rusqlite/,/crate::api::Refusal::new/,/crate::assets::get/,/never create that folder/,
-   /android\.permission\.INTERNET/,/RoseApi\.serverUrl\(\)/,/when it is null/,/never call one on\s+the main thread/,
-   /new RoseSignin\(transport, session\)/,/never edit, rename or delete a migration/,/raise "api"/,
-   /Never write Cargo files/])assert.match(appBuildPolicy,phrase);
- assert.doesNotMatch(appBuildPolicy,/`/);  // the policy is a template literal; a backtick would end it
+test('the policy offers a client-server app only when the turn says so, and says the server is not hosted',()=>{
+ // The names themselves are checked against the builder and its generated code in Python
+ // (rose/tests/test_app_writer_policy.py); here, the sentences the writer's choices hang on.
+ for(const phrase of [/A client-server app, only when this turn says the builder builds them/,
+   /Otherwise write the app\nwithout a server and say in your reply what would need one/,
+   /The server is not hosted yet: RoseApi\.serverUrl\(\) is null in every build today/,
+   /never say the server runs, is reachable or syncs/,/Do not use the network yourself \(the app may\)/,
+   /PRAGMA foreign_keys changes nothing/,/never DROP or rebuild a table other tables reference/,
+   /never call one on the main thread/,/Never edit, rename or delete a migration that was delivered/])
+  assert.match(appBuildPolicy,phrase);
+});
+
+test('the policy source is one template literal with nothing interpolated',()=>{
+ // A backtick would end the literal and ${..} would splice JavaScript into the writer's text; neither shows in
+ // the evaluated string, so check the source.
+ const source=readFileSync(new URL('./app-build.mjs',import.meta.url),'utf8');
+ const body=source.slice(source.indexOf('appBuildPolicy = `')+'appBuildPolicy = `'.length);
+ const literal=body.slice(0,body.indexOf('`;'));
+ assert.ok(literal.length>1000);
+ assert.doesNotMatch(literal,/`|\$\{|\\/);
+ assert.equal(appBuildPolicy,literal);
 });
 
 test('a real child launch: workspace-write in the project, no network per turn, research launches unchanged',async()=>{
