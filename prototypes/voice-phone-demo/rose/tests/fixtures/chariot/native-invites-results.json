@@ -1,0 +1,9 @@
+{
+  "description": "Synthetic token and fake guest transport only; no real invite or live endpoint. Every result uses Cache-Control: no-store and no Retry-After.",
+  "request": {"method": "POST", "path": "/v1/app-hosts/{recorded_native_host_id}/invites", "header": "Idempotency-Key: nonzero UUID", "body": {"account": "unchanged account", "revision_sha256": "64 lowercase hex from HostView", "deployment_sha256": "64 lowercase hex from HostView"}},
+  "limits": {"timeout_seconds": 30, "stdout_bytes": 53, "stderr_bytes": 256},
+  "issued": {"status": 200, "json": {"outcome": "issued", "reason": null, "exit_code": 0, "replayed": false, "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
+  "replayed_issued": {"status": 200, "json": {"outcome": "issued", "reason": null, "exit_code": 0, "replayed": true, "token": null}},
+  "already_enrolled": {"status": 409, "json": {"outcome": "refused", "reason": "already_enrolled", "exit_code": 1, "replayed": false, "token": null}},
+  "outcome_unknown": {"status": 503, "json": {"outcome": "outcome_unknown", "reason": "unconfirmed", "exit_code": null, "replayed": false, "token": null}}
+}
