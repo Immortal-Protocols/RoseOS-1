@@ -50,7 +50,7 @@ jobs:
         run: |
           cargo clippy --all-targets --locked -- -D warnings
           cargo clippy --all-targets --locked --features sqlite -- -D warnings
-      - name: Tests (shared vectors, flow, sealer, store conformance on memory and SQLite, concurrency, restore)
+      - name: Tests (vectors, flow, sealer, store conformance on memory and SQLite, concurrency, restore, invites, recovery)
         run: |
           cargo test --locked --no-fail-fast
           cargo test --locked --no-fail-fast --features sqlite

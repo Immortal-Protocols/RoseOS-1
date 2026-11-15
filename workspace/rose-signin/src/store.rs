@@ -27,6 +27,9 @@ pub struct Account {
     pub pending_since: u64,
     /// Set by a restore: unused recovery codes were invalidated, and the next sign-in issues a new set.
     pub recovery_reissue: bool,
+    /// Authenticator recovery: the new secret, sealed, staged until a code from the new authenticator confirms it
+    /// (with the pending handle). The account stays confirmed meanwhile, so nobody can enroll over it.
+    pub staged_otp_secret: Option<Vec<u8>>,
 }
 
 /// A storage failure (I/O, a locked or corrupt database). The operation rolls back and reports "unavailable".
@@ -60,6 +63,22 @@ pub trait Store {
     fn revoke_all(&mut self, principal: &session::Principal) -> StoreResult<()>;
     /// Revokes every session of every principal (restore).
     fn revoke_every_session(&mut self) -> StoreResult<()>;
+    /// Stores an invite for (app, account): the SHA-256 of its token and when it expires.
+    fn put_invite(
+        &mut self,
+        app: &str,
+        account: &str,
+        token_hash: [u8; 32],
+        expires: u64,
+    ) -> StoreResult<()>;
+    /// Deletes and reports an unexpired invite for (app, account) with this token hash (single use).
+    fn take_invite(
+        &mut self,
+        app: &str,
+        account: &str,
+        token_hash: [u8; 32],
+        now: u64,
+    ) -> StoreResult<bool>;
 }
 
 #[derive(Clone, Default)]
@@ -67,6 +86,7 @@ struct MemoryData {
     accounts: HashMap<(String, String), Account>,
     rates: HashMap<String, rate::State>,
     sessions: HashMap<[u8; 32], session::Record>,
+    invites: HashMap<(String, String, [u8; 32]), u64>,
 }
 
 /// An in-memory store. Transactions are snapshots: `rollback` restores the state at `begin`.
@@ -146,6 +166,32 @@ impl Store for Memory {
             r.revoked = true;
         }
         Ok(())
+    }
+    fn put_invite(
+        &mut self,
+        app: &str,
+        account: &str,
+        token_hash: [u8; 32],
+        expires: u64,
+    ) -> StoreResult<()> {
+        self.data
+            .invites
+            .insert((app.to_string(), account.to_string(), token_hash), expires);
+        Ok(())
+    }
+    fn take_invite(
+        &mut self,
+        app: &str,
+        account: &str,
+        token_hash: [u8; 32],
+        now: u64,
+    ) -> StoreResult<bool> {
+        let key = (app.to_string(), account.to_string(), token_hash);
+        Ok(self
+            .data
+            .invites
+            .remove(&key)
+            .is_some_and(|expires| now < expires))
     }
 }
 
