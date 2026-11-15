@@ -1718,7 +1718,7 @@ no restore until those are agreed.
 
   | `reason` | Category | When |
   |---|---|---|
-  | `build_isolation_unavailable` | toolchain | The host supplied no isolation |
+  | `build_isolation_unavailable` | toolchain | The host supplied no isolation, its `command()` raised, or its program is missing |
   | `build_isolation_unavailable` | toolchain | A cargo config sits in a folder above the job |
   | `rust_toolchain_unavailable` | toolchain | No cargo or rustc, no standard library for the target, no linker, or cargo wrote no lock or binary |
   | `crate_set_invalid` | toolchain | The set can't be read, or a crate in it fails the checks above |
@@ -1730,7 +1730,8 @@ no restore until those are agreed.
   | `server_not_static` | compile with no crates, else dependency | The binary needs a program interpreter or a shared library (§7.7) |
   | `server_binary_invalid` | toolchain | The binary is not a 64-bit x86-64 Linux executable (§7.7) |
   | `server_compile` | compile | The writer's server code didn't compile |
-  | `server_build` | compile | Any other cargo failure |
+  | `build_isolation_failed` | toolchain | The isolation's own launcher failed (for example the kernel refused a namespace), as its `failed()` says |
+  | `server_build` | toolchain | Any other cargo failure: with no compiler error in the app's own code, it is never the app's |
 
   Logs have the job's, the toolchain's and the set's paths redacted.
 - **One version** (the ledger; source, not yet called by the builder):
