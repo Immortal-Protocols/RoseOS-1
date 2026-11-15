@@ -106,5 +106,4 @@ final class FakeBuilderApi implements BuilderApi {
 
  @Override public synchronized void reportInstall(InstallReceipt receipt) { receipts.add(receipt); }
 
- @Override public String shareUrl(String id, Long versionCode) { return null; }
 }

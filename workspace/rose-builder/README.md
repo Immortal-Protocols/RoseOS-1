@@ -34,6 +34,12 @@ in `scripts/test-local.sh`):
 - `RequestIds`: one `clientRequestId` per request. Retrying the same text after a lost connection reuses it. Changed
   text, or any request after the builder has answered, gets a new id. Host-tested in `tests/RequestIdsTest.java`.
 - The builder's refusal sentence and its accepted-request `notes` are shown as plain text only.
+- `ShareState`: each version's recorded public links (proposed `versions[].share`, schemaVersion 1). Hosting is the
+  Chariot engineering worker's; App Core records the links in the library. The phone shares only a link recorded for
+  exactly that version: "Share version N" uses its immutable link, and "Share latest version" uses the newest
+  version's latest link. It never invents or derives a link and never contacts the hosting. Anything off-spec, such
+  as a link that isn't a plain absolute https URL, is "couldn't be read" and never a link. A missing field is "Not
+  shared yet". Host-tested in `tests/ShareStateTest.java`.
 - `ShareMessage`: the text the owner sends from Android's share sheet or SMS composer. It carries either the version's
   immutable link or the latest link. The link is a public APK download only.
 

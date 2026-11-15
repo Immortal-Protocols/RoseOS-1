@@ -59,6 +59,13 @@ public final class BuilderWireTest {
         List<BuilderApi.Version> rv = BuilderWire.library(withReports).get(0).project.versions;
         expect(rv.size() == 3, "the library still loads with bad summaries");
         expect(rv.get(0).apiReport.unreadable && rv.get(1).apiReport.unreadable, "deviceProof true, or not an object: read as unavailable");
+        expect(rv.get(0).share.status == ShareState.Status.UNPUBLISHED && !rv.get(0).share.published(), "no share field: not shared yet");
+        String withShare = "{\"schemaVersion\":1,\"projects\":[{\"projectId\":\"p3\",\"packageName\":\"app.rose.gen.pp3\",\"activeJob\":null,\"versions\":["
+            + "{\"versionCode\":1,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"share\":{\"schemaVersion\":1,\"status\":\"published\",\"versionUrl\":\"http://x.invalid/a\",\"latestUrl\":\"https://x.invalid/l\"}},"
+            + "{\"versionCode\":2,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"share\":{\"schemaVersion\":1,\"status\":\"published\",\"versionUrl\":\"https://x.invalid/v2\",\"latestUrl\":\"https://x.invalid/l\"}}]}]}";
+        List<BuilderApi.Version> sv = BuilderWire.library(withShare).get(0).project.versions;
+        expect(sv.size() == 2 && sv.get(0).share.unreadable && !sv.get(0).share.published(), "a bad share state loads as unreadable, never a link");
+        expect(sv.get(1).share.published() && "https://x.invalid/v2".equals(sv.get(1).share.versionUrl), "a recorded share is read");
         expect(rv.get(2).apiReport.status == ApiReport.Status.COMPLETE && rv.get(2).apiReport.notGuardedHere == 2 && rv.get(2).apiReport.highestLevel == 33L, "a good summary is read");
 
         // Job (§3.2), with a failure.
