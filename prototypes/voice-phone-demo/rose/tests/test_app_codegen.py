@@ -11,6 +11,7 @@ The generated start-up (rose/main.rs) builds on OS Core's adapter (workspace/ros
 (rose-signin's lock, with rusqlite) come only by that crate's own route. Its build here runs only where they are
 already in the offline cache; otherwise it is skipped and says why, and nothing is downloaded.
 ROSE_REQUIRE_ADAPTER_BUILD makes their absence a failure."""
+import base64
 import copy
 import hashlib
 import json
@@ -237,8 +238,8 @@ class Client(unittest.TestCase):
 
     def test_files_are_in_the_reserved_folder(self):
         self.assertEqual(sorted(self.files), [self.base + n for n in (
-            'RoseApi.java', 'RoseJson.java', 'RoseSession.java', 'RoseSignin.java', 'RoseSigninCore.java',
-            'RoseTypes.java')])
+            'RoseApi.java', 'RoseJson.java', 'RoseQr.java', 'RoseSession.java', 'RoseSignin.java',
+            'RoseSigninCore.java', 'RoseTypes.java')])
         self.assertTrue(all(f'package {PACKAGE}.rose;' in v for k, v in self.files.items()
                             if not k.endswith('RoseSigninCore.java')))
 
@@ -287,6 +288,52 @@ class Client(unittest.TestCase):
         done = subprocess.run(cmd + sources, capture_output=True, text=True, timeout=300)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         return out
+
+    def test_the_qr_code_is_rose_qrs_module_for_module(self):
+        # rose.qr is the encoder Rose decodes with ZXing (rose/tests/test_qr.py); the generated port gives the same
+        # symbol for each of its samples, enrollment URIs among them, and refuses what does not fit version 20.
+        require('ROSE_REQUIRE_APP_BUILD', 'javac')
+        from rose import qr
+        from rose.tests import test_qr
+        texts = test_qr.samples() + [
+            'otpauth://totp/Notes:ada%40example.org?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Notes&algorithm=SHA1'
+            '&digits=6&period=30', 'otpauth://totp/' + 'x' * 400 + '?secret=' + 'A' * 32]
+        harness = r'''import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.Base64;
+
+public class QrCheck {
+    public static void main(String[] args) throws Exception {
+        StringBuilder out = new StringBuilder();
+        for (String line : Files.readAllLines(Paths.get(args[0]))) {
+            String text = new String(Base64.getDecoder().decode(line), StandardCharsets.UTF_8);
+            try {
+                boolean[][] m = %s.rose.RoseQr.matrix(text);
+                for (boolean[] row : m) { for (boolean v : row) out.append(v ? '1' : '0'); out.append(' '); }
+            } catch (IllegalArgumentException e) {
+                out.append("REFUSED");
+            }
+            out.append('\n');
+        }
+        System.out.print(out);
+    }
+}
+''' % PACKAGE
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.compile(Path(tmp), {'test/QrCheck.java': harness}, android=False)
+            inputs = Path(tmp) / 'texts'
+            inputs.write_text(''.join(base64.b64encode(t.encode('utf-8')).decode() + '\n'
+                                      for t in texts + ['y' * 667]))
+            run = subprocess.run(['java', '-cp', str(out), 'QrCheck', str(inputs)], capture_output=True, text=True,
+                                 timeout=300)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            got = run.stdout.split('\n')[:-1]
+        self.assertEqual(len(got), len(texts) + 1)
+        for text, line in zip(texts, got):
+            with self.subTest(text=text[:40]):
+                want = ' '.join(''.join('1' if v else '0' for v in row) for row in qr.matrix(text)) + ' '
+                self.assertEqual(line, want)
+        self.assertEqual(got[-1], 'REFUSED')  # 667 bytes: more than version 20 holds at level M
 
     def test_compiles_and_behaves_on_the_jvm(self):
         require('ROSE_REQUIRE_APP_BUILD', 'javac')

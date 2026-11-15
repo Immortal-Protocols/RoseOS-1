@@ -1859,7 +1859,9 @@ reserved `src/<package>/rose/`:
   shown as copyable text and opened with `ACTION_VIEW`. OS Core will build a
   RoseOS system authenticator for that scheme, and on stock Android any
   authenticator app claims it, so the flows are the same.
-- **QR rendering is not generated yet.**
+- **QR rendering** is generated: `RoseSession.qr(uri, pixelsPerModule)` draws
+  the enrollment URI as a QR code (`RoseQr.java`, a port of `rose/qr.py`,
+  which Rose decodes with ZXing; a test compares the two module for module).
 - The user types the code and the passphrase.
 - **Naming the app (#824).** OS Core's RoseOS authenticator
   (`dev.pixel.rose.authenticator`) names the sending app only when Android

@@ -141,7 +141,8 @@ class WriterPolicy(unittest.TestCase):
                   'new RoseSignin(transport, session)', 'enroll(account, passphrase, invite, null)',
                   'confirm(account, enrollment.handle, code)', 'signIn(account, code, passphrase)',
                   'RoseSignin.passphraseProblem(passphrase)', 'signOut(false)',
-                  'RoseSession.openAuthenticator(activity, uri)', '401 signed_out or session_invalid',
+                  'RoseSession.openAuthenticator(activity, uri)', 'RoseSession.qr(uri, 8)',
+                  '401 signed_out or session_invalid',
                   'int is long, float double, bytes byte[]')
         for generated in ('public static String serverUrl()', 'public HttpsTransport(String baseUrl)',
                           'public Client(Transport transport, Tokens tokens)', 'public RoseSession(android.content.Context',
@@ -151,6 +152,7 @@ class WriterPolicy(unittest.TestCase):
                           'public Session signIn(String account, String code, String passphrase)',
                           'public static String passphraseProblem(String passphrase)', 'public void signOut(boolean',
                           'static boolean openAuthenticator(android.app.Activity', 'otpauthUri', 'recoveryCodes',
+                          'public static android.graphics.Bitmap qr(String otpauthUri, int pixelsPerModule)',
                           '"signed_out"', 'public p.q.rose.RoseTypes.NoteList listNotes() throws Error', 'public long noteId;'):
             self.assertIn(generated, self.client)
         self.assertIn('static final String URL = null;', service.rose_server_java('p.q', None))
