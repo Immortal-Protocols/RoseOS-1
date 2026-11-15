@@ -1545,9 +1545,50 @@ needing older clients to update, through the library's minClientVersionCode
   `toolchain` or `dependency` failure, never a skipped half.
 - **One version.** A version pairs the client APK and the server ELF, each by
   sha256, from one source revision, recorded in one ledger transaction.
-- **Migrations** are checked offline against every delivered version. They
-  are append-only and byte-identical, and they are applied to a fresh and to
-  an upgraded database.
+- **Migrations** (`app_builder/migrations.py`; source, called nowhere) are
+  checked offline before anything is built:
+  - **Layout.** Each scope, `account` (every user's own database) and
+    `shared`, is numbered `0001…` with none missing (`migration_gap`). Files
+    are UTF-8, at most 256 KB each, and at most 1000 per scope.
+  - **The lock.** Every migration of every delivered version must still be
+    there under its number, with the same name and bytes. New ones may only
+    follow (`migration_removed`, `migration_changed`). The ledger records
+    each version's lock (slice 4).
+  - **A sandbox.** The migrations are applied in an in-memory SQLite, one
+    transaction each as the runtime does, with foreign keys on and a step
+    budget. Temporary data stays in memory (`temp_store = MEMORY`), and a
+    trace showed that no file is created even for a large sort.
+  - **Statements** are split by a one-pass port of SQLite's own
+    `sqlite3_complete` state machine, which is linear in file size.
+  - **An authorizer** refuses anything that could touch the builder's files
+    or the server's own settings:
+    - `ATTACH` (and `VACUUM INTO`, which attaches) and `DETACH`;
+    - transaction control and `load_extension`;
+    - any other database;
+    - temp objects, which would outlive their migration on one connection,
+      never on a phone's;
+    - every PRAGMA outside a short list (`foreign_keys`, `table_info` and
+      the like). `page_size` and `data_version` may be read, as fts5 and
+      rtree do, but never set.
+
+    Common DDL passes: `DROP COLUMN`, `RENAME`, rebuilds, generated columns,
+    `STRICT`, `WITHOUT ROWID`, upsert, fts5 and rtree.
+  - **Fresh and upgrade runs.** The set is applied from an empty database.
+    It is also applied as an upgrade: the delivered set first, then sample
+    rows, then the new migrations.
+    - **Sample rows.** Every table gets two rows of values typed by column
+      affinity. They are identical where its constraints allow, otherwise
+      two different rows, otherwise default rows. Rowid keys and foreign
+      keys are left to SQLite. This is best effort: a table whose
+      constraints refuse all three stays empty.
+    - **Effect.** A change that only fails over a phone's data is caught and
+      says so. Examples are a unique index over duplicates, and a rebuild
+      that loses NOT NULL values.
+
+    Integrity and foreign key checks follow each run, and running out of
+    steps anywhere is a refusal.
+  - **Results.** Any failure is `migration_sql`, naming the file. Only
+    generated SQL runs, never generated Rust, and nothing is written to disk.
 
 ### 7.7 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
 
@@ -1633,7 +1674,8 @@ need no hosting and no further OS Core change.
    `env::{self as x}` and `$(#[$m:meta])*`.
 2. **The shared API contract and its compatibility rules (§7.3).** Done:
    `rose/tests/test_app_contract.py`.
-3. Offline migration checks.
+3. **Offline migration checks (§7.6).** Done:
+   `rose/tests/test_app_migrations.py`.
 4. Ledger pairing of client and server artifacts.
 5. The injected crate source and server build plumbing, with a fake `cargo`,
    then a real build of a dependency-free fixture.
