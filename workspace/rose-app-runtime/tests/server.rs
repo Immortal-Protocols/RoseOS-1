@@ -1247,4 +1247,18 @@ fn the_hosts_client_header_counts_only_when_the_server_is_told_to_trust_it() {
         let last = calls(&h).last().cloned().unwrap();
         assert!(last.contains(&format!(" {counted} ")), "{header:?}: {last}");
     }
+    // Only the header it was told about: another host's name leaves Chariot's to the client.
+    let h = harness(Admission::Invite);
+    let h = Harness {
+        server: h.server.with_client_header("X-Other-Client"),
+        ..h
+    };
+    for (header, counted) in [
+        ("X-Chariot-Client-Address: 198.51.100.4\r\n", "203.0.113.7"),
+        ("X-Other-Client: 198.51.100.9\r\n", "198.51.100.9"),
+    ] {
+        send(&h, &sign_in(header));
+        let last = calls(&h).last().cloned().unwrap();
+        assert!(last.contains(&format!(" {counted} ")), "{header:?}: {last}");
+    }
 }
