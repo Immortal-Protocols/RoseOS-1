@@ -17,6 +17,7 @@ cannot change. Direct actions run on the phone; agent tasks chosen on the page u
 from __future__ import annotations
 
 SCHEMA_VERSION = 1
+PROVIDER = 'dev.pixel.voice'  # Rose Agent serves workspace_compose and capabilities (docs/APP-BUILDER.md §4.4)
 OPERATION = 'workspace_compose'
 KINDS = ('prompt', 'arrange', 'regenerate', 'undo')
 STATUSES = ('shown', 'prepared', 'rejected', 'unavailable', 'uncertain')
@@ -109,6 +110,13 @@ def outcome(request_id: str, result) -> dict:
     if reason:
         out['reason'] = reason[:200]
     return out
+
+
+def request_id_for(call_id) -> str:
+    """The composer requestId for one conversation tool call: stable for that call (a repeat composes nothing new,
+    section 4.1), at most 64 characters whatever the call id looks like."""
+    import hashlib
+    return 'conv-' + hashlib.sha256(str(call_id).encode('utf-8')).hexdigest()[:40]
 
 
 def call(phone, provider: str | None, request_id: str, args) -> dict:
