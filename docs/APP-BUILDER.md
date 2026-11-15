@@ -1192,7 +1192,7 @@ test, and no model was called.
    client/server co-generation and sign-in integration (§7). Each part is
    blocked on its owner, as follows:
    - **Chariot owner (the Codex Chariot engineering worker, via Chief).**
-     Hosting: the server boundary (§7.6), ingress, sleep/wake, the sealing
+     Hosting: the server boundary (§7.7), ingress, sleep/wake, the sealing
      key's home (D9), backups, and the deploy tools.
    - **OS Core.** `rose-signin-v1` and the RoseOS native factors.
    - **Local Server Worker.** On the builder host: the Rust toolchain and the
@@ -1207,11 +1207,11 @@ versioned together. Users sign in with `rose-signin-v1`
 Owners:
 - **App Core:** co-generation, the server profile and sign-in integration.
 - **OS Core:** `rose-signin-v1` and the RoseOS native factors.
-- **Chariot owner:** hosting (§7.6).
+- **Chariot owner:** hosting (§7.7).
 - **Home/App:** the builder's phone UI.
 
 Nothing here is built into a job, hosted, deployed or run on a phone. Only
-§7.2's checks exist in source.
+§7.2's checks and §7.3's contract exist in source.
 
 ### 7.1 Facts the design rests on
 
@@ -1224,7 +1224,7 @@ Nothing here is built into a job, hosted, deployed or run on a phone. Only
     or read while the agent sleeps, and nothing else is served.
 
   So no phone-facing endpoint exists yet. The Chariot owner is working on
-  VM/endpoint hosting, and has proposed the boundary in §7.6.
+  VM/endpoint hosting, and has proposed the boundary in §7.7.
 - **rose-signin at `23062a04` (#819, #821, #822).** The generated server uses
   this revision, which completes the decided library. OS Core owns its storage, so App Core writes no sign-in SQL and no
   sealer. The server uses:
@@ -1357,7 +1357,80 @@ The scan is a second line of defence. It does not cover:
 
 The boundary is build isolation (blocker 3).
 
-### 7.3 Server profile (planned; next slices)
+### 7.3 The shared API contract (`app_builder/contract.py`; source, called nowhere)
+
+The writer describes the app's types and routes once, in `contract/api.json`.
+The builder will generate the server's Rust handlers trait and the client's
+Java API from it (slice 8). It also checks every revision against the
+delivered one, so an update never silently breaks the copies already
+installed on phones.
+
+```json
+{"schemaVersion": 1, "api": 1,
+ "types": {"Note": {"fields": {"id": "int", "text": {"type": "string", "max": 10000},
+                               "parent": {"type": "Note", "optional": true}}},
+           "NoteList": {"fields": {"notes": {"type": "list", "of": "Note"}}}},
+ "routes": {"listNotes": {"method": "GET", "path": "/app/notes", "response": "NoteList"}}}
+```
+
+- **Fields.** A field is one of:
+  - a primitive: `bool`, `int`, `float`, `string` or `bytes`;
+  - a `list`, or a `map` with string keys, `of` a field type, nested at most
+    4 deep;
+  - one of the contract's own types.
+
+  `optional` fields may be absent or null. `max` bounds a string, bytes,
+  list or map in requests, where the server refuses more; it promises
+  nothing about responses. Generated code ignores fields it doesn't know, in
+  both directions.
+- **Routes.** A route has:
+  - a method: `GET` and `DELETE` carry no body;
+  - a path under `/app/`, with 1–8 lower-case segments and no parameters;
+  - `auth`: `account` (the default, a signed-in user) or `public`;
+  - an optional `request` type and a required `response` type.
+
+  The `(method, path)` pair is unique.
+- **Strict parsing.** The file is strict UTF-8 JSON, at most 256 KB, with no
+  repeated or unknown keys. Limits: 128 types, 64 fields per type, 128
+  routes. Malformed contracts are `contract_invalid`.
+- **No infinite types.** A type that contains itself only through required
+  fields could never have a value, so it is `type_cycle`. An optional field,
+  a list or a map breaks the cycle.
+- **Canonical digest.** The sha256 covers the canonical form: defaults
+  spelled out, sorted keys, no whitespace. Key order and spelled-out defaults
+  don't change it, and the canonical form is itself a valid contract.
+
+**Revisions** (`check_update`) are judged by what an installed older client
+would trip on.
+- **Which versions.** A revision is compared with every contract delivered
+  since `api` last rose, not only the newest. So a field dropped in one
+  revision and brought back with another shape in the next still meets the
+  phones that kept the first.
+- **Directions.** Responses are compared by what the old client expects to
+  read, and requests by what it still sends.
+- **Matching.** Routes are matched by method and path, which is what an
+  installed client calls, and types by shape. Renaming either changes
+  nothing.
+- **Recursive types** are walked with a queue, each pair of types once per
+  comparison, so cost is bounded and recursion can't crash it.
+- **Additive, allowed as is:** new routes, types and response fields; new
+  optional request fields; a request field dropped (servers ignore extras);
+  a request field made optional, or its `max` raised; a response field made
+  required, or an optional one dropped; an account route made public.
+- **Breaking:**
+  - a method and path no longer served, or a public route that now needs
+    sign-in;
+  - a response field removed, made optional or retyped, nested types
+    included;
+  - a new or newly required request field, a `max` lowered or added, or a
+    route that now needs a body older clients don't send.
+
+A breaking change at the same `api` is refused as `breaking_without_major`,
+naming what breaks. Raising `api` allows it, and marks the version as
+needing older clients to update, through the library's minClientVersionCode
+(slice 9). `api` can never go down (`api_lowered`).
+
+### 7.4 Server profile (planned; next slices)
 
 - **Runtime.** A small runtime crate (App Core) runs the generated handlers,
   serving `rose-signin-v1`'s routes (`/signin/v1/*`) and the contract's routes.
@@ -1376,7 +1449,7 @@ The boundary is build isolation (blocker 3).
   start, and never invents one.
 - **Logs** never contain bodies, tokens, passphrases, codes or keys.
 
-### 7.4 Client sign-in (planned)
+### 7.5 Client sign-in (planned)
 
 - The client includes `RoseSigninCore.java` at the pin above.
 - It shows the `otpauth://` URI as a QR and as copyable text, and also opens
@@ -1386,7 +1459,7 @@ The boundary is build isolation (blocker 3).
 - The user types the code and the passphrase. Only the bearer token is kept,
   in no-backup storage.
 
-### 7.5 Builder (planned)
+### 7.6 Builder (planned)
 
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:
@@ -1401,7 +1474,7 @@ The boundary is build isolation (blocker 3).
   are append-only and byte-identical, and they are applied to a fresh and to
   an upgraded database.
 
-### 7.6 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
+### 7.7 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
 
 App Core accepts this boundary. The server is one Rust ELF plus a manifest,
 with nothing Chariot-specific inside the app. The fake host in tests checks
@@ -1410,35 +1483,60 @@ the same manifest.
 Proposed manifest:
 - `schemaVersion: 1`, `projectId`, `versionCode`;
 - `elf: {sha256, size, target}`;
-- `listen`: the host passes `PORT`;
+- `listen`: the host passes `PORT`, default `8080`;
 - `health: "/health"`;
 - `dataDir`: the host passes `DATA_DIR`, the only writable path, holding
   `TMPDIR`;
 - `signin: {revision: "23062a04"}`;
 - `schema` versions.
 
-Open items for the Chariot owner (App Core's proposal in brackets):
-1. ELF target and libc [static `*-linux-musl`, with SQLite compiled in].
-2. Further manifest fields [resources, shutdown grace].
-3. Health [`200` only when ready, else `503`; liveness kept separate if
-   Chariot wants it].
-4. The client base URL [one stable HTTPS URL per project, allocated before
-   the first build and never changed; written into the APK as configuration,
-   never a secret].
-5. Sleep [wait within a stated bound, or `503` with `Retry-After`].
-6. Sealing key (D9) [a file passed at start, outside the ELF, the manifest,
-   `DATA_DIR` and backups, holding a current version and versioned keys; no
-   key means not ready].
-7. Client address for rate limits [one header only the proxy sets].
-8. Restore signal [a flag or marker that makes the server run
-   `restore_after_backup` before serving].
-9. Rollback [keep the previous ELF; report the running sha256].
-10. Process and logs [SIGTERM within a grace period; no secrets in logs].
+**Agreed with the Chariot owner (relayed by Chief, 2026-11-15):**
+- **Binary:** a static x86-64 musl ELF, taking `PORT` and `DATA_DIR`, behind
+  a stable HTTPS endpoint. A stopped or unhealthy server answers `503` with
+  `Retry-After`.
+- **Readiness** is served on the app's own listener (default `8080`), with
+  no separate liveness check. `/health` returns `200` only once the sealer is
+  ready, migrations are done and any restore has run, and `503` until then.
+  It carries the same identity fields either way, and no secrets, request
+  data or account information:
+  - `appId`: the Chariot host's UUID. It is not the builder's `projectId`.
+    The builder's ledger keeps an explicit mapping from `projectId` to the
+    hosted app id and the hosted APK app id, written only from owner tooling
+    or publisher results, never guessed.
+  - `revisionSha256`: measured by the server itself, by hashing its own ELF
+    at start.
+  - `deploymentSha256`: the authoritative value is the
+    `CHARIOT_DEPLOYMENT_SHA256` the host passes, which the server echoes. Any
+    hash the server computes itself over its args, port and schema is
+    reported separately and never replaces it.
+- **Publication** uses Chariot's existing creator auth, by sha256, never the
+  phone or the APK. The publication adapter isn't finished, and there is no
+  live URL or credential.
+
+Still open for the Chariot owner (App Core's proposal in brackets):
+1. Further manifest fields [resources, shutdown grace].
+2. The name of the variable that carries the host's app id to the server
+   [for example `CHARIOT_APP_ID`].
+3. Sealing key (D9). Chariot prefers a pinned Secret Manager descriptor
+   [Chariot resolves it at start into a read-only key file outside the ELF,
+   `DATA_DIR` and backups; the server never holds the descriptor's
+   credentials; no key means not ready].
+4. Schema-changing deploys, which return a conflict today [the manifest
+   states `schema: {from, to}`; the owner confirms; Chariot snapshots
+   `DATA_DIR` first; the server migrates forward only and is ready only
+   afterwards; rollback restores the snapshot and the previous ELF].
+5. Restore. The marker is reserved and there is no executor yet [the
+   server runs `restore_after_backup` once, then removes the marker before
+   it reports ready; App Core makes no restore claim until Chariot has a
+   restore executor].
+6. Client address for rate limits [one header only the proxy sets].
+7. Rollback [keep the previous ELF; report the running sha256].
+8. Process and logs [SIGTERM within a grace period; no secrets in logs].
 
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
 
-### 7.7 Slices
+### 7.8 Slices
 
 Each slice is source only, offline, and tested before merging. Slices 2–5
 need no hosting and no further OS Core change.
@@ -1458,7 +1556,8 @@ need no hosting and no further OS Core change.
 
    It also fixed false refusals of Unicode identifiers, a byte order mark,
    `env::{self as x}` and `$(#[$m:meta])*`.
-2. The shared API contract validator and its compatibility rules.
+2. **The shared API contract and its compatibility rules (§7.3).** Done:
+   `rose/tests/test_app_contract.py`.
 3. Offline migration checks.
 4. Ledger pairing of client and server artifacts.
 5. The injected crate source and server build plumbing, with a fake `cargo`,
@@ -1468,4 +1567,4 @@ need no hosting and no further OS Core change.
 8. Codegen and the client sign-in overlay.
 9. The library wire summary and its fixture for Home/App.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
-    until §7.6 is answered.
+    until §7.7 is answered.
