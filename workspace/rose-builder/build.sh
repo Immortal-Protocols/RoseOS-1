@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux unsigned build. Never creates or reads a signing key.
+# Linux/macOS unsigned build. Never creates or reads a signing key.
 set -euo pipefail
 APP="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP/../.." && pwd)"
@@ -14,11 +14,13 @@ mkdir -p "$OUT/classes" "$OUT/generated" "$OUT/dex"
   -I "$ANDROID_JAR" -F "$OUT/resources.apk" -J "$OUT/generated"
 # Rose Agent's rose-auth-v1 signer and key code, compiled in unchanged so both apps sign the same bytes (RoseLink).
 AGENT="$ROOT/workspace/rose-agent/app/src/dev/pixel/voice"
-mapfile -t SOURCES < <({ find "$APP/src" "$OUT/generated" -name '*.java' -type f; printf '%s\n' "$AGENT/LocalRoseAuth.java" "$AGENT/LocalRoseKey.java"; } | sort)
+SOURCES=()
+while IFS= read -r source_path; do SOURCES+=("$source_path"); done < <({ find "$APP/src" "$OUT/generated" -name '*.java' -type f; printf '%s\n' "$AGENT/LocalRoseAuth.java" "$AGENT/LocalRoseKey.java"; } | sort)
 "$JAVA" -m jdk.compiler/com.sun.tools.javac.Main -encoding UTF-8 -source 8 -target 8 \
   -Xlint:-options -bootclasspath "$ANDROID_JAR:$BT/core-lambda-stubs.jar" \
   -d "$OUT/classes" "${SOURCES[@]}"
-mapfile -t CLASSES < <(find "$OUT/classes" -name '*.class' -type f | sort)
+CLASSES=()
+while IFS= read -r class_path; do CLASSES+=("$class_path"); done < <(find "$OUT/classes" -name '*.class' -type f | sort)
 "$BT/d8" --min-api 26 --lib "$ANDROID_JAR" --output "$OUT/dex" "${CLASSES[@]}"
 cp "$OUT/resources.apk" "$OUT/unaligned.apk"
 (cd "$OUT/dex" && zip -q "$OUT/unaligned.apk" classes*.dex)
