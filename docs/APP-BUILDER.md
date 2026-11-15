@@ -1630,6 +1630,7 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   - `shared.sqlite3`: only when the app declares shared data.
 
   Handlers reach the data as `ctx.data` (`AppData`), and `account(principal)` opens only this app's principal's own file.
+  - **SQLite in handlers.** The adapter re-exports its `rusqlite` (0.32, bundled, the version in rose-signin's lock). Handlers name `rose_app_runtime_signin::rusqlite::{Connection, params, OptionalExtension}`, and the generated server declares no rusqlite of its own.
 - **Migrations.** The builder-embedded lists run forward only. Each one runs in one immediate transaction with its `user_version`. A database above the list is refused and left untouched, at start-up and on open.
 - **Start-up.** `start` opens and migrates the sign-in store, the shared database and every existing account file. It then measures `revision_sha256` from the binary.
   - **Environment.** `Config::from_env` reads `DATA_DIR`, `CHARIOT_APP_ID` and `CHARIOT_DEPLOYMENT_SHA256` (echoed as passed). When the host also sets `CHARIOT_REVISION_SHA256`, a binary that measures differently is held not ready.

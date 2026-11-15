@@ -24,6 +24,11 @@ pub mod identity;
 pub mod keys;
 pub mod start;
 
+/// The SQLite binding [`AppData`]'s connections come from (rusqlite 0.32, bundled; the version in rose-signin's lock).
+/// Generated handlers name it through this path, `rose_app_runtime_signin::rusqlite::{Connection, params}`, so a
+/// server never declares, or mismatches, the version itself.
+pub use rusqlite;
+
 pub use auth::SigninAuth;
 pub use data::{AppData, DataError, Migrations};
 pub use keys::KeyError;
