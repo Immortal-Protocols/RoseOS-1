@@ -1,0 +1,433 @@
+{
+ "contract": "Builder API v1 library versions[].server, schemaVersion 1 (docs/APP-BUILDER.md §3.3)",
+ "comment": "Each case: one project's delivered versions, oldest first: whether each was delivered with a server (hasServer), and the canonical contract the ledger recorded for it (null: none), with the server summary the library serves for each (null: the field is absent, a plain version). Home/App clients parse server only. clientUnreadable: values the server never sends, which a client must read as unavailable; clientReadable: edge values a client must accept. Numbers are JSON integers: 1.0 is refused.",
+ "cases": [
+  {
+   "case": "plain-app",
+   "comment": "A plain (app-v1) project: no version carries a server summary; the field is absent.",
+   "versions": [
+    {
+     "versionCode": 1,
+     "hasServer": false,
+     "contract": null
+    },
+    {
+     "versionCode": 2,
+     "hasServer": false,
+     "contract": null
+    }
+   ],
+   "server": {
+    "1": null,
+    "2": null
+   }
+  },
+  {
+   "case": "one-api",
+   "comment": "Every version at api 1: each server serves every client since the first version.",
+   "versions": [
+    {
+     "versionCode": 1,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    },
+    {
+     "versionCode": 2,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    },
+    {
+     "versionCode": 3,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    }
+   ],
+   "server": {
+    "1": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 1
+    },
+    "2": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 1
+    },
+    "3": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 1
+    }
+   }
+  },
+  {
+   "case": "api-raised",
+   "comment": "Version 3 raised api to 2 (a breaking change): installed versions 1 and 2 must update before they use version 3's server.",
+   "versions": [
+    {
+     "versionCode": 1,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    },
+    {
+     "versionCode": 2,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    },
+    {
+     "versionCode": 3,
+     "hasServer": true,
+     "contract": "{\"api\":2,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    },
+    {
+     "versionCode": 4,
+     "hasServer": true,
+     "contract": "{\"api\":2,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    }
+   ],
+   "server": {
+    "1": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 1
+    },
+    "2": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 1
+    },
+    "3": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 2,
+     "minClientVersionCode": 3
+    },
+    "4": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 2,
+     "minClientVersionCode": 3
+    }
+   }
+  },
+  {
+   "case": "became-client-server",
+   "comment": "Versions 1 and 2 were plain; version 3 added a server. A plain client never talked to it.",
+   "versions": [
+    {
+     "versionCode": 1,
+     "hasServer": false,
+     "contract": null
+    },
+    {
+     "versionCode": 2,
+     "hasServer": false,
+     "contract": null
+    },
+    {
+     "versionCode": 3,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    }
+   ],
+   "server": {
+    "1": null,
+    "2": null,
+    "3": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 3
+    }
+   }
+  },
+  {
+   "case": "unreadable-record",
+   "comment": "Version 2's recorded contract cannot be read: nothing is claimed about it, and version 3 claims nothing older than itself.",
+   "versions": [
+    {
+     "versionCode": 1,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    },
+    {
+     "versionCode": 2,
+     "hasServer": true,
+     "contract": "{\"api\": \"one\"}"
+    },
+    {
+     "versionCode": 3,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    }
+   ],
+   "server": {
+    "1": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 1
+    },
+    "2": {
+     "schemaVersion": 1,
+     "status": "unavailable"
+    },
+    "3": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 3
+    }
+   }
+  },
+  {
+   "case": "no-contract-record",
+   "comment": "Version 1 was delivered with its server but no contract record: nothing is claimed about it; version 2 claims nothing older than itself.",
+   "versions": [
+    {
+     "versionCode": 1,
+     "hasServer": true,
+     "contract": null
+    },
+    {
+     "versionCode": 2,
+     "hasServer": true,
+     "contract": "{\"api\":1,\"routes\":{},\"schemaVersion\":1,\"types\":{}}"
+    }
+   ],
+   "server": {
+    "1": {
+     "schemaVersion": 1,
+     "status": "unavailable"
+    },
+    "2": {
+     "schemaVersion": 1,
+     "status": "ok",
+     "api": 1,
+     "minClientVersionCode": 2
+    }
+   }
+  }
+ ],
+ "clientUnreadable": [
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 2,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1
+   },
+   "why": "unknown schemaVersion"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "fine",
+    "api": 1,
+    "minClientVersionCode": 1
+   },
+   "why": "unknown status"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1
+   },
+   "why": "a field its status has is missing"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": "1",
+    "minClientVersionCode": 1
+   },
+   "why": "api not a number"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 0,
+    "minClientVersionCode": 1
+   },
+   "why": "api below 1"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 4
+   },
+   "why": "minClientVersionCode above the version itself"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 0
+   },
+   "why": "minClientVersionCode below 1"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1.0
+   },
+   "why": "minClientVersionCode not a JSON integer (1.0)"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "unavailable",
+    "api": 1
+   },
+   "why": "unavailable carries nothing else"
+  },
+  {
+   "versionCode": 3,
+   "server": "ok",
+   "why": "not an object"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": true,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1
+   },
+   "why": "schemaVersion a boolean"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1.0,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1
+   },
+   "why": "schemaVersion not a JSON integer (1.0)"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1.0,
+    "status": "unavailable"
+   },
+   "why": "schemaVersion not a JSON integer (1.0), unavailable"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1,
+    "extra": 1
+   },
+   "why": "ok carries nothing else"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": true,
+    "minClientVersionCode": 1
+   },
+   "why": "api a boolean"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": true
+   },
+   "why": "minClientVersionCode a boolean"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1.0,
+    "minClientVersionCode": 1
+   },
+   "why": "api not a JSON integer (1.0)"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1.5,
+    "minClientVersionCode": 1
+   },
+   "why": "api a fraction"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 2147483648,
+    "minClientVersionCode": 1
+   },
+   "why": "api above 2^31-1"
+  },
+  {
+   "versionCode": 2147483648,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 2147483648
+   },
+   "why": "minClientVersionCode above 2^31-1"
+  }
+ ],
+ "clientReadable": [
+  {
+   "versionCode": 2147483647,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 2147483647,
+    "minClientVersionCode": 2147483647
+   },
+   "why": "the largest api and minClientVersionCode"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 3
+   },
+   "why": "minClientVersionCode equal to the version itself"
+  }
+ ]
+}

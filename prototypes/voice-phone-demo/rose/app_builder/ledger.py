@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from .apilevel import wire_summary
+from . import server_summary
 
 STATES = ('queued', 'preparing', 'building', 'testing', 'signing', 'ready', 'failed', 'cancelled')
 ACTIVE = ('queued', 'preparing', 'building', 'testing', 'signing')
@@ -543,12 +544,18 @@ class Ledger:
 
     def _versions(self, project: str) -> list[dict]:
         # Each version's advisory API level report summary (apilevel.wire_summary): `none` when it has no report.
+        # A client-server version also carries its server summary (server_summary); a plain one has no `server`.
         rows = self.db.execute('SELECT v.version_code, v.version_name, v.created, v.job_id, v.source_revision, '
-                               'v.sha256, v.size, v.notes, r.report FROM versions v LEFT JOIN version_api_reports r '
-                               'ON r.project_id=v.project_id AND r.version_code=v.version_code WHERE v.project_id=? '
+                               'v.sha256, v.size, v.notes, r.report, c.contract, s.sha256 FROM versions v '
+                               'LEFT JOIN version_api_reports r ON r.project_id=v.project_id AND '
+                               'r.version_code=v.version_code LEFT JOIN version_contracts c ON '
+                               'c.project_id=v.project_id AND c.version_code=v.version_code LEFT JOIN version_servers s ON '
+                               's.project_id=v.project_id AND s.version_code=v.version_code WHERE v.project_id=? '
                                'ORDER BY v.version_code', (project,)).fetchall()
+        servers = server_summary.summaries([(r[0], r[10] is not None, r[9]) for r in rows])
         return [{'versionCode': r[0], 'versionName': r[1], 'createdAt': r[2], 'jobId': r[3], 'sourceRevision': r[4],
-                 'apk': {'sha256': r[5], 'size': r[6]}, 'notes': r[7], 'apiReport': wire_summary(r[8])} for r in rows]
+                 'apk': {'sha256': r[5], 'size': r[6]}, 'notes': r[7], 'apiReport': wire_summary(r[8])}
+                | ({'server': servers[r[0]]} if r[0] in servers else {}) for r in rows]
 
     def projects(self) -> list[dict]:
         with self.lock:
