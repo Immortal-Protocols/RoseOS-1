@@ -1,19 +1,20 @@
 // app_build purpose (docs/APP-BUILDER.md §4A) against a fake Codex app-server; nothing here starts a real model.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Codex} from './codex.mjs';
-import {appBuildPolicy,appBuildConfig,appBuildCwd,appBuildSandbox,APP_BUILD_ITEMS} from './app-build.mjs';
+import {appBuildPolicy,appBuildConfig,appBuildCwd,appBuildLaunchArgs,appBuildProfile,checkAppBuildProfile,checkActiveProfile,supportsAppBuildVersion,
+ APP_BUILD_PROFILE,APP_BUILD_ITEMS} from './app-build.mjs';
 import {researchConfig} from './life-research.mjs';
 
 // A stand-in for `codex app-server`: records argv and requests, and plays a scenario from ROSE_TEST_SCENARIO.
 const FAKE=`#!${process.execPath}
 const fs=require('node:fs');
-if(process.argv.includes('--version')){console.log('codex-cli 0.167.1');process.exit(0);}
+if(process.argv.includes('--version')){console.log(process.env.ROSE_TEST_SCENARIO==='old_codex'?'codex-cli 0.167.0':'codex-cli 0.167.1');process.exit(0);}
 const args=process.argv.slice(2),file=process.env.ROSE_TEST_RECORD,scenario=process.env.ROSE_TEST_SCENARIO||'normal';
 const log=x=>fs.appendFileSync(file,JSON.stringify(x)+'\\n');log({args,cwd:process.cwd()});
 const out=x=>console.log(JSON.stringify(x));let reads=0;
@@ -27,8 +28,26 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
   if(scenario==='enabled_mcp')servers.notes.enabled=true;
   if(scenario==='changed'&&reads>1)servers.calendar={enabled:false};
   result={config:{mcp_servers:servers}};
+  // The writer's profile, as the app-server would load it from the exact -c definition it was launched with.
+  const i=args.indexOf('-c',args.indexOf('--strict-config'));
+  if(args.includes('--strict-config')&&args[i+1]==='default_permissions="rose_app_build"'
+     &&args[i+3]===process.env.ROSE_TEST_PROFILE_ARG){
+   result.config.default_permissions='rose_app_build';
+   result.config.permissions={rose_app_build:JSON.parse(process.env.ROSE_TEST_PROFILE)};
+   if(scenario==='merged')result.config.permissions.rose_app_build.filesystem['~/Documents']='read';
+   if(scenario==='network')result.config.permissions.rose_app_build.network.enabled=true;
+  }
+  if(scenario==='legacy')result.config.sandbox_mode='workspace-write';
  }
- if(m.method==='thread/start')result={thread:{id:'build'},model:'gpt-6.1-terra',serviceTier:'priority'};
+ if(m.method==='permissionProfile/list'){
+  const entry={id:'rose_app_build',allowed:scenario!=='not_allowed'};
+  result=scenario==='unlisted'?{data:[{id:':workspace',allowed:true}]}:
+   scenario==='paged'&&!m.params.cursor?{data:[{id:':read-only',allowed:true}],nextCursor:'2'}:{data:[entry]};
+ }
+ if(m.method==='thread/start')result={thread:{id:'build'},model:'gpt-6.1-terra',serviceTier:'priority',
+  ...(m.params.permissions&&scenario!=='no_active'?{activePermissionProfile:{id:scenario==='wrong_profile'?':workspace':m.params.permissions,
+   extends:scenario==='wrong_parent'?':danger-full-access':':workspace'}}:{}),
+  runtimeWorkspaceRoots:scenario==='extra_root'?[m.params.cwd,'/']:[m.params.cwd]};
  if(m.method==='mcpServerStatus/list')result={data:[{runtimeStatus:'disabled',tools:{},resources:[],resourceTemplates:[]}]};
  if(m.method==='turn/interrupt'){out({id:m.id,result:{}});out({method:'turn/completed',params:{threadId:'build',turn:{id:'t1',status:'interrupted'}}});return;}
  if(m.method==='turn/start'){
@@ -59,29 +78,35 @@ function fixture(){
  const cli=join(dir,'codex.cjs'),record=join(dir,'record.jsonl');
  writeFileSync(cli,FAKE,{mode:0o700});writeFileSync(record,'');
  const rows=()=>readFileSync(record,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
- return {dir,source,cli,record,rows,env:scenario=>({...process.env,PIXEL_CODEX_BIN:cli,ROSE_TEST_RECORD:record,ROSE_TEST_SCENARIO:scenario})};
+ return {dir,source,cli,record,rows,env:scenario=>({...process.env,PIXEL_CODEX_BIN:cli,ROSE_TEST_RECORD:record,ROSE_TEST_SCENARIO:scenario,
+  ROSE_TEST_PROFILE_ARG:appBuildLaunchArgs()[4],ROSE_TEST_PROFILE:JSON.stringify(appBuildProfile)})};
 }
 
 async function withEnv(env,fn){
- const keys=['PIXEL_CODEX_BIN','ROSE_TEST_RECORD','ROSE_TEST_SCENARIO'],old=keys.map(k=>process.env[k]);
+ const keys=['PIXEL_CODEX_BIN','ROSE_TEST_RECORD','ROSE_TEST_SCENARIO','ROSE_TEST_PROFILE_ARG','ROSE_TEST_PROFILE'],old=keys.map(k=>process.env[k]);
  for(const k of keys)process.env[k]=env[k];
  try{return await fn();}finally{keys.forEach((k,i)=>old[i]===undefined?delete process.env[k]:process.env[k]=old[i]);}
 }
 
-test('app_build config keeps research isolation, turns web search off, keeps the sandboxed shell and no network',()=>{
- const base=researchConfig({mcp_servers:{notes:{enabled:false}}}),out=appBuildConfig({mcp_servers:{notes:{enabled:false}}});
+const PROFILED={default_permissions:APP_BUILD_PROFILE,permissions:{[APP_BUILD_PROFILE]:JSON.parse(JSON.stringify(appBuildProfile))}};
+
+test('app_build config keeps research isolation, turns web search off and keeps the sandboxed shell',()=>{
+ const base=researchConfig({mcp_servers:{notes:{enabled:false}}}),out=appBuildConfig({...PROFILED,mcp_servers:{notes:{enabled:false}}});
  assert.equal(out.web_search,'disabled');
  assert.equal(out['features.shell_tool'],true);
- assert.equal(out['sandbox_workspace_write.network_access'],false);
- assert.equal(out['sandbox_workspace_write.exclude_tmpdir_env_var'],true);
- assert.equal(out['sandbox_workspace_write.exclude_slash_tmp'],true);
+ assert.equal(Object.keys(out).some(k=>k.startsWith('sandbox')),false);  // read isolation is the profile's, not legacy
  for(const key of ['features.apps','features.multi_agent','features.view_image','features.hooks','features.memories',
    'features.plugins','mcp_servers.notes.enabled'])assert.equal(out[key],base[key]??false,key);
  assert.equal(out.project_doc_max_bytes,0);
  // Same refusals as research.
  for(const bad of [{mcp_servers:{notes:{enabled:true}}},{mcp_servers:{notes:{}}},{instructions:'x'},{model_instructions_file:'/x'},null,[]])
   assert.throws(()=>appBuildConfig(bad),/isolation/);
- assert.deepEqual(appBuildSandbox,{type:'workspaceWrite',writableRoots:[],networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true});
+ // The writer's profile: minimal runtime read, the job's source writable, everything else and the network denied.
+ assert.deepEqual(appBuildProfile,{extends:':workspace',filesystem:{':root':'deny',':minimal':'read',':tmpdir':'deny',
+  ':slash_tmp':'deny',':workspace_roots':{'.':'write'}},network:{enabled:false}});
+ assert.deepEqual(appBuildLaunchArgs(),['--strict-config','-c','default_permissions="rose_app_build"','-c',
+  'permissions.rose_app_build={"extends" = ":workspace", "filesystem" = {":root" = "deny", ":minimal" = "read", '
+  +'":tmpdir" = "deny", ":slash_tmp" = "deny", ":workspace_roots" = {"." = "write"}}, "network" = {"enabled" = false}}']);
  assert.equal(APP_BUILD_ITEMS.includes('webSearch'),false);
  assert.equal(APP_BUILD_ITEMS.includes('dynamicToolCall'),false);
  assert.equal(APP_BUILD_ITEMS.includes('mcpToolCall'),false);
@@ -144,18 +169,27 @@ test('a real child launch: workspace-write in the project, no network per turn, 
    assert.equal(start.ephemeral,true);
    assert.equal(start.cwd,f.source);
    if(runtime.appBuild){
-    assert.equal(start.sandbox,'workspace-write');
+    assert.equal(start.permissions,APP_BUILD_PROFILE);
+    assert.equal('sandbox' in start,false);  // never together with permissions
+    assert.deepEqual(start.runtimeWorkspaceRoots,[f.source]);  // the one writable root, named, never defaulted
+    for(const arg of appBuildLaunchArgs())assert.ok(args.includes(arg),arg);
     assert.equal(start.config.web_search,'disabled');
     assert.equal(start.config['features.shell_tool'],true);
-    assert.equal(start.config['sandbox_workspace_write.network_access'],false);
+    assert.equal(Object.keys(start.config).some(k=>k.startsWith('sandbox')),false);
     assert.equal(start.config['mcp_servers.notes.enabled'],false);
     assert.equal('environments' in start,false);
-    assert.deepEqual(turn.sandboxPolicy,appBuildSandbox);
+    assert.equal(turn.permissions,APP_BUILD_PROFILE);
+    assert.equal('sandboxPolicy' in turn,false);
     const methods=rows.slice(1).map(r=>r.method);
     assert.ok(methods.indexOf('mcpServerStatus/list')<methods.indexOf('turn/start'));
+    assert.ok(methods.indexOf('permissionProfile/list')<methods.indexOf('turn/start'));
+    assert.equal(rows.find(r=>r.method==='permissionProfile/list').params.cwd,f.source);
    }else{
     assert.equal(start.sandbox,'read-only');
+    assert.equal('permissions' in start,false);
+    assert.equal('runtimeWorkspaceRoots' in start,false);
     assert.equal('sandboxPolicy' in turn,false);
+    assert.equal(args.includes('--strict-config'),false);
     if(runtime.publicResearch){assert.deepEqual(start.environments,[]);assert.equal(start.config.web_search,'live');}
     if(runtime.characterLife){assert.deepEqual(start.environments,[]);assert.equal(start.config.web_search,'disabled');
      assert.equal(start.config['features.shell_tool'],false);}
@@ -283,4 +317,70 @@ test('SIGKILL always follows, even when the group already looks empty after SIGT
  process.kill=(pid,signal)=>{if(signal===0)throw Object.assign(Error('no such process'),{code:'ESRCH'});sent.push([pid,signal]);return true;};
  try{assert.equal(await c.closeGroupConfirmed(child,60),true);}finally{process.kill=realKill;}
  assert.deepEqual(sent,[[-2147480,'SIGTERM'],[-2147480,'SIGKILL']]);
+});
+
+test('the writer refuses unless exactly its permission profile is active, listed and allowed',async()=>{
+ const f=fixture();
+ try{
+  for(const scenario of ['legacy','merged','network','not_allowed','unlisted','wrong_profile','no_active','wrong_parent',
+   'extra_root','old_codex']){
+   writeFileSync(f.record,'');
+   await withEnv(f.env(scenario),async()=>{
+    const c=new Codex(f.source,join(f.dir,'unused'),null,{externalPhone:true,appBuild:true,model:'gpt-6.1-terra',dynamicTools:[]});
+    try{await assert.rejects(c.init(),{code:'research_isolation_unavailable'},scenario);}finally{await c.closeConfirmed();}
+   });
+   assert.equal(f.rows().some(r=>r.method==='turn/start'),false,scenario);
+  }
+  writeFileSync(f.record,'');  // a later page lists it: found
+  await withEnv(f.env('paged'),async()=>{
+   const c=new Codex(f.source,join(f.dir,'unused'),null,{externalPhone:true,appBuild:true,model:'gpt-6.1-terra',dynamicTools:[]});
+   try{await c.init();}finally{await c.closeConfirmed();}
+  });
+  assert.equal(f.rows().filter(r=>r.method==='permissionProfile/list').length,2);
+ }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('the active-profile check takes only this profile, its own parent and the source as workspace root',()=>{
+ const cwd='/p/source',ok={id:APP_BUILD_PROFILE,extends:':workspace'};
+ for(const r of [{activePermissionProfile:ok,runtimeWorkspaceRoots:[cwd]},{activePermissionProfile:{id:APP_BUILD_PROFILE}},
+  {activePermissionProfile:{id:APP_BUILD_PROFILE,extends:null},runtimeWorkspaceRoots:[]}])
+  assert.doesNotThrow(()=>checkActiveProfile(r,cwd),JSON.stringify(r));
+ for(const r of [null,{},{activePermissionProfile:null},{activePermissionProfile:{id:':workspace'}},
+  {activePermissionProfile:{...ok,extends:':danger-full-access'}},{activePermissionProfile:ok,runtimeWorkspaceRoots:[cwd,'/']},
+  {activePermissionProfile:ok,runtimeWorkspaceRoots:['/p']},{activePermissionProfile:ok,runtimeWorkspaceRoots:'/p/source'}])
+  assert.throws(()=>checkActiveProfile(r,cwd),/app_build_isolation_unavailable/,JSON.stringify(r));
+});
+
+// Codex parses a -c value as TOML and, on a parse failure, falls back to a raw string; the definition must be valid
+// TOML that parses to exactly the profile. Checked with Python's tomllib where present (CI has it).
+test('the profile launch value is TOML that parses to exactly the profile',{skip:spawnSync('python3',['-c','import tomllib']).status!==0},()=>{
+ const args=appBuildLaunchArgs(),def=args.find(a=>a.startsWith(`permissions.${APP_BUILD_PROFILE}=`));
+ const dflt=args.find(a=>a.startsWith('default_permissions='));
+ const parse=v=>JSON.parse(spawnSync('python3',['-c','import json,sys,tomllib;print(json.dumps(tomllib.loads("x = "+sys.stdin.read())["x"]))'],
+  {input:v,encoding:'utf8'}).stdout);
+ assert.deepEqual(parse(def.slice(def.indexOf('=')+1)),JSON.parse(JSON.stringify(appBuildProfile)));
+ assert.equal(parse(dflt.slice(dflt.indexOf('=')+1)),APP_BUILD_PROFILE);
+});
+
+test('the profile check and the version gate refuse anything else',()=>{
+ assert.doesNotThrow(()=>checkAppBuildProfile(PROFILED));
+ const bad=[{},{...PROFILED,sandbox_mode:'workspace-write'},{...PROFILED,sandbox_workspace_write:{network_access:false}},
+  {...PROFILED,default_permissions:':workspace'},{...PROFILED,permissions:{}},
+  {...PROFILED,permissions:{[APP_BUILD_PROFILE]:{...appBuildProfile,extends:':danger-full-access'}}},
+  {...PROFILED,permissions:{[APP_BUILD_PROFILE]:{...appBuildProfile,filesystem:{...appBuildProfile.filesystem,':root':'read'}}}},
+  {...PROFILED,permissions:{[APP_BUILD_PROFILE]:{...appBuildProfile,network:{enabled:true}}}},null,[],
+  // A selected config profile is where an owner's legacy sandbox can also live: it would win over the profile.
+  {...PROFILED,profile:'dev',profiles:{dev:{sandbox_mode:'danger-full-access'}}},
+  {...PROFILED,profile:'dev',profiles:{dev:{sandbox_mode:'workspace-write',sandbox_workspace_write:{network_access:true}}}},
+  {...PROFILED,profile:'dev',profiles:{dev:{default_permissions:':workspace'}}},
+  {...PROFILED,profile:'dev',profiles:{dev:{permissions:{}}}},
+  {...PROFILED,profile:'dev',profiles:{}},{...PROFILED,profile:'dev'},{...PROFILED,profile:7,profiles:{7:{}}}];
+ for(const config of bad)assert.throws(()=>checkAppBuildProfile(config),/app_build_isolation_unavailable/,JSON.stringify(config));
+ // Unset is unset whether absent or serialized as null, and a selected profile without isolation settings is fine.
+ for(const config of [{...PROFILED,sandbox_mode:null,sandbox_workspace_write:null},{...PROFILED,profile:null},
+  {...PROFILED,profile:'dev',profiles:{dev:{model:'x',sandbox_mode:null}}},
+  {...PROFILED,profiles:{other:{sandbox_mode:'danger-full-access'}}}])
+  assert.doesNotThrow(()=>checkAppBuildProfile(config),JSON.stringify(config));
+ for(const v of ['codex-cli 0.167.1','codex-cli 0.168.0\n','codex-cli 1.0.0'])assert.equal(supportsAppBuildVersion(v),true,v);
+ for(const v of ['codex-cli 0.167.0','codex-cli 0.167.1-alpha.2','codex-cli 0.166.9','unknown',''])assert.equal(supportsAppBuildVersion(v),false,v);
 });
