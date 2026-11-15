@@ -50,6 +50,11 @@ final class WorkspaceTaskClient {
  /** One HTTP exchange; throws when no definite response arrived (connection lost, timeout). */
  interface Transport {
   Response post(String path,Map<String,String> headers,byte[] body)throws Exception;
+  /**
+   * A POST that abort can stop from another thread (WorkspaceAbort): the transport attaches its socket, so a
+   * fire() closes it. Fakes that never stop may keep the plain post.
+   */
+  default Response post(String path,Map<String,String> headers,byte[] body,WorkspaceAbort abort)throws Exception{return post(path,headers,body);}
   /** One GET (App Core's page-task read). Fakes that never read need not implement it. */
   default Response get(String path,Map<String,String> headers)throws Exception{throw new UnsupportedOperationException("get");}
  }

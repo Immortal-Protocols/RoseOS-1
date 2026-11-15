@@ -612,6 +612,64 @@ can send meets the rules above. A client can test its parsing against the
 same file. This is the server and wire side only (App Core). The phone's
 parsing and display are Home/App's, and are not implemented here.
 
+**`share`** (schemaVersion 1; `app_builder/share.py`; source, not yet
+served) tells the phone whether a version has a public download page it may
+share.
+- **Who talks to hosting.** The phone never contacts hosting and holds no
+  Chariot credential. The builder's server reads the hosting metadata,
+  `GET /apps/<hostedAppId>/releases/<versionCode>/metadata`, which is public,
+  from the Chariot owner.
+- **The hosted app id.** It comes from an explicit per-project mapping that
+  owner tooling or the publisher records. It is never derived from
+  `projectId`.
+- **Links** are passed through exactly as hosting returned them: `release` as
+  `versionUrl`, and `latest` (a `307` to the newest release) as `latestUrl`.
+  The raw `download` link is never shared.
+
+| Hosting's answer | `share` |
+|---|---|
+| no hosted app id recorded for the project (no lookup made) | `{schemaVersion: 1, status: "unpublished"}` |
+| the builder's record for the version is incomplete (no signer yet, or a field of the wrong kind) | `unavailable`: "this version can't be checked against the hosted copy yet" |
+| `200` whose `app_id`, `package_name`, `version_code`, `signer_sha256`, `sha256` and `size_bytes` all equal the builder's record, with plain absolute https `release` and `latest` links | `{schemaVersion: 1, status: "published", versionUrl, latestUrl}` |
+| `200` that differs from the record in any of those fields | `unavailable`: "the hosted copy doesn't match this version" |
+| `200` the server can't read (a link missing or not a plain https URL; any of the six fields missing, null or of the wrong kind) | `unavailable`: "the app's download host answered something this server can't read" |
+| `404` | `unpublished` |
+| `503` | `unavailable`: "the app's download storage is unavailable right now; try again in a minute". With a `Retry-After` over 90 s, it ends "try again later" instead |
+| any other status, or no answer | `unavailable`: "the app's download host could not be reached" |
+
+- **Caching.** A `200` stands for its `max-age`, at most 600 s, because
+  hosting can't revoke a release yet. `404` and `503` are never kept. After a
+  `503` the server waits its `Retry-After` (at most 1 hour) before asking that
+  host again.
+- **Identity fields.** Each identity field must be of its own kind on both
+  sides: non-empty text, 64 lower-case hex digests, a versionCode of at least
+  1, and a size. So two missing values never count as a match.
+- **Links.** The server's link rule is at least as strict as the phone's
+  `ShareState.link`:
+  - https, at most 2048 ASCII characters;
+  - a valid host name or IPv4 address, and an all-digit port if any;
+  - no credentials, fragment or IPv6;
+  - only RFC 3986 characters, with `%` only as a valid escape.
+
+  A test compiles the phone's own `ShareState` and checks that it accepts
+  every link the server would publish.
+- **Retry-After** counts in ASCII digits only.
+- **Fixture.** `rose/tests/fixtures/share-summary-v1.json` lists each
+  recorded version, hosting's answer and the `share` served, plus
+  `clientUnreadable` values a phone must not read as links.
+  - **Verbatim answers:** they come from the Chariot owner's own fixture,
+    `Immortal-Protocols/ProtocolsBackend`
+    `chariot/test/fixtures/apk_http/metadata-responses.json` on
+    `codex/project1-apk-hosting-contract` at `31de2ac1`. It is copied byte
+    for byte to `rose/tests/fixtures/chariot/`, and a test pins its git blob
+    `3222e6c5`.
+  - **Derived cases:** cases marked DERIVED change one thing in that answer.
+    Its URLs are synthetic, and none is live.
+- **Not yet done.** The library doesn't serve `share` yet. That needs the
+  hosted-app mapping in the ledger and a metadata reader on the builder host,
+  and nothing is published. Until then phones read the absent field as
+  "Not shared yet".
+
 ### 3.4 Baseline
 
 minSdk 26, targetSdk 35, framework APIs, plus declared pure-Java JAR libraries
@@ -1458,6 +1516,14 @@ needing older clients to update, through the library's minClientVersionCode
   flows are the same.
 - The user types the code and the passphrase. Only the bearer token is kept,
   in no-backup storage.
+- **Naming the app (#824).** OS Core's RoseOS authenticator
+  (`dev.pixel.rose.authenticator`) names the sending app only when Android
+  vouches for it (API 34+). So the client starts the `ACTION_VIEW` with
+  `ActivityOptions.makeBasic().setShareIdentityEnabled(true)`. Without that,
+  the dialog says "an unidentified app" and still works.
+- **Names.** Issuer and account names must have no control, bidi or
+  line-separator characters, and at most 128 UTF-16 units. rose-signin's name
+  rules already require this.
 
 ### 7.6 Builder (planned)
 

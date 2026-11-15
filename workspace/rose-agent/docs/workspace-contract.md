@@ -146,7 +146,12 @@ model behind it (currently `WorkspaceModel.compose`); this side owns the client 
   `WorkspaceLayout.check`, against the registry of the read the request was built from. An id the phone does
   not have is `unknown_ref`, and nothing is drawn. The server never makes the phone open anything.
 - **One attempt.** The call has the request's own deadline (4 s, `WorkspaceEngine.DEADLINE_MS`) plus the
-  transport's read timeout. There is no retry. Superseded queued work is skipped before reading/sending;
+  transport's read timeout. There is no retry.
+- **A superseded request is stopped.** A newer request, from the page or a conversation, supersedes the one
+  composing. If the older one is still queued, it is never sent. If it is in flight, `WorkspaceAbort` closes
+  its socket at once (`WorkspaceHub.start`). The phone's worker then moves on, and the server sees the
+  disconnect and cancels its composition. The stopped request's answer is uncertain and discarded, so it is
+  never drawn and never retried. Superseded queued work is skipped before reading/sending;
   a response received after supersession is discarded. An already-sent call can finish within its cap.
 - **Authorized route.** Nathan's current server-local direction and implementation approval enable the default
   route. `compose-route-enabled=false` remains an explicit opt-out; a preference-read failure stays closed.
@@ -155,6 +160,8 @@ model behind it (currently `WorkspaceModel.compose`); this side owns the client 
   owner's own Rose server, over the paired, pinned link. That includes the labels of apps, shortcuts and
   templates, and, for a prompt, the owner's words.
 - **Labels and timing.**
+  - While composing, the status line says who is working: "Composing with Rose…" for the server, or
+    "Arranging on this phone…" for the starter (`WorkspaceComposer.routed`).
   - The label under the title says who decides: "Arranged by your Rose server" with the route on, or the
     starter's label with it off.
   - Each timing record has `route`: `server` or `phone`. With `server`, `requestToResultMs` includes the
