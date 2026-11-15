@@ -106,11 +106,13 @@ def _redact(text: str, *paths: Path) -> str:
     return text  # whole: the identity checks parse it; the ledger keeps only a tail for display
 
 
-def run(args: list, cwd: Path, home: Path, tools: Tools, cancelled, category: str, redact=()) -> str:
-    """One tool with a scrubbed environment, a timeout and cancellation; raises StepFailed."""
-    env = {'PATH': tools.path(), 'HOME': str(home), 'LANG': 'C.UTF-8', 'TMPDIR': str(home)}
-    if tools.java_home:
-        env['JAVA_HOME'] = str(tools.java_home)
+def run(args: list, cwd: Path, home: Path, tools: Tools, cancelled, category: str, redact=(), env=None) -> str:
+    """One tool with a scrubbed environment, a timeout and cancellation; raises StepFailed. ``env`` replaces the
+    Android tools' environment whole (rose.app_builder.server_build passes cargo's); nothing is inherited either way."""
+    if env is None:
+        env = {'PATH': tools.path(), 'HOME': str(home), 'LANG': 'C.UTF-8', 'TMPDIR': str(home)}
+        if tools.java_home:
+            env['JAVA_HOME'] = str(tools.java_home)
     proc = subprocess.Popen([str(a) for a in args], cwd=cwd, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, errors='replace')
     deadline = time.monotonic() + tools.timeout_s
