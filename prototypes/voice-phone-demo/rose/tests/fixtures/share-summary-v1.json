@@ -105,7 +105,7 @@
    "share": {
     "schemaVersion": 1,
     "status": "unavailable",
-    "reason": "the app's download storage is unavailable right now"
+    "reason": "the app's download storage is unavailable right now; try again in a minute"
    }
   },
   {
@@ -522,6 +522,47 @@
     "status": "unavailable",
     "reason": "the app's download host answered something this server can't read"
    }
+  },
+  {
+   "case": "derived-no-latest",
+   "answerFrom": "published",
+   "record": {
+    "hostedAppId": "11111111-1111-4111-8111-111111111111",
+    "packageName": "com.example.app",
+    "versionCode": 1,
+    "signerSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "apk": {
+     "sha256": "82f001d69d6b74a272b0fde9013c81450c038a7b3167af108206049849d4ee80",
+     "size": 25
+    }
+   },
+   "answer": {
+    "status": 200,
+    "headers": {
+     "cache-control": "public, max-age=600"
+    },
+    "json": {
+     "app_id": "11111111-1111-4111-8111-111111111111",
+     "display_name": "Counter",
+     "package_name": "com.example.app",
+     "version_code": 1,
+     "version_name": "1.1",
+     "signer_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "sha256": "82f001d69d6b74a272b0fde9013c81450c038a7b3167af108206049849d4ee80",
+     "size_bytes": 25,
+     "links": {
+      "app": "https://downloads.example.invalid/apps/11111111-1111-4111-8111-111111111111",
+      "release": "https://downloads.example.invalid/apps/11111111-1111-4111-8111-111111111111/releases/1",
+      "download": "https://downloads.example.invalid/apps/11111111-1111-4111-8111-111111111111/releases/1/app.apk"
+     }
+    }
+   },
+   "share": {
+    "schemaVersion": 1,
+    "status": "unavailable",
+    "reason": "the app's download host answered something this server can't read"
+   },
+   "comment": "DERIVED, not a Chariot response: hosting's published answer with one change (links.latest missing)."
   },
   {
    "case": "derived-version-as-text",

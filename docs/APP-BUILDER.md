@@ -1505,6 +1505,14 @@ needing older clients to update, through the library's minClientVersionCode
   flows are the same.
 - The user types the code and the passphrase. Only the bearer token is kept,
   in no-backup storage.
+- **Naming the app (#824).** OS Core's RoseOS authenticator
+  (`dev.pixel.rose.authenticator`) names the sending app only when Android
+  vouches for it (API 34+). So the client starts the `ACTION_VIEW` with
+  `ActivityOptions.makeBasic().setShareIdentityEnabled(true)`. Without that,
+  the dialog says "an unidentified app" and still works.
+- **Names.** Issuer and account names must have no control, bidi or
+  line-separator characters, and at most 128 UTF-16 units. rose-signin's name
+  rules already require this.
 
 ### 7.6 Builder (planned)
 

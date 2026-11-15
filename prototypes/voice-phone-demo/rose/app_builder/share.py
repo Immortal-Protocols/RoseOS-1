@@ -20,7 +20,7 @@ MAX_URL = 2048
 MAX_CACHE_S = 600  # a 200 is re-checked at least this often: hosting cannot revoke a release yet, but may later
 MAX_BACKOFF_S = 3600
 REASONS = {
-    'storage': 'the app\'s download storage is unavailable right now',
+    'storage': 'the app\'s download storage is unavailable right now; try again in a minute',
     'unreachable': 'the app\'s download host could not be reached',
     'unreadable': 'the app\'s download host answered something this server can\'t read',
     'mismatch': 'the hosted copy doesn\'t match this version',
