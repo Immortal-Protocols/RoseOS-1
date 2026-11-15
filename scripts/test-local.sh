@@ -474,6 +474,9 @@ java -cp "$JAVA_TESTS/PhoneCommandGate" dev.pixel.voice.PhoneCommandGateTest
 # the pure-Java client core against the shared vectors, and the name guard (the Rust library runs in
 # .github/workflows/rose-signin.yml, since cargo needs its locked crates).
 bash workspace/rose-signin/java/test.sh
+# rose-signin-v1 D3/D8: RoseOS's system authenticator (os/overlays/packages/apps/RoseAuthenticator): package
+# boundaries, the shared core copy, a compile against the platform jar and its vault on the JVM.
+python3 os/tests/test_rose_authenticator.py
 # Plan 1E: the shared theme definition (themes/rose-themes.json), its generated RoseTheme copies, Glacier's assets
 # and contrast, and the Java colour map against the approved prototype's own map (golden values).
 python3 -I scripts/tests/test_rose_themes.py

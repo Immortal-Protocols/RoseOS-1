@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RoseOS: the Rose authenticator. One activity: the launcher entry (codes) and the otpauth://totp enrollment
+     handler. No permission requested: no network, no backup of its sealed secrets. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.pixel.rose.authenticator">
+
+    <application
+        android:label="@string/app_name"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/no_extraction">
+        <activity
+            android:name=".AuthenticatorActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="otpauth" android:host="totp" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
