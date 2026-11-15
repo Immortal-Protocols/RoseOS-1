@@ -5,10 +5,13 @@
 //! authenticator's results map one to one onto the runtime's; nothing here decides about factors, limits, sessions
 //! or admission.
 //!
-//! Handles, session tokens and invites are rose-signin bytes, carried over HTTP as rose-signin base32 (upper case,
-//! no padding: letters and digits only, as the runtime's bearer check requires). A string that does not decode is
-//! answered as rose-signin answers a wrong value: an unknown token is no session, a bad handle does not confirm,
-//! a bad invite does not admit. Closed admission with no invite is `Admission::Invite(b"")`, which admits no one.
+//! Handles, session tokens and invites are minted by rose-signin already as text: 52 base32 characters (256 bits;
+//! upper case, no padding: letters and digits only, as the runtime's bearer check requires), the format
+//! docs/ROSE-SIGNIN-V1.md names. They cross HTTP exactly as minted, never re-encoded, so a value from rose-signin
+//! itself (an invite from the owner's tooling, say) is the value the client sends back. A value that is too long or
+//! not base32 is answered as rose-signin answers a wrong value: an unknown token is no session, a bad handle does
+//! not confirm, a bad invite does not admit. Closed admission with no invite is `Admission::Invite(b"")`, which
+//! admits no one.
 
 use rose_app_runtime::signin::{self as rt, Auth};
 use rose_signin::flow::{self, Admission};
@@ -19,7 +22,7 @@ use rose_signin::{base32, knowledge, session};
 /// rose-signin's authenticator as generated servers use it.
 pub type Authenticator = flow::Authenticator<SqliteStore, AeadSealer>;
 
-/// The longest base32 value accepted from a request: longer than any handle, token or invite rose-signin mints.
+/// The longest value accepted from a request: longer than any handle, token or invite rose-signin mints (52).
 const MAX_ENCODED: usize = 256;
 
 pub struct SigninAuth {
@@ -35,12 +38,18 @@ impl std::fmt::Debug for SigninAuth {
     }
 }
 
-/// Decodes a request's base32 value into a zeroized secret; None when it is too long or not base32.
-fn decode(text: &str) -> Option<Secret> {
-    if text.len() > MAX_ENCODED {
+/// A request's handle, token or invite as rose-signin's bytes (the text itself), in a zeroized secret; None when
+/// it is too long or not base32, which no minted value is.
+fn presented(text: &str) -> Option<Secret> {
+    if text.is_empty() || text.len() > MAX_ENCODED || base32::decode(text).is_none() {
         return None;
     }
-    base32::decode(text).map(Secret::new)
+    Some(Secret::new(text.as_bytes().to_vec()))
+}
+
+/// A minted value as the client receives it. rose-signin mints ASCII; anything else is unavailable.
+fn text(secret: &Secret) -> Option<String> {
+    std::str::from_utf8(secret.expose()).ok().map(str::to_string)
 }
 
 fn rejected(r: knowledge::Rejected) -> rt::Rejected {
@@ -76,7 +85,7 @@ fn recover_error(e: flow::RecoverError) -> rt::RecoverError {
 fn enrollment(e: flow::Enrollment) -> Option<rt::Enrollment> {
     Some(rt::Enrollment {
         otpauth_uri: std::str::from_utf8(e.otpauth_uri.expose()).ok()?.to_string(),
-        handle: base32::encode(e.handle.expose()),
+        handle: text(&e.handle)?,
         recovery_codes: e.recovery_codes,
     })
 }
@@ -109,8 +118,8 @@ impl SigninAuth {
     pub fn create_invite(&mut self, account: &str, now: u64) -> Result<String, rt::EnrollError> {
         self.inner
             .create_invite(&self.app, account, now)
-            .map(|t| base32::encode(t.expose()))
             .map_err(enroll_error)
+            .and_then(|t| text(&t).ok_or(rt::EnrollError::Unavailable))
     }
 
     /// Ciphertexts that failed their integrity check since start; the host alerts on increases.
@@ -133,14 +142,14 @@ impl Auth for SigninAuth {
         handle: Option<&str>,
         now: u64,
     ) -> Result<rt::Enrollment, rt::EnrollError> {
-        let invite = invite.and_then(decode);
+        let invite = invite.and_then(presented);
         let admission = if open {
             Admission::Open
         } else {
             Admission::Invite(invite.as_ref().map_or(&[][..], Secret::expose))
         };
         // A handle that does not decode is a handle that matches nothing.
-        let handle = handle.map(|h| decode(h).unwrap_or_else(|| Secret::new(Vec::new())));
+        let handle = handle.map(|h| presented(h).unwrap_or_else(|| Secret::new(Vec::new())));
         let started = self.inner.begin_enrollment(
             &self.app,
             account,
@@ -157,7 +166,7 @@ impl Auth for SigninAuth {
 
     fn confirm_enrollment(&mut self, account: &str, handle: &str, code: &str, now: u64) -> Result<(), rt::EnrollError> {
         // Counted against the account's limit like any wrong handle.
-        let handle = decode(handle).unwrap_or_else(|| Secret::new(Vec::new()));
+        let handle = presented(handle).unwrap_or_else(|| Secret::new(Vec::new()));
         self.inner
             .confirm_enrollment(&self.app, account, handle.expose(), code, now)
             .map_err(enroll_error)
@@ -169,10 +178,13 @@ impl Auth for SigninAuth {
                 token,
                 principal: p,
                 new_recovery_codes,
-            } => rt::SignIn::Ok {
-                token: base32::encode(token.expose()),
-                principal: principal(p),
-                new_recovery_codes,
+            } => match text(&token) {
+                Some(token) => rt::SignIn::Ok {
+                    token,
+                    principal: principal(p),
+                    new_recovery_codes,
+                },
+                None => rt::SignIn::Unavailable,
             },
             flow::SignIn::Failed => rt::SignIn::Failed,
             flow::SignIn::Limited { retry_after } => rt::SignIn::Limited { retry_after },
@@ -181,7 +193,7 @@ impl Auth for SigninAuth {
     }
 
     fn validate(&mut self, token: &str, now: u64) -> Result<Option<rt::Principal>, rt::Unavailable> {
-        let Some(token) = decode(token) else {
+        let Some(token) = presented(token) else {
             return Ok(None);
         };
         self.inner
@@ -191,7 +203,7 @@ impl Auth for SigninAuth {
     }
 
     fn revoke(&mut self, token: &str) -> Result<(), rt::Unavailable> {
-        let Some(token) = decode(token) else {
+        let Some(token) = presented(token) else {
             return Ok(());
         };
         self.inner

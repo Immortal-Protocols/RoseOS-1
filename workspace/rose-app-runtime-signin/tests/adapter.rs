@@ -364,6 +364,37 @@ fn closed_admission_needs_the_creators_invite() {
     );
 }
 
+/// Values cross HTTP exactly as rose-signin mints them (docs/ROSE-SIGNIN-V1.md: 256 random bits, base32), so a
+/// value from rose-signin itself, not only from this adapter, is accepted.
+#[test]
+fn handles_tokens_and_invites_are_rose_signins_own_text() {
+    let dir = Dir::new();
+    let mut a = auth(&dir.0, "notes", Admission::Invite);
+    // An invite minted by rose-signin directly (as owner tooling would), on the same store.
+    let store =
+        rose_signin::store::sqlite::SqliteStore::new(Connection::open(dir.0.join("auth.sqlite3")).unwrap()).unwrap();
+    let sealer = rose_signin::secret::AeadSealer::new(None, Vec::new()).unwrap();
+    let mut owner = rose_signin::flow::Authenticator::new(store, sealer, "Rose Notes").unwrap();
+    let minted = owner.create_invite("notes", "ana", T0).unwrap();
+    let minted = std::str::from_utf8(minted.expose()).unwrap().to_string();
+    assert_eq!(minted.len(), 52);
+    let e = a.begin_enrollment("ana", PASS, Some(&minted), false, None, T0).unwrap();
+    for value in [&e.handle, &a.create_invite("bob", T0).unwrap()] {
+        assert_eq!(value.len(), 52, "{value}");
+        assert_eq!(base32::decode(value).map(|b| b.len()), Some(32));
+    }
+    a.confirm_enrollment("ana", &e.handle, &code(&e.otpauth_uri, T0), T0)
+        .unwrap();
+    let rt::SignIn::Ok { token, .. } = a.sign_in("ana", &code(&e.otpauth_uri, T0 + 30), PASS, "c", T0 + 30) else {
+        panic!("sign-in failed");
+    };
+    assert_eq!(token.len(), 52);
+    assert_eq!(base32::decode(&token).map(|b| b.len()), Some(32));
+    assert!(a.validate(&token, T0 + 31).unwrap().is_some());
+    // The same bits in another spelling are another value.
+    assert_eq!(a.validate(&token.to_lowercase(), T0 + 31).unwrap(), None);
+}
+
 #[test]
 fn another_apps_session_is_no_session_and_is_left_alone() {
     let dir = Dir::new();
