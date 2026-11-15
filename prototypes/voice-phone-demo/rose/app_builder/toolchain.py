@@ -293,14 +293,18 @@ JDK_ONLY = ('java.', 'jdk.', 'sun.', 'com.sun.', 'javax.swing', 'javax.imageio',
 
 
 def build(source: Path, work: Path, package: str, version_code: int, version_name: str, tools: Tools,
-          cancelled=lambda: False, libraries=()) -> tuple[Path, str]:
+          cancelled=lambda: False, libraries=(), builder_files=frozenset(),
+          builder_packages=frozenset()) -> tuple[Path, str]:
     """An unsigned, aligned APK for this exact identity, and the build log. ``libraries`` are verified job-local
-    JARs (rose.app_builder.dependencies.resolve): javac compiles against them and d8 adds them to the app."""
+    JARs (rose.app_builder.dependencies.resolve): javac compiles against them and d8 adds them to the app.
+    ``builder_files`` are the builder's own files in ``source`` (rose.app_builder.template.check), and
+    ``builder_packages`` the packages their classes may also live in (the sign-in core's own); the writer's code
+    cannot use them, since its source must be in the app's package."""
     missing = tools.available()
     if missing:
         raise StepFailed('toolchain', missing, retryable=True)
     try:
-        template.check(source, package)
+        template.check(source, package, builder_files=frozenset(builder_files))
     except template.TemplateRefused as refused:
         raise StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
     for d in ('classes', 'generated', 'dex', 'home'):
@@ -341,7 +345,7 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
                              'builder has them).', log=failed.log) from None
         raise
     classes = sorted(str(p) for p in (work / 'classes').rglob('*.class'))
-    own = package.replace('.', '/') + '/'
+    own = tuple(p.replace('.', '/') + '/' for p in (package, *sorted(builder_packages)))
     for c in classes:  # whatever the source text claimed, compiled classes live in the app's own package
         if not Path(c).relative_to(work / 'classes').as_posix().startswith(own):
             raise StepFailed('compile', f'Classes must be in package {package}.')

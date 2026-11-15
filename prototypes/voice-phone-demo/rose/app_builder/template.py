@@ -111,9 +111,12 @@ def write_skeleton(source: Path, package: str, label: str):
         target.write_text(text, encoding='utf-8')
 
 
-def check(source: Path, package: str, *, extra_top: frozenset = frozenset()) -> None:
+def check(source: Path, package: str, *, extra_top: frozenset = frozenset(),
+          builder_files: frozenset = frozenset()) -> None:
     """Refuse generated source that could change the app's identity or escape the pinned toolchain. ``extra_top``
-    lets a declared profile (rose.app_builder.appprofile) add top-level entries; every other check still covers them."""
+    lets a declared profile (rose.app_builder.appprofile) add top-level entries; every other check still covers them.
+    ``builder_files`` are paths (relative to ``source``) the builder wrote itself after checking the writer's tree,
+    such as the client's sign-in core, which keeps its own package; only the package rule skips them."""
     source = Path(source)
     if os.lstat(source).st_mode & 0o700 != 0o700:
         raise TemplateRefused('The app\'s source folder is not readable and writable by the builder.')
@@ -188,6 +191,8 @@ def check(source: Path, package: str, *, extra_top: frozenset = frozenset()) -> 
     if application is not None and application.get(ANDROID + 'debuggable') is not None:
         raise TemplateRefused('android:debuggable is not allowed.')
     for java in source.glob('src/**/*.java'):
+        if java.relative_to(source).as_posix() in builder_files:
+            continue
         text = unicode_escapes(java.read_text(encoding='utf-8', errors='replace'))  # as javac reads it
         code = re.sub(r'/\*.*?\*/|//[^\n]*', ' ', text, flags=re.S)  # comments cannot hide the declaration
         match = re.match(r'\s*package\s+([\w.]+)\s*;', code)

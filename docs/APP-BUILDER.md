@@ -1638,7 +1638,40 @@ no restore until those are agreed.
   line-separator characters, and at most 128 UTF-16 units. rose-signin's name
   rules already require this.
 
-### 7.6 Builder (planned)
+### 7.6 Builder (wired in the job; each host-side part injected)
+
+**The job** (`service.Builder`; source, run by nothing on a host yet). Every
+project's snapshot is checked by `appprofile.check`, which is
+`template.check` for a plain app. For a `client-server-v1` app, the job also
+runs these steps before signing:
+1. **Contract.** `contract/api.json` is checked against every delivered
+   version's contract, which the ledger now records with each
+   client-server version.
+2. **Migrations.** They are checked against the delivered lock and in the
+   sandbox, then embedded as `rose/migrations.rs`
+   (`ACCOUNT`/`SHARED: &[(number, name, sql)]`) for the adapter.
+3. **Generated code.** The injected `codegen` writes the server's `rose/*.rs`
+   files and the client's files under `src/<package>/rose/`. A generator
+   that fails, or writes outside that folder, is the builder's failure
+   (`toolchain`).
+4. **APK.** It is built from the client's tree: the writer's checked app
+   without `rose-app.json`, `contract/` or `server/`, plus the builder's
+   files.
+   - Builder-written Java may keep its own package. The sign-in core is the
+     case: byte-identical, package `dev.pixel.rosesignin`.
+   - That exemption covers only those files and their packages. The
+     writer's Java and classes still have to be in the app's package.
+5. **Server.** It is built by `server_build` with the injected isolation,
+   Rust toolchain and crate set. The builder's own crates, the runtime
+   (and later its adapter), are read-only path dependencies, remapped out of
+   the binary.
+6. **Delivery.** The ELF is stored by its digest (`artifacts/<sha256>.server`).
+   The version is delivered with its server, migration lock, crates,
+   `Cargo.lock` and contract, all in one transaction.
+
+With no `codegen`, no isolation, no toolchain or no crate set, a
+client-server job fails with an honest category before anything is half
+built or delivered. A plain app's job is unchanged.
 
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:

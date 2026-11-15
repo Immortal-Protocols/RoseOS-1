@@ -121,9 +121,13 @@ class ServerBuild:
         return {'sha256': self.sha256, 'size': self.size, 'target': self.target}
 
 
-def cargo_toml(declared) -> str:
+PATH_CRATE = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+
+
+def cargo_toml(declared, path_crates: dict | None = None) -> str:
     """The server's Cargo.toml: one binary at the builder's entry point, exact versions of the declared crates,
-    no build script and no target found by Cargo's own conventions (the writer's files are modules, nothing else)."""
+    the builder's own path crates (the runtime, its adapter), no build script and no target found by Cargo's own
+    conventions (the writer's files are modules, nothing else)."""
     lines = ['[package]', f'name = "{PACKAGE}"', 'version = "0.0.0"', f'edition = "{EDITION}"', 'publish = false',
              'build = false', 'autolib = false', 'autobins = false', 'autoexamples = false', 'autotests = false',
              'autobenches = false', '', '[[bin]]', f'name = "{PACKAGE}"', f'path = "{ENTRY}"', '', '[dependencies]']
@@ -132,6 +136,10 @@ def cargo_toml(declared) -> str:
             raise BuildFailed('compile', 'profile_invalid', f'{key!r} is not an exact crate version.')
         name, version = key.split('@', 1)
         lines.append(f'{name} = "={version}"')
+    for name, path in sorted((path_crates or {}).items()):
+        if not PATH_CRATE.fullmatch(name) or name == PACKAGE:
+            raise ValueError(f'{name!r} is not a builder path crate name')
+        lines.append(f'{name} = {{ path = {_toml_string(Path(path))} }}')
     lines += ['', '[profile.release]', 'codegen-units = 1', 'incremental = false', 'debug = false',
               'strip = "debuginfo"', '', '[workspace]', '']
     return '\n'.join(lines)
@@ -152,10 +160,15 @@ def cargo_config(vendor: Path | None) -> str:
 
 def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | None, tools: RustTools | None,
           isolation: Isolation | None, cancelled=lambda: False, *, cache: Path, generated: dict[str, str],
-          previous_lock: str | None = None, locked: dict[str, str] | None = None) -> ServerBuild:
+          previous_lock: str | None = None, locked: dict[str, str] | None = None,
+          path_crates: dict[str, Path] | None = None, dependent_path_crates: dict[str, Path] | None = None) \
+        -> ServerBuild:
     """Build ``snapshot``'s server into ``work`` (a fresh job folder). ``generated`` holds the builder's own files
     (``rose/main.rs``, the entry point, and anything it uses); ``previous_lock`` is the last delivered version's
-    Cargo.lock and ``locked`` the crates delivered versions used (rose.app_builder.ledger)."""
+    Cargo.lock and ``locked`` the crates delivered versions used (rose.app_builder.ledger). ``path_crates`` are the
+    builder's own crates the server depends on (name -> folder: the runtime, its adapter), and
+    ``dependent_path_crates`` the path crates those depend on (rose-signin): all are read-only to the build, remapped
+    out of the binary, and the only packages besides the server allowed without a source."""
     if isolation is None:
         raise BuildFailed('toolchain', 'build_isolation_unavailable',
                           'The server was not built: this builder has no build isolation set up.')
@@ -184,19 +197,27 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         path = server / name
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         _write(path, text)
-    _write(server / 'Cargo.toml', cargo_toml(declared))
+    path_crates = {k: Path(os.path.realpath(v)) for k, v in (path_crates or {}).items()}
+    dependent = {k: Path(os.path.realpath(v)) for k, v in (dependent_path_crates or {}).items()}
+    for name, folder in {**path_crates, **dependent}.items():
+        if not (folder / 'Cargo.toml').is_file():
+            raise BuildFailed('toolchain', 'rust_toolchain_unavailable', f'The builder\'s crate {name} is missing.')
+    _write(server / 'Cargo.toml', cargo_toml(declared, path_crates))
     if previous_lock is not None:
         _write(server / 'Cargo.lock', previous_lock)
     _write(cargo_home / 'config.toml', cargo_config(vendor))
     # Static, as §7.7 agreed (the musl target's default; said once so every target the builder runs is the same).
     remap = ['-Ctarget-feature=+crt-static', f'--remap-path-prefix={work}=/rose-build']
+    for name, folder in sorted({**path_crates, **dependent}.items()):
+        remap.append(f'--remap-path-prefix={folder}=/rose-crates/{name}')
     if vendor is not None:
         remap.append(f'--remap-path-prefix={vendor}=/rose-crates')
     env = {'PATH': tools.path(), 'HOME': str(home), 'CARGO_HOME': str(cargo_home), 'CARGO_TARGET_DIR': str(target_dir),
            'TMPDIR': str(tmp), 'LANG': 'C.UTF-8', 'RUSTC': str(tools.rustc), 'CARGO_NET_OFFLINE': 'true',
            'CARGO_INCREMENTAL': '0', 'CARGO_TERM_COLOR': 'never', 'CARGO_ENCODED_RUSTFLAGS': '\x1f'.join(remap)}
-    readonly = (Path(tools.toolchain),) + ((vendor,) if vendor is not None else ())
-    redact = (work, Path(tools.toolchain)) + ((vendor,) if vendor is not None else ())
+    own = tuple(sorted(set({**path_crates, **dependent}.values())))
+    readonly = (Path(tools.toolchain),) + ((vendor,) if vendor is not None else ()) + own
+    redact = (work, Path(tools.toolchain)) + ((vendor,) if vendor is not None else ()) + own
     manifest = str(server / 'Cargo.toml')
 
     def cargo(*args):
@@ -233,7 +254,8 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'Cargo did not write the server\'s lock.') \
             from None
     try:
-        used = crate_set.check_lock(lock_text, by_key, locked, root=PACKAGE, declared=declared)
+        used = crate_set.check_lock(lock_text, by_key, locked, root=PACKAGE, declared=declared,
+                                    path_crates=frozenset(path_crates) | frozenset(dependent))
     except crate_set.Refused as refused:
         raise _refused(refused) from None
     cargo('build', '--offline', '--frozen', '--release', '--target', tools.target, '--message-format', 'json',
@@ -406,3 +428,23 @@ def _write(path: Path, text: str):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as stream:
         stream.write(text)
+
+
+def _raw(text: str) -> str:
+    """A Rust raw string literal holding exactly ``text``."""
+    hashes = 1
+    while '"' + '#' * hashes in text:
+        hashes += 1
+    return 'r' + '#' * hashes + '"' + text + '"' + '#' * hashes
+
+
+def migrations_rs(current: dict) -> str:
+    """``rose/migrations.rs``: the server's migrations embedded by the builder (§7.6), each scope's
+    ``(number, name, sql)`` in order, for the adapter to apply forward only. Built from the checked files
+    (rose.app_builder.migrations.read), never from the writer's Rust, which may not read files (§7.2)."""
+    out = ['//! The server\'s migrations, embedded by the builder. Generated; not the app\'s code.', '']
+    for scope, const in (('account', 'ACCOUNT'), ('shared', 'SHARED')):
+        rows = ''.join(f'    ({m.number}, "{m.name}", {_raw(m.sql)}),\n' for m in current.get(scope, []))
+        out.append(f'pub const {const}: &[(u32, &str, &str)] = &[\n{rows}];')
+        out.append('')
+    return '\n'.join(out)
