@@ -2214,8 +2214,7 @@ App Core accepts this boundary. The server is one Rust ELF plus a manifest,
 with nothing Chariot-specific inside the app. The fake host in tests checks
 the same manifest.
 
-**The manifest** (`app_builder/server_manifest.py`; source, called
-nowhere). This is App Core's description of one version's server. It is not
+**The manifest** (`app_builder/server_manifest.py`; source). This is App Core's description of one version's server. It is not
 Chariot's own wire format, because further manifest fields are still open
 (item 1 below). Its keys follow the host's snake_case, as the readiness keys
 do:
@@ -2234,6 +2233,23 @@ canonical JSON, so one manifest has one digest. Decoding is strict: no
 repeated key, no float or NaN, at most 16 KB, and only the canonical bytes. `check` holds a manifest to exactly this schema, and, when
 given them, to its project, its version and its binary. That function is
 what the fake host checks now, and what the Chariot adapter will check later.
+
+**Recorded with each delivered version.** When a client-server version's
+server is built for the agreed target (`x86_64-unknown-linux-musl`), the
+job builds its manifest from the job's own facts and the ledger records the
+canonical bytes with the version, in the same transaction
+(`server_manifest(project, versionCode)`).
+- **Matching:** the ledger refuses a manifest that names another project,
+  version or server, so nothing is half recorded.
+- **Other targets:** a server built for any other target, such as a build
+  machine's own target in CI, has no manifest. It is still delivered, but
+  it is not one the host runs.
+- **What a host is handed:** the ELF (`artifacts/<sha256>.server`) and that
+  manifest. Slice 10's fake host test holds the two to `check`, as the
+  Chariot adapter will.
+- **Not Chariot's wire format:** the fields stay App Core's schema version 1.
+  Further fields (item 1 below) are the Chariot owner's to agree, and nothing
+  relies on the manifest as Chariot's format until they are.
 
 **The binary check** (`check_elf`, also run by every server build). It
 reads the ELF's own headers, every offset bounded by the file, and accepts
@@ -2469,6 +2485,10 @@ need no hosting and no further OS Core change.
    Home/App's.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
     until §7.7 is answered.
+    - **The delivered version's manifest and the fake host's check
+      (§7.7).** Done: `rose/tests/test_app_level2_pipeline.py` (`FakeHost`)
+      and `rose/tests/test_app_ledger_level2.py` (`Manifests`). The Chariot
+      adapter stays blocked on §7.7 item 1.
     - **The native host record (§7.7 client base URL).** Done:
       `rose/tests/test_app_ledger_level2.py` (`NativeHost`) and
       `rose/tests/test_app_level2_pipeline.py`, which builds with the

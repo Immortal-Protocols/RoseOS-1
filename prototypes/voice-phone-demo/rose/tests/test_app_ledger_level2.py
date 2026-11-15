@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rose.app_builder import crates, ledger as L
+from rose.app_builder import crates, ledger as L, server_manifest as SM
 
 SERVER = {'sha256': 'e' * 64, 'size': 1234, 'target': 'x86_64-unknown-linux-musl'}
 M1 = {'scope': 'account', 'number': 1, 'name': 'notes', 'sha256': '1' * 64}
@@ -164,6 +164,40 @@ class Hosting(Base):
             self.l.record_hosted_app('nope', '33333333-3333-4333-8333-333333333333')
         self.assertIsNone(self.l.hosted_app(other))
 
+
+
+class Manifests(Base):
+    """§7.7: a client-server version's manifest (App Core's own description of its server) is recorded with the
+    version, in the same transaction, only when it names that version, its project and its server."""
+    MUSL = {**SERVER, 'target': SM.TARGET}
+
+    def manifest(self, version_code=1, server=None, project=None):
+        return SM.encode(SM.manifest(project or self.project, version_code, server or self.MUSL, [M1]))
+
+    def test_recorded_with_its_version(self):
+        self.assertIsNone(self.l.server_manifest(self.project, 1))
+        data = self.manifest()
+        self.assertTrue(self.deliver(1, profile=L.CLIENT_SERVER, server=self.MUSL, migrations=[M1], manifest=data))
+        self.assertEqual(self.l.server_manifest(self.project, 1), data)
+        self.assertEqual(SM.decode(self.l.server_manifest(self.project, 1))['schema'], {'account': 1})
+        # A version whose server the host does not run (another target) has none, and is still delivered.
+        self.assertTrue(self.deliver(2, profile=L.CLIENT_SERVER, server=SERVER, migrations=[M1]))
+        self.assertIsNone(self.l.server_manifest(self.project, 2))
+
+    def test_a_manifest_for_anything_else_is_refused_and_nothing_is_recorded(self):
+        other = SM.encode(SM.manifest('0123456789abcdef', 1, self.MUSL, [M1]))
+        for kw in (dict(manifest=self.manifest(version_code=2)),  # another version
+                   dict(manifest=other),  # another project
+                   dict(manifest=self.manifest(server={**self.MUSL, 'size': 9})),  # another server
+                   dict(manifest=self.manifest() + b' '),  # not canonical
+                   dict(manifest=b'{}')):
+            with self.subTest(kw=kw), self.assertRaises(L.LedgerError):
+                self.first = True
+                self.deliver(1, profile=L.CLIENT_SERVER, server=self.MUSL, migrations=[M1], **kw)
+            self.assertEqual(self.l.versions(self.project), [])
+            self.assertIsNone(self.l.server_manifest(self.project, 1))
+        with self.assertRaises(L.LedgerError):  # a plain version has no server, so no manifest
+            self.deliver(1, manifest=self.manifest())
 
 
 # Synthetic fixtures only: reserved example names (RFC 2606) and made-up UUIDs, never a live host.

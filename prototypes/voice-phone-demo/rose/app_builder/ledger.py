@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from .apilevel import wire_summary
-from . import server_summary
+from . import server_manifest, server_summary
 
 STATES = ('queued', 'preparing', 'building', 'testing', 'signing', 'ready', 'failed', 'cancelled')
 ACTIVE = ('queued', 'preparing', 'building', 'testing', 'signing')
@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS version_cargo_locks (
 -- them (rose.app_builder.contract.check_update).
 CREATE TABLE IF NOT EXISTS version_contracts (
   project_id TEXT NOT NULL, version_code INTEGER NOT NULL, contract TEXT NOT NULL, PRIMARY KEY (project_id, version_code));
+-- §7.7: the manifest of a client-server version's server (rose.app_builder.server_manifest, canonical bytes), App
+-- Core's own description of it, recorded with the version when its server is one the host runs (the musl target).
+CREATE TABLE IF NOT EXISTS version_manifests (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, manifest BLOB NOT NULL, PRIMARY KEY (project_id, version_code));
 -- Level 3 (§3.3 share): the hosted app id for a project, recorded only from owner tooling or the publisher.
 CREATE TABLE IF NOT EXISTS project_hosting (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), hosted_app_id TEXT NOT NULL UNIQUE,
@@ -358,7 +362,8 @@ class Ledger:
 
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
                 dependencies=(), api_report: dict | None = None, profile: str | None = None, server=None,
-                migrations=(), crates=(), cargo_lock: str | None = None, contract: str | None = None):
+                migrations=(), crates=(), cargo_lock: str | None = None, contract: str | None = None,
+                manifest: bytes | None = None):
         """Record the delivered version and, in the same transaction, the libraries it was built with (its lock).
         A client-server version (profile CLIENT_SERVER) also records its server ELF, its migration lock, the crates
         its server was built with and its Cargo.lock, and binds the project's profile; once bound, a version without
@@ -379,8 +384,17 @@ class Ledger:
             if contract is not None and (not isinstance(contract, str) or not contract
                                          or len(contract.encode('utf-8', 'replace')) > MAX_CONTRACT):
                 raise LedgerError('a contract is its canonical JSON text')
-        elif server is not None or migrations or crates or cargo_lock is not None or contract is not None:
-            raise LedgerError('only a client-server version has a server, migrations, crates and a contract')
+            if manifest is not None:
+                try:
+                    manifest_doc = server_manifest.decode(manifest)  # canonical bytes of schema version 1 only
+                except server_manifest.Refused as refused:
+                    raise LedgerError(f'a server manifest must be valid and canonical ({refused})') from None
+                if manifest_doc['elf'] != server:
+                    raise LedgerError("the server manifest describes another server than the version's")
+        elif server is not None or migrations or crates or cargo_lock is not None or contract is not None \
+                or manifest is not None:
+            raise LedgerError('only a client-server version has a server, migrations, crates, a contract and a '
+                              'manifest')
         with self.lock:
             job = self.job(job_id)
             if job['state'] not in ACTIVE or self.cancel_requested(job_id):
@@ -431,6 +445,12 @@ class Ledger:
                     if contract is not None:
                         self.db.execute('INSERT INTO version_contracts VALUES (?,?,?)',
                                         (job['projectId'], job['versionCode'], contract))
+                    if manifest is not None:  # it names this version, so it is checked against the job itself
+                        if (manifest_doc['project_id'], manifest_doc['version_code']) != (job['projectId'],
+                                                                                           job['versionCode']):
+                            raise LedgerError('the server manifest names another project or version')
+                        self.db.execute('INSERT INTO version_manifests VALUES (?,?,?)',
+                                        (job['projectId'], job['versionCode'], bytes(manifest)))
                 self.db.execute("UPDATE jobs SET state='ready', stage='ready', message='Ready to install.', "
                                 "updated=? WHERE job_id=?", (self.clock(), job_id))
                 self.db.execute('COMMIT')
@@ -494,6 +514,14 @@ class Ledger:
             row = self.db.execute('SELECT sha256, size, target FROM version_servers WHERE project_id=? AND '
                                   'version_code=?', (project, version_code)).fetchone()
         return {'sha256': row[0], 'size': row[1], 'target': row[2]} if row else None
+
+    def server_manifest(self, project: str, version_code: int) -> bytes | None:
+        """The canonical manifest bytes recorded with a delivered client-server version, or None (a plain version,
+        one from before manifests were recorded, or one whose server is not for the host's target)."""
+        with self.lock:
+            row = self.db.execute('SELECT manifest FROM version_manifests WHERE project_id=? AND version_code=?',
+                                  (project, version_code)).fetchone()
+        return None if row is None else bytes(row[0])
 
     def migration_lock(self, project: str) -> list[dict]:
         """Every migration any delivered version ran, once each (rose.app_builder.migrations.check holds every later
