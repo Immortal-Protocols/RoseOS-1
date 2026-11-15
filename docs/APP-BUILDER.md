@@ -2255,9 +2255,11 @@ the server does.
   - `status`: `ok` when ready. When not ready it is `not_ready`; that word
     is App Core's, since the contract names only the ready body.
   - `app_id`: the Chariot host's UUID, from `CHARIOT_APP_ID`. It is not the builder's `projectId`.
-    The builder's ledger keeps an explicit mapping from `projectId` to the
-    hosted app id and the hosted APK app id, written only from owner tooling
-    or publisher results, never guessed.
+    The builder's ledger keeps two separate, explicit mappings from
+    `projectId`: to this native host id (`record_native_host`, below), and
+    to the hosted APK app id that §3.3 `share` reads (`record_hosted_app`).
+    Both are written only from owner tooling or publisher results, never
+    guessed.
   - `revision_sha256`: measured by the server itself, by hashing its own ELF
     at start. If the host's `CHARIOT_REVISION_SHA256` differs, the server
     stays not ready.
@@ -2286,13 +2288,15 @@ the server does.
     tooling records `record_native_host(project, hostId, endpoint)`: the
     host's lower-case UUID (`CHARIOT_APP_ID`, above) and its endpoint,
     checked with `HOSTED_URL` (what the generated client accepts), at most
-    2048 characters.
+    2048 characters, and in one spelling: no trailing `/` and no default
+    port `:443`, since the client reaches the same server either way.
     - It is its own record, never the hosted APK app id (§3.3 `share`).
     - The same record again changes nothing. A different one is refused
       unless `replaces` names the current record exactly, so a replaced host
       or a changed domain is an explicit change, never a silent move.
-    - A host id or endpoint another project holds is refused, so one app's
-      clients never reach another app's server.
+    - A host id or endpoint another project holds is refused, so no two
+      projects' records name the same host or server. Where a domain
+      actually routes is Chariot's to decide.
     - `native_host_endpoint(project)` is what a host passes as the Builder's
       `server_url`, and the build checks the value again. Versions already
       built keep the endpoint they baked until they are rebuilt.

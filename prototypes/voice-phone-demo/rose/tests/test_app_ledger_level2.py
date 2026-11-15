@@ -218,16 +218,30 @@ class NativeHost(Base):
             self.l.record_native_host('nope', '66666666-6666-4666-8666-666666666666', 'https://x.example.org')
 
     def test_the_host_id_and_endpoint_are_checked(self):
-        for bad in ('', HOST.upper(), 'not-a-uuid', None, 7, self.project):
+        for bad in ('', HOST.upper(), 'not-a-uuid', None, 7, self.project, HOST + '0', 'x' + HOST):
             with self.subTest(host=bad), self.assertRaises(L.LedgerError):
                 self.l.record_native_host(self.project, bad, ENDPOINT)
         for bad in ('http://notes.example.org', 'https://Notes.example.org', 'https://notes.example.org/#x',
                     'https://notes.example.org?q=1', 'https://user@notes.example.org', 'https://10.0.0.1',
                     'https://notes.example.org:0', 'https://' + 'a' * 2050 + '.org', '', None, b'https://x.org',
-                    ' https://notes.example.org', 'https://notes.example.org\n'):
+                    ' https://notes.example.org', 'https://notes.example.org\n',
+                    'https://notes.example.org/', 'https://notes.example.org/app/', 'https://notes.example.org:443',
+                    'https://notes.example.org:443/app', 'https://notes.example.org/' + 'a' * 2048):
             with self.subTest(endpoint=bad), self.assertRaises(L.LedgerError):
                 self.l.record_native_host(self.project, HOST, bad)
         self.assertIsNone(self.l.native_host(self.project))
+        longest = 'https://notes.example.org/' + 'a' * (L.MAX_ENDPOINT - len('https://notes.example.org/'))
+        self.l.record_native_host(self.project, HOST, longest)  # at the bound; one more is refused above
+        other = self.l.create('d', 'o', 'y', 'Y')['projectId']
+        self.l.record_native_host(other, HOST2, 'https://notes.example.org:8443/app')  # another port is kept
+
+    def test_another_spelling_of_a_recorded_endpoint_is_refused(self):
+        self.l.record_native_host(self.project, HOST, ENDPOINT)
+        other = self.l.create('d', 'other', 'y', 'Y')['projectId']
+        for spelling in (ENDPOINT + '/', ENDPOINT + ':443', ENDPOINT + ':443/'):
+            with self.subTest(spelling=spelling), self.assertRaises(L.LedgerError):
+                self.l.record_native_host(other, HOST2, spelling)
+        self.assertIsNone(self.l.native_host(other))
 
     def test_it_is_not_the_hosted_apk_app_id(self):
         self.l.record_hosted_app(self.project, HOSTED)

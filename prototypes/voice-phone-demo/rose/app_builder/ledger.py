@@ -562,11 +562,16 @@ class Ledger:
         endpoint). The same record again is a no-op. A different one is refused unless ``replaces`` names the
         current record exactly (``{hostId, endpoint}``): a replaced host or a changed domain is an explicit change,
         never a silent move, and versions already built keep the endpoint they baked until they are rebuilt. A host
-        id or endpoint another project holds is refused, so one app's clients never reach another app's server."""
+        id or endpoint another project holds is refused (the endpoint in its one spelling: no trailing '/', no :443), so
+        no two projects' records name the same host or server."""
         if not isinstance(host_id, str) or not UUID.fullmatch(host_id):
             raise LedgerError('a native host id is a lower-case UUID')
         if not isinstance(endpoint, str) or len(endpoint) > MAX_ENDPOINT or not HOSTED_URL.fullmatch(endpoint):
             raise LedgerError('a native host endpoint is an https address the generated client accepts')
+        # One spelling per server: the client drops a trailing '/', and :443 is https's own port, so either would
+        # let a second project record another spelling of the same server past the uniqueness check.
+        if endpoint.endswith('/') or re.match(r'https://[^/]*:443(?:/|$)', endpoint):
+            raise LedgerError('a native host endpoint is written without a trailing / or the default port :443')
         record = {'hostId': host_id, 'endpoint': endpoint}
         with self.lock:
             if self._project(project) is None:
