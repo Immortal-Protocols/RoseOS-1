@@ -12,6 +12,8 @@ rose-signin = { path = "../rose-signin", features = ["sqlite"] }
 # Both are already in rose-signin's lock (the bundled SQLite store and SHA-256); the adapter adds no crate.
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
+# Standard padded base64 for the keyring (already in rose-signin's lock, through password-hash).
+base64ct = "1.8"
 
 [lib]
 path = "src/lib.rs"

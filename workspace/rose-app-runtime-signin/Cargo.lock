@@ -335,6 +335,7 @@ version = "0.1.0"
 name = "rose-app-runtime-signin"
 version = "0.1.0"
 dependencies = [
+ "base64ct",
  "rose-app-runtime",
  "rose-signin",
  "rusqlite",

@@ -1626,10 +1626,17 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   Handlers reach the data as `ctx.data` (`AppData`), and `account(principal)` opens only this app's principal's own file.
 - **Migrations.** The builder-embedded lists run forward only. Each one runs in one immediate transaction with its `user_version`. A database above the list is refused and left untouched, at start-up and on open.
 - **Start-up.** `start` opens and migrates the sign-in store, the shared database and every existing account file. It then measures `revision_sha256` from the binary.
-  - **Environment.** `Config::from_env` reads only `DATA_DIR` and `CHARIOT_DEPLOYMENT_SHA256`, which is echoed as passed.
-  - **App id.** The host's app id is passed in by the caller, because its variable isn't named yet (item 2).
+  - **Environment.** `Config::from_env` reads `DATA_DIR`, `CHARIOT_APP_ID` and `CHARIOT_DEPLOYMENT_SHA256` (echoed as passed). When the host also sets `CHARIOT_REVISION_SHA256`, a binary that measures differently is held not ready.
+  - **Keys.** `Keys::from_env()` loads the keyring from `CHARIOT_SEALING_KEY_FILE`, the absolute path of an app-owned `0400` file the host exposes by a read-only bind mount. The format is `rose-signin-keyring/v1`: `{"format","current","keys":[{"version","key"}]}`.
+    - Strict UTF-8 JSON of at most 16 KiB, with no unknown or repeated field. Whitespace between tokens is allowed.
+    - 1 to 64 keys with unique `u32` versions, and `current` among them.
+    - Each key is standard padded base64, with no whitespace, of exactly 32 bytes.
+    - The path must be absolute. The opened file must be a regular file that the server's process can read, and neither the group nor others may read it (mode bits `0o044` clear). Its owner isn't checked, so an app-owned `0400` file behind a read-only bind works.
+    - The file is opened without blocking, so a FIFO is refused rather than waited on. It is read once.
+    - The loader zeroes its own buffers. It can't zero the JSON parser's internal copies, or rose-signin's `Secret`, which redacts `Debug` but isn't zeroed on drop.
+    - Its path and contents are never logged. Any problem leaves the server without a key, and a reason word says why.
   - **Server.** `Started::server` attaches the data and marks the migrations done.
-- **Not ready yet.** Keys come only from the caller, and today's caller passes `Keys::Unavailable` (D9). `restore_done` is never set (item 5). So a server built on the adapter answers `503` until both are agreed.
+- **Not ready yet.** `restore_done` is never set (item 5), and no host delivers a keyring yet. So a server built on the adapter answers `503` until the restore executor is agreed and a keyring arrives.
 - **Dependencies.** The lock is rose-signin's 52 crates plus the two path crates, and a test checks this. Its CI (`.github/workflows/rose-app-runtime-signin.yml`) follows rose-signin's route.
 - **Build note.** The bundled SQLite C source needs a musl C compiler on the builder.
 

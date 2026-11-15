@@ -4,7 +4,7 @@
 //! handed, migrates the shared and every existing account database, and measures the identity. [`Started::server`]
 //! then builds the runtime's server and marks the migrations done. It never marks a restore done: the restore
 //! marker is not agreed yet (§7.7 item 5), so a server started here is not ready, and says so, until that contract
-//! and the key's delivery (D9, item 3) are settled.
+//! is settled; and without a delivered keyring ([`Keys::from_env`]) it has no key and is not ready either.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -22,9 +22,13 @@ use crate::identity::{self, DEPLOYMENT_ENV};
 
 /// The variable naming the server's only writable directory (§7.7).
 pub const DATA_DIR_ENV: &str = "DATA_DIR";
+/// The variable carrying the host's app id (§7.7 item 2, settled in the Chariot owner's docs).
+pub const APP_ID_ENV: &str = "CHARIOT_APP_ID";
+/// The optional variable carrying the revision the host deployed.
+pub const REVISION_ENV: &str = "CHARIOT_REVISION_SHA256";
 
-/// The sealing keys, handed in by whoever resolves them. Their delivery is not agreed (D9), so a generated server
-/// passes [`Keys::Unavailable`] today: the sealer then has no key, sign-in answers `auth_unavailable` and the
+/// The sealing keys: what [`Keys::from_env`] loads from the host's keyring file (D9, [`crate::keys`]), or
+/// [`Keys::Unavailable`]: the sealer then has no key, sign-in answers `auth_unavailable` and the
 /// server is not ready. This crate never fetches, derives or creates a key.
 pub enum Keys {
     Unavailable,
@@ -61,26 +65,32 @@ pub struct Config {
     /// The name authenticator apps show beside the code.
     pub issuer: String,
     pub admission: Admission,
-    /// The host's app id (the Chariot host's UUID), passed by the caller: its variable is not named yet.
+    /// The host's app id (the Chariot host's UUID), from `CHARIOT_APP_ID`.
     pub app_id: String,
     pub data_dir: PathBuf,
     /// The host's `CHARIOT_DEPLOYMENT_SHA256`, echoed as it is.
     pub deployment_sha256: String,
+    /// The host's `CHARIOT_REVISION_SHA256`, when it passes one: the binary it deployed. A server whose own
+    /// measurement differs is not ready (its authenticator is held), so a wrong binary never serves sign-in.
+    pub expected_revision: Option<String>,
     pub migrations: Migrations,
 }
 
 impl Config {
-    /// The configuration from the environment the host gives the server: `DATA_DIR` and
-    /// `CHARIOT_DEPLOYMENT_SHA256`. Everything else is the build's.
+    /// The configuration from the environment the host gives the server: `DATA_DIR`, `CHARIOT_APP_ID`,
+    /// `CHARIOT_DEPLOYMENT_SHA256` and, when set, `CHARIOT_REVISION_SHA256`. Everything else is the build's.
     pub fn from_env(
         app: &str,
         issuer: &str,
         admission: Admission,
-        app_id: &str,
         migrations: Migrations,
     ) -> Result<Config, StartError> {
-        Self::from_lookup(app, issuer, admission, app_id, migrations, |name| {
-            std::env::var(name).ok()
+        // A variable that is set but not UTF-8 is kept as an empty value, which the checks refuse: it never reads
+        // as unset (an unreadable CHARIOT_REVISION_SHA256 must not switch the revision check off).
+        Self::from_lookup(app, issuer, admission, migrations, |name| match std::env::var(name) {
+            Ok(value) => Some(value),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => Some(String::new()),
         })
     }
 
@@ -89,19 +99,20 @@ impl Config {
         app: &str,
         issuer: &str,
         admission: Admission,
-        app_id: &str,
         migrations: Migrations,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, StartError> {
         let data_dir = lookup(DATA_DIR_ENV).ok_or(StartError::Missing(DATA_DIR_ENV))?;
+        let app_id = lookup(APP_ID_ENV).ok_or(StartError::Missing(APP_ID_ENV))?;
         let deployment = lookup(DEPLOYMENT_ENV).ok_or(StartError::Missing(DEPLOYMENT_ENV))?;
         Ok(Config {
             app: app.to_string(),
             issuer: issuer.to_string(),
             admission,
-            app_id: app_id.to_string(),
+            app_id,
             data_dir: PathBuf::from(data_dir),
             deployment_sha256: deployment,
+            expected_revision: lookup(REVISION_ENV),
             migrations,
         })
     }
@@ -144,6 +155,8 @@ pub struct Started {
     pub identity: Identity,
     /// Account databases checked and migrated at start-up.
     pub accounts_migrated: usize,
+    /// False when the host named a revision and this binary is another: the server is then not ready.
+    pub revision_matches: bool,
     pub restore: Restore,
 }
 
@@ -169,7 +182,14 @@ pub fn start(config: Config, keys: Keys) -> Result<Started, StartError> {
         return Err(StartError::Invalid("the issuer"));
     }
     if !identity::is_app_id(&config.app_id) {
-        return Err(StartError::Invalid("the host's app id"));
+        return Err(StartError::Invalid(APP_ID_ENV));
+    }
+    if config
+        .expected_revision
+        .as_deref()
+        .is_some_and(|r| !identity::is_sha256_hex(r))
+    {
+        return Err(StartError::Invalid(REVISION_ENV));
     }
     if !identity::is_sha256_hex(&config.deployment_sha256) {
         return Err(StartError::Invalid(DEPLOYMENT_ENV));
@@ -181,9 +201,13 @@ pub fn start(config: Config, keys: Keys) -> Result<Started, StartError> {
     let store = auth_store(&config.data_dir)?;
     let inner = flow::Authenticator::new(store, sealer(keys)?, &config.issuer)
         .map_err(|_| StartError::Invalid("the issuer"))?;
-    let auth = SigninAuth::new(&config.app, inner).map_err(|_| StartError::Invalid("the app name"))?;
+    let mut auth = SigninAuth::new(&config.app, inner).map_err(|_| StartError::Invalid("the app name"))?;
     let accounts_migrated = data.migrate_all().map_err(StartError::Data)?;
     let revision = identity::revision_sha256().map_err(|e| StartError::Revision(e.to_string()))?;
+    let revision_matches = config.expected_revision.as_deref().is_none_or(|r| r == revision);
+    if !revision_matches {
+        auth.hold();
+    }
     Ok(Started {
         app: config.app,
         admission: config.admission,
@@ -195,6 +219,7 @@ pub fn start(config: Config, keys: Keys) -> Result<Started, StartError> {
             deployment_sha256: config.deployment_sha256,
         },
         accounts_migrated,
+        revision_matches,
         restore: Restore::Unresolved,
     })
 }

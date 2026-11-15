@@ -34,8 +34,8 @@ pub fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// The host's app id: a non-empty token of at most 128 visible ASCII characters (the Chariot host's UUID). Its
-/// variable is not named yet (§7.7 item 2), so the caller passes it.
+/// The host's app id (`CHARIOT_APP_ID`): a non-empty token of at most 128 visible ASCII characters (the Chariot
+/// host's UUID).
 pub fn is_app_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && value.bytes().all(|b| b.is_ascii_graphic())
 }
