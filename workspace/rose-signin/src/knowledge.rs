@@ -1,12 +1,12 @@
-//! The knowledge factor (PIN/passphrase), verified server-side against an Argon2id hash (decision D1's recommended
-//! option; docs/ROSE-SIGNIN-V1.md). The plaintext is never stored, logged or returned. Clients send it only inside the
+//! The knowledge factor (PIN/passphrase), verified server-side against an Argon2id hash (decision D1;
+//! docs/ROSE-SIGNIN-V1.md). The plaintext is never stored, logged or returned. Clients send it only inside the
 //! TLS sign-in request; nothing on the device stores or autofills it.
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Algorithm, Argon2, Params, Version};
 
 /// Minimum length in Unicode scalar values. 8 follows NIST SP 800-63B for a memorized secret used with a second
-/// factor; the final value is decision D2.
+/// factor (decision D2).
 pub const MIN_LEN: usize = 8;
 /// Upper bound, so a request cannot make the server hash megabytes.
 pub const MAX_LEN: usize = 128;

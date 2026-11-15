@@ -46,9 +46,13 @@ jobs:
           java -version
       - name: Format
         run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-      - name: Tests (shared vectors, flow and security properties)
-        run: cargo test --locked --no-fail-fast
+      - name: Clippy (core, and with the reference SQLite store)
+        run: |
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --all-targets --locked --features sqlite -- -D warnings
+      - name: Tests (shared vectors, flow, sealer, store conformance on memory and SQLite, concurrency, restore)
+        run: |
+          cargo test --locked --no-fail-fast
+          cargo test --locked --no-fail-fast --features sqlite
       - name: Java client core (shared vectors, Java 8 source level, no android.*)
         run: bash java/test.sh
