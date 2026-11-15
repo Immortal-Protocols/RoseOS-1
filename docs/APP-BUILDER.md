@@ -1627,7 +1627,7 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
 - **Migrations.** The builder-embedded lists run forward only. Each one runs in one immediate transaction with its `user_version`. A database above the list is refused and left untouched, at start-up and on open.
 - **Start-up.** `start` opens and migrates the sign-in store, the shared database and every existing account file. It then measures `revision_sha256` from the binary.
   - **Environment.** `Config::from_env` reads `DATA_DIR`, `CHARIOT_APP_ID` and `CHARIOT_DEPLOYMENT_SHA256` (echoed as passed). When the host also sets `CHARIOT_REVISION_SHA256`, a binary that measures differently is held not ready.
-  - **Keys.** `Keys::from_env()` loads the keyring from `CHARIOT_SEALING_KEY_FILE`, the systemd credential `rose-signin-keyring`. The format is `rose-signin-keyring/v1`: `{"format","current","keys":[{"version","key"}]}`.
+  - **Keys.** `Keys::from_env()` loads the keyring from `CHARIOT_SEALING_KEY_FILE`, the absolute path of an app-owned `0400` file the host exposes by a read-only bind mount. The format is `rose-signin-keyring/v1`: `{"format","current","keys":[{"version","key"}]}`.
     - Strict UTF-8 JSON of at most 16 KiB, with no unknown or repeated field. Whitespace between tokens is allowed.
     - 1 to 64 keys with unique `u32` versions, and `current` among them.
     - Each key is standard padded base64, with no whitespace, of exactly 32 bytes.

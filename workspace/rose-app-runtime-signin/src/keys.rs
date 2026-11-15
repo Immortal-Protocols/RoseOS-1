@@ -1,12 +1,12 @@
 //! The sealing keyring the host hands the server (D9, §7.7 item 3), parsed into rose-signin's `AeadSealer` keys.
 //!
-//! **Delivery.** `CHARIOT_SEALING_KEY_FILE` names the systemd credential `rose-signin-keyring` (an absolute path,
-//! for example under `$CREDENTIALS_DIRECTORY`). The host passes the payload's bytes as they are; this is the only
-//! place they are read. The file must be a regular file the process can read and neither the group nor others can
-//! read (its owner is not checked: an app-owned `0400` file behind a read-only bind is the expected form), at most
-//! 16 KiB; it is opened without blocking (a FIFO or device there is refused, never waited on), read once at start
-//! and never re-read (a rotation takes effect on restart). Its path and contents never reach a log, an error or
-//! `Debug`.
+//! **Delivery.** `CHARIOT_SEALING_KEY_FILE` is the absolute path of the keyring file: an app-owned `0400` regular
+//! file the host exposes into the service by a read-only bind mount. The host passes the payload's bytes as they
+//! are; this is the only place they are read. The opened file (symlinks followed) must be a regular file the
+//! process can read, with no group or other read bits (`0o044`, which also refuses an ACL granting read), at most
+//! 16 KiB; the owner is not checked. It is opened without blocking (a FIFO or device there is refused, never waited
+//! on), read once at start and never re-read (a rotation takes effect on restart). Its path and contents never
+//! reach a log, an error or `Debug`.
 //!
 //! **Wiping, exactly.** The loader zeroes its own read buffer and decode buffer, and, after a successful parse, the
 //! strings of the parsed value. It cannot zero copies it does not own: the runtime JSON parser's intermediate
