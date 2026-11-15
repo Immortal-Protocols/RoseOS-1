@@ -88,6 +88,7 @@ class RoseAuthenticatorPackageTest(unittest.TestCase):
         # starts again whenever the dialog window regains focus (a floating window does not pause the activity).
         self.assertEqual(activity.count('setHideOverlayWindows(true)'), 3)
         self.assertIn('FLAG_WINDOW_IS_PARTIALLY_OBSCURED', activity)
+        self.assertIn('d.setMessage(message + COVERED)', activity, 'a dropped touch says why (PiP is not hidden)')
         self.assertIn('addOnWindowFocusChangeListener', activity)
         # The delay is re-armed whenever the activity is shown again, and stopped while it is covered.
         self.assertIn('tick.removeCallbacks(enable);', activity)

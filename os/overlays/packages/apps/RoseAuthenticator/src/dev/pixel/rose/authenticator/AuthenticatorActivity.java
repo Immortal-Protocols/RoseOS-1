@@ -50,6 +50,8 @@ public final class AuthenticatorActivity extends Activity {
     /** How long the confirm button stays disabled after the dialog appears (tapjacking). */
     private static final long CONFIRM_DELAY_MS = 1000;
     private static final Object LOCK = new Object();
+    private static final String COVERED =
+            "\n\nAnother window is covering part of this dialog. Move or close it, then tap again.";
 
     private final Handler tick = new Handler(Looper.getMainLooper());
     private final Vault.Sealer sealer = new KeystoreSealer();
@@ -201,11 +203,12 @@ public final class AuthenticatorActivity extends Activity {
                     .show();
             return;
         }
+        final String names = e.issuer + "\n" + e.account;
         final AlertDialog[] self = new AlertDialog[1];
         dialog = self[0] = new AlertDialog.Builder(this)
                 // The sender is in the title, apart from the names the link supplies.
                 .setTitle(sender == null ? "Add an account from an unidentified app?" : "Add an account from " + sender + "?")
-                .setMessage(e.issuer + "\n" + e.account)
+                .setMessage(names)
                 .setPositiveButton("Add", (d, w) -> {
                     pending = null;
                     try {
@@ -229,15 +232,20 @@ public final class AuthenticatorActivity extends Activity {
             if (dialog == self[0]) dialog = null;
             guarded.remove(add);
         });
-        guard(add);
+        guard(dialog, add, names);
     }
 
     /** Tapjacking: ignore touches while another window covers the button, and enable it only after a delay. */
-    private void guard(Button b) {
+    private void guard(AlertDialog d, Button b, String message) {
         if (b == null) return;
         b.setFilterTouchesWhenObscured(true);
-        // Also ignore a touch while any other window covers part of the dialog (its text could be painted over).
-        b.setOnTouchListener((v, ev) -> (ev.getFlags() & MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED) != 0);
+        // Also ignore a touch while any other window covers part of the dialog (its text could be painted over), and
+        // say why: a picture-in-picture or freeform window is not an overlay, so it is not hidden.
+        b.setOnTouchListener((v, ev) -> {
+            if ((ev.getFlags() & MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED) == 0) return false;
+            if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) d.setMessage(message + COVERED);
+            return true;
+        });
         // A window over the dialog takes its focus without pausing the activity: start the delay again on return.
         b.getViewTreeObserver().addOnWindowFocusChangeListener(focused -> {
             if (focused) arm();
@@ -354,9 +362,10 @@ public final class AuthenticatorActivity extends Activity {
     }
 
     private void confirmRemove(Vault.Entry e) {
+        final String message = e.issuer + "\n" + e.account + "\n\nYou will need a recovery code to sign in to it again.";
         AlertDialog d = new AlertDialog.Builder(this)
                 .setTitle("Remove this account?")
-                .setMessage(e.issuer + "\n" + e.account + "\n\nYou will need a recovery code to sign in to it again.")
+                .setMessage(message)
                 .setPositiveButton("Remove", (x, w) -> {
                     try {
                         change(v -> v.remove(e.issuer, e.account));
@@ -370,7 +379,7 @@ public final class AuthenticatorActivity extends Activity {
         d.show();
         final Button remove = d.getButton(AlertDialog.BUTTON_POSITIVE);
         d.setOnDismissListener(x -> guarded.remove(remove));
-        guard(remove);
+        guard(d, remove, message);
     }
 
     /** The vault on disk. An unreadable file is kept aside (never overwritten) and an empty vault is used. */
