@@ -58,10 +58,10 @@ layouts survive a new snapshot.
 | actions: `shortcut` | `sc:<package>/<shortcut id>` | `LauncherApps.getShortcuts` (Home holds the HOME role; no new permission) | yes |
 | actions: `deeplink` | `intent:<template>` | intent templates Rose already has (alarm, timer, directions, music; `LocalRosePhone`) | yes |
 | actions: `agent_task` | `task:<template id>` | the phone's task templates: `label` ≤ 60, `ask` ≤ 200, `goal` ≤ 300. The target is Rose Agent's own app entry, because every rose-layout-v1 action names one. The ask and goal never enter the model, and `requiresConfirmation` is always true. | after App Core's route |
-| actions: `notification_action` | `nact:<key>/<index>` | notification actions | after D1 |
+| actions: `notification_action` | `nact:<hash>/<index>` | a notification's actions, at most 2, targeting its `n:` id | after D1 (inputs ready, no source) |
 | actions: `app_function` | — | needs a privileged permission, so not inferred | no |
-| notifications | `n:<key>` | see D1 | after D1 |
-| content | `c:<source>/<id>` | no source yet (recipes, documents and media in the HiFi are sample data) | no |
+| notifications | `n:<hash>`, 16 hex of SHA-256 over the notification's key | see D1; only the title enters, never the body or the raw key | after D1 (inputs ready, no source) |
+| content | `c:<source>/<id>` | no source yet (recipes, documents and media in the HiFi are sample data) | no (inputs ready, no source) |
 
 A package, activity, shortcut or template name that is empty, longer than 200 characters, or contains a
 space, `/`, `"` or `\` cannot make an unambiguous id, so it is left out.
@@ -77,12 +77,48 @@ offered exactly the ids the phone can open.
 - **Labels** are display text the OS already shows. Control characters become one space, invisible format
   characters are dropped, and the text is cut to 60 code points. An entry with no visible label is left out.
 - **Bounds:** at most 120 apps and 60 actions, and the first entry of a repeated id wins.
-- **Notifications and content** are empty until D1 and a content source exist.
+- **Notifications and content** come from `WorkspaceInputs.SOURCE`, which is `WorkspaceInputs.NONE` today:
+  notifications are `not_decided` (D1) and content is `no_source`. So both lists are empty, and with no inputs
+  the snapshot and its version are exactly as before. See "Notification and content inputs".
 - **Pins:** `pinned` keeps only ids that are present.
 - **The version** is `s-` plus 12 hex digits of SHA-256 over every entry and the pins. `createdAtMs` and
   `timeOfDay` are not part of it, so a new hour alone never makes a layout stale.
 - **Requests:** `WorkspaceSnapshot.request` writes the request with cat-1's own limits (6 sections, 8 per
   section, 20 in total). On regenerate it adds `avoid`: the previous layout's ids, unique and at most 64.
+
+## Notification and content inputs
+
+The snapshot side is ready for a source, but no source is attached, and none will be until D1 and a content
+source are decided.
+
+- **What exists on the phone today.** Rose Agent has no notification listener and holds no notification-access
+  grant. The Rose shade (OS Core's SystemUI overlay) reads notifications only inside SystemUI and offers Rose
+  Agent nothing. Rose's book, podcast and sky entry points are hand-offs the person starts for a conversation,
+  not a standing feed. They are not repurposed as content.
+- **The inputs.** `WorkspaceInputs.Source` has a status and items for each feed: `available`, `not_granted`,
+  `not_decided` or `no_source`. Only an `available` source's items are used. A source that throws gives none,
+  so nothing is ever fabricated.
+- **A notification** (`WorkspaceSnapshot.Notice`):
+  - It is kept only for an app the snapshot lists, and only with a non-empty title.
+  - It enters as `{id: n:<hash>, appId, title, recentRank}`, exactly rose-layout-v1's fields. The body text is
+    never taken, and the raw key never leaves the phone; the phone maps the hash back.
+  - At most 12 are kept, most recent first, each with at most 2 actions (`nact:<hash>/<i>`).
+- **A content item** (`WorkspaceSnapshot.Content`) needs:
+  - a rose-layout-v1 kind (`media`, `contact`, `document`, `place` or `other`);
+  - a label, and an app the snapshot lists;
+  - an unambiguous `c:<source>/<id>`.
+
+  At most 12 are kept.
+- **Rendering.** Lists and cards show a notification's title or a content item's label. Opening one, or running
+  a notification action, needs the source and does nothing until there is one.
+- **The decisions this waits on.**
+  - **D1 (Nathan):** (a) a listener in Rose Agent behind the person's own grant; (b) a bounded,
+    signature-protected snapshot from the Rose shade, which is OS Core's, with a security review; or (c) none.
+    With the compose route on, any notification titles in the snapshot go to the owner's Rose server, so D1
+    includes that.
+  - **A content source:** which one, if any.
+
+`app/tests/WorkspaceInputsTest.java` checks this with made-up items. Nothing reads a real notification.
 
 ## The phone's own check
 

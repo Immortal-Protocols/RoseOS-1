@@ -722,3 +722,10 @@ test('Project 2: a superseded compose request in flight is stopped, and the stat
  assert.match(transport,/finally\{if\(abort!=null\)abort\.detach\(raw\);/);
  assert.match(transport,/if\(abort!=null\)\{abort\.detach\(raw\);if\(abort\.fired\(\)\)throw e;\}/);
 });
+
+test('Project 2: no notification source or permission exists; the snapshot reads WorkspaceInputs.SOURCE, which is NONE',()=>{
+ const inputs=read('../app/src/dev/pixel/voice/WorkspaceInputs.java'),sources=read('../app/src/dev/pixel/voice/WorkspaceSources.java');
+ assert.match(inputs,/static final Source SOURCE=NONE;/);
+ assert.match(sources,/WorkspaceInputs\.notices\(WorkspaceInputs\.SOURCE\),WorkspaceInputs\.content\(WorkspaceInputs\.SOURCE\)/);
+ assert.doesNotMatch(manifest,/BIND_NOTIFICATION_LISTENER_SERVICE|NotificationListenerService/,'no notification listener is declared (D1 is undecided)');
+});

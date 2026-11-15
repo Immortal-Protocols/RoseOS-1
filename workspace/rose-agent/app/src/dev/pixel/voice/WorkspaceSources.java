@@ -28,7 +28,8 @@ import java.util.Set;
  *   HOME role. Nothing new is requested; without that role there are no shortcuts.</li>
  *   <li><b>Intent templates:</b> Rose's existing timer and alarms intents, each resolved to the app that handles it.</li>
  * </ul>
- * There are no notifications (D1 is undecided), no content source, and no Rose tasks until App Core's route is
+ * Notifications and content come from WorkspaceInputs.SOURCE, which is WorkspaceInputs.NONE today: D1 is
+ * undecided and no content source exists, so both are empty. There are no Rose tasks until App Core's route is
  * enabled. Everything is read on the page's worker thread.
  */
 final class WorkspaceSources {
@@ -114,7 +115,9 @@ final class WorkspaceSources {
    apps.add(self);resolved.put(WorkspaceSnapshot.appId(self),rose);
    for(WorkspaceSnapshot.Task t:offered)tasks.add(new WorkspaceSnapshot.Task(t.templateId,t.label,t.ask,t.goal,self));
   }
-  WorkspaceSnapshot snapshot=WorkspaceSnapshot.build(apps,shortcuts,templates,tasks,pinned,System.currentTimeMillis(),Calendar.getInstance());
+  // Notifications and content: only what an AVAILABLE source gives (none today).
+  WorkspaceSnapshot snapshot=WorkspaceSnapshot.build(apps,shortcuts,templates,tasks,
+   WorkspaceInputs.notices(WorkspaceInputs.SOURCE),WorkspaceInputs.content(WorkspaceInputs.SOURCE),pinned,System.currentTimeMillis(),Calendar.getInstance());
   return new Read(snapshot,resolved,shortcutInfo);
  }
 
