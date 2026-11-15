@@ -18,9 +18,9 @@ import java.util.Set;
  * Android side and passes them in; this decides the ids, the bounds and the version.
  *
  * Only labels the OS already shows enter the snapshot, cut to 60 characters and stripped of control
- * characters. Notifications and content come from a WorkspaceInputs.Source, if any. Today there is none
- * (WorkspaceInputs.NONE): D1 is undecided and no content source exists, so both stay empty. A notification enters
- * only as its title, never its body text, and under a hashed key. The version is a hash of every entry, so it
+ * characters. Notifications and content come from a WorkspaceInputs.Source: on the phone, WorkspaceDeviceInputs,
+ * which gives nothing without the person's Notification access and the workspace's own consent. A notification
+ * enters only as its title, never its body text, and under a hashed key. The version is a hash of every entry, so it
  * changes whenever an entry does and a layout made for another snapshot is stale_snapshot.
  */
 final class WorkspaceSnapshot {

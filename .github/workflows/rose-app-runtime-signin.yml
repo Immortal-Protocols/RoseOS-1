@@ -1,0 +1,55 @@
+name: rose-app-runtime-signin (Level 2 sign-in adapter)
+
+# Builds and tests workspace/rose-app-runtime-signin, the rose-signin adapter for the Rose app runtime
+# (docs/APP-BUILDER.md §7.4, slice 7b), against real rose-signin (SQLite store, AeadSealer) and the runtime core,
+# on temporary directories with random per-test keys. Its lock is rose-signin's 52 crates plus the two path crates
+# (a test checks that), fetched by the same route as .github/workflows/rose-signin.yml. Host-only: no server
+# listens, and there is no endpoint, phone, secret, cloud access or deployment.
+on:
+  pull_request:
+    paths:
+      - 'workspace/rose-app-runtime-signin/**'
+      - 'workspace/rose-app-runtime/**'
+      - 'workspace/rose-signin/**'
+      - '.github/workflows/rose-app-runtime-signin.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/rose-app-runtime-signin/**'
+      - 'workspace/rose-app-runtime/**'
+      - 'workspace/rose-signin/**'
+      - '.github/workflows/rose-app-runtime-signin.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rose-app-runtime-signin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rose-app-runtime-signin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: workspace/rose-app-runtime-signin
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.0
+          rustc --version
+          cargo --version
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Tests (HTTP sign-in over the real authenticator, readiness, identity, per-account data, migrations, lock)
+        run: cargo test --locked --no-fail-fast

@@ -1611,32 +1611,166 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   item 6 says which proxy header carries the client. Behind one proxy every
   client shares that address. This is a known limit, not a decision.
 
-**Next (slice 7b): the adapter.** It binds `Auth` to rose-signin `23062a04`
-(`SqliteStore`, `AeadSealer`, `validate_for`/`revoke_for`), opens each
-user's own SQLite file and applies the migrations. It computes
-`revision_sha256` from the binary itself, and fills `app_id` and
-`deployment_sha256` from what the host passes. It uses only rose-signin's
-own locked dependencies, so it adds no crate. The key's delivery (D9) and
-the restore marker (item 5) stay open, so the adapter loads no key and runs
-no restore until those are agreed.
+**The adapter (slice 7b)** (`workspace/rose-app-runtime-signin`, OS Core; source, built on by nothing yet) binds `Auth` to rose-signin `23062a04`.
 
-### 7.5 Client sign-in (planned)
+- **Sign-in.** `SigninAuth` wraps `Authenticator<SqliteStore, AeadSealer>`.
+  - It is fixed to the app, so every session goes through `validate_for` and `revoke_for`.
+  - Handles, tokens and invites cross HTTP as rose-signin base32: letters and digits, no padding.
+  - A value that doesn't decode is treated as a wrong value, never as an error.
+  - Closed admission without an invite is `Admission::Invite(b"")`, which admits no one.
+- **Data.** Under `DATA_DIR` there are three kinds of file:
+  - `auth.sqlite3`: rose-signin's own store, with its own migrations.
+  - `accounts/<sha256>.sqlite3`: one file per account. The name is a length-prefixed SHA-256 of (app, account), so no name reaches the disk. The directory is `0700`.
+  - `shared.sqlite3`: only when the app declares shared data.
 
-- The client includes `RoseSigninCore.java` at the pin above.
-- It shows the `otpauth://` URI as a QR and as copyable text, and also opens
-  it with `ACTION_VIEW`. OS Core will build a RoseOS system authenticator for
-  that scheme, and on stock Android any authenticator app claims it, so the
-  flows are the same.
-- The user types the code and the passphrase. Only the bearer token is kept,
-  in no-backup storage.
+  Handlers reach the data as `ctx.data` (`AppData`), and `account(principal)` opens only this app's principal's own file.
+- **Migrations.** The builder-embedded lists run forward only. Each one runs in one immediate transaction with its `user_version`. A database above the list is refused and left untouched, at start-up and on open.
+- **Start-up.** `start` opens and migrates the sign-in store, the shared database and every existing account file. It then measures `revision_sha256` from the binary.
+  - **Environment.** `Config::from_env` reads `DATA_DIR`, `CHARIOT_APP_ID` and `CHARIOT_DEPLOYMENT_SHA256` (echoed as passed). When the host also sets `CHARIOT_REVISION_SHA256`, a binary that measures differently is held not ready.
+  - **Keys.** `Keys::from_env()` loads the keyring from `CHARIOT_SEALING_KEY_FILE`, the absolute path of an app-owned `0400` file the host exposes by a read-only bind mount. The format is `rose-signin-keyring/v1`: `{"format","current","keys":[{"version","key"}]}`.
+    - Strict UTF-8 JSON of at most 16 KiB, with no unknown or repeated field. Whitespace between tokens is allowed.
+    - 1 to 64 keys with unique `u32` versions, and `current` among them.
+    - Each key is standard padded base64, with no whitespace, of exactly 32 bytes.
+    - The path must be absolute. The opened file must be a regular file that the server's process can read, and neither the group nor others may read it (mode bits `0o044` clear). Its owner isn't checked, so an app-owned `0400` file behind a read-only bind works.
+    - The file is opened without blocking, so a FIFO is refused rather than waited on. It is read once.
+    - The loader zeroes its own buffers. It can't zero the JSON parser's internal copies, or rose-signin's `Secret`, which redacts `Debug` but isn't zeroed on drop.
+    - Its path and contents are never logged. Any problem leaves the server without a key, and a reason word says why.
+  - **Server.** `Started::server` attaches the data and marks the migrations done.
+- **Restore marker** (Chariot `e592c4b1`). At start the adapter looks up `CHARIOT_RESTORE_STATE_PATH` once, without following a link. When the variable is unset, the path is `DATA_DIR/.chariot-restore.json`, and a value that is set must be absolute.
+  - **Absent** (`NotIndicated`): no restore is indicated, and `restore_done` is set.
+  - **Anything present** (`Indicated`): a file, directory or link, even a dangling one. The server stays `503`.
+  - **Any other lookup error** (`Unknown`): the server stays `503`.
+  - The marker is never read, parsed, run, removed or completed, because no restore executor or completion protocol is agreed.
+- **Readiness.** A server is ready once a keyring is delivered, its migrations are done and no restore is indicated. No host delivers a keyring yet.
+- **Dependencies.** The lock is rose-signin's 52 crates plus the two path crates, and a test checks this. Its CI (`.github/workflows/rose-app-runtime-signin.yml`) follows rose-signin's route.
+- **Build note.** The bundled SQLite C source needs a musl C compiler on the builder.
+
+### 7.5 Client sign-in and generated code (slice 8)
+
+`rose/app_builder/codegen.py` turns a contract (§7.3) into source on both
+sides. The same contract always gives the same bytes, whatever the order of its
+keys.
+
+**Server: `server_files(contract)`.** This returns `rose/api.rs`,
+`rose/routes.rs`, `rose/wire.rs` and `rose/main.rs` (the entry point), all
+matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
+(`APP`, `ISSUER`, `ADMISSION`) and `rose/migrations.rs` (`ACCOUNT`,
+`SHARED`), and codegen never writes those.
+- `api.rs` has:
+  - one struct per contract type, with `from_value` and `to_value` over the
+    runtime's `json::Value`;
+  - the `Handlers` trait, one function per route, taking `&Ctx` and the typed
+    request and returning the typed response or a `Refusal`;
+  - `Refusal`, a 4xx status and an error word. The word must be lower-case
+    letters and underscores; the runtime answers any other word with a 500.
+- Contract types named `Self`, `Handlers` or `Refusal` become `Self_`,
+  `Handlers_` and `Refusal_`.
+- `routes.rs` has `routes::<H>()`, the runtime's `Vec<Route>`. A route takes a
+  body exactly when it has a request type, and public routes are
+  `RouteAuth::Public`. A missing or malformed request body is refused with
+  `400 bad_request` before the handler runs. That is the word the runtime uses
+  for malformed JSON and on the sign-in routes.
+- `wire.rs` checks the §7.4 wire shapes. Unknown fields are ignored. An absent
+  optional is left out, and null reads as absent. `max` on a string counts
+  characters, not UTF-8 bytes.
+- **Bytes** travel as standard base64 with padding, both ways. Reading is
+  strict: a character outside the alphabet, missing or extra padding, unused
+  bits that are set, or any whitespace is `400 bad_request`. `max` on `bytes`
+  counts decoded bytes.
+- **The writer's code** is `server/src/handlers/mod.rs` (appprofile
+  `HANDLERS`). It defines `pub struct App;` and
+  `impl crate::api::Handlers for App`. The builder copies it to
+  `<server>/src/handlers/mod.rs`.
+- **`rose/main.rs`** is the start-up, over OS Core's adapter
+  (`rose_app_runtime_signin::{start, Config, Keys, Migrations}`, slice 7b).
+  - It declares the generated modules, `meta`, `migrations` and
+    `#[path = "../src/handlers/mod.rs"] mod handlers;`.
+  - It reads only `PORT` (decimal, 1 to 65535, default 8080). The adapter
+    reads and checks `DATA_DIR`, `CHARIOT_APP_ID`,
+    `CHARIOT_DEPLOYMENT_SHA256`, the optional `CHARIOT_REVISION_SHA256` and
+    the keyring file named by `CHARIOT_SEALING_KEY_FILE`, and looks up the
+    restore marker (`CHARIOT_RESTORE_STATE_PATH`, by default
+    `DATA_DIR/.chariot-restore.json`).
+  - It calls `Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION,
+    Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED })`,
+    then `let (keys, why) = Keys::from_env();`, then `start(config, keys)`,
+    then `.server(routes::routes::<handlers::App>())`, and serves on
+    `0.0.0.0:$PORT`.
+  - **Keys.** Only the adapter's loader reads the keyring
+    (`rose-signin-keyring/v1`), and its result never stops start-up. When
+    there is no usable keyring, `main.rs` prints
+    `rose server: sealing keys unavailable: <word>`. The word names the
+    problem, never the path or a byte of the file. Sign-in then answers
+    `auth_unavailable` and `/health` answers 503.
+  - **Readiness** is decided by the adapter, not by `main.rs`. `/health`
+    answers 200 only when three things hold:
+    - the keys are loaded;
+    - the migrations are done;
+    - no restore is indicated: nothing is at the marker's path, and only "not
+      found" counts as absent.
+
+    A marker of any kind, or a lookup that fails, keeps the server at 503 for
+    that whole run. Nothing in `main.rs` or the adapter runs, reads or
+    removes a restore (§7.7 item 5).
+  - **Failures.** Any failure before serving prints `rose server: <reason>`
+    and exits 1. The reason names the variable, never its value.
+  - **Crates.** The runtime and the adapter come in as builder-owned path
+    crates. Codegen writes no Cargo files.
+
+**Client: `client_files(contract, package)`.** Everything goes under the
+reserved `src/<package>/rose/`:
+- `RoseJson`: a strict JSON reader and writer. It refuses repeated keys,
+  trailing data, lone surrogates and nesting deeper than 64.
+- `RoseTypes`: one class per contract type, the same shapes as the server.
+- `RoseApi`: `Client(transport, tokens)` with one method per route.
+  `HttpsTransport(baseUrl)` takes the base URL from the caller, and the builder
+  never writes one in. It accepts `https` only, with no user info, query or
+  fragment, and does not follow redirects. Errors come back as
+  `RoseApi.Error(status, word, retryAfterSeconds)`. A 401 `session_invalid`
+  forgets the token.
+- `RoseSignin`: enroll, confirm, sign in, recover authenticator, recover
+  passphrase and sign out, over the `/signin/v1/*` routes.
+- `RoseSession`: keeps only the bearer token, in `getNoBackupFilesDir()`.
+- `RoseSigninCore.java`, copied byte for byte at the pin above. The builder
+  refuses to run if the file's SHA-256 has changed.
+
+**The sign-in flow.**
+- The `otpauth://` URI is checked with `RoseSigninCore.parseOtpAuth`. It is
+  shown as copyable text and opened with `ACTION_VIEW`. OS Core will build a
+  RoseOS system authenticator for that scheme, and on stock Android any
+  authenticator app claims it, so the flows are the same.
+- **QR rendering is not generated yet.**
+- The user types the code and the passphrase.
 - **Naming the app (#824).** OS Core's RoseOS authenticator
   (`dev.pixel.rose.authenticator`) names the sending app only when Android
-  vouches for it (API 34+). So the client starts the `ACTION_VIEW` with
-  `ActivityOptions.makeBasic().setShareIdentityEnabled(true)`. Without that,
-  the dialog says "an unidentified app" and still works.
+  vouches for it (API 34+). So on API 34+ the client starts the `ACTION_VIEW`
+  with `ActivityOptions.makeBasic().setShareIdentityEnabled(true)`. Without
+  that, the dialog says "an unidentified app" and still works.
 - **Names.** Issuer and account names must have no control, bidi or
   line-separator characters, and at most 128 UTF-16 units. rose-signin's name
   rules already require this.
+
+**Tests (`rose/tests/test_app_codegen.py`).**
+- The Rust side builds against `workspace/rose-app-runtime` with no warnings,
+  with the writer's `App` laid out as above.
+- The Java side compiles with `--release 17 -Xlint:all -Werror` and runs on the
+  JVM. The Android parts compile against android-35.
+- A Java request goes through the generated Rust and back.
+- With `ROSE_REQUIRE_CARGO` and `ROSE_REQUIRE_APP_BUILD`, a missing tool or
+  runtime crate fails instead of skipping.
+- **Start-up.**
+  - The port and variable rules are compiled and run on their own, with only
+    `std`.
+  - The whole `main.rs` builds against the adapter only where the adapter's
+    crates (rose-signin's lock, with rusqlite) are already in the offline
+    cache. Those crates come only by the adapter's own route. Elsewhere,
+    including the app-tests job, which downloads nothing, the test is skipped
+    and says why. `ROSE_REQUIRE_ADAPTER_BUILD` turns that skip into a
+    failure.
+  - When the build does run, it checks every refusal before anything
+    listens, including the keyring reason printed before a refusal and a
+    relative `CHARIOT_RESTORE_STATE_PATH`. No server is started, and no
+    restore marker is created.
 
 ### 7.6 Builder (wired in the job; each host-side part injected)
 
