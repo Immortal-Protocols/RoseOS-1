@@ -380,7 +380,7 @@ class Builder:
             libraries = self._libraries(snapshot, work, project_id, package)
             level2 = None
             if profile.name == CLIENT_SERVER:
-                level2 = self._client_server(snapshot, work, project_id, package, profile, cancelled)
+                level2 = self._client_server(snapshot, work, project, profile, cancelled)
                 unsigned, log = toolchain.build(level2['client_source'], work, package, code, name, self.tools,
                                                 cancelled, libraries, builder_files=level2['builder_files'],
                                                 builder_packages=level2['packages'])
@@ -424,10 +424,11 @@ class Builder:
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
 
-    def _client_server(self, snapshot: Path, work: Path, project_id: str, package: str, profile, cancelled) -> dict:
+    def _client_server(self, snapshot: Path, work: Path, project: dict, profile, cancelled) -> dict:
         """A client-server app's checks, generated code and server build (docs/APP-BUILDER.md §7): the contract
         against every delivered version's, the migrations against the delivered lock and a sandbox, the server
         built offline under isolation, and the client's tree with the builder's generated files added."""
+        project_id, package = project['projectId'], project['packageName']
         try:
             api = contract.load(snapshot)
             delivered = [contract.parse(json.loads(text)) for text in self.ledger.contracts(project_id)]
@@ -446,7 +447,11 @@ class Builder:
         except Exception:
             raise toolchain.StepFailed('toolchain', 'The builder could not generate the app\'s server and API '
                                        'client code.') from None
-        server_files['rose/migrations.rs'] = server_build.migrations_rs(current)
+        if any(k in server_files for k in ('rose/migrations.rs', 'rose/meta.rs')):
+            raise toolchain.StepFailed('toolchain', 'The builder\'s server code generator wrote a file the builder '
+                                       'writes itself.')
+        server_files['rose/migrations.rs'] = server_build.migrations_rs(current, profile.server.shared)
+        server_files['rose/meta.rs'] = server_build.meta_rs(package, project['name'], profile.server.admission)
         prefix = f'src/{package.replace(".", "/")}/rose/'
         if any(not isinstance(k, str) or not k.startswith(prefix) or '..' in k.split('/') for k in client_files):
             raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote outside its own '

@@ -438,13 +438,44 @@ def _raw(text: str) -> str:
     return 'r' + '#' * hashes + '"' + text + '"' + '#' * hashes
 
 
-def migrations_rs(current: dict) -> str:
-    """``rose/migrations.rs``: the server's migrations embedded by the builder (§7.6), each scope's
-    ``(number, name, sql)`` in order, for the adapter to apply forward only. Built from the checked files
-    (rose.app_builder.migrations.read), never from the writer's Rust, which may not read files (§7.2)."""
+def migrations_rs(current: dict, shared: bool) -> str:
+    """``rose/migrations.rs``: the server's migrations embedded by the builder (§7.6) in the adapter's shape
+    (rose-app-runtime-signin ``Migrations``): ``ACCOUNT: &[&str]`` and ``SHARED: Option<&[&str]>``, where the
+    statement at index ``i`` takes a database from version ``i`` to ``i + 1``. Numbers run 1, 2, ... with no gap
+    (rose.app_builder.migrations.read refuses one), so position is number. ``SHARED`` is ``None`` unless the app
+    declares shared data. Built from the checked files, never from the writer's Rust, which may not read files."""
     out = ['//! The server\'s migrations, embedded by the builder. Generated; not the app\'s code.', '']
     for scope, const in (('account', 'ACCOUNT'), ('shared', 'SHARED')):
-        rows = ''.join(f'    ({m.number}, "{m.name}", {_raw(m.sql)}),\n' for m in current.get(scope, []))
-        out.append(f'pub const {const}: &[(u32, &str, &str)] = &[\n{rows}];')
+        listed = sorted(current.get(scope, []), key=lambda m: m.number)
+        if [m.number for m in listed] != list(range(1, len(listed) + 1)):
+            raise ValueError(f'{scope} migrations must be numbered 1..n')
+        rows = ''.join(f'    // {m.number:04d}_{m.name}.sql\n    {_raw(m.sql)},\n' for m in listed)
+        if const == 'SHARED':
+            value = f'Some(&[\n{rows}])' if shared else 'None'
+            out.append(f'pub const SHARED: Option<&[&str]> = {value};')
+        else:
+            out.append(f'pub const ACCOUNT: &[&str] = &[\n{rows}];')
         out.append('')
     return '\n'.join(out)
+
+
+def _issuer(name: str) -> str:
+    """What authenticator apps show beside the code: the app's name, as rose-signin's names allow (no ':' or
+    control character, at most 128 bytes), or "Rose app" when nothing is left."""
+    clean = ''.join(c for c in name if c != ':' and c.isprintable()).strip()
+    while len(clean.encode('utf-8')) > 128:
+        clean = clean[:-1]
+    return clean or 'Rose app'
+
+
+def meta_rs(app: str, issuer: str, admission: str) -> str:
+    """``rose/meta.rs``: what the server's start-up needs from the builder: ``APP`` (rose-signin's app name: the
+    app's package, stable and unique to the project), ``ISSUER`` (the name an authenticator shows) and
+    ``ADMISSION`` (the app's declaration in rose-app.json, never a request's)."""
+    if admission not in ('invite', 'open'):
+        raise ValueError('admission is invite or open')
+    variant = 'Invite' if admission == 'invite' else 'Open'
+    return ('//! The server\'s identity for sign-in, written by the builder. Generated; not the app\'s code.\n\n'
+            f'pub const APP: &str = {_raw(app)};\n'
+            f'pub const ISSUER: &str = {_raw(_issuer(issuer))};\n'
+            f'pub const ADMISSION: rose_app_runtime::signin::Admission = rose_app_runtime::signin::Admission::{variant};\n')

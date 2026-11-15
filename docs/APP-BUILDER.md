@@ -1648,8 +1648,21 @@ runs these steps before signing:
    version's contract, which the ledger now records with each
    client-server version.
 2. **Migrations.** They are checked against the delivered lock and in the
-   sandbox, then embedded as `rose/migrations.rs`
-   (`ACCOUNT`/`SHARED: &[(number, name, sql)]`) for the adapter.
+   sandbox, then embedded in two builder-owned files, which a generator
+   may not write:
+   - `rose/migrations.rs`, in the adapter's shape: `ACCOUNT: &[&str]` and
+     `SHARED: Option<&[&str]>` (`None` unless the app declares shared
+     data). The statement at index `i` takes a database from version `i`
+     to `i + 1`. Numbers run 1, 2, … with no gap, so position is the
+     number.
+   - `rose/meta.rs`:
+     - `APP`: rose-signin's app name, which is the app's package (stable
+       and unique to the project);
+     - `ISSUER`: the project's name, as an authenticator shows it, with no
+       `:` or control character, at most 128 bytes, and `Rose app` when
+       nothing is left;
+     - `ADMISSION`: `rose_app_runtime::signin::Admission`, from
+       `rose-app.json`.
 3. **Generated code.** The injected `codegen` writes the server's `rose/*.rs`
    files and the client's files under `src/<package>/rose/`. A generator
    that fails, or writes outside that folder, is the builder's failure

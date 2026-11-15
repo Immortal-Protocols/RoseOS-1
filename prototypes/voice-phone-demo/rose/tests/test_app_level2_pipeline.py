@@ -52,15 +52,21 @@ class Codegen:
     """Test-only stand-in for slice 8's generator: a main that uses the runtime, the embedded migrations and the
     writer's handlers, and two client files, one keeping a package of its own (as the sign-in core does)."""
 
-    def __init__(self, outside=False, broken=False):
-        self.outside, self.broken = outside, broken
+    def __init__(self, outside=False, broken=False, writes=None):
+        self.outside, self.broken, self.writes = outside, broken, writes
 
     def server_files(self, contract):
         if self.broken:
             raise RuntimeError('generator bug')
-        return {'rose/main.rs': 'mod migrations;\n#[path = "../src/handlers/mod.rs"]\nmod handlers;\n\n'
-                                'fn main() {\n    handlers::hello();\n'
-                                '    let _ = (migrations::ACCOUNT.len(), rose_app_runtime::json::parse(b"1"));\n}\n'}
+        files = {'rose/main.rs': 'mod meta;\nmod migrations;\n#[path = "../src/handlers/mod.rs"]\nmod handlers;\n\n'
+                                 'fn main() {\n    handlers::hello();\n'
+                                 '    let account: &[&str] = migrations::ACCOUNT;\n'
+                                 '    let shared: Option<&[&str]> = migrations::SHARED;\n'
+                                 '    let _ = (account.len(), shared, meta::APP, meta::ISSUER, meta::ADMISSION);\n'
+                                 '    let _ = rose_app_runtime::json::parse(b"1");\n}\n'}
+        if self.writes:
+            files[self.writes] = '// not the generator\'s\n'
+        return files
 
     def client_files(self, contract, package):
         base = 'src/elsewhere/' if self.outside else f'src/{package.replace(".", "/")}/rose/'
@@ -132,7 +138,9 @@ class HonestFailures(Base):
                 self.assertFailed(job, category, words)
 
     def test_a_generator_that_fails_or_strays_is_the_builders(self):
-        for codegen, words in ((Codegen(broken=True), 'could not generate'), (Codegen(outside=True), 'outside')):
+        for codegen, words in ((Codegen(broken=True), 'could not generate'), (Codegen(outside=True), 'outside'),
+                               (Codegen(writes='rose/meta.rs'), 'writes itself'),
+                               (Codegen(writes='rose/migrations.rs'), 'writes itself')):
             with self.subTest(words=words):
                 shutil.rmtree(self.root, ignore_errors=True)
                 b = self.builder(client_server_app(), codegen=codegen)
@@ -141,12 +149,31 @@ class HonestFailures(Base):
 
 
 class Pieces(unittest.TestCase):
-    def test_embedded_migrations_hold_the_sql_exactly(self):
+    def test_embedded_migrations_are_the_adapters_shape(self):
         tricky = 'INSERT INTO t VALUES (\'a"#b"##c\');\n'
-        m = Migration('account', 1, 'notes', hashlib.sha256(tricky.encode()).hexdigest(), tricky)
-        text = server_build.migrations_rs({'account': [m], 'shared': []})
-        self.assertIn('(1, "notes", r###"' + tricky + '"###)', text)
-        self.assertIn('pub const SHARED: &[(u32, &str, &str)] = &[\n];', text)
+        m = lambda scope, n, sql='SELECT 1;': Migration(scope, n, f'm{n}', hashlib.sha256(sql.encode()).hexdigest(), sql)
+        text = server_build.migrations_rs({'account': [m('account', 2), m('account', 1, tricky)], 'shared': []}, False)
+        # Position is the number: index i takes version i to i + 1, as rose-app-runtime-signin's Migrations reads it.
+        self.assertIn('pub const ACCOUNT: &[&str] = &[\n    // 0001_m1.sql\n    r###"' + tricky + '"###,\n'
+                      '    // 0002_m2.sql\n    r#"SELECT 1;"#,\n];', text)
+        self.assertIn('pub const SHARED: Option<&[&str]> = None;', text)
+        shared = server_build.migrations_rs({'account': [], 'shared': [m('shared', 1)]}, True)
+        self.assertIn('pub const SHARED: Option<&[&str]> = Some(&[\n    // 0001_m1.sql\n    r#"SELECT 1;"#,\n]);',
+                      shared)
+        self.assertIn('pub const ACCOUNT: &[&str] = &[\n];', shared)
+        with self.assertRaises(ValueError):  # a gap would shift every later version
+            server_build.migrations_rs({'account': [m('account', 1), m('account', 3)]}, False)
+
+    def test_meta_names_the_app_for_sign_in(self):
+        text = server_build.meta_rs('app.rose.gen.p1', 'Notes: "mine"\x07', 'open')
+        self.assertIn('pub const APP: &str = r#"app.rose.gen.p1"#;', text)
+        self.assertIn('pub const ISSUER: &str = r#"Notes "mine""#;', text)  # no ':' or control character
+        self.assertIn('rose_app_runtime::signin::Admission::Open;', text)
+        self.assertIn('Admission::Invite;', server_build.meta_rs('a.b', '', 'invite'))
+        self.assertIn('r#"Rose app"#', server_build.meta_rs('a.b', ':::', 'invite'))
+        self.assertLessEqual(len(server_build._issuer('é' * 200).encode()), 128)
+        with self.assertRaises(ValueError):
+            server_build.meta_rs('a.b', 'x', 'anyone')
 
     def test_path_crates_in_the_cargo_toml(self):
         toml = server_build.cargo_toml(['serde@1.0.219'], {'rose-app-runtime': Path('/opt/rose/runtime')})
