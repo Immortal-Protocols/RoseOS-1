@@ -2476,14 +2476,14 @@ the server does.
     `^[A-Z2-7]{52}\n$` with empty stderr; stderr capped at 256 bytes.
   - **Result:** `{outcome, reason, exit_code, replayed, token}`, sent
     `no-store` with no `Retry-After`.
-    - `issued`: the token is in the first delivery only. A replay of the same
-      key gets `token: null`; a token can't be retrieved or reissued.
+    - `issued` (200): the token is in the first delivery only. A replay of the
+      same key gets `token: null`; a token can't be retrieved or reissued.
     - `refused`: the adapter's words. `invalid_name` is 422;
       `already_enrolled`, `not_found` and `restore_pending` are 409;
       `store_unavailable` is 503. Chariot's own lease refusals
       (`operation_pending`, `deployment_changed`, `host_unavailable`) are 409
       or 503. The command's usage refusal is 502.
-    - `outcome_unknown`: any other exit or output, including
+    - `outcome_unknown` (503): any other exit or output, including
       `the invite could not be written`, a timeout, a signal or an inconsistent
       receipt. A token may exist, so nothing is reissued automatically; a new
       invite needs a new explicit request.

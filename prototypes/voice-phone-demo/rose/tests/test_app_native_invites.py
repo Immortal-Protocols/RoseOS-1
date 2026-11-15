@@ -12,6 +12,7 @@ FIXTURE = HERE / 'fixtures' / 'chariot' / 'native-invites-results.json'
 REPO = HERE.parents[3]
 ADAPTER = REPO / 'workspace' / 'rose-app-runtime-signin' / 'src' / 'invite.rs'
 BASE32 = REPO / 'workspace' / 'rose-signin' / 'src' / 'base32.rs'
+SESSION = REPO / 'workspace' / 'rose-signin' / 'src' / 'session.rs'
 # Chariot's source: Immortal-Protocols/ProtocolsBackend #2564 at 814fd66c, chariot/test/fixtures/native_invites/.
 SOURCE_BLOB = '925b85f881b5cc823d709eb0692ebbbe369d1c91'
 TOKEN = re.compile(r'[A-Z2-7]{52}')
@@ -46,9 +47,19 @@ class Fixture(unittest.TestCase):
         limits = self.doc['limits']
         self.assertEqual(limits, {'timeout_seconds': 30, 'stdout_bytes': 53, 'stderr_bytes': 256})
         self.assertEqual(limits['stdout_bytes'], 52 + 1)  # one token line
-        # 32 random bytes in unpadded RFC 4648 base32 (rose-signin's alphabet) are 52 characters.
-        self.assertIn('b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"', BASE32.read_text(encoding='utf-8'))
-        self.assertEqual(-(-32 * 8 // 5), 52)
+        # The token is rose-signin's session::mint(): random bytes in unpadded RFC 4648 base32, so its length is
+        # read from that source, not assumed.
+        base32 = BASE32.read_text(encoding='utf-8')
+        self.assertIn('b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"', base32)
+        encode = base32[base32.index('pub fn encode('):]
+        encode = encode[:encode.index('\n}\n')]
+        self.assertNotIn("'='", encode)  # the encoder never pushes a padding character
+        session = SESSION.read_text(encoding='utf-8')
+        mint = session[session.index('pub fn mint()'):]
+        mint = mint[:mint.index('\n}\n')]
+        found = re.findall(r'Secret::random\((\d+)\)', mint)
+        self.assertEqual(len(found), 1, 'mint() draws one random value')
+        self.assertEqual(-(-int(found[0]) * 8 // 5) + 1, limits['stdout_bytes'])  # its characters plus a newline
         longest = max(len(f'rose server: no invite: {w}\n') for w in adapter_words())
         self.assertLess(longest, limits['stderr_bytes'])
 
