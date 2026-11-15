@@ -1,0 +1,50 @@
+name: rose-app-runtime (Level 2 server runtime core)
+
+# Builds and tests workspace/rose-app-runtime, the standard-library core a generated server is built on
+# (docs/APP-BUILDER.md §7.4). It has no dependencies, so it runs offline with the runner image's own Rust
+# toolchain: nothing is installed or fetched. No server, endpoint, phone, secrets, cloud access or deployment.
+on:
+  pull_request:
+    paths:
+      - 'workspace/rose-app-runtime/**'
+      - '.github/workflows/rose-app-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/rose-app-runtime/**'
+      - '.github/workflows/rose-app-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rose-app-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rose-app-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: workspace/rose-app-runtime
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_NET_OFFLINE: 'true'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Tool versions (the runner image's own toolchain)
+        run: |
+          rustc --version
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --offline --locked --all-targets -- -D warnings
+      - name: Tests (HTTP, JSON, sign-in routes over a fake authenticator, readiness, logs, a local socket)
+        run: cargo test --offline --locked --no-fail-fast
