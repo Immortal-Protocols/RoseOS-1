@@ -4,17 +4,18 @@ calls this yet.
 
 Both halves are generated from ``Contract.data`` (canonical: defaults spelled out), so the same contract always gives
 the same files, byte for byte. Nothing here invents a URL, a key, an app id or an account: the client takes its base
-URL from the caller, and the server's start-up (rose/main.rs) binds the host's identity and OS Core's authenticator,
-which is not generated here yet (see ``server_files``).
+URL from the caller, and the server takes its app id, port, data directory and deployment hash from the host.
 
 **Server** (``server_files``): files under ``rose/`` for rose.app_builder.server_build (keys match its ``GENERATED``):
 - ``rose/api.rs``: one struct per contract type, converting from and to the runtime's ``json::Value``; the
   ``Handlers`` trait the writer implements, one associated function per route; and ``Refusal`` (a 4xx status and an
   error word of lower-case letters and underscores);
 - ``rose/routes.rs``: ``routes::<H: Handlers>()``, the ``Vec<Route>`` the runtime's ``Server::new`` takes;
-- ``rose/wire.rs``: the JSON helpers they share.
+- ``rose/wire.rs``: the JSON helpers they share;
+- ``rose/main.rs``: the crate root and start-up (``MAIN_RS``), over OS Core's adapter (rose-app-runtime-signin).
 
-The crate root (rose/main.rs) declares ``mod api; mod routes; mod wire;`` and the writer's code,
+The crate root declares those modules, the builder's own ``rose/meta.rs`` (``APP``, ``ISSUER``, ``ADMISSION``) and
+``rose/migrations.rs`` (``ACCOUNT``, ``SHARED``), which codegen never writes, and the writer's code,
 ``#[path = "../src/handlers/mod.rs"] mod handlers;``, which defines ``pub struct App;`` and
 ``impl crate::api::Handlers for App`` (the convention is App Core's: rose.app_builder.appprofile ``HANDLERS``).
 
@@ -339,15 +340,79 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 '''
 
 
+MAIN_RS = '''//! The server's start-up (docs/APP-BUILDER.md §7.4, §7.7): OS Core's adapter opens and migrates the data, the
+//! runtime serves the contract's routes. The host passes `CHARIOT_APP_ID` and `PORT` (read here) and `DATA_DIR` and
+//! `CHARIOT_DEPLOYMENT_SHA256` (read by the adapter); the build passes `meta` and `migrations`. Nothing is made up.
+
+mod api;
+#[path = "../src/handlers/mod.rs"]
+mod handlers;
+mod meta;
+mod migrations;
+mod routes;
+mod wire;
+
+use std::net::TcpListener;
+use std::sync::Arc;
+
+use rose_app_runtime_signin::{start, Config, Keys, Migrations};
+
+/// The variable the host passes its app id in (§7.7 item 2).
+const APP_ID_ENV: &str = "CHARIOT_APP_ID";
+/// The variable the host passes the port in, and the port when it passes none (§7.7).
+const PORT_ENV: &str = "PORT";
+const DEFAULT_PORT: u16 = 8080;
+
+/// An environment variable: absent is `None`; present but not text is refused (its value is never shown).
+fn var(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not valid")),
+    }
+}
+
+/// The port: decimal digits only, 1 to 65535.
+fn port(value: Option<String>) -> Result<u16, String> {
+    let Some(text) = value else { return Ok(DEFAULT_PORT) };
+    match text.parse::<u16>() {
+        Ok(port) if port != 0 && text.bytes().all(|b| b.is_ascii_digit()) => Ok(port),
+        _ => Err(format!("{PORT_ENV} is not a port")),
+    }
+}
+
+fn run() -> Result<(), String> {
+    let app_id = var(APP_ID_ENV)?.ok_or_else(|| format!("{APP_ID_ENV} is not set"))?;
+    let port = port(var(PORT_ENV)?)?;
+    let migrations = Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED };
+    let config = Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, &app_id, migrations)
+        .map_err(|e| e.to_string())?;
+    // The sealing keys' loader is not in the adapter yet (D9). Without keys sign-in answers `auth_unavailable` and
+    // `/health` answers 503: the server is honestly not ready. Nothing here reads, derives or makes up a key.
+    let started = start(config, Keys::Unavailable).map_err(|e| e.to_string())?;
+    let server = started.server(routes::routes::<handlers::App>()).map_err(|e| format!("routes: {e}"))?;
+    let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("listening on {PORT_ENV}: {e}"))?;
+    Arc::new(server).serve(listener).map_err(|e| format!("serving: {e}"))
+}
+
+fn main() {
+    if let Err(message) = run() {
+        eprintln!("rose server: {message}");
+        std::process::exit(1);
+    }
+}
+'''
+
+
 def _route_types(route: dict) -> tuple[str | None, str]:
     req = route['request'] and f'crate::api::{rust_type_name(route["request"])}'
     return req, f'crate::api::{rust_type_name(route["response"])}'
 
 
 def server_files(contract: Contract) -> dict[str, str]:
-    """The server's generated Rust modules, keyed by path under the server crate (rose.app_builder.server_build
-    ``GENERATED``). ``rose/main.rs``, the crate root that binds the host's identity and OS Core's authenticator, is
-    not included yet: its start-up API is still being agreed (docs/APP-BUILDER.md §7.5)."""
+    """The server's generated Rust, keyed by path under the server crate (rose.app_builder.server_build
+    ``GENERATED``; ``rose/main.rs`` is its ``ENTRY``). The builder adds ``rose/meta.rs`` and ``rose/migrations.rs``
+    itself (docs/APP-BUILDER.md §7.5)."""
     data = contract.data
     head = HEADER.format(sha=contract.sha256)
     types = '\n'.join(_rust_struct(n, t['fields']) for n, t in sorted(data['types'].items()))
@@ -388,7 +453,7 @@ def server_files(contract: Contract) -> dict[str, str]:
     trait += ['}', '']
     table += ['    ]', '}', '']
     return {'rose/api.rs': '\n'.join(trait) + '\n' + types, 'rose/routes.rs': '\n'.join(routes + table),
-            'rose/wire.rs': head + WIRE_RS}
+            'rose/wire.rs': head + WIRE_RS, 'rose/main.rs': head + MAIN_RS}
 
 
 # ---- client (Java) --------------------------------------------------------------------------------------------------

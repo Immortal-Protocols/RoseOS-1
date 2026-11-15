@@ -1640,7 +1640,10 @@ sides. The same contract always gives the same bytes, whatever the order of its
 keys.
 
 **Server: `server_files(contract)`.** This returns `rose/api.rs`,
-`rose/routes.rs` and `rose/wire.rs`, all matching `server_build.GENERATED`.
+`rose/routes.rs`, `rose/wire.rs` and `rose/main.rs` (the entry point), all
+matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
+(`APP`, `ISSUER`, `ADMISSION`) and `rose/migrations.rs` (`ACCOUNT`,
+`SHARED`), and codegen never writes those.
 - `api.rs` has:
   - one struct per contract type, with `from_value` and `to_value` over the
     runtime's `json::Value`;
@@ -1666,13 +1669,27 @@ keys.
   `HANDLERS`). It defines `pub struct App;` and
   `impl crate::api::Handlers for App`. The builder copies it to
   `<server>/src/handlers/mod.rs`.
-- `rose/main.rs` is **not generated yet**: the startup wiring waits on OS
-  Core's startup API, agreed through Chief. It will declare
-  `mod api; mod routes; mod wire;` and
-  `#[path = "../src/handlers/mod.rs"] mod handlers;`, and serve
-  `routes::routes::<handlers::App>()`. The runtime crate comes in as a
-  builder-owned path crate. The generated code only uses `rose_app_runtime`,
-  and codegen writes no Cargo files.
+- **`rose/main.rs`** is the start-up, over OS Core's adapter
+  (`rose_app_runtime_signin::{start, Config, Keys, Migrations}`, slice 7b).
+  - It declares the generated modules, `meta`, `migrations` and
+    `#[path = "../src/handlers/mod.rs"] mod handlers;`.
+  - It reads `CHARIOT_APP_ID` (required) and `PORT` (decimal, 1 to 65535,
+    default 8080). The adapter reads `DATA_DIR` and
+    `CHARIOT_DEPLOYMENT_SHA256` and checks every value.
+  - It calls `Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION,
+    &app_id, Migrations { account: migrations::ACCOUNT, shared:
+    migrations::SHARED })`, then `start(config, Keys::Unavailable)`, then
+    `.server(routes::routes::<handlers::App>())`, and serves on
+    `0.0.0.0:$PORT`.
+  - **Keys.** It passes `Keys::Unavailable` until OS Core's keyring loader
+    exists (D9, `rose-signin-keyring/v1`). Until then sign-in answers
+    `auth_unavailable` and `/health` answers 503, so the server is honestly
+    not ready. No restore is run, because the restore marker (§7.7 item 5) is
+    still open.
+  - **Failures.** Any failure before serving prints `rose server: <reason>`
+    and exits 1. The reason names the variable, never its value.
+  - **Crates.** The runtime and the adapter come in as builder-owned path
+    crates. Codegen writes no Cargo files.
 
 **Client: `client_files(contract, package)`.** Everything goes under the
 reserved `src/<package>/rose/`:
@@ -1715,6 +1732,17 @@ reserved `src/<package>/rose/`:
 - A Java request goes through the generated Rust and back.
 - With `ROSE_REQUIRE_CARGO` and `ROSE_REQUIRE_APP_BUILD`, a missing tool or
   runtime crate fails instead of skipping.
+- **Start-up.**
+  - The port and variable rules are compiled and run on their own, with only
+    `std`.
+  - The whole `main.rs` builds against the adapter only where the adapter's
+    crates (rose-signin's lock, with rusqlite) are already in the offline
+    cache. Those crates come only by the adapter's own route. Elsewhere,
+    including the app-tests job, which downloads nothing, the test is skipped
+    and says why. `ROSE_REQUIRE_ADAPTER_BUILD` turns that skip into a
+    failure.
+  - When the build does run, it checks every refusal before anything
+    listens. No server is started.
 
 ### 7.6 Builder (planned)
 
