@@ -475,6 +475,44 @@ impl<S: Store, K: Sealer> Authenticator<S, K> {
         .map_err(|_| Unavailable)
     }
 
+    /// `validate` for a server that serves one app: the principal only if the token belongs to `app`.
+    /// Another app's token is `None` and is not touched (its idle timer is not refreshed). Generated
+    /// servers use this rather than comparing `principal.app` themselves.
+    pub fn validate_for(
+        &mut self,
+        app: &str,
+        token: &[u8],
+        now: u64,
+    ) -> Result<Option<Principal>, Unavailable> {
+        let key = session::key(token);
+        self.transaction(|me| {
+            let Some(mut r) = me.store.session(&key)? else {
+                return Ok(None);
+            };
+            if r.principal.app != app || !me.session.live(&r, now) {
+                return Ok(None);
+            }
+            r.last_seen = now;
+            me.store.put_session(key, &r)?;
+            Ok(Some(r.principal))
+        })
+        .map_err(|_| Unavailable)
+    }
+
+    /// `revoke` for a server that serves one app: signs out only a session of `app`; another app's
+    /// token is left alone.
+    pub fn revoke_for(&mut self, app: &str, token: &[u8]) -> Result<(), Unavailable> {
+        let key = session::key(token);
+        self.transaction(|me| {
+            if let Some(mut r) = me.store.session(&key)?.filter(|r| r.principal.app == app) {
+                r.revoked = true;
+                me.store.put_session(key, &r)?;
+            }
+            Ok(())
+        })
+        .map_err(|_| Unavailable)
+    }
+
     /// Ends every session of an account (sign out everywhere, or after a factor change).
     pub fn revoke_all(&mut self, principal: &Principal) -> Result<(), Unavailable> {
         self.transaction(|me| Ok(me.store.revoke_all(principal)?))
