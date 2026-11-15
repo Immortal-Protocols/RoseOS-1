@@ -99,7 +99,7 @@ class Server(unittest.TestCase):
     def test_main_takes_everything_from_the_host_and_the_build(self):
         main = self.files['rose/main.rs']
         for line in ('mod api;', 'mod assets;', '#[path = "../src/handlers/mod.rs"]\nmod handlers;', 'mod meta;', 'mod migrations;',
-                     'mod routes;', 'mod wire;', 'use rose_app_runtime_signin::{start, Config, Keys, Migrations};',
+                     'mod routes;', 'mod wire;', 'use rose_app_runtime_signin::{invite, start, Config, Keys, Migrations};',
                      'Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED }',
                      'Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations)',
                      'let (keys, why) = Keys::from_env();', 'eprintln!("rose server: {why}");',
@@ -119,11 +119,29 @@ class Server(unittest.TestCase):
                          'restore_done', '.chariot-restore.json"'):
             self.assertNotIn(invented, main)
 
+    def test_main_invites_without_keys_or_a_port(self):
+        main = self.files['rose/main.rs']
+        # The dispatch: no arguments serve, `invite <account>` prints one invite, anything else is usage (exit 2).
+        for line in ('Some(Command::Serve) => run(),', 'Some(Command::Invite(account)) => invite_one(&account),',
+                     'eprintln!("rose server: {USAGE}");\n            std::process::exit(2);',
+                     '[verb, account] if verb == "invite" => account.to_str()',
+                     'let token = invite(&config, account, now).map_err(|e| e.to_string())?;',
+                     'writeln!(out, "{}", token.as_str())'):
+            self.assertIn(line, main)
+        body = main[main.index('fn invite_one('):main.index('fn run()')]
+        # No keyring, no port, no listener; the token goes to stdout once and nowhere else.
+        for absent in ('Keys', 'PORT', 'TcpListener', 'serve', 'eprintln', 'println', '{:?}', 'Debug'):
+            self.assertNotIn(absent, body)
+        self.assertEqual(body.count('token'), 2)  # bound once, printed once
+        self.assertEqual(main.count('Keys::from_env()'), 1)  # the serve path only
+        self.assertIn('let (keys, why) = Keys::from_env();', main[main.index('fn run()'):])
+
     def test_main_reads_its_port_and_variables_strictly(self):
         # main.rs's own parts that need only std, compiled and run alone (the adapter's build is the next test).
         require('ROSE_REQUIRE_CARGO', 'rustc')
         main = G.MAIN_RS
-        own = main[main.index('/// The variable the host passes the port in'):main.index('fn run()')]
+        own = 'use std::ffi::OsString;\n' + main[main.index('/// The variable the host passes the port in'):
+                                               main.index('/// The same configuration serving uses')]
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / 'startup.rs'
             source.write_text(own + STARTUP_CHECKS, encoding='utf-8')
@@ -190,6 +208,26 @@ class Server(unittest.TestCase):
                 want = lines[:-1] + [f'rose server: {lines[-1]}']
                 self.assertEqual((run.returncode, run.stderr.strip().splitlines()), (1, want), case)
             self.assertEqual(list(data.iterdir()), [])  # refused before the adapter opened anything
+            # invite: the usage rule, then the adapter's refusals, each before any store or keyring is touched. A
+            # fresh DATA_DIR has no sign-in store a server set up, so nothing is created and nothing is printed.
+            usage = 'rose server: usage: no arguments to serve, or invite <account>'
+            for argv in (['invite'], ['invite', 'a', 'b'], ['serve'], ['Invite', 'a'], ['--help']):
+                run = subprocess.run([binary, *argv], env=ready, capture_output=True, text=True, timeout=60)
+                self.assertEqual((run.returncode, run.stdout, run.stderr.strip()), (2, '', usage), argv)
+            marker = Path(tmp) / 'restore-marker'
+            marker.write_text('x')
+            for argv, case, word in (
+                    (['invite', 'alice'], host, 'DATA_DIR is not set'),
+                    (['invite', ''], ready, 'no invite: invalid_name'),
+                    (['invite', 'alice'], ready, 'no invite: not_found'),
+                    (['invite', 'alice'], {**ready, 'CHARIOT_SEALING_KEY_FILE': 'keys.json'}, 'no invite: not_found'),
+                    (['invite', 'two\nlines'], ready, 'no invite: invalid_name'),
+                    (['invite', 'alice'], {**ready, 'CHARIOT_RESTORE_STATE_PATH': str(marker)},
+                     'no invite: restore_pending')):
+                run = subprocess.run([binary, *argv], env=case, capture_output=True, text=True, timeout=60)
+                self.assertEqual((run.returncode, run.stdout, run.stderr.strip()), (1, '', f'rose server: {word}'),
+                                 (argv, case))
+            self.assertEqual(list(data.iterdir()), [])  # no store was created
 
     def test_same_contract_same_bytes(self):
         reordered = json.loads(json.dumps(CONTRACT), object_pairs_hook=lambda kv: dict(reversed(kv)))
@@ -418,6 +456,21 @@ STARTUP_CHECKS = textwrap.dedent('''
             assert_eq!(port(Some(bad.into())), Err("PORT is not a port".to_string()), "{:?}", bad);
         }
         assert_eq!(var("ROSE_CODEGEN_CHECK_UNSET"), Ok(None));
+        let args = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(command(&args(&[])), Some(Command::Serve));
+        assert_eq!(command(&args(&["invite", "alice"])), Some(Command::Invite("alice".into())));
+        assert_eq!(command(&args(&["invite", " Alice Two "])), Some(Command::Invite(" Alice Two ".into())));
+        for bad in [&["invite"][..], &["invite", "a", "b"], &["serve"], &["Invite", "a"], &["--help"]] {
+            assert_eq!(command(&args(bad)), None, "{:?}", bad);
+        }
+        // An empty or odd account is passed on as typed; the adapter refuses it (invalid_name).
+        assert_eq!(command(&args(&["invite", ""])), Some(Command::Invite(String::new())));
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let not_text = vec![OsString::from("invite"), OsString::from_vec(vec![0x61, 0xff])];
+            assert_eq!(command(&not_text), None);
+        }
+        assert!(USAGE.starts_with("usage: ") && USAGE.contains("invite <account>"));
         println!("start-up checks passed");
     }
 ''')
