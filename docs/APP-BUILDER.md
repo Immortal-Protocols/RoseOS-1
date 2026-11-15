@@ -1636,7 +1636,12 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
     - The loader zeroes its own buffers. It can't zero the JSON parser's internal copies, or rose-signin's `Secret`, which redacts `Debug` but isn't zeroed on drop.
     - Its path and contents are never logged. Any problem leaves the server without a key, and a reason word says why.
   - **Server.** `Started::server` attaches the data and marks the migrations done.
-- **Not ready yet.** `restore_done` is never set (item 5), and no host delivers a keyring yet. So a server built on the adapter answers `503` until the restore executor is agreed and a keyring arrives.
+- **Restore marker** (Chariot `e592c4b1`). At start the adapter looks up `CHARIOT_RESTORE_STATE_PATH` once, without following a link. When the variable is unset, the path is `DATA_DIR/.chariot-restore.json`, and a value that is set must be absolute.
+  - **Absent** (`NotIndicated`): no restore is indicated, and `restore_done` is set.
+  - **Anything present** (`Indicated`): a file, directory or link, even a dangling one. The server stays `503`.
+  - **Any other lookup error** (`Unknown`): the server stays `503`.
+  - The marker is never read, parsed, run, removed or completed, because no restore executor or completion protocol is agreed.
+- **Readiness.** A server is ready once a keyring is delivered, its migrations are done and no restore is indicated. No host delivers a keyring yet.
 - **Dependencies.** The lock is rose-signin's 52 crates plus the two path crates, and a test checks this. Its CI (`.github/workflows/rose-app-runtime-signin.yml`) follows rose-signin's route.
 - **Build note.** The bundled SQLite C source needs a musl C compiler on the builder.
 
