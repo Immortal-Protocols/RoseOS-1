@@ -1373,7 +1373,8 @@ folder is still refused.
 The tree adds a `contract/` folder (the API both halves share; required) and
 `server/`:
 - `server/src/**.rs`, with `server/src/handlers/mod.rs` required;
-- `server/assets/**` (data files);
+- `server/assets/**` (data files, embedded in the server as `crate::assets::get("data/x.json")`, §7.6, once
+  the generated `main.rs` declares `mod assets;`);
 - `server/migrations/account/NNNN_name.sql`, and `migrations/shared/` only
   when `shared` is true.
 
@@ -1612,10 +1613,9 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   server is given its host's client header (`Server::with_client_header`,
   Chariot's `X-Chariot-Client-Address`, §7.7). The header is then used
   when it holds exactly one IP address, and the peer otherwise. It is never
-  trusted by default. No generated server is given it yet (the adapter's
-  `Started::server` and the generated `main.rs` do not call it), so behind
-  Chariot's gateway every client of a generated server still shares the
-  gateway's address. This is a known limit until `main.rs` opts in.
+  trusted by default. Every generated server is given it: the generated
+  `main.rs` calls `.with_client_header("X-Chariot-Client-Address")`
+  (§7.5, #850).
 
 **The adapter (slice 7b)** (`workspace/rose-app-runtime-signin`, OS Core; source, built on by nothing yet) binds `Auth` to rose-signin `23062a04`.
 
@@ -1766,8 +1766,9 @@ reserved `src/<package>/rose/`:
   trailing data, lone surrogates and nesting deeper than 64.
 - `RoseTypes`: one class per contract type, the same shapes as the server.
 - `RoseApi`: `Client(transport, tokens)` with one method per route.
-  `HttpsTransport(baseUrl)` takes the base URL from the caller, and the builder
-  never writes one in. It accepts `https` only, with no user info, query or
+  `HttpsTransport(baseUrl)` takes the base URL from the caller: the
+  builder-written `RoseServer.URL` (§7.6), which `RoseApi.serverUrl()` is to
+  return once Home/App's codegen reads it. It accepts `https` only, with no user info, query or
   fragment, and does not follow redirects. Errors come back as
   `RoseApi.Error(status, word, retryAfterSeconds)`. A 401 `session_invalid`
   forgets the token.
@@ -1827,8 +1828,9 @@ runs these steps before signing:
    keeps (512 KiB); a larger one is the writer's (`compile`), refused
    before anything is built.
 2. **Migrations.** They are checked against the delivered lock and in the
-   sandbox, then embedded in two builder-owned files, which a generator
-   may not write:
+   sandbox, then embedded in builder-owned files, which a generator may
+   not write (it is the builder's failure, `toolchain`); the builder writes
+   its other files with them:
    - `rose/migrations.rs`, in the adapter's shape: `ACCOUNT: &[&str]` and
      `SHARED: Option<&[&str]>` (`None` unless the app declares shared
      data). The statement at index `i` takes a database from version `i`
@@ -1844,6 +1846,28 @@ runs these steps before signing:
        nothing is left;
      - `ADMISSION`: `rose_app_runtime::signin::Admission`, from
        `rose-app.json`.
+   - `rose/assets.rs`: `pub fn get(path: &str) -> Option<&'static [u8]>`,
+     the writer's `server/assets/` files by their path under it (with `/`),
+     each `include_bytes!` of the build's own copy, so the bytes are exact.
+     It is written on every client-server build (with no assets, `get`
+     answers `None`), so the generated `main.rs` can always declare it
+     (Home/App adds `mod assets;` next; until then nothing reaches it). At
+     most 1024 files and 64 MiB in all, within the app's own 64 MB; more is
+     the writer's (`compile`, `assets_too_large`). A path under
+     `server/src` or `server/assets` longer than 1024 bytes is the
+     writer's too (`layout_invalid`), so the build's copy always fits.
+   - `src/<package>/rose/RoseServer.java` (the client's):
+     `static final String URL`, the app's hosted https base URL, or `null`
+     when it is not hosted yet. It comes from the injected `server_url`
+     (the hosting record, which only owner tooling writes; slice 10), never
+     guessed. A record the generated client would refuse fails the build as
+     the builder's (`toolchain`): the builder takes only https with a
+     lower-case DNS name whose last label starts with a letter (as
+     `java.net.URI` reads a host; no IP address), an optional port and a
+     plain path, and a test checks the generated `HttpsTransport` accepts
+     each of those. It is baked into the APK, so the first hosted version
+     needs a build after the record exists. `RoseApi.serverUrl()` is to
+     read it (Home/App, next).
 3. **Generated code.** The injected `codegen` writes the server's `rose/*.rs`
    files and the client's files under `src/<package>/rose/`. A generator
    that fails, or writes outside that folder (a `..`, `.` or empty path
@@ -2135,6 +2159,12 @@ the server does.
 - **Publication** uses Chariot's existing creator auth, by sha256, never the
   phone or the APK. The publication adapter isn't finished, and there is no
   live URL or credential.
+- **Client base URL.** The builder bakes the hosted base URL into each
+  client-server APK as `RoseServer.URL` (§7.6), from the injected
+  `server_url` hosting record. No record is defined or written yet, so every
+  build carries `null` and the generated client reports that the app is not
+  hosted. The record's form, and who writes it, is slice 10's to agree with
+  the Chariot owner.
 
 - **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
   on every request, and guest ingress admits only the gateway (Chariot's
@@ -2190,9 +2220,8 @@ Still open for the Chariot owner (App Core's proposal in brackets):
      the marker's sha256 to `revision_sha256`. Chariot verifies the receipt
      and removes the marker.]
 6. Client address: the header is agreed, `X-Chariot-Client-Address`
-   (above), and the runtime can use it. It is not yet wired into generated
-   servers: Home/App's `main.rs` is to call
-   `.with_client_header("X-Chariot-Client-Address")`.
+   (above). Every generated server counts rate limits by it, because the
+   generated `main.rs` calls `.with_client_header(..)` (§7.5).
 7. Rollback [keep the previous ELF; report the running sha256].
 8. Process and logs [SIGTERM within a grace period; no secrets in logs].
 

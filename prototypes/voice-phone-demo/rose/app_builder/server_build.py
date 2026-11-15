@@ -45,6 +45,10 @@ ADAPTER = 'rose-app-runtime-signin'  # the generated rose/main.rs starts the ser
 BUILDER_CRATES = (RUNTIME, ADAPTER)  # what the builder's own generated code names, so a host must inject
 EDITION = '2021'
 ENTRY = 'rose/main.rs'
+ASSETS = 'rose-assets'  # the build's copy of the writer's server/assets, next to rose/ and src/
+MAX_ASSETS = 1024  # files in server/assets
+MAX_ASSET_BYTES = 64 * 1024 * 1024  # all of them together, embedded in the binary
+MAX_COPIED_PATH = 1024  # bytes of a path under server/src or server/assets, so the build's copy always fits
 GENERATED = re.compile(r'rose/(?:[a-z][a-z0-9_]{0,63}/){0,4}[a-z][a-z0-9_]{0,63}\.rs')
 TRIPLE = re.compile(r'[a-z0-9_]+(?:-[a-z0-9_.]+){1,3}')
 
@@ -197,6 +201,8 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
     for folder in (server, home, cargo_home, target_dir, tmp):
         folder.mkdir(mode=0o700, parents=True)
     _copy_tree(Path(snapshot) / 'server/src', server / 'src')
+    if os.path.lexists(Path(snapshot) / 'server/assets'):  # what rose/assets.rs (assets_rs) embeds
+        _copy_tree(Path(snapshot) / 'server/assets', server / ASSETS, 'server/assets')
     for name, text in generated.items():
         path = server / name
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -444,24 +450,36 @@ def classify(log: str, returncode: int | None = None) -> BuildFailed:
                        log=shown)
 
 
-def _copy_tree(src: Path, dst: Path):
-    """The writer's server/src, plain files and folders only (rose.app_builder.appprofile has checked the tree)."""
+def _copy_tree(src: Path, dst: Path, label: str = 'server/src'):
+    """The writer's server/src (or server/assets), plain files and folders only (rose.app_builder.appprofile has
+    checked the tree)."""
     dst.mkdir(mode=0o700)
+    try:
+        _copy_files(src, dst, label)
+    except OSError:  # the builder's own folders lengthen every path; one the snapshot held may not fit here
+        raise BuildFailed('toolchain', 'layout_unbuildable', f'The builder could not copy {label} into the build.')\
+            from None
+
+
+def _copy_files(src: Path, dst: Path, label: str):
     for here, dirs, files in os.walk(src):
         rel = Path(here).relative_to(src)
+        if any(len((rel / name).as_posix().encode()) > MAX_COPIED_PATH for name in (*dirs, *files)):
+            raise BuildFailed('compile', 'layout_invalid', f'A path in {label} is longer than {MAX_COPIED_PATH} '
+                              'bytes.')
         for d in dirs:
             if not stat.S_ISDIR(os.lstat(Path(here) / d).st_mode):
-                raise BuildFailed('compile', 'layout_invalid', f'server/src/{rel / d} is not a plain folder.')
+                raise BuildFailed('compile', 'layout_invalid', f'{label}/{rel / d} is not a plain folder.')
             (dst / rel / d).mkdir(mode=0o700)
         for f in files:
             path = Path(here) / f
             try:
                 fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
             except OSError:
-                raise BuildFailed('compile', 'layout_invalid', f'server/src/{rel / f} is not a plain file.') from None
+                raise BuildFailed('compile', 'layout_invalid', f'{label}/{rel / f} is not a plain file.') from None
             try:
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise BuildFailed('compile', 'layout_invalid', f'server/src/{rel / f} is not a plain file.')
+                    raise BuildFailed('compile', 'layout_invalid', f'{label}/{rel / f} is not a plain file.')
                 with os.fdopen(os.dup(fd), 'rb') as stream:
                     data = stream.read()
             finally:
@@ -527,3 +545,30 @@ def meta_rs(app: str, issuer: str, admission: str) -> str:
             f'pub const APP: &str = {_str(app)};\n'
             f'pub const ISSUER: &str = {_str(_issuer(issuer))};\n'
             f'pub const ADMISSION: rose_app_runtime::signin::Admission = rose_app_runtime::signin::Admission::{variant};\n')
+
+
+def assets_rs(snapshot: Path) -> str:
+    """``rose/assets.rs``: the writer's ``server/assets/`` embedded in the server, written by the builder on every
+    client-server build (none: ``get`` answers ``None`` for every path), so the generated ``main.rs`` can always
+    declare it. ``get("data/x.json")`` is the file's bytes; paths are relative to ``server/assets`` with ``/``.
+    Each file is ``include_bytes!`` of the build's own copy (``build`` copies the folder), so the bytes are exact."""
+    root = Path(snapshot) / 'server/assets'
+    files = []
+    if os.path.lexists(root):
+        for here, dirs, names in os.walk(root):
+            dirs.sort()
+            for name in sorted(names):
+                path = Path(here) / name
+                files.append((path.relative_to(root).as_posix(), os.lstat(path).st_size))
+    if len(files) > MAX_ASSETS:
+        raise BuildFailed('compile', 'assets_too_large', f'server/assets holds more than {MAX_ASSETS} files.')
+    if sum(size for _, size in files) > MAX_ASSET_BYTES:
+        raise BuildFailed('compile', 'assets_too_large',
+                          f'server/assets holds more than {MAX_ASSET_BYTES // (1024 * 1024)} MB.')
+    arms = ''.join(f'        {_str(rel)} => Some(&include_bytes!({_str(f"../{ASSETS}/{rel}")})[..]),\n'
+                   for rel, _ in sorted(files))
+    return ('//! The app\'s server/assets, embedded by the builder. Generated; not the app\'s code.\n'
+            '#![allow(dead_code)]\n\n'
+            '/// The bytes of `server/assets/<path>`, or `None` when there is no such file.\n'
+            'pub fn get(path: &str) -> Option<&\'static [u8]> {\n'
+            f'    match path {{\n{arms}        _ => None,\n    }}\n}}\n')
