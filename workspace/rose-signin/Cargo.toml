@@ -13,5 +13,11 @@ sha2 = "0.10"
 argon2 = { version = "0.5", features = ["std"] }
 subtle = "2"
 getrandom = "0.2"
+aes-gcm = "0.10"
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+[features]
+# The reference SQLite store (store::sqlite). Generated servers enable it; the core library needs no database.
+sqlite = ["dep:rusqlite"]
 
 [dev-dependencies]

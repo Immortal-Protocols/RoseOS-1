@@ -1,30 +1,22 @@
 //! The rose-signin-v1 server flow and its security properties.
 
 use rose_signin::flow::{Authenticator, EnrollError, PENDING_SECONDS, SignIn};
-use rose_signin::secret::{Sealer, Secret};
+use rose_signin::secret::{AeadSealer, Secret};
 use rose_signin::session::Principal;
 use rose_signin::store::{Memory, Store};
 use rose_signin::{base32, knowledge, otp, rate, recovery};
 
-/// Test-only sealer (XOR with a fixed pad plus a marker). Production sealing is decision D9.
-struct TestSealer;
-impl Sealer for TestSealer {
-    fn seal(&self, p: &Secret) -> Vec<u8> {
-        let mut v = vec![0xA5];
-        v.extend(p.expose().iter().map(|b| b ^ 0x5C));
-        v
-    }
-    fn open(&self, s: &[u8]) -> Option<Secret> {
-        (s.first() == Some(&0xA5)).then(|| Secret::new(s[1..].iter().map(|b| b ^ 0x5C).collect()))
-    }
+/// The reference AES-256-GCM sealer with one fixed test key (version 1). Production keys come from the host (D9).
+fn sealer() -> AeadSealer {
+    AeadSealer::new(Some(1), vec![(1, Secret::new(vec![7u8; 32]))]).unwrap()
 }
 
-type Auth = Authenticator<Memory, TestSealer>;
+type Auth = Authenticator<Memory, AeadSealer>;
 const T0: u64 = 1_800_000_000;
 const PASS: &str = "correct horse";
 
 fn auth() -> Auth {
-    Authenticator::new(Memory::default(), TestSealer, "Rose Notes").unwrap()
+    Authenticator::new(Memory::default(), sealer(), "Rose Notes").unwrap()
 }
 
 /// The secret the user's authenticator app would hold, read back from the otpauth URI.
@@ -81,7 +73,10 @@ fn both_factors_sign_in_and_the_session_names_its_principal() {
     let k = enrolled(&mut a, "notes", "ana");
     let t = T0 + 90;
     let tok = token(&a.sign_in("notes", "ana", &code(&k, t), PASS, "10.0.0.1", t));
-    assert_eq!(a.validate(&tok, t + 1), Some(principal("notes", "ana")));
+    assert_eq!(
+        a.validate(&tok, t + 1).unwrap(),
+        Some(principal("notes", "ana"))
+    );
 }
 
 #[test]
@@ -126,7 +121,7 @@ fn a_code_is_never_accepted_twice_even_after_a_wrong_passphrase() {
         SignIn::Failed
     );
     let tok = token(&a.sign_in("notes", "ana", &code(&k, t + 30), PASS, "c", t + 30));
-    assert!(a.validate(&tok, t + 31).is_some());
+    assert!(a.validate(&tok, t + 31).unwrap().is_some());
     // The enrollment's own confirming code cannot sign in either.
     let mut b = auth();
     let e = b.begin_enrollment("notes", "bo", PASS, None, T0).unwrap();
@@ -298,7 +293,7 @@ fn the_knowledge_factor_is_hashed_and_length_checked() {
 fn secrets_are_sealed_at_rest_and_never_printed() {
     let mut a = auth();
     let k = enrolled(&mut a, "notes", "ana");
-    let stored = a.store.account("notes", "ana").unwrap();
+    let stored = a.store.account("notes", "ana").unwrap().unwrap();
     assert!(
         !stored
             .sealed_otp_secret
@@ -386,9 +381,9 @@ fn sessions_expire_idle_and_absolute_and_can_be_revoked() {
     let sign = |a: &mut Auth, t: u64| token(&a.sign_in("notes", "ana", &code(&k, t), PASS, "c", t));
     let mut t = T0 + 90;
     let idle = sign(&mut a, t);
-    assert!(a.validate(&idle, t + 7 * 86400 - 1).is_some());
+    assert!(a.validate(&idle, t + 7 * 86400 - 1).unwrap().is_some());
     assert!(
-        a.validate(&idle, t + 2 * 7 * 86400).is_none(),
+        a.validate(&idle, t + 2 * 7 * 86400).unwrap().is_none(),
         "idle expiry"
     );
     t += 30;
@@ -396,20 +391,22 @@ fn sessions_expire_idle_and_absolute_and_can_be_revoked() {
     let mut now = t;
     while now < t + 29 * 86400 {
         now += 86400;
-        assert!(a.validate(&abs, now).is_some());
+        assert!(a.validate(&abs, now).unwrap().is_some());
     }
     assert!(
-        a.validate(&abs, t + 30 * 86400).is_none(),
+        a.validate(&abs, t + 30 * 86400).unwrap().is_none(),
         "absolute expiry even when active"
     );
     t = now + 30;
     let one = sign(&mut a, t);
     let two = sign(&mut a, t + 30);
-    a.revoke(&one);
-    assert!(a.validate(&one, t + 31).is_none() && a.validate(&two, t + 31).is_some());
-    a.revoke_all(&principal("notes", "ana"));
-    assert!(a.validate(&two, t + 32).is_none());
-    assert!(a.validate(b"not a token", t + 32).is_none());
+    a.revoke(&one).unwrap();
+    assert!(
+        a.validate(&one, t + 31).unwrap().is_none() && a.validate(&two, t + 31).unwrap().is_some()
+    );
+    a.revoke_all(&principal("notes", "ana")).unwrap();
+    assert!(a.validate(&two, t + 32).unwrap().is_none());
+    assert!(a.validate(b"not a token", t + 32).unwrap().is_none());
 }
 
 #[test]
@@ -430,14 +427,17 @@ fn accounts_and_apps_are_isolated() {
     );
     let tb = token(&a.sign_in("notes", "bo", &code(&kb, t + 30), PASS, "c2", t + 30));
     let tc = token(&a.sign_in("recipes", "ana", &code(&kc, t + 30), PASS, "c2", t + 30));
-    assert_eq!(a.validate(&tb, t + 31).unwrap(), principal("notes", "bo"));
     assert_eq!(
-        a.validate(&tc, t + 31).unwrap(),
+        a.validate(&tb, t + 31).unwrap().unwrap(),
+        principal("notes", "bo")
+    );
+    assert_eq!(
+        a.validate(&tc, t + 31).unwrap().unwrap(),
         principal("recipes", "ana")
     );
-    a.revoke_all(&principal("notes", "ana"));
+    a.revoke_all(&principal("notes", "ana")).unwrap();
     assert!(
-        a.validate(&tc, t + 32).is_some(),
+        a.validate(&tc, t + 32).unwrap().is_some(),
         "revoking one app's account leaves the other app's"
     );
 }
@@ -485,7 +485,7 @@ fn recovery_codes_are_single_use_bound_to_their_account_and_stored_hashed() {
 
 #[test]
 fn names_that_break_the_otpauth_label_are_refused() {
-    assert!(Authenticator::new(Memory::default(), TestSealer, "Rose: Notes").is_err());
+    assert!(Authenticator::new(Memory::default(), sealer(), "Rose: Notes").is_err());
     let mut a = auth();
     let long = "x".repeat(129);
     for bad in ["", "ana:admin", "line\nbreak", long.as_str()] {

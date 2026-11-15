@@ -7,13 +7,17 @@ import os
 import stat
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from rose.app_builder import host, toolchain
+from rose.app_builder import dependencies, host, toolchain
 from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
+from rose.tests.test_app_dependencies import CLASS, Store, jar
+from rose.tests.test_app_generator import DONE, FakeClient
 from rose.tests.test_builder_routes import Device, label
 
 
@@ -27,6 +31,7 @@ class Config(unittest.TestCase):
         c = host.parse_config(config_data('/srv/x'))
         self.assertEqual((c.key_creation, c.writer, c.backup, c.build_timeout_s), (False, None, None, 600.0))
         self.assertEqual((c.port, c.admin_port, c.hosts), (8766, 8767, ('100.64.0.9',)))
+        self.assertIsNone(c.library_store)
 
     def test_refusals(self):
         good = config_data('/srv/x')
@@ -38,6 +43,7 @@ class Config(unittest.TestCase):
                {**good, 'hosts': ['builder.example.com']}, {**good, 'name': ''},
                {**good, 'root': '//srv/x/remote'}, {**good, 'root': good['remoteDir'] + '/../remote'},
                {**good, 'keyCreation': 'yes'}, {**good, 'buildTimeoutS': 0},
+               *({**good, 'libraryStore': value} for value in ('relative', '', True, [], {})),
                {**good, 'writer': {'argv': ['node', 'bridge.mjs']}}, {**good, 'writer': {'argv': []}},
                {**good, 'backup': {'argv': ['/bin/backup'], 'extra': 1}}, {**good, 'backup': ['/bin/backup']}]
         for data in bad:
@@ -83,6 +89,132 @@ class Serving(unittest.TestCase):
             os.symlink(f'{tmp}/remote', f'{tmp}/builder')  # both names, one directory
             with self.assertRaises(host.ConfigError):
                 host.build_host(host.parse_config(config_data(tmp)))
+
+
+class Libraries(unittest.TestCase):
+    """Host factory -> writer prompt -> job-local resolver, with no model, compiler or signer."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.store = Store(self.root / 'libraries')
+        data = jar(self.root / 'fixture.jar', {'example/math/Adder.class': CLASS})
+        self.coordinate = 'example:math:1.0'
+        self.digest = self.store.add(self.coordinate, data)
+
+    def config(self):
+        return host.parse_config(config_data(self.tmp.name, libraryStore=str(self.store.root),
+                                            writer={'argv': ['/not-invoked/test-bridge']}))
+
+    def test_host_advertises_and_resolves_its_configured_libraries_for_a_job(self):
+        # Keep the host-constructed CodexGenerator; replace only its transport.
+        clients = []
+        requested = self.coordinate
+        def connect(on_event, command):
+            self.assertEqual(command, ['/not-invoked/test-bridge'])
+            client = FakeClient(on_event, after_submit=DONE)
+            request = client.request
+            def write(op, session, **params):
+                if op == 'submit':
+                    source = Path(client.calls[0][2]['cwd'])
+                    (source / 'dependencies.json').write_text(json.dumps(
+                        {'schemaVersion': 1, 'dependencies': [requested]}))
+                return request(op, session, **params)
+            client.request = write
+            clients.append(client)
+            return client
+        with mock.patch('rose.codex_client.CodexClient', side_effect=connect):
+            b = host.build_host(self.config())
+        self.addCleanup(b.builder.ledger.close)
+        self.assertIsInstance(b.builder.resolver, dependencies.RecordedStore)
+        self.assertEqual(b.builder.resolver.available(), [self.coordinate])
+        sdk = self.root / 'sdk'
+        android = sdk / 'platforms/android-35/android.jar'
+        android.parent.mkdir(parents=True)
+        with zipfile.ZipFile(android, 'w'):
+            pass
+        b.builder.tools = toolchain.Tools(sdk)
+        seen = []
+        def compile(source, work, package, code, name, tools, cancelled, libraries):
+            seen.extend(libraries)
+            # Stop after resolution: no compilation or signing keys in this test.
+            raise toolchain.StepFailed('compile', 'Stopped after resolving the host libraries.')
+        with mock.patch.object(toolchain, 'build', side_effect=compile) as build, \
+                mock.patch.object(toolchain, 'ensure_key') as keys:
+            job = b.builder.create('device', {'schemaVersion': 1, 'clientRequestId': 'one',
+                                              'description': 'A calculator using the provided math library.'})
+            self.assertTrue(b.builder.run_next())
+            self.assertEqual(build.call_count, 1, b.builder.job(job['jobId']))
+            keys.assert_not_called()
+        self.assertIn(self.coordinate, clients[0].calls[1][2]['text'])
+        self.assertTrue(clients[0].closed)
+        self.assertEqual([(lib.coordinate, lib.sha256) for lib in seen], [(self.coordinate, self.digest)])
+        self.assertTrue(seen[0].jar.is_relative_to(b.config.root / 'jobs'))
+        self.assertNotEqual(seen[0].jar, self.store.root / f'{self.digest}.jar')
+        self.assertEqual(b.builder.job(job['jobId'])['failure']['category'], 'compile')
+        # The same host also preserves the resolver's unavailable/digest refusals
+        # before compilation, rather than falling back to a framework-only build.
+        with mock.patch.object(toolchain, 'build') as build, mock.patch.object(toolchain, 'ensure_key') as keys:
+            for number, (requested, reason) in enumerate([
+                    ('example:absent:1.0', 'not available'), (self.coordinate, 'recorded digest')]):
+                if number:
+                    (self.store.root / f'{self.digest}.jar').write_bytes(b'tampered')
+                out = b.builder.create('device', {'schemaVersion': 1, 'clientRequestId': f'refused-{number}',
+                                                   'description': 'A library app.'})
+                self.assertTrue(b.builder.run_next())
+                failure = b.builder.job(out['jobId'])['failure']
+                self.assertEqual(failure['category'], 'dependency')
+                self.assertIn(reason, failure['summary'])
+            build.assert_not_called()
+            keys.assert_not_called()
+
+    def test_writer_catalog_is_live_and_no_store_preserves_the_default(self):
+        b = host.build_host(self.config())
+        self.addCleanup(b.builder.ledger.close)
+        self.assertEqual(b.builder.generate.libraries(), [self.coordinate])
+        self.store.add('example:other:2.0', (self.root / 'fixture.jar').read_bytes())
+        self.assertEqual(b.builder.generate.libraries(), [self.coordinate, 'example:other:2.0'])
+        # An empty configured store is valid; omission still means no libraries.
+        self.store.index.clear(); self.store._write()
+        self.assertEqual(b.builder.generate.libraries(), [])
+        bare = host.build_host(host.parse_config(config_data(self.tmp.name + '/bare',
+                               writer={'argv': ['/not-invoked/test-bridge']})))
+        self.addCleanup(bare.builder.ledger.close)
+        self.assertIsNone(bare.builder.resolver)
+        self.assertIsNone(bare.builder.generate.libraries)
+
+    def test_unavailable_or_malformed_store_is_refused_before_host_construction(self):
+        valid = {'schemaVersion': 1, 'artifacts': {self.coordinate: self.digest}}
+        index = self.store.root / 'index.json'
+        bad_indexes = ['{', [], {}, {'schemaVersion': True, 'artifacts': {}},
+                       {'schemaVersion': 2, 'artifacts': {}}, {'schemaVersion': 1, 'artifacts': []},
+                       {'schemaVersion': 1, 'artifacts': {'not-a-coordinate': self.digest}},
+                       {'schemaVersion': 1, 'artifacts': {self.coordinate: '../outside'}},
+                       {'schemaVersion': 1, 'artifacts': {self.coordinate: 42}},
+                       {'schemaVersion': 1, 'artifacts': {self.coordinate: 'f' * 64}}]
+        with mock.patch('rose.remote.Remote') as remote:
+            for value in bad_indexes:
+                index.write_text(value if isinstance(value, str) else json.dumps(value))
+                with self.subTest(value=value), self.assertRaises(host.ConfigError):
+                    host.build_host(self.config())
+            index.write_text(json.dumps(valid))
+            original = index.read_text(); index.unlink()
+            with self.assertRaises(host.ConfigError):host.build_host(self.config())
+            elsewhere = self.root / 'index.json'; elsewhere.write_text(original)
+            index.symlink_to(elsewhere)
+            with self.assertRaises(host.ConfigError):host.build_host(self.config())
+            index.unlink(); index.write_text(original)
+            artifact = self.store.root / f'{self.digest}.jar'
+            artifact.unlink(); artifact.symlink_to(self.root / 'fixture.jar')
+            with self.assertRaises(host.ConfigError):host.build_host(self.config())
+            for path in (self.root / 'missing', self.root / 'fixture.jar'):
+                c = host.parse_config(config_data(self.tmp.name, libraryStore=str(path)))
+                with self.assertRaises(host.ConfigError):host.build_host(c)
+            linked = self.root / 'linked'; linked.symlink_to(self.store.root)
+            with self.assertRaises(host.ConfigError):
+                host.build_host(host.parse_config(config_data(self.tmp.name, libraryStore=str(linked))))
+            remote.assert_not_called()
+        self.assertFalse((self.root / 'builder').exists())
 
 
 class Wired(unittest.TestCase):
