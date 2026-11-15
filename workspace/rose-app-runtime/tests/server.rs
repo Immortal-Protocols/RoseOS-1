@@ -731,6 +731,11 @@ fn logs_hold_no_private_data() {
         assert!(!all.contains(private), "{private}");
     }
     // Debug output of what carries secrets is redacted too.
+    let principal = Principal {
+        app: APP.into(),
+        account: "secret-account".into(),
+    };
+    assert!(!format!("{principal:?}").contains("secret-account"));
     assert!(!format!("{:?}", enrollment()).contains("HANDLE"));
 }
 
