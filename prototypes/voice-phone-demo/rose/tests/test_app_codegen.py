@@ -99,7 +99,9 @@ class Server(unittest.TestCase):
                      'Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED }',
                      'Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations)',
                      'let (keys, why) = Keys::from_env();', 'eprintln!("rose server: {why}");',
-                     'start(config, keys)', 'started.server(routes::routes::<handlers::App>())',
+                     'start(config, keys)', '.server(routes::routes::<handlers::App>())',
+                     'const CLIENT_HEADER: &str = "X-Chariot-Client-Address";',
+                     '.map_err(|e| format!("routes: {e}"))?\n        .with_client_header(CLIENT_HEADER);',
                      'const PORT_ENV: &str = "PORT";',
                      'const DEFAULT_PORT: u16 = 8080;', 'TcpListener::bind(("0.0.0.0", port))'):
             self.assertIn(line, main)
