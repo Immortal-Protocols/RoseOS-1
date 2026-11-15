@@ -7,15 +7,22 @@
 //! - `shared.sqlite3`: only when the app declares shared data.
 //!
 //! Migrations are the builder-embedded lists (`server/migrations/account/NNNN_*.sql` and `shared/`, already
-//! checked offline by §7.6), applied forward only, each in the same transaction as the version it records
-//! (`PRAGMA user_version`). A database whose version is above the list (written by a newer build) is refused and
-//! never downgraded or touched.
+//! checked offline by §7.6), applied forward only, all pending ones in one transaction with the versions they
+//! record (`PRAGMA user_version`). A database whose version is above the list (written by a newer build) is refused
+//! and never downgraded or touched.
+//!
+//! Foreign keys follow SQLite's documented procedure for schema changes: they are switched off outside the
+//! transaction while migrations run (inside one, `PRAGMA foreign_keys` does nothing, so a table rebuild would fire
+//! `ON DELETE` actions or fail on its own children), and `PRAGMA foreign_key_check` must find no violation before
+//! the commit. A violation rolls every pending migration back and refuses the database
+//! ([`DataError::ForeignKeys`]): nothing is lost and it stays at its old version. A migration therefore deletes
+//! child rows itself; `ON DELETE CASCADE` does not act during migrations.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rose_app_runtime::signin::Principal;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 /// The builder-embedded migrations, in order: index `i` takes a database from version `i` to `i + 1`.
@@ -34,6 +41,8 @@ pub enum DataError {
     NotThisApp,
     /// The app declared no shared data.
     NoShared,
+    /// After the pending migrations, rows of `table` reference a missing parent: nothing was committed.
+    ForeignKeys { table: String },
     /// SQLite or the file system failed; the message names no account.
     Storage(String),
 }
@@ -49,6 +58,12 @@ impl std::fmt::Display for DataError {
             }
             DataError::NotThisApp => f.write_str("the principal belongs to another app"),
             DataError::NoShared => f.write_str("the app declares no shared data"),
+            DataError::ForeignKeys { table } => {
+                write!(
+                    f,
+                    "the migrations leave rows of {table} without their parent; nothing was committed"
+                )
+            }
             DataError::Storage(m) => write!(f, "storage: {m}"),
         }
     }
@@ -74,9 +89,27 @@ pub fn account_key(app: &str, account: &str) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Applies `list` forward from the database's recorded version, in one immediate transaction.
+/// Applies `list` forward from the database's recorded version, in one immediate transaction, with foreign keys
+/// off while it runs and checked before it commits. The connection's foreign-key setting is restored afterwards,
+/// whatever the outcome.
 pub fn migrate(conn: &Connection, list: &[&str]) -> Result<(), DataError> {
     conn.busy_timeout(BUSY).map_err(storage)?;
+    let enforced: bool = conn
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .map_err(storage)?;
+    // Outside any transaction, where the pragma takes effect.
+    conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(storage)?;
+    let result = migrate_unenforced(conn, list);
+    let restored = conn.execute_batch(if enforced {
+        "PRAGMA foreign_keys = ON"
+    } else {
+        "PRAGMA foreign_keys = OFF"
+    });
+    result?;
+    restored.map_err(storage)
+}
+
+fn migrate_unenforced(conn: &Connection, list: &[&str]) -> Result<(), DataError> {
     conn.execute_batch("BEGIN IMMEDIATE").map_err(storage)?;
     let result = (|| {
         let found: i64 = conn
@@ -88,10 +121,22 @@ pub fn migrate(conn: &Connection, list: &[&str]) -> Result<(), DataError> {
                 known: list.len(),
             });
         }
+        let mut applied = 0;
         for (i, sql) in list.iter().enumerate().skip(found as usize) {
             conn.execute_batch(sql).map_err(storage)?;
             conn.execute_batch(&format!("PRAGMA user_version = {}", i + 1))
                 .map_err(storage)?;
+            applied += 1;
+        }
+        if applied > 0 {
+            // The first violating table, if any (its name only: never a row's contents).
+            let violation: Option<String> = conn
+                .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+                .optional()
+                .map_err(storage)?;
+            if let Some(table) = violation {
+                return Err(DataError::ForeignKeys { table });
+            }
         }
         Ok(())
     })();
