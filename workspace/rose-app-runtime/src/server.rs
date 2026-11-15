@@ -103,6 +103,7 @@ pub struct Server {
     log: Box<Log>,
     clock: Box<Clock>,
     data: Box<dyn Any + Send + Sync>,
+    client_header: Option<String>,
     open: AtomicUsize,
 }
 
@@ -160,6 +161,7 @@ impl Server {
             log: Box::new(stderr_log),
             clock: Box::new(unix_now),
             data: Box::new(()),
+            client_header: None,
             open: AtomicUsize::new(0),
         })
     }
@@ -177,6 +179,14 @@ impl Server {
     /// What handlers reach as `ctx.data` (the adapter's databases).
     pub fn with_data(mut self, data: Box<dyn Any + Send + Sync>) -> Self {
         self.data = data;
+        self
+    }
+
+    /// The header that carries the client's address, for a host whose proxy overwrites it on every request and is
+    /// the only way in (Chariot's gateway sets `X-Chariot-Client-Address`, §7.7). Rate limits then count by it when
+    /// it is one IP address, and by the peer otherwise. Without this, only the peer's address counts.
+    pub fn with_client_header(mut self, name: &str) -> Self {
+        self.client_header = Some(name.to_ascii_lowercase());
         self
     }
 
@@ -199,17 +209,29 @@ impl Server {
     }
 
     fn health(&self) -> Response {
+        let ready = self.ready();
         let body = Value::obj([
+            ("status", Value::str(if ready { "ok" } else { "not_ready" })),
             ("app_id", Value::str(self.identity.app_id.clone())),
             ("revision_sha256", Value::str(self.identity.revision_sha256.clone())),
             ("deployment_sha256", Value::str(self.identity.deployment_sha256.clone())),
         ]);
-        let status = if self.ready() { 200 } else { 503 };
+        let status = if ready { 200 } else { 503 };
         Response::json(status, json::to_string(&body).unwrap_or_default().into_bytes())
     }
 
     /// One request's response and the route template it is logged under. `client` is what rate limits count by.
     pub fn respond(&self, req: &Request, client: &str) -> (Response, &'static str) {
+        let forwarded = self
+            .client_header
+            .as_deref()
+            .and_then(|name| req.header(name))
+            .map(str::trim);
+        // The host's proxy header, only when the server was told the host sets it, and only as an address.
+        let client = match forwarded {
+            Some(value) if value.parse::<std::net::IpAddr>().is_ok() => value,
+            _ => client,
+        };
         let path = req.target.as_str();
         if path == "/health" {
             return if req.method == "GET" {
@@ -323,7 +345,8 @@ impl Server {
     /// Accepts connections, each on its own thread, at most `max_connections` at once. A request must arrive
     /// within `timeout` of the connection, and its response leave within `timeout` (a deadline for the whole of
     /// each, not each read). Failing to accept one connection (out of descriptors, say) waits briefly and goes on;
-    /// it never stops the server. Rate limits count by the peer's address (§7.7 item 6 is open).
+    /// it never stops the server. Rate limits count by the peer's address, or by the host's client header when
+    /// the server was given one (`with_client_header`).
     pub fn serve(self: Arc<Self>, listener: TcpListener) -> stdio::Result<()> {
         let mut backoff = Duration::from_millis(10);
         loop {
