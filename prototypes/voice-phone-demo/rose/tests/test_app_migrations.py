@@ -2,6 +2,7 @@
 ones only follow, and every set applies in an in-memory sandbox, fresh and as an upgrade over data, before
 anything is built. Every migration is one the test writes; no file is ever created by running one."""
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -145,6 +146,51 @@ class Sandbox(Base):
         self.assertIn('upgrading a database from schema 1 that already has rows', str(self.refused('migration_sql',
                                                                                                  delivered)))
 
+    def rebuild(self, children, copy=True):
+        # SQLite's documented rebuild of a referenced table, as the runtime applies it (foreign keys off, then
+        # every reference checked): it keeps the children only when the new table keeps their parents' rows.
+        shutil.rmtree(self.root / 'server', ignore_errors=True)
+        self.put('account', '0001_a.sql', 'CREATE TABLE lists (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n'
+                                          f'CREATE TABLE items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL '
+                                          f'REFERENCES lists(id){children}, body TEXT);')
+        delivered = self.locks()
+        self.put('account', '0002_rebuild.sql',
+                 'PRAGMA foreign_keys = OFF;\n'  # no effect inside the transaction, here as on a phone
+                 'CREATE TABLE lists_new (id INTEGER PRIMARY KEY, name TEXT NOT NULL, colour TEXT);\n'
+                 + ('INSERT INTO lists_new (id, name) SELECT id, name FROM lists;\n' if copy else '')
+                 + 'DROP TABLE lists;\nALTER TABLE lists_new RENAME TO lists;\nPRAGMA foreign_keys = ON;')
+        return delivered
+
+    def test_a_referenced_table_rebuilt_with_its_rows_keeps_its_children(self):
+        for children in ('', ' ON DELETE CASCADE'):
+            with self.subTest(children=children):
+                delivered = self.rebuild(children)
+                self.assertEqual(M.check(M.read(self.root), delivered), {'account': 2, 'shared': 0})
+
+    def test_a_rebuild_that_loses_the_childrens_parents_is_refused(self):
+        # On a phone with an item, the runtime refuses this at start-up (with ON DELETE CASCADE it would have
+        # deleted the items); here the seeded item, which points at a seeded list, shows it before anything ships.
+        for children in ('', ' ON DELETE CASCADE'):
+            with self.subTest(children=children):
+                delivered = self.rebuild(children, copy=False)
+                M.check(M.read(self.root), [])  # a new install has no item to lose
+                refused = self.refused('migration_sql', delivered)
+                self.assertIn('a row of table items references a row that is gone', str(refused))
+
+    def test_seeded_children_point_at_seeded_parents(self):
+        self.put('account', '0001_a.sql', 'CREATE TABLE items (id INTEGER PRIMARY KEY, list_id TEXT '
+                                          'REFERENCES lists(code), body TEXT);\n'  # the child first, nullable
+                                          'CREATE TABLE lists (code TEXT PRIMARY KEY, name TEXT);\n'
+                                          'CREATE TABLE tags (item INTEGER NOT NULL REFERENCES items, '
+                                          'list TEXT NOT NULL REFERENCES lists(code));')
+        box = M._Sandbox()
+        box.apply(M.read(self.root)['account'])
+        box.seed()
+        db = box.db
+        self.assertEqual(db.execute('SELECT count(*) FROM items WHERE list_id IS NULL').fetchone()[0], 0)
+        self.assertGreater(db.execute('SELECT count(*) FROM tags').fetchone()[0], 0)
+        self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
+
     def test_a_trigger_fired_by_upgrade_rows_is_sandboxed_too(self):
         self.put('account', '0001_a.sql', 'CREATE TABLE a (x INTEGER DEFAULT 0);\n'
                                           'CREATE TABLE b (n INTEGER);\n'
@@ -171,7 +217,7 @@ class Sandbox(Base):
                                           'ALL SELECT i + 1 FROM n WHERE i < 3000) INSERT INTO t SELECT hex(i) FROM n;')
         migration = M.read(self.root)['account'][0]
         box = M._Sandbox()
-        box.apply(migration)
+        box.apply([migration])
         box.steps = M.MAX_STEPS - 1000  # as if applying had used almost all of it
         with self.assertRaises(M.MigrationRefused) as caught:
             box.verify('account migrations from an empty database')
@@ -244,7 +290,7 @@ class Sandbox(Base):
         # A table whose key forbids duplicates still gets two different rows.
         self.put('account', '0001_a.sql', 'CREATE TABLE k (code TEXT PRIMARY KEY, n INTEGER NOT NULL);')
         box = M._Sandbox()
-        box.apply(M.read(self.root)['account'][0])
+        box.apply([M.read(self.root)["account"][0]])
         self.assertEqual(box.seed(), 2)
         self.assertEqual(box.db.execute('SELECT count(DISTINCT code) FROM k').fetchone()[0], 2)
 

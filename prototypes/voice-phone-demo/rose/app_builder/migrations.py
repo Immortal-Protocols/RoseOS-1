@@ -179,6 +179,10 @@ def _statements(sql: str):
         raise SyntaxError('the last statement does not end with ;')
 
 
+def _quote(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
 class _Sandbox:
     def __init__(self):
         self.db = sqlite3.connect(':memory:', isolation_level=None)
@@ -192,26 +196,40 @@ class _Sandbox:
         self.db.execute('PRAGMA foreign_keys = ON')
         self.db.execute('PRAGMA temp_store = MEMORY')  # sorts and temporary results never spill to temporary files
 
-    def apply(self, migration: Migration):
+    def apply(self, batch: list[Migration]):
+        """Pending migrations as the runtime applies them (SQLite's schema-change procedure): foreign keys off, all
+        of them in one transaction, then every reference checked before the commit. So a table rebuild keeps its
+        children, ON DELETE actions do not fire, and a reference left broken refuses the whole batch."""
+        parsed = []
+        for migration in batch:
+            try:
+                parsed.append((migration, list(_statements(migration.sql))))
+            except SyntaxError as error:
+                raise MigrationRefused(f'{migration.file}: {error.msg}.', 'migration_sql') from None
+        self.db.execute('PRAGMA foreign_keys = OFF')  # outside the transaction, where SQLite honours it
         try:
-            statements = list(_statements(migration.sql))
-        except SyntaxError as error:
-            raise MigrationRefused(f'{migration.file}: {error.msg}.', 'migration_sql') from None
-        # One transaction per migration, where the runtime commits all pending ones together: each migration's
-        # deferred constraints are checked at its own end, so what passes here also commits there.
-        self.db.execute('BEGIN IMMEDIATE')
-        self.db.set_authorizer(_authorizer)
-        try:
-            for statement in statements:
-                self.db.execute(statement)
-            self.db.set_authorizer(None)
-            self.db.execute('COMMIT')  # deferred constraints are checked here, and can fail here
-        except sqlite3.Error as error:
-            self.db.set_authorizer(None)
+            self.db.execute('BEGIN IMMEDIATE')
+            for migration, statements in parsed:
+                self.db.set_authorizer(_authorizer)
+                try:
+                    for statement in statements:
+                        self.db.execute(statement)
+                except sqlite3.Error as error:
+                    raise self._refused(migration.file, error) from None
+                finally:
+                    self.db.set_authorizer(None)
+            try:
+                broken = self.db.execute('PRAGMA foreign_key_check').fetchone()
+            except sqlite3.Error as error:
+                raise self._refused(f'Checking references after {batch[-1].file}', error) from None
+            if broken is not None:
+                raise MigrationRefused(f'After {batch[-1].file}, a row of table {str(broken[0])[:64]} references a '
+                                       'row that is gone; the update would be refused at start-up.', 'migration_sql')
+            self.db.execute('COMMIT')
+        finally:
             if self.db.in_transaction:
                 self.db.execute('ROLLBACK')
-            message = 'it ran too long' if self.steps > MAX_STEPS else str(error).split('\n')[0][:200]
-            raise MigrationRefused(f'{migration.file} failed: {message}.', 'migration_sql') from None
+            self.db.execute('PRAGMA foreign_keys = ON')
 
     def _refused(self, what: str, error: sqlite3.Error) -> MigrationRefused:
         reason = 'it ran too long' if self.steps > MAX_STEPS else str(error).split('\n')[0][:200]
@@ -238,59 +256,96 @@ class _Sandbox:
                 return values[variant]
         return (1, 2)[variant] if upper else ('a', 'b')[variant]  # NUMERIC, or no type at all
 
+    def _references(self, table: str) -> dict:
+        """Values for the table's foreign-key columns that point at a row its parent already holds (a self
+        reference, or a parent with no row yet, gives none, and the column is left to SQLite)."""
+        groups: dict = {}
+        for row in self.db.execute(f'PRAGMA foreign_key_list({_quote(table)})'):
+            groups.setdefault(row[0], (row[2], []))[1].append((row[3], row[4]))
+        values = {}
+        for parent, pairs in groups.values():
+            if parent == table:
+                continue
+            targets = [to for _, to in pairs]
+            if None in targets:  # the parent's primary key, in key order (or its rowid)
+                key = sorted((c for c in self.db.execute(f'PRAGMA table_info({_quote(parent)})') if c[5]),
+                             key=lambda c: c[5])
+                targets = [c[1] for c in key] if key else ['rowid']
+                if len(targets) != len(pairs):
+                    continue
+            try:
+                row = self.db.execute(f'SELECT {", ".join(_quote(t) for t in targets)} FROM {_quote(parent)} '
+                                      'LIMIT 1').fetchone()
+            except sqlite3.Error:
+                continue
+            if row is not None:
+                values.update({column: value for (column, _), value in zip(pairs, row)})
+        return values
+
     def seed(self) -> int:
         """Rows like a phone's, so an upgrade runs over data (a unique index over duplicates, a NOT NULL rebuild,
-        an update) and not only over empty tables. Each table gets two rows of typed values: identical ones where
-        its constraints allow, else two different ones, else default rows; rowid keys and foreign keys are left to
-        SQLite. Best effort: a table whose constraints refuse all three stays empty. Returns the rows added."""
+        an update, a parent table rebuilt under its children) and not only over empty tables. Each table gets two
+        rows of typed values: identical ones where its constraints allow, else two different ones, else default
+        rows. Rowid keys are left to SQLite, and foreign keys point at a row the parent already holds: parents are
+        filled first, a table at a time until no more can be. Best effort: a table whose constraints refuse every
+        try stays empty. Returns the rows added."""
         added = 0
         self.db.set_authorizer(_authorizer)  # a migration's triggers fire here too, under the same rules
         try:
-            tables = [r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND sql "
-                                                    "NOT LIKE 'CREATE VIRTUAL%' AND name NOT LIKE 'sqlite\\_%' "
-                                                    "ESCAPE '\\'")]
-            for table in tables:
-                quoted = '"' + table.replace('"', '""') + '"'
-                columns = self.db.execute(f'PRAGMA table_xinfo({quoted})').fetchall()
-                keys = {r[3] for r in self.db.execute(f'PRAGMA foreign_key_list({quoted})')}
-                pk = [c for c in columns if c[5]]
-                rowid = len(pk) == 1 and (pk[0][2] or '').upper() == 'INTEGER'
-                cols = [c for c in columns if c[6] == 0 and c[1] not in keys and not (rowid and c[5])]
-                names = ', '.join('"' + c[1].replace('"', '""') + '"' for c in cols)
-                for rows in ((0, 0), (0, 1), None):
-                    inserted = 0
-                    try:
-                        for variant in (rows or (None, None)):
-                            if variant is None or not cols:
-                                self.db.execute(f'INSERT INTO {quoted} DEFAULT VALUES')
-                            else:
-                                values = [self._value(c[2], variant) for c in cols]
-                                self.db.execute(f'INSERT INTO {quoted} ({names}) VALUES '
-                                                f'({", ".join("?" * len(values))})', values)
-                            inserted += 1
-                    except sqlite3.Error:
-                        if self.steps > MAX_STEPS:
-                            raise MigrationRefused('A trigger in these migrations ran too long.',
-                                                   'migration_sql') from None
-                    if inserted:
-                        added += inserted
-                        if inserted == 2:
-                            break
-                        # one row went in: try for a second, different one, then stop
-                        try:
-                            values = [self._value(c[2], 1) for c in cols]
-                            if cols:
-                                self.db.execute(f'INSERT INTO {quoted} ({names}) VALUES '
-                                                f'({", ".join("?" * len(values))})', values)
-                                added += 1
-                        except sqlite3.Error:
-                            pass
-                        break
+            pending = [r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND sql "
+                                                     "NOT LIKE 'CREATE VIRTUAL%' AND name NOT LIKE 'sqlite\\_%' "
+                                                     "ESCAPE '\\'")]
+            parents = {t: {r[2] for r in self.db.execute(f'PRAGMA foreign_key_list({_quote(t)})')} - {t}
+                       for t in pending}
+            while pending:  # parents first, so a child's references point at rows; a cycle is taken as it comes
+                ready = [t for t in pending if not parents[t] & set(pending)] or pending
+                counts = [self._seed_table(table) for table in ready]
+                added += sum(counts)
+                done = set(ready)
+                if not any(counts) and ready == pending:
+                    break
+                pending = [t for t in pending if t not in done]
         except sqlite3.Error as error:
             raise self._refused('Filling the delivered tables with sample rows', error) from None
         finally:
             self.db.set_authorizer(None)
         return added
+
+    def _seed_table(self, table: str) -> int:
+        """Up to two sample rows in one table, foreign keys pointing at the parents' rows; the rows added."""
+        quoted = _quote(table)
+        columns = self.db.execute(f'PRAGMA table_xinfo({quoted})').fetchall()
+        keys = {r[3] for r in self.db.execute(f'PRAGMA foreign_key_list({quoted})')}
+        refs = self._references(table)
+        pk = [c for c in columns if c[5]]
+        rowid = len(pk) == 1 and (pk[0][2] or '').upper() == 'INTEGER'
+        cols = [c for c in columns if c[6] == 0 and (c[1] not in keys or c[1] in refs) and not (rowid and c[5])]
+        names = ', '.join(_quote(c[1]) for c in cols)
+
+        def insert(variant):
+            if variant is None or not cols:
+                self.db.execute(f'INSERT INTO {quoted} DEFAULT VALUES')
+            else:
+                values = [refs[c[1]] if c[1] in refs else self._value(c[2], variant) for c in cols]
+                self.db.execute(f'INSERT INTO {quoted} ({names}) VALUES ({", ".join("?" * len(values))})', values)
+        for rows in ((0, 0), (0, 1), None):
+            inserted = 0
+            try:
+                for variant in (rows or (None, None)):
+                    insert(variant)
+                    inserted += 1
+            except sqlite3.Error:
+                if self.steps > MAX_STEPS:
+                    raise MigrationRefused('A trigger in these migrations ran too long.', 'migration_sql') from None
+            if inserted == 1 and cols:  # one row went in: try for a second, different one, then stop
+                try:
+                    insert(1)
+                    inserted += 1
+                except sqlite3.Error:
+                    pass
+            if inserted:
+                return inserted
+        return 0
 
 
 def check(current: dict[str, list[Migration]], delivered: list[dict]) -> dict[str, int]:
@@ -302,18 +357,15 @@ def check(current: dict[str, list[Migration]], delivered: list[dict]) -> dict[st
         if not migrations:
             continue
         fresh = _Sandbox()
-        for migration in migrations:
-            fresh.apply(migration)
+        fresh.apply(migrations)  # a new install: every migration pending at once
         fresh.verify(f'{scope} migrations from an empty database')
         upto = max((d['number'] for d in delivered if d['scope'] == scope), default=0)
         if 0 < upto < len(migrations):  # the delivered set, as phones have it, with data in it; then the new ones
             upgrade = _Sandbox()
-            for migration in migrations[:upto]:
-                upgrade.apply(migration)
+            upgrade.apply(migrations[:upto])
             upgrade.seed()
             try:
-                for migration in migrations[upto:]:
-                    upgrade.apply(migration)
+                upgrade.apply(migrations[upto:])  # the delivered schema's phones, updated at once
                 upgrade.verify(f'{scope} upgrade from schema {upto}')
             except MigrationRefused as refused:
                 raise MigrationRefused(f'{refused} This happens when upgrading a database from schema {upto} that '
