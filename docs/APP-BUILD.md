@@ -37,6 +37,10 @@ Protect the private directory with mode 700 and private files with mode 600.
 Do not point it at a working deployment merely to prepare a build: generated
 public assets must match that deployment's verified certificate and endpoint.
 
+For an existing macOS SDK, `ANDROID_BUILD_TOOLS_DIR` and `ANDROID_PLATFORM_JAR` may explicitly select installed
+tools and the compile platform. Default CI inputs remain API 35 / Build Tools 35.0.0; record any override in the
+build receipt.
+
 The build stages inputs in `out/rose-agent.*/`, bundles the browser voice client,
 compiles Java, creates DEX, packages resources, aligns the APK and checks ZIP
 integrity. It does not alter tracked source or sign/install anything. A stale

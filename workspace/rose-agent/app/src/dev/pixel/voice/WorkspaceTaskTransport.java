@@ -1,0 +1,69 @@
+package dev.pixel.voice;
+
+import android.content.Context;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.security.GeneralSecurityException;
+import java.util.Map;
+import javax.net.ssl.SSLSocket;
+
+/**
+ * Project 2: The workspace clients' transport and signer, over the trust the phone already has.
+ * <ul>
+ *   <li>The paired backend's addresses, port and certificate pin (LocalRoseConnection.paired).</li>
+ *   <li>TLS that accepts only the pinned certificate (LocalRoseConnection.tls).</li>
+ *   <li>The phone's own pairing key, signing rose-auth-v1 (LocalRoseKey, LocalRoseAuth.headers), as /hello is signed.</li>
+ * </ul>
+ * Nothing new is trusted, stored or requested.
+ *
+ * WorkspaceHub uses this for layout composition and for confirmed tasks. Task calls remain behind
+ * WorkspaceTaskGate; layout requests use the separate compose endpoint. It moves to the next paired address only when the TLS connection itself fails. Once the
+ * request has been written, the answer, or its absence, is final for this attempt, so one signed nonce is never
+ * sent twice.
+ */
+final class WorkspaceTaskTransport implements WorkspaceTaskClient.Transport {
+ static final int READ_TIMEOUT_MS=10000;
+ private final Context context;
+ WorkspaceTaskTransport(Context context){this.context=context.getApplicationContext();}
+
+ @Override public WorkspaceTaskClient.Response post(String path,Map<String,String> headers,byte[] body)throws Exception{return exchange(path,headers,body,true,null);}
+ @Override public WorkspaceTaskClient.Response post(String path,Map<String,String> headers,byte[] body,WorkspaceAbort abort)throws Exception{return exchange(path,headers,body,true,abort);}
+ @Override public WorkspaceTaskClient.Response get(String path,Map<String,String> headers)throws Exception{return exchange(path,headers,null,false,null);}
+
+ /**
+  * One exchange. With abort, the raw socket is attached before it connects, so WorkspaceAbort.fire() from
+  * another thread ends a connect, the TLS handshake or a blocked read at once. A stopped request never moves
+  * on to the next address.
+  */
+ private WorkspaceTaskClient.Response exchange(String path,Map<String,String> headers,byte[] body,boolean post,WorkspaceAbort abort)throws Exception{
+  LocalRoseConnection.Paired p=LocalRoseConnection.paired(context);
+  if(p==null)throw new IOException("not paired");
+  IOException last=null;
+  for(String host:p.order()){
+   if(abort!=null&&abort.fired())throw new IOException("stopped");
+   Socket raw=new Socket();SSLSocket s;
+   if(abort!=null&&!abort.attach(raw))throw new IOException("stopped");
+   try{s=LocalRoseConnection.tls(raw,host,p.port,p.pin);}
+   catch(IOException e){if(abort!=null){abort.detach(raw);if(abort.fired())throw e;}last=e;try{raw.close();}catch(IOException ignored){}continue;}
+   try{
+    s.setSoTimeout(READ_TIMEOUT_MS);
+    OutputStream out=s.getOutputStream();
+    out.write(post?WorkspaceHttp.post(host,p.port,path,headers,body):WorkspaceHttp.get(host,p.port,path,headers));out.flush();
+    return WorkspaceHttp.read(s.getInputStream());
+   }finally{if(abort!=null)abort.detach(raw);try{s.close();}catch(IOException ignored){}try{raw.close();}catch(IOException ignored){}}
+  }
+  throw last!=null?last:new IOException("no address for the backend");
+ }
+
+ /** The rose-auth-v1 headers for one request, signed with this phone's pairing key. */
+ static WorkspaceTaskClient.Signer signer(Context context){
+  final Context app=context.getApplicationContext();
+  return (method,path)->{
+   LocalRoseConnection.Paired p=LocalRoseConnection.paired(app);
+   LocalRoseKey key=LocalRoseKey.load();
+   if(p==null||key==null||!key.deviceId().equals(p.deviceId))throw new GeneralSecurityException("pairing key unavailable");
+   return LocalRoseAuth.headers(p.deviceId,method,path,System.currentTimeMillis(),LocalRoseAuth.newNonce(),p.pin,key);
+  };
+ }
+}

@@ -1,14 +1,19 @@
 package dev.pixel.voice;
 
-/** Home page order and where an entry lands (OS-HIFI-HOME-001, #223). Pages run Home, then the app pages, and
- * nothing else: the legacy Widgets and voice ("Tap to talk") pages are no longer pages, so normal swipes stay in
+/** Home page order and where an entry lands (OS-HIFI-HOME-001, #223; Project 2). Pages run the workspace, Home, then
+ * the app pages, and nothing else. The workspace is Project 2's one extra page to the left of Home (the approved HiFi
+ * r2): it never replaces or rearranges Home, its dock or the chin, and the dots mark it with a star before Home's
+ * round dots. The legacy Widgets and voice ("Tap to talk") pages are no longer pages, so normal swipes stay in
  * the current Home; the legacy voice controls that opened over it are removed with their setting (1H). A HOME press that
  * returns from an app or the Rose conversation keeps the page the owner left, like a phone launcher; HOME while
  * Home is already showing, or the app icon, goes to Home. Pure logic, no Android types. */
 final class HomePages {
  private HomePages() {}
 
- static final int HOME = 0, FIRST_APPS = 1;
+ static final int WORKSPACE = 0, HOME = 1, FIRST_APPS = 2;
+
+ /** The workspace page: its dot is the star, and the page is live (not inert) only while it is shown. */
+ static boolean workspace(int page) { return page == WORKSPACE; }
 
  /**
   * @param showHome   the entry is a Home entry (HomeEntry.showHome)

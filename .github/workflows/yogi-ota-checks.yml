@@ -3,10 +3,10 @@ name: Yogi OTA checks
 # app suites so a Yogi change re-runs exactly its own unit; scripts/test-local.sh runs it too.
 on:
   pull_request:
-    paths: ['os/**', 'scripts/yogi*', 'scripts/mustang_ota.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/release-pipeline.py', 'scripts/release_receipts.py', 'scripts/github_release_publisher.py', 'scripts/background_apks.py', 'scripts/prepare-yogi-port.py', 'scripts/app-inputs-verify.py', 'scripts/signing-bootstrap.py', 'scripts/host-app-inputs-export.py', 'scripts/tests/test_yogi_ota.py', 'scripts/tests/test_yogi_direct.py', '.github/workflows/yogi-ota*.yml']
+    paths: ['os/**', 'scripts/yogi*', 'scripts/mustang_ota.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/release-pipeline.py', 'scripts/release_receipts.py', 'scripts/github_release_publisher.py', 'scripts/background_apks.py', 'scripts/prepare-yogi-port.py', 'scripts/app-inputs-verify.py', 'scripts/signing-bootstrap.py', 'scripts/host-app-inputs-export.py', 'scripts/tests/test_yogi_ota.py', 'scripts/tests/test_yogi_full.py', 'scripts/mustang_compiler_cache.py', 'scripts/mustang-ccache-wrapper.sh', 'scripts/tests/test_yogi_direct.py', '.github/workflows/yogi-ota*.yml']
   push:
     branches: [main]
-    paths: ['os/**', 'scripts/yogi*', 'scripts/mustang_ota.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/release-pipeline.py', 'scripts/release_receipts.py', 'scripts/github_release_publisher.py', 'scripts/background_apks.py', 'scripts/prepare-yogi-port.py', 'scripts/app-inputs-verify.py', 'scripts/signing-bootstrap.py', 'scripts/host-app-inputs-export.py', 'scripts/tests/test_yogi_ota.py', 'scripts/tests/test_yogi_direct.py', '.github/workflows/yogi-ota*.yml']
+    paths: ['os/**', 'scripts/yogi*', 'scripts/mustang_ota.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/release-pipeline.py', 'scripts/release_receipts.py', 'scripts/github_release_publisher.py', 'scripts/background_apks.py', 'scripts/prepare-yogi-port.py', 'scripts/app-inputs-verify.py', 'scripts/signing-bootstrap.py', 'scripts/host-app-inputs-export.py', 'scripts/tests/test_yogi_ota.py', 'scripts/tests/test_yogi_full.py', 'scripts/mustang_compiler_cache.py', 'scripts/mustang-ccache-wrapper.sh', 'scripts/tests/test_yogi_direct.py', '.github/workflows/yogi-ota*.yml']
 permissions:
   contents: read
 jobs:
@@ -19,4 +19,5 @@ jobs:
           persist-credentials: false
       - run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server build-essential libssl-dev zlib1g-dev
       - run: python3 scripts/tests/test_yogi_ota.py
+      - run: python3 scripts/tests/test_yogi_full.py
       - run: python3 -B scripts/tests/test_yogi_direct.py -v

@@ -116,7 +116,7 @@ class ContractTest(unittest.TestCase):
         cfg = yogi.config()
         found = {stage: yogi.blockers(cfg, stage, access=True) for stage in yogi.STAGES}
         joined = ' | '.join(found['bootstrap'])
-        for expected in ('builder runner/controller not ready', 'signed app inputs are not bound',
+        for expected in ('builder runner/controller not ready',
                          'Yogi bootstrap receipt absent', 'signing read access is not approved'):
             self.assertIn(expected, joined)
         self.assertIn('Yogi bootstrap build A is not signed yet (bootstrap.status)', found['ota'])
@@ -173,7 +173,7 @@ class ContractTest(unittest.TestCase):
                           'make_latest: true', 'MUSTANG_V1'):
             self.assertNotIn(forbidden, text)
         self.assertIn('group: yogi-ota', text)
-        self.assertEqual(text.count('runs-on: [self-hosted, roseos-yogi-builder-20261105-b]'), 4)
+        self.assertEqual(text.count('runs-on: [self-hosted, roseos-yogi-builder-20261105-b]'), 5)
         self.assertNotIn('runs-on: [self-hosted, roseos-yogi-builder]', text)
 
 
@@ -248,7 +248,7 @@ class KeyBootstrapTest(Fixture):
             self.assertNotIn(forbidden, job)
         build = text[text.index('  build:\n'):text.index('  sign:\n')]
         self.assertIn("if: inputs.stage == 'bootstrap' || inputs.stage == 'ota'", build)
-        self.assertIn('needs: [controller, readiness, key-bootstrap, build, sign, publisher]', text)
+        self.assertIn('needs: [controller, readiness, key-bootstrap, build, sign, publisher, full, full-publisher, full-queue-watch]', text)
 
 
 class ProviderTest(unittest.TestCase):
@@ -256,7 +256,7 @@ class ProviderTest(unittest.TestCase):
     def jobs(self):
         text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
         body = text[text.index('\njobs:\n'):]
-        names = [n for n in ('guard', 'controller', 'key-bootstrap', 'build', 'sign', 'publisher', 'cleanup')]
+        names = [n for n in ('guard', 'controller', 'key-bootstrap', 'build', 'sign', 'publisher', 'full', 'full-publisher', 'full-queue-watch', 'cleanup')]
         starts = sorted((body.index(f'\n  {n}:\n'), n) for n in names)
         return {n: body[i:(starts[k+1][0] if k+1 < len(starts) else len(body))] for k, (i, n) in enumerate(starts)}
 
@@ -278,7 +278,7 @@ class ProviderTest(unittest.TestCase):
             self.assertIn('GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}', jobs[name])
             self.assertIn('GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}', jobs[name])
             self.assertNotIn('YOGI_CONTROLLER', jobs[name])
-        for name in ('guard', 'build', 'publisher'):
+        for name in ('build', 'publisher'):
             self.assertNotIn('WORKLOAD_IDENTITY_PROVIDER', jobs[name])
 
 
@@ -420,7 +420,7 @@ class RecordTest(Fixture):
         self.assertTrue(any('not committed' in b for b in yogi.blockers(self.cfg, 'ota')))
 
     def test_committed_contract_points_at_the_release_record(self):
-        self.assertEqual(yogi.config()['appInputs']['record'], 'os/app-inputs/frankel-2026110403.json')
+        self.assertEqual(yogi.config()['appInputs']['record'], 'os/app-inputs/frankel-2026111201.json')
         self.assertNotIn('status', yogi.config()['appInputs'])  # bound only by Release's committed record
 
 

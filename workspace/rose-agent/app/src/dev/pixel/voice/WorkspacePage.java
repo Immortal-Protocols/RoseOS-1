@@ -1,0 +1,430 @@
+package dev.pixel.voice;
+
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.LauncherApps;
+import android.content.pm.ResolveInfo;
+import android.content.pm.ShortcutInfo;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Process;
+import android.text.InputFilter;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Project 2: the workspace page to the left of Home (HomePages.WORKSPACE), as in the approved HiFi r2
+ * (prototypes/rose-hifi/HANDOFF-WORKSPACE.md).
+ *
+ * <p><b>Fixed geometry.</b> The request field, Arrange, Regenerate and Undo, the status line (20dp), the recent row
+ * (28dp) and the canvas never move. While composing, the old sections stay dimmed under a veil and the buttons are
+ * disabled in place. A failure keeps the layout and its pins.
+ *
+ * <p><b>Composition.</b> A request runs on one worker thread:
+ * <ol>
+ *   <li>WorkspaceSources reads the phone into a snapshot.</li>
+ *   <li>WorkspaceEngine runs Models' composer over it.</li>
+ *   <li>WorkspaceComposer checks the result on the main thread, and WorkspaceState saves it.</li>
+ * </ol>
+ * Decisions come from the Rose server's model through the compose route (WorkspaceDecisionClient), which is off
+ * by default. Rose Agent runs no model. With the route off, the starter (not a model) arranges the page, and the
+ * label under the title says which one decides.
+ *
+ * <p><b>Rendering.</b> Rendering shows only what is still on the phone (WorkspaceLayout.available). It never
+ * reshuffles the saved layout. The first draw of a committed layout on screen is timed (WorkspaceTiming).
+ *
+ * <p><b>Gestures.</b> A drag that starts on the field or a carousel belongs to it (keepsDrag); anything else pages as
+ * on Home. The page is inert while off screen.
+ */
+final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
+ static final int STATUS_DP=20,RECENT_DP=28,HIT_DP=44,COLUMNS=4;
+
+ final MainActivity activity;
+ /** The theme the page was drawn in (RoseThemeNow); Home makes a new page when the theme changes. */
+ final String theme=RoseThemeNow.id;
+ /** The one owner of the workspace (shared with the composer provider); this page is a view onto it. */
+ final WorkspaceHub hub;
+ final WorkspaceState state;
+ final WorkspaceComposer composer;
+ private final Handler main=new Handler(Looper.getMainLooper());
+ private boolean shown;
+
+ final EditText field;final Button arrange,regenerate,undo;final TextView status,label;
+ final LinearLayout recents,sections;final View veil;final ScrollView canvas;
+ /** Views that keep a drag that starts on them: the field and recents row (fixed) and the carousels drawn now. */
+ private final List<View> keeps=new ArrayList<>(),carousels=new ArrayList<>();
+
+ WorkspacePage(MainActivity activity){
+  super(activity);
+  this.activity=activity;
+  hub=WorkspaceHub.get(activity);state=hub.state;composer=hub.composer;
+  setContentDescription("Workspace");
+  int ink=RoseThemeNow.c(0xfff4ede0),muted=RoseThemeNow.c(0xb3f4ede0);
+
+  LinearLayout column=new LinearLayout(activity);column.setOrientation(LinearLayout.VERTICAL);
+  TextView title=text("Workspace",22,ink);title.setTypeface(Typeface.DEFAULT_BOLD);column.addView(title);
+  label=text(hub.deciderLabel(),12,muted);
+  column.addView(label,new LinearLayout.LayoutParams(-1,dp(18)));
+
+  LinearLayout ask=new LinearLayout(activity);ask.setGravity(Gravity.CENTER_VERTICAL);
+  field=new EditText(activity);field.setSingleLine(true);field.setHint("Ask for a workspace");field.setTextColor(ink);field.setHintTextColor(muted);
+  field.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);field.setImeOptions(EditorInfo.IME_ACTION_GO);
+  field.setFilters(new InputFilter[]{new InputFilter.LengthFilter(WorkspaceLayout.MAX_REQUEST)});
+  field.setBackground(pill(0x26ffffff,0));field.setPadding(dp(14),0,dp(14),0);
+  field.setOnEditorActionListener((v,id,e)->{if(id==EditorInfo.IME_ACTION_GO||id==EditorInfo.IME_ACTION_DONE){ask(field.getText().toString());return true;}return false;});
+  ask.addView(field,new LinearLayout.LayoutParams(0,dp(HIT_DP),1));keeps.add(field);
+  column.addView(ask,margins(new LinearLayout.LayoutParams(-1,dp(HIT_DP)),0,10,0,0));
+
+  LinearLayout controls=new LinearLayout(activity);controls.setGravity(Gravity.CENTER_VERTICAL);
+  arrange=button(WorkspaceComposer.ARRANGE,()->ask(null));regenerate=button("Regenerate",this::regenerate);undo=button("Undo",this::undo);
+  controls.addView(arrange,new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+  controls.addView(regenerate,margins(new LinearLayout.LayoutParams(-2,dp(HIT_DP)),8,0,0,0));
+  controls.addView(undo,margins(new LinearLayout.LayoutParams(-2,dp(HIT_DP)),8,0,0,0));
+  column.addView(controls,margins(new LinearLayout.LayoutParams(-1,dp(HIT_DP)),0,8,0,0));
+
+  status=text("",13,muted);status.setSingleLine(true);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+  column.addView(status,margins(new LinearLayout.LayoutParams(-1,dp(STATUS_DP)),0,6,0,0));
+  HorizontalScrollView recentScroll=new HorizontalScrollView(activity);recentScroll.setHorizontalScrollBarEnabled(false);
+  recents=new LinearLayout(activity);recents.setGravity(Gravity.CENTER_VERTICAL);recentScroll.addView(recents);
+  column.addView(recentScroll,new LinearLayout.LayoutParams(-1,dp(RECENT_DP)));keeps.add(recentScroll);
+
+  FrameLayout stage=new FrameLayout(activity);
+  canvas=new ScrollView(activity);canvas.setVerticalScrollBarEnabled(false);
+  sections=new LinearLayout(activity);sections.setOrientation(LinearLayout.VERTICAL);sections.setPadding(0,dp(8),0,dp(16));
+  canvas.addView(sections);stage.addView(canvas,new FrameLayout.LayoutParams(-1,-1));
+  veil=new View(activity);veil.setBackgroundColor(0x33000000);veil.setVisibility(View.GONE);veil.setClickable(true);
+  stage.addView(veil,new FrameLayout.LayoutParams(-1,-1));
+  column.addView(stage,new LinearLayout.LayoutParams(-1,0,1));
+  addView(column,new FrameLayout.LayoutParams(-1,-1));
+
+  int side=dp(HomeAppLayout.MARGIN_DP);
+  setPadding(side,dp(HomeAppLayout.TOP_DP),side,0);
+  setOnApplyWindowInsetsListener((v,i)->{v.setPadding(side+i.getSystemWindowInsetLeft(),dp(HomeAppLayout.TOP_DP)+i.getSystemWindowInsetTop(),side+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
+  hub.attach(this);
+  render(null);
+  shown(false);
+ }
+
+ // ---------- WorkspaceHub.Listener ----------
+
+ @Override public void busy(){showBusy();}
+ @Override public void changed(String timedRequest){render(timedRequest);}
+
+ // ---------- requests ----------
+
+ /** Arrange (text null) or a typed request. A newer request supersedes one still composing. */
+ void ask(String text){hideKeyboard();hub.ask(text);}
+ void regenerate(){hub.regenerate();}
+ void undo(){hub.undo();}
+
+ // ---------- rendering ----------
+
+ private void showBusy(){
+  status.setText(composer.status());
+  veil.setVisibility(View.VISIBLE);sections.setAlpha(.45f);
+  arrange.setEnabled(false);regenerate.setEnabled(false);undo.setEnabled(false);
+ }
+
+ /**
+  * Draws the current layout. timedRequest names a just-committed request whose first draw on screen is timed. A failure
+  * to draw never reaches Home: the page says so, and its saved state is untouched.
+  */
+ void render(String timedRequest){
+  try{draw(timedRequest);}
+  catch(RuntimeException e){
+   sections.removeAllViews();carousels.clear();veil.setVisibility(View.GONE);sections.setAlpha(1f);
+   sections.addView(text("Couldn't show the workspace · your layout is kept",15,RoseThemeNow.c(0xb3f4ede0)));
+  }
+ }
+ private void draw(String timedRequest){
+  veil.setVisibility(View.GONE);sections.setAlpha(1f);
+  status.setText(composer.status());label.setText(hub.deciderLabel());
+  arrange.setEnabled(true);regenerate.setEnabled(state.request()!=null);undo.setEnabled(state.canUndo());
+  renderRecents();
+  sections.removeAllViews();carousels.clear();
+  sections.addView(notificationsRow(),margins(new LinearLayout.LayoutParams(-1,-2),0,0,0,10));
+  WorkspaceLayout layout=state.layout();
+  if(layout!=null&&hub.lastRead==null){
+   // A saved layout waits for the first read of the phone, so it never draws an app that has gone.
+   hub.refreshSources();return;
+  }
+  if(layout==null){
+   TextView empty=text("Tap "+WorkspaceComposer.ARRANGE+", or ask for what you're doing.",15,RoseThemeNow.c(0xb3f4ede0));
+   sections.addView(empty);
+  }else{
+   WorkspaceLayout shown=hub.lastRead==null?layout:layout.available(hub.lastRead.snapshot.present());
+   for(WorkspaceLayout.Section c:shown.sections)sections.addView(section(c),margins(new LinearLayout.LayoutParams(-1,-2),0,0,0,14));
+  }
+  if(timedRequest!=null)timeFirstFrame(timedRequest);
+ }
+
+ private void renderRecents(){
+  recents.removeAllViews();
+  List<WorkspaceState.Entry> list=state.recent();
+  for(int i=0;i<list.size();i++){
+   final int index=i;WorkspaceState.Entry e=list.get(i);
+   if(e.layout==state.layout())continue;
+   String name=e.request==null||WorkspaceComposer.ARRANGE.equals(e.request)?"Best guess":e.request;
+   TextView chip=text(name,12,RoseThemeNow.c(0xfff4ede0));chip.setSingleLine(true);chip.setGravity(Gravity.CENTER);
+   chip.setBackground(pill(0x1fffffff,0));chip.setPadding(dp(12),0,dp(12),0);chip.setContentDescription("Reopen "+name);
+   chip.setOnClickListener(v->hub.reopen(index));
+   recents.addView(chip,margins(new LinearLayout.LayoutParams(-2,dp(RECENT_DP)),0,0,6,0));
+  }
+ }
+
+ private View section(final WorkspaceLayout.Section c){
+  LinearLayout box=new LinearLayout(activity);box.setOrientation(LinearLayout.VERTICAL);
+  box.setBackground(pill(0x1affffff,0));box.setPadding(dp(14),dp(6),dp(6),dp(12));
+  LinearLayout head=new LinearLayout(activity);head.setGravity(Gravity.CENTER_VERTICAL);
+  TextView title=text(c.title,15,RoseThemeNow.c(0xfff4ede0));title.setTypeface(Typeface.DEFAULT_BOLD);
+  head.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+  final boolean pinned=state.pinned(c.key);
+  Button pin=button(pinned?"Pinned":"Pin",()->hub.togglePin(c.key));
+  pin.setContentDescription((pinned?"Unpin ":"Pin ")+c.title);
+  head.addView(pin,new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+  box.addView(head);
+  switch(c.component){
+   case "grid":box.addView(grid(c.items));break;
+   case "carousel":{HorizontalScrollView s=new HorizontalScrollView(activity);s.setHorizontalScrollBarEnabled(false);LinearLayout row=new LinearLayout(activity);for(String id:c.items)row.addView(tile(id),new LinearLayout.LayoutParams(dp(84),-2));s.addView(row);carousels.add(s);box.addView(s);break;}
+   case "button":{LinearLayout row=new LinearLayout(activity);row.setGravity(Gravity.CENTER_VERTICAL);for(String id:c.items)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,-2,1),0,0,6,0));box.addView(row);break;}
+   default:{for(String id:c.items){TextView t=text(labelOf(id),14,RoseThemeNow.c(0xfff4ede0));
+    // A notification or a media item opens in its own app when tapped, as it would from the shade.
+    if(id.startsWith("n:")||id.startsWith("c:")){t.setOnClickListener(v->act(id));t.setContentDescription(labelOf(id)+", opens");}
+    box.addView(t,new LinearLayout.LayoutParams(-1,dp(HIT_DP)));}
+    if(!c.actions.isEmpty()){LinearLayout row=new LinearLayout(activity);for(String id:c.actions)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,-2,1),0,0,6,0));box.addView(row);}}
+  }
+  return box;
+ }
+
+ private View grid(List<String> ids){
+  LinearLayout rows=new LinearLayout(activity);rows.setOrientation(LinearLayout.VERTICAL);LinearLayout row=null;
+  for(int i=0;i<ids.size();i++){
+   if(i%COLUMNS==0){row=new LinearLayout(activity);rows.addView(row,new LinearLayout.LayoutParams(-1,-2));}
+   row.addView(tile(ids.get(i)),new LinearLayout.LayoutParams(0,-2,1));
+  }
+  if(row!=null)for(int k=ids.size()%COLUMNS;k>0&&k<COLUMNS;k++)row.addView(new View(activity),new LinearLayout.LayoutParams(0,1,1));
+  return rows;
+ }
+
+ /** An app as Home draws and opens it, or an action as a tile. */
+ private View tile(String id){
+  ResolveInfo app=hub.lastRead==null?null:hub.lastRead.apps.get(id);
+  if(app!=null)return activity.appTile(app);
+  return action(id);
+ }
+
+ private View action(final String id){
+  boolean task=id.startsWith("task:");
+  Button b=button(labelOf(id),()->act(id));
+  b.setContentDescription(labelOf(id)+(task?", Rose task, asks first":""));
+  if(!task)return b;
+  // A Rose task: outlined, with its line beneath (WorkspaceTaskTracker): "Rose task · asks first" until tapped,
+  // then only what the reply and App Core's own state for its taskId say.
+  b.setBackground(pill(0,0x99f4ede0));
+  LinearLayout box=new LinearLayout(activity);box.setOrientation(LinearLayout.VERTICAL);
+  box.addView(b,new LinearLayout.LayoutParams(-1,dp(HIT_DP)));
+  TextView under=text(hub.taskLine(id),11,RoseThemeNow.c(0xb3f4ede0));under.setSingleLine(true);
+  box.addView(under,new LinearLayout.LayoutParams(-1,-2));
+  return box;
+ }
+
+ /**
+  * A Rose task always asks first: its own ask on a sheet, with "Ask Rose" and "Not now". "Not now" starts
+  * nothing. "Ask Rose" sends that one task (WorkspaceHub.startTask). With the gate off (the default) the
+  * sheet only says tasks are not available, and nothing is sent.
+  */
+ private void confirmTask(String id){
+  WorkspaceSnapshot.Task task=hub.lastRead==null?null:hub.lastRead.snapshot.task(id);
+  if(!hub.tasksEnabled()||task==null){
+   new AlertDialog.Builder(activity).setTitle(labelOf(id)).setMessage("Rose tasks aren't available on this phone yet.").setPositiveButton("OK",null).show();
+   return;
+  }
+  WorkspaceTaskTracker.Record last=hub.tasks.byAction(id);
+  boolean open=last!=null&&!last.finalState()&&(last.sent==null||"STARTED".equals(last.sent)||"ALREADY_STARTED".equals(last.sent)||"UNCERTAIN".equals(last.sent));
+  if(open){
+   // Already asked and not ended (or not known to have ended): show where it is rather than asking twice. Only
+   // when the phone never learned whether it started (no taskId) may the person explicitly ask again, and then the
+   // sheet says the first task may already exist or still be running, so a new request could start it twice.
+   AlertDialog.Builder b=new AlertDialog.Builder(activity).setTitle(task.label);
+   if(hub.tasks.mayAskAgain(id))b.setMessage(hub.taskLine(id)+"\n\n"+WorkspaceTaskTracker.ASK_AGAIN_WARNING)
+    .setPositiveButton("Ask again",(d,w)->hub.startTask(id)).setNegativeButton("Not now",null);
+   else b.setMessage(hub.taskLine(id)).setPositiveButton("OK",null);
+   b.show();
+   return;
+  }
+  new AlertDialog.Builder(activity).setTitle(task.label).setMessage(task.ask)
+   .setPositiveButton("Ask Rose",(d,w)->hub.startTask(id))
+   .setNegativeButton("Not now",null).show();
+ }
+
+ /** A notification (its content intent), one of its plain actions, or a media session (its session activity). */
+ private boolean openNotice(String id){
+  if(hub.lastRead==null)return false;
+  if(id.startsWith("c:media/"))return WorkspaceNotificationListener.openMedia(activity,id.substring("c:media/".length()));
+  if(id.startsWith("n:")){WorkspaceSnapshot.Notice n=hub.lastRead.snapshot.notice(id);return n!=null&&WorkspaceNotificationListener.open(n.key);}
+  int slash=id.lastIndexOf('/');if(slash<0)return false;
+  WorkspaceSnapshot.Notice n=hub.lastRead.snapshot.notice("n:"+id.substring("nact:".length(),slash));
+  try{return n!=null&&WorkspaceNotificationListener.action(n.key,Integer.parseInt(id.substring(slash+1)));}catch(NumberFormatException e){return false;}
+ }
+
+ // ---------- notifications on this page: disclosure and consent ----------
+
+ static final String NOTIFICATIONS_DISCLOSURE="Rose can show the titles of your notifications, and what is playing, on this page. "
+  +"To arrange the page, those titles go to your own Rose server over your paired connection. Message text is never read. "
+  +"You turn on Notification access for Rose Agent in Settings, and you can turn this off here at any time.";
+
+ /** The row or card about notifications, at the top of the canvas; null while nothing needs saying. */
+ private View notificationsRow(){
+  boolean consent=WorkspaceDeviceInputs.consented(activity),granted=WorkspaceDeviceInputs.accessGranted(activity);
+  int muted=RoseThemeNow.c(0xb3f4ede0);
+  LinearLayout row=new LinearLayout(activity);row.setGravity(Gravity.CENTER_VERTICAL);
+  if(consent&&granted){
+   row.addView(text("Notification titles shown here",12,muted),new LinearLayout.LayoutParams(0,-2,1));
+   row.addView(button("Turn off",()->{WorkspaceDeviceInputs.setConsent(activity,false);hub.refreshSources();}),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+   return row;
+  }
+  if(consent){
+   row.addView(text("Turn on Notification access for Rose Agent to show them here",12,muted),new LinearLayout.LayoutParams(0,-2,1));
+   row.addView(button("Settings",this::openNotificationAccess),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+   row.addView(button("Cancel",()->{WorkspaceDeviceInputs.setConsent(activity,false);hub.refreshSources();}),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+   return row;
+  }
+  row.addView(text(WorkspaceDeviceInputs.dismissed(activity)?"Notifications aren't shown here":"Show your notifications here?",12,muted),new LinearLayout.LayoutParams(0,-2,1));
+  row.addView(button("Set up",this::askNotifications),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+  if(!WorkspaceDeviceInputs.dismissed(activity))row.addView(button("Not now",()->{WorkspaceDeviceInputs.dismiss(activity);render(null);}),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+  return row;
+ }
+
+ /** The disclosure first; only "Continue" records consent, and only Settings can grant access. */
+ private void askNotifications(){
+  new AlertDialog.Builder(activity).setTitle("Notifications on your workspace").setMessage(NOTIFICATIONS_DISCLOSURE)
+   .setPositiveButton("Continue",(d,w)->{WorkspaceDeviceInputs.setConsent(activity,true);if(WorkspaceDeviceInputs.accessGranted(activity))hub.refreshSources();else openNotificationAccess();})
+   .setNegativeButton("Not now",null).show();
+ }
+
+ private void openNotificationAccess(){
+  Intent i;
+  if(android.os.Build.VERSION.SDK_INT>=30)i=new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+   .putExtra(android.provider.Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,WorkspaceNotificationListener.component(activity).flattenToString());
+  else i=new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+  try{activity.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
+  catch(ActivityNotFoundException|SecurityException e){
+   try{activity.startActivity(new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
+   catch(ActivityNotFoundException|SecurityException ignored){status.setText("Open Settings › Notifications › Device & app notifications");}
+  }
+ }
+
+ private String labelOf(String id){
+  if(hub.lastRead!=null){
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("apps"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("actions"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("notifications"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("title"));
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("content"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
+  }
+  return "Unavailable";
+ }
+
+ /** A direct action acts at once; a Rose task asks first. The outcome is shown, never assumed. */
+ private void act(String id){
+  if(composer.busy())return;
+  try{
+   if(id.startsWith("app:")){ResolveInfo r=hub.lastRead==null?null:hub.lastRead.apps.get(id);if(r!=null){WorkspaceLauncher.open(activity,r,labelOf(id));hub.actionResult(id,"opened");}}
+   else if(id.startsWith("sc:")){
+    ShortcutInfo s=hub.lastRead==null?null:hub.lastRead.shortcuts.get(id);LauncherApps launcher=activity.getSystemService(LauncherApps.class);
+    if(s!=null&&launcher!=null){launcher.startShortcut(s.getPackage(),s.getId(),null,null,Process.myUserHandle());hub.actionResult(id,"opened");}
+   }
+   else if(id.startsWith("intent:")){Intent i=WorkspaceSources.template(id.substring("intent:".length()));if(i!=null){activity.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));hub.actionResult(id,"opened");}}
+   else if(id.startsWith("task:"))confirmTask(id);
+   else if(id.startsWith("n:")||id.startsWith("nact:")||id.startsWith("c:media/")){
+    if(openNotice(id))hub.actionResult(id,"opened");else{hub.actionResult(id,"failed");status.setText("Couldn't open "+labelOf(id));}
+   }
+  }catch(ActivityNotFoundException|SecurityException|IllegalStateException e){
+   hub.actionResult(id,"failed");status.setText("Couldn't open "+labelOf(id));
+  }
+ }
+
+ /**
+  * WorkspaceTiming's first-draw point: the first draw pass after a committed layout while the page is on screen,
+  * timed on the draw pass itself (not display presentation). A draw off screen does not count, so the listener
+  * stays until one does, or until the record can never count.
+  */
+ private void timeFirstFrame(final String requestId){
+  final ViewTreeObserver observer=sections.getViewTreeObserver();
+  final ViewTreeObserver.OnDrawListener[] once=new ViewTreeObserver.OnDrawListener[1];
+  final boolean[] done={false};
+  once[0]=()->{
+   if(done[0]||!hub.timing.rendered(requestId,System.nanoTime(),hub.onScreen()))return;
+   done[0]=true;
+   main.post(()->{if(observer.isAlive())observer.removeOnDrawListener(once[0]);});
+  };
+  observer.addOnDrawListener(once[0]);
+  sections.invalidate();
+ }
+
+ // ---------- the page in the pager ----------
+
+ /** Home's window shows or hides (another app came in front): a commit while hidden is prepared, not shown. */
+ @Override protected void onWindowVisibilityChanged(int visibility){
+  super.onWindowVisibilityChanged(visibility);
+  hub.windowVisible(visibility==View.VISIBLE);
+ }
+
+ /** The pager settled on (or left) the workspace. Off screen the page is inert, and the offer card has done its job once reached. */
+ void shown(boolean now){
+  shown=now;
+  setImportantForAccessibility(now?View.IMPORTANT_FOR_ACCESSIBILITY_AUTO:View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+  setDescendantFocusability(now?ViewGroup.FOCUS_AFTER_DESCENDANTS:ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+  hub.shown(now);
+  if(now)hub.refreshSources();else{hideKeyboard();field.clearFocus();}
+ }
+
+ /** A drag that starts on the request field or a carousel belongs to it, not to the pager (MainActivity.canSwipePages). */
+ boolean keepsDrag(MotionEvent event){
+  if(!shown)return false;
+  for(View v:keeps)if(activity.touchInside(v,event))return true;
+  for(View v:carousels)if(activity.touchInside(v,event))return true;
+  return false;
+ }
+
+ /** The last few requests' timing, for benchmarks and logs (ids, triggers and numbers only). */
+ String timingJson(){return hub.timing.json();}
+
+ /** The page is going away; the hub, its state and any composition carry on without it. */
+ void release(){hub.detach(this);}
+
+ // ---------- small helpers ----------
+
+ private void hideKeyboard(){InputMethodManager imm=activity.getSystemService(InputMethodManager.class);if(imm!=null)imm.hideSoftInputFromWindow(field.getWindowToken(),0);}
+ private int dp(float v){return activity.dp(v);}
+ private TextView text(String s,float size,int color){TextView t=new TextView(activity);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);return t;}
+ private Button button(String s,Runnable run){
+  Button b=new Button(activity);b.setText(s);b.setAllCaps(false);b.setTextSize(14);b.setTextColor(RoseThemeNow.c(0xfff4ede0));
+  b.setMinHeight(dp(HIT_DP));b.setMinimumHeight(dp(HIT_DP));b.setPadding(dp(14),0,dp(14),0);b.setBackground(pill(0x2effffff,0));
+  b.setOnClickListener(v->run.run());return b;
+ }
+ private GradientDrawable pill(int fill,int stroke){GradientDrawable d=new GradientDrawable();d.setCornerRadius(dp(16));d.setColor(RoseThemeNow.c(fill));if(stroke!=0)d.setStroke(dp(1.5f),RoseThemeNow.c(stroke));return d;}
+ /** Margins in dp. */
+ private LinearLayout.LayoutParams margins(LinearLayout.LayoutParams p,int l,int t,int r,int b){p.setMargins(dp(l),dp(t),dp(r),dp(b));return p;}
+}

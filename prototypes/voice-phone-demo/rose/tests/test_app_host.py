@@ -1,0 +1,502 @@
+"""The standalone app-builder host (docs/APP-BUILDER.md §6) with fakes: config validation, the builder-only signed
+listener and loopback pairing admin, no-writer behaviour, and the key backup that must succeed before a project's
+first delivery. No socket is bound, no key leaves the test, nothing calls a model."""
+import base64
+import json
+import os
+import stat
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest import mock
+
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from rose.app_builder import dependencies, host, ledger, server_build, toolchain
+from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
+from rose.tests.test_app_dependencies import CLASS, Store, jar
+from rose.tests.test_app_generator import DONE, FakeClient
+from rose.tests.test_app_level2_pipeline import BUILDER_CRATES, Codegen, client_server_app
+from rose.tests.test_builder_routes import Device, label
+
+
+def config_data(tmp, **extra):
+    return {'schemaVersion': 1, 'root': f'{tmp}/builder', 'remoteDir': f'{tmp}/remote', 'name': 'Rose app builder',
+            'port': 8766, 'adminPort': 8767, 'hosts': ['100.64.0.9'], 'sdk': str(SDK), **extra}
+
+
+class Config(unittest.TestCase):
+    def test_a_minimal_config_is_safe_by_default(self):
+        c = host.parse_config(config_data('/srv/x'))
+        self.assertEqual((c.key_creation, c.writer, c.backup, c.build_timeout_s), (False, None, None, 600.0))
+        self.assertEqual((c.port, c.admin_port, c.hosts), (8766, 8767, ('100.64.0.9',)))
+        self.assertIsNone(c.library_store)
+
+    def test_refusals(self):
+        good = config_data('/srv/x')
+        bad = [None, [], {**good, 'schemaVersion': 2}, {**good, 'extra': 1},
+               {k: v for k, v in good.items() if k != 'sdk'}, {**good, 'root': 'relative'},
+               {**good, 'remoteDir': good['root']}, {**good, 'remoteDir': good['root'] + '/remote'},
+               {**good, 'port': 80}, {**good, 'adminPort': good['port']}, {**good, 'port': True},
+               {**good, 'hosts': []}, {**good, 'hosts': ['a b']}, {**good, 'hosts': ['192.168.1.5']},
+               {**good, 'hosts': ['builder.example.com']}, {**good, 'name': ''},
+               {**good, 'root': '//srv/x/remote'}, {**good, 'root': good['remoteDir'] + '/../remote'},
+               {**good, 'keyCreation': 'yes'}, {**good, 'buildTimeoutS': 0},
+               *({**good, 'libraryStore': value} for value in ('relative', '', True, [], {})),
+               {**good, 'writer': {'argv': ['node', 'bridge.mjs']}}, {**good, 'writer': {'argv': []}},
+               {**good, 'backup': {'argv': ['/bin/backup'], 'extra': 1}}, {**good, 'backup': ['/bin/backup']}]
+        for data in bad:
+            with self.assertRaises(host.ConfigError, msg=data):
+                host.parse_config(data)
+
+    def test_load_config_and_main_refuse_a_bad_file_without_serving(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'host.json'
+            path.write_text('{not json')
+            with self.assertRaises(host.ConfigError):
+                host.load_config(path)
+            self.assertEqual(host.main(['--config', str(path)]), 2)
+            path.write_text(json.dumps(config_data(tmp, writer={'argv': ['/usr/bin/node', 'b.mjs'], 'timeoutS': 60})))
+            c = host.load_config(path)
+            self.assertEqual((c.writer.argv, c.writer.timeout_s), (('/usr/bin/node', 'b.mjs'), 60.0))
+
+
+class Serving(unittest.TestCase):
+    def test_a_listener_that_fails_is_reraised_and_main_exits_nonzero(self):
+        import asyncio
+
+        class Failing:
+            should_exit = force_exit = False
+
+            async def serve(self, sockets=None):
+                raise FileNotFoundError('tls-key.pem')
+
+        class Idle(Failing):
+            async def serve(self, sockets=None):
+                while not self.should_exit:
+                    await asyncio.sleep(0.01)
+        with self.assertRaises(FileNotFoundError):
+            asyncio.run(host._serve([(Failing(), None), (Idle(), None)]))
+
+    def test_a_symlinked_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(f'{tmp}/real')
+            os.symlink(f'{tmp}/real', f'{tmp}/builder')
+            with self.assertRaises(host.ConfigError):
+                host.build_host(host.parse_config(config_data(tmp)))
+            os.unlink(f'{tmp}/builder')
+            os.symlink(f'{tmp}/remote', f'{tmp}/builder')  # both names, one directory
+            with self.assertRaises(host.ConfigError):
+                host.build_host(host.parse_config(config_data(tmp)))
+
+
+class Libraries(unittest.TestCase):
+    """Host factory -> writer prompt -> job-local resolver, with no model, compiler or signer."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.store = Store(self.root / 'libraries')
+        data = jar(self.root / 'fixture.jar', {'example/math/Adder.class': CLASS})
+        self.coordinate = 'example:math:1.0'
+        self.digest = self.store.add(self.coordinate, data)
+
+    def config(self):
+        return host.parse_config(config_data(self.tmp.name, libraryStore=str(self.store.root),
+                                            writer={'argv': ['/not-invoked/test-bridge']}))
+
+    def test_host_advertises_and_resolves_its_configured_libraries_for_a_job(self):
+        # Keep the host-constructed CodexGenerator; replace only its transport.
+        clients = []
+        requested = self.coordinate
+        def connect(on_event, command):
+            self.assertEqual(command, ['/not-invoked/test-bridge'])
+            client = FakeClient(on_event, after_submit=DONE)
+            request = client.request
+            def write(op, session, **params):
+                if op == 'submit':
+                    source = Path(client.calls[0][2]['cwd'])
+                    (source / 'dependencies.json').write_text(json.dumps(
+                        {'schemaVersion': 1, 'dependencies': [requested]}))
+                return request(op, session, **params)
+            client.request = write
+            clients.append(client)
+            return client
+        with mock.patch('rose.codex_client.CodexClient', side_effect=connect):
+            b = host.build_host(self.config())
+        self.addCleanup(b.builder.ledger.close)
+        self.assertIsInstance(b.builder.resolver, dependencies.RecordedStore)
+        self.assertEqual(b.builder.resolver.available(), [self.coordinate])
+        sdk = self.root / 'sdk'
+        android = sdk / 'platforms/android-35/android.jar'
+        android.parent.mkdir(parents=True)
+        with zipfile.ZipFile(android, 'w'):
+            pass
+        b.builder.tools = toolchain.Tools(sdk)
+        seen = []
+        def compile(source, work, package, code, name, tools, cancelled, libraries):
+            seen.extend(libraries)
+            # Stop after resolution: no compilation or signing keys in this test.
+            raise toolchain.StepFailed('compile', 'Stopped after resolving the host libraries.')
+        with mock.patch.object(toolchain, 'build', side_effect=compile) as build, \
+                mock.patch.object(toolchain, 'ensure_key') as keys:
+            job = b.builder.create('device', {'schemaVersion': 1, 'clientRequestId': 'one',
+                                              'description': 'A calculator using the provided math library.'})
+            self.assertTrue(b.builder.run_next())
+            self.assertEqual(build.call_count, 1, b.builder.job(job['jobId']))
+            keys.assert_not_called()
+        self.assertIn(self.coordinate, clients[0].calls[1][2]['text'])
+        self.assertTrue(clients[0].closed)
+        self.assertEqual([(lib.coordinate, lib.sha256) for lib in seen], [(self.coordinate, self.digest)])
+        self.assertTrue(seen[0].jar.is_relative_to(b.config.root / 'jobs'))
+        self.assertNotEqual(seen[0].jar, self.store.root / f'{self.digest}.jar')
+        self.assertEqual(b.builder.job(job['jobId'])['failure']['category'], 'compile')
+        # The same host also preserves the resolver's unavailable/digest refusals
+        # before compilation, rather than falling back to a framework-only build.
+        with mock.patch.object(toolchain, 'build') as build, mock.patch.object(toolchain, 'ensure_key') as keys:
+            for number, (requested, reason) in enumerate([
+                    ('example:absent:1.0', 'not available'), (self.coordinate, 'recorded digest')]):
+                if number:
+                    (self.store.root / f'{self.digest}.jar').write_bytes(b'tampered')
+                out = b.builder.create('device', {'schemaVersion': 1, 'clientRequestId': f'refused-{number}',
+                                                   'description': 'A library app.'})
+                self.assertTrue(b.builder.run_next())
+                failure = b.builder.job(out['jobId'])['failure']
+                self.assertEqual(failure['category'], 'dependency')
+                self.assertIn(reason, failure['summary'])
+            build.assert_not_called()
+            keys.assert_not_called()
+
+    def test_writer_catalog_is_live_and_no_store_preserves_the_default(self):
+        b = host.build_host(self.config())
+        self.addCleanup(b.builder.ledger.close)
+        self.assertEqual(b.builder.generate.libraries(), [self.coordinate])
+        self.store.add('example:other:2.0', (self.root / 'fixture.jar').read_bytes())
+        self.assertEqual(b.builder.generate.libraries(), [self.coordinate, 'example:other:2.0'])
+        # An empty configured store is valid; omission still means no libraries.
+        self.store.index.clear(); self.store._write()
+        self.assertEqual(b.builder.generate.libraries(), [])
+        bare = host.build_host(host.parse_config(config_data(self.tmp.name + '/bare',
+                               writer={'argv': ['/not-invoked/test-bridge']})))
+        self.addCleanup(bare.builder.ledger.close)
+        self.assertIsNone(bare.builder.resolver)
+        self.assertIsNone(bare.builder.generate.libraries)
+
+    def test_unavailable_or_malformed_store_is_refused_before_host_construction(self):
+        valid = {'schemaVersion': 1, 'artifacts': {self.coordinate: self.digest}}
+        index = self.store.root / 'index.json'
+        bad_indexes = ['{', [], {}, {'schemaVersion': True, 'artifacts': {}},
+                       {'schemaVersion': 2, 'artifacts': {}}, {'schemaVersion': 1, 'artifacts': []},
+                       {'schemaVersion': 1, 'artifacts': {'not-a-coordinate': self.digest}},
+                       {'schemaVersion': 1, 'artifacts': {self.coordinate: '../outside'}},
+                       {'schemaVersion': 1, 'artifacts': {self.coordinate: 42}},
+                       {'schemaVersion': 1, 'artifacts': {self.coordinate: 'f' * 64}}]
+        with mock.patch('rose.remote.Remote') as remote:
+            for value in bad_indexes:
+                index.write_text(value if isinstance(value, str) else json.dumps(value))
+                with self.subTest(value=value), self.assertRaises(host.ConfigError):
+                    host.build_host(self.config())
+            index.write_text(json.dumps(valid))
+            original = index.read_text(); index.unlink()
+            with self.assertRaises(host.ConfigError):host.build_host(self.config())
+            elsewhere = self.root / 'index.json'; elsewhere.write_text(original)
+            index.symlink_to(elsewhere)
+            with self.assertRaises(host.ConfigError):host.build_host(self.config())
+            index.unlink(); index.write_text(original)
+            artifact = self.store.root / f'{self.digest}.jar'
+            artifact.unlink(); artifact.symlink_to(self.root / 'fixture.jar')
+            with self.assertRaises(host.ConfigError):host.build_host(self.config())
+            for path in (self.root / 'missing', self.root / 'fixture.jar'):
+                c = host.parse_config(config_data(self.tmp.name, libraryStore=str(path)))
+                with self.assertRaises(host.ConfigError):host.build_host(c)
+            linked = self.root / 'linked'; linked.symlink_to(self.store.root)
+            with self.assertRaises(host.ConfigError):
+                host.build_host(host.parse_config(config_data(self.tmp.name, libraryStore=str(linked))))
+            remote.assert_not_called()
+        self.assertFalse((self.root / 'builder').exists())
+
+
+class NativeHosts(unittest.TestCase):
+    """Actual host construction reads its own ledger; only synthetic reserved endpoints.
+
+    No listener/worker is started. Other Level 2 facilities are test-only fakes;
+    server compilation is intercepted after the client URL has been written.
+    """
+    HOST = '7b7b7b7b-4444-4444-8444-44444444444c'
+    REPLACEMENT = '7b7b7b7b-4444-4444-8444-44444444444d'
+    ENDPOINT = 'https://notes.example.org/app'
+    NEXT_ENDPOINT = 'https://notes-next.example.org/app'
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.config = host.parse_config(config_data(tmp.name))
+        self.host = host.build_host(self.config, generate=client_server_app())
+        self.builder = self.host.builder
+        self.addCleanup(self.builder.ledger.close)
+
+    def test_callback_is_bound_to_the_same_ledger_and_survives_host_reconstruction(self):
+        b = self.builder
+        self.assertIs(b.server_url.__self__, b.ledger)
+        self.assertEqual(b.ledger.path, self.config.root / 'builder.sqlite3')
+        project = b.create('fixture', {'schemaVersion': 1, 'clientRequestId': 'one',
+                                       'description': 'Synthetic notes app'})['projectId']
+        other = b.create('fixture', {'schemaVersion': 1, 'clientRequestId': 'two',
+                                     'description': 'Another synthetic app'})['projectId']
+        # A hosted APK id does not stand in for a native host or its endpoint.
+        b.ledger.record_hosted_app(project, '8b8b8b8b-4444-4444-8444-44444444444c')
+        self.assertIsNone(b.server_url(project))
+        b.ledger.record_native_host(project, self.HOST, self.ENDPOINT)
+        self.assertEqual(b.server_url(project), self.ENDPOINT)
+        self.assertIsNone(b.server_url(other))
+        rebuilt = host.build_host(self.config)
+        self.addCleanup(rebuilt.builder.ledger.close)
+        self.assertIs(rebuilt.builder.server_url.__self__, rebuilt.builder.ledger)
+        self.assertEqual(rebuilt.builder.server_url(project), self.ENDPOINT)
+        self.assertIsNone(rebuilt.builder.server_url(other))
+        self.assertIsNone(rebuilt.worker)
+
+    def test_jobs_bake_missing_recorded_and_explicitly_replaced_endpoints(self):
+        b = self.builder
+        # These are deliberately not production host wiring: this test needs
+        # only to reach client generation, then stops before any compilation.
+        b.codegen = Codegen()
+        b.server_crates = BUILDER_CRATES
+        self.assertIsNone(b.rust_tools)
+        self.assertIsNone(b.server_isolation)
+        written = []
+
+        def stop(snapshot, work, *args, **kwargs):
+            written.append(next((Path(work).parent / 'client').glob('src/**/rose/RoseServer.java')))
+            raise server_build.BuildFailed('toolchain', 'server_build', 'Stopped before compilation by the test.')
+
+        first = b.create('fixture', {'schemaVersion': 1, 'clientRequestId': 'missing',
+                                     'description': 'Synthetic notes app'})
+        project = first['projectId']
+        with mock.patch.object(server_build, 'build', side_effect=stop) as compile_server, \
+                mock.patch.object(toolchain, 'build') as compile_client, \
+                mock.patch.object(toolchain, 'ensure_key') as keys:
+            self.assertTrue(b.run_next())
+            self.assertIn('static final String URL = null;', written[-1].read_text())
+            b.ledger.record_native_host(project, self.HOST, self.ENDPOINT)
+            second = b.revise('fixture', project, {'schemaVersion': 1, 'clientRequestId': 'recorded',
+                                                  'request': 'Build with the recorded endpoint.'})
+            self.assertTrue(b.run_next())
+            recorded_client = written[-1]
+            self.assertIn(f'static final String URL = "{self.ENDPOINT}";', recorded_client.read_text())
+            with self.assertRaises(ledger.LedgerError):
+                b.ledger.record_native_host(project, self.REPLACEMENT, self.NEXT_ENDPOINT)
+            self.assertEqual(b.server_url(project), self.ENDPOINT)
+            b.ledger.record_native_host(project, self.REPLACEMENT, self.NEXT_ENDPOINT,
+                                        replaces={'hostId': self.HOST, 'endpoint': self.ENDPOINT})
+            third = b.revise('fixture', project, {'schemaVersion': 1, 'clientRequestId': 'replacement',
+                                                 'request': 'Build with the explicitly replaced endpoint.'})
+            self.assertTrue(b.run_next())
+            self.assertIn(f'static final String URL = "{self.NEXT_ENDPOINT}";', written[-1].read_text())
+            self.assertIn(f'static final String URL = "{self.ENDPOINT}";', recorded_client.read_text())
+            self.assertEqual(compile_server.call_count, 3)
+            compile_client.assert_not_called()
+            keys.assert_not_called()
+        for job in (first, second, third):
+            failure = b.job(job['jobId'])['failure']
+            self.assertEqual(failure['category'], 'toolchain')
+            self.assertEqual(failure['summary'], 'Stopped before compilation by the test.')
+        self.assertEqual(b.ledger.versions(project), [])
+        self.assertIsNone(self.host.worker)
+
+
+class Wired(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config = host.parse_config(config_data(self.tmp.name))
+        self.host = host.build_host(self.config, generate=label, backup=fake_backup)
+        self.addCleanup(self.host.builder.ledger.close)
+        self.host.remote.listening = True  # main() sets this once the TLS socket is bound
+        self.remote = TestClient(self.host.remote_app)
+        self.admin = TestClient(self.host.admin_app, base_url='http://127.0.0.1:8767')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def pair(self):
+        invite = self.admin.post('/api/pair/new').json()
+        self.assertIn('100.64.0.9', invite['hosts'])
+        code = invite['uri'].split('code=')[1].split('&')[0]
+        device = Device()
+        r = self.remote.post('/pair', json={'code': code, 'publicKey': base64.b64encode(device.spki).decode(),
+                                            'name': 'Rose App Builder on Pixel', 'model': 'Pixel'})
+        self.assertEqual(r.status_code, 200, r.text)
+        return device
+
+    def signed(self, device, method, path, json=None):
+        h = device.headers(method, path, self.host.remote.identity.pin)
+        return self.remote.request(method, path, json=json, headers=h)
+
+    def test_directories_are_private(self):
+        for d in (self.config.root, self.config.remote_dir):
+            self.assertEqual(stat.S_IMODE(os.stat(d).st_mode), 0o700)
+
+    def test_pairing_is_loopback_only_and_the_listener_serves_only_the_builder(self):
+        refused = TestClient(self.host.admin_app, base_url='http://100.64.0.9:8767').post('/api/pair/new')
+        self.assertEqual(refused.status_code, 403)
+        device = self.pair()
+        hello = self.signed(device, 'GET', '/hello').json()
+        self.assertEqual((hello['serverName'], hello['phone']), ('Rose app builder', 'none'))
+        for path in ('/ws/audio', '/ws/events', '/ws/phone'):
+            with self.assertRaises(WebSocketDisconnect):
+                with self.remote.websocket_connect(path, headers=device.headers('GET', path,
+                                                                               self.host.remote.identity.pin)):
+                    pass
+        self.assertEqual(self.remote.get('/builder/v1/projects').status_code, 401)  # unsigned
+        r = self.signed(device, 'POST', '/builder/v1/projects', {'schemaVersion': 1, 'clientRequestId': 'a',
+                                                                 'description': 'a stopwatch'})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(self.signed(device, 'GET', '/builder/v1/projects').json()['projects']), 1)
+
+    def test_no_writer_fails_jobs_honestly(self):
+        bare = host.build_host(host.parse_config(config_data(self.tmp.name + '/bare')))
+        self.addCleanup(bare.builder.ledger.close)
+        out = bare.builder.create('d', {'schemaVersion': 1, 'clientRequestId': 'a', 'description': 'a stopwatch'})
+        self.assertTrue(bare.builder.run_next())
+        job = bare.builder.job(out['jobId'])
+        self.assertEqual((job['state'], job['failure']['summary']), ('failed', host.NO_WRITER))
+        self.assertIsNone(bare.builder.backup)  # nothing configured means nothing will be delivered
+        self.assertFalse(bare.builder.tools.key_creation)
+
+    def test_worker_starts_and_stops(self):
+        self.host.start_worker()
+        self.assertTrue(self.host.worker.is_alive())
+        self.host.stop(timeout_s=10)
+        self.assertFalse(self.host.worker.is_alive())
+
+
+def script(tmp, body):
+    path = Path(tmp) / 'backup.sh'
+    path.write_text('#!/bin/sh\n' + body)
+    path.chmod(0o700)
+    return path
+
+
+class Backup(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.keys = Path(self.tmp.name) / 'keys'
+        self.keys.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_backup(self, body, timeout_s=10.0):
+        return host.CommandBackup(host.Command((str(script(self.tmp.name, body)),), timeout_s))(
+            self.keys, 'p1', 'app.rose.gen.pp1')
+
+    def test_receipt_and_arguments(self):
+        receipt = self.run_backup('echo "stored:$2:$3:$(basename "$1")"\necho second line\n')
+        self.assertEqual(receipt, 'stored:p1:app.rose.gen.pp1:keys')
+
+    def test_its_own_home_outside_the_key_directory(self):
+        receipt = self.run_backup('mkdir -p "$HOME/.cache/tool" && echo state > "$HOME/.cache/tool/s"\n'
+                                  'printf "home:%s\\tcwd:%s\\n" "$HOME" "$(pwd)"\n')
+        self.assertTrue(receipt.startswith('home:'))
+        home = receipt.split()[0][5:]
+        self.assertNotEqual(Path(home).resolve(), self.keys.resolve())
+        self.assertFalse(Path(home).exists())  # removed afterwards
+        self.assertEqual(sorted(p.name for p in self.keys.iterdir()), [])  # nothing written next to the key
+
+    def test_nothing_it_started_survives(self):
+        marker = Path(self.tmp.name) / 'late'
+        # Succeeds at once but leaves a helper holding stdout; the helper must not block or outlive the backup.
+        receipt = self.run_backup(f'( sleep 2; touch {marker} ) &\necho receipt-ok\n', timeout_s=10.0)
+        self.assertEqual(receipt, 'receipt-ok')
+        for body in (f'( sleep 2; touch {marker} ) &\nsleep 30\n',):  # and on a timeout
+            with self.assertRaises(toolchain.StepFailed):
+                self.run_backup(body, timeout_s=0.5)
+        import time
+        time.sleep(2.5)
+        self.assertFalse(marker.exists())
+
+    def test_receipt_rule_matches_the_builder(self):
+        self.assertTrue(host.valid_receipt('x' * 200))
+        for bad in ('', 'x' * 201, 'a\nb', None):
+            self.assertFalse(host.valid_receipt(bad))
+        self.assertEqual(self.run_backup('printf "Hash (crc32c):\\t\\tabc\\n"\n'), 'Hash (crc32c):  abc')
+        with self.assertRaises(toolchain.StepFailed) as cm:
+            self.run_backup('printf "%0300d\\n" 0\n')
+        self.assertIn('unusable receipt', cm.exception.summary)
+
+    def test_failures_raise_signing_without_echoing_output(self):
+        for body, timeout in (('echo secret-material >&2\nexit 3\n', 10.0), ('exit 0\n', 10.0),
+                              ('sleep 5\necho late\n', 0.5)):
+            with self.assertRaises(toolchain.StepFailed) as cm:
+                self.run_backup(body, timeout)
+            self.assertEqual(cm.exception.category, 'signing')
+            self.assertNotIn('secret', cm.exception.summary + cm.exception.log)
+
+
+@unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK and a JDK')
+class BackupBeforeFirstDelivery(unittest.TestCase):
+    """Compilation and signing with throwaway keys; nothing is installed and no key leaves the test."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.calls = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def builder(self, backup):
+        from rose.app_builder.service import Builder
+        tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=300, key_creation=True)
+        b = Builder(Path(self.tmp.name) / 'b', tools, label, backup=backup)
+        self.addCleanup(b.ledger.close)
+        return b
+
+    def test_no_backup_configured_delivers_nothing(self):
+        b = self.builder(None)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'a', 'description': 'a stopwatch'})
+        b.run_next()
+        job = b.job(out['jobId'])
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'signing'), job)
+        project = b.projects()[0]
+        self.assertEqual((project['versions'], project['signerSha256']), ([], None))
+
+    def test_a_failed_backup_blocks_delivery_until_it_succeeds_once(self):
+        state = {'ok': False}
+
+        def backup(keys, project_id, package):
+            self.calls.append(project_id)
+            if not state['ok']:
+                raise OSError('bucket unreachable')
+            return 'receipt-1'
+        b = self.builder(backup)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'a', 'description': 'a stopwatch'})
+        b.run_next()
+        job = b.job(out['jobId'])
+        self.assertEqual((job['state'], job['failure']['category'], job['failure']['retryable']),
+                         ('failed', 'signing', True), job)
+        self.assertEqual((b.projects()[0]['versions'], b.projects()[0]['signerSha256']), ([], None))
+        state['ok'] = True
+        b.retry(out['jobId'], {'schemaVersion': 1})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready')
+        self.assertEqual(b.ledger.key_backup(out['projectId']), 'receipt-1')
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'b', 'request': 'add laps'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready')
+        self.assertEqual(len(self.calls), 2)  # one failure, one success; the update needs no new backup
+
+    def test_a_bad_receipt_is_a_failed_backup(self):
+        for receipt in ('', None, 'x' * 201, 'line\nbreak'):
+            with self.subTest(receipt=receipt):
+                b = self.builder(lambda *a, r=receipt: r)
+                out = b.create('d', {'schemaVersion': 1, 'clientRequestId': f'a{len(str(receipt))}',
+                                     'description': 'a stopwatch'})
+                b.run_next()
+                self.assertEqual(b.job(out['jobId'])['failure']['category'], 'signing')
+                self.assertIsNone(b.ledger.key_backup(out['projectId']))
+
+
+if __name__ == '__main__':
+    unittest.main()

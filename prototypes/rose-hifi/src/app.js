@@ -10,6 +10,11 @@
   let reducedOverride = false, epoch = 0;
   const timers = new Set();
   const reduced = () => reducedOverride || media.matches;
+  // Phone mode: opened on a phone (or ?phone=1), the simulated screen fills the real one, the bezel
+  // goes, and the simulation controls fold into a sheet behind a small button. ?phone=0 opts out.
+  const phoneParam = new URLSearchParams(location.search).get('phone');
+  const phoneMode = () => phoneParam === '1' || (phoneParam !== '0' && (window.innerWidth <= 540 || matchMedia('(pointer: coarse) and (max-width: 900px)').matches));
+  document.documentElement.classList.toggle('phone-mode', phoneMode());
 
   const RESULTS = {
     saturday: {
@@ -77,13 +82,23 @@
       d.setAttribute('aria-label', 'Home page ' + (i + 1)); d.dataset.page = i; d.innerHTML = '<i></i>';
       dots.appendChild(d);
     });
+    mountWorkspace();
+    if (!ox && state.homePage < 0) state = M.transition(state, { type: 'homePage', value: 0 }).state;
   }
 
+  function mountWorkspace() { if (window.RoseWorkspace) window.RoseWorkspace.mount($('home-track'), device.dataset.theme === 'oxblood'); }
   let drag = null, suppressClick = false;
+  // Project 2: an adaptive workspace page sits one page left of Home (page -1), Oxblood system only.
+  const homePages = () => [...$('home-track').querySelectorAll(':scope > .home-page')];
+  const wsMin = () => (device.dataset.theme === 'oxblood' && window.RoseWorkspace ? -1 : 0);
   function bindHomeGestures() {
     const pages = $('home-pages'), track = $('home-track');
     pages.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      // A touch swipe produces no click, so a stale suppression must never swallow the next real tap.
+      suppressClick = false;
+      // Horizontal scrollers inside the workspace own their drags; the page does not move under them.
+      if (e.target.closest && e.target.closest('.ws-carousel,.ws-field,.ws-sheet')) return;
       drag = { x: e.clientX, y: e.clientY, id: e.pointerId, moved: false, w: pages.clientWidth };
     });
     pages.addEventListener('pointermove', (e) => {
@@ -91,19 +106,21 @@
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) { drag.moved = true; pages.setPointerCapture(drag.id); track.classList.add('dragging'); }
       if (drag.moved) {
-        const max = $('home-track').children.length - 1, p = state.homePage;
-        const resist = (p === 0 && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
+        const max = homePages().length - 1, p = state.homePage;
+        const resist = (p === wsMin() && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
         track.style.transform = 'translateX(' + (-p * drag.w + dx * resist) + 'px)';
       }
     });
     const end = (e) => {
       if (!drag || (e && e.pointerId !== drag.id)) return;
       const moved = drag.moved, dx = e ? e.clientX - drag.x : 0, w = drag.w; drag = null;
-      track.classList.remove('dragging'); track.style.transform = '';
+      track.classList.remove('dragging');
+      // A tap (no drag) must not disturb the track's position; only a real drag hands back to render().
       if (moved) {
+        track.style.transform = '';
         suppressClick = true;
         const next = Math.abs(dx) > w * 0.18 ? state.homePage + (dx < 0 ? 1 : -1) : state.homePage;
-        dispatch({ type: 'homePage', value: next, max: $('home-track').children.length });
+        dispatch({ type: 'homePage', value: next, max: homePages().length, min: wsMin() });
         render();
       }
     };
@@ -113,8 +130,9 @@
     pages.addEventListener('dragstart', (e) => e.preventDefault());
     pages.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: $('home-track').children.length });
-      const first = $('home-track').children[state.homePage].querySelector('.app'); if (first) first.focus({ preventScroll: true });
+      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: homePages().length, min: wsMin() });
+      const pg = state.homePage < 0 ? $('ws-page') : homePages()[state.homePage];
+      const first = pg && pg.querySelector('.app,button'); if (first) first.focus({ preventScroll: true });
     });
   }
 
@@ -294,6 +312,7 @@
   let peek = false, peekDrag = null, suppressHomeTap = false;
   function render() {
     if (shownView !== state.view) rememberFocus(shownView);
+    if (window.RoseSystem) window.RoseSystem.beforeRender(state);
     device.classList.toggle('unfolded', state.layout === 'unfolded');
     document.documentElement.style.setProperty('--screen-w', state.layout === 'unfolded' ? '748px' : '384px');
     screen.classList.toggle('static-motion', reduced());
@@ -301,9 +320,11 @@
 
     // Home
     $('home-track').style.transform = 'translateX(' + (-state.homePage * 100) + '%)';
-    [...$('home-track').children].forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
+    homePages().forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
+    const wsp = $('ws-page'); if (wsp) { wsp.inert = state.homePage !== -1; wsp.setAttribute('aria-hidden', String(state.homePage !== -1)); }
+    if (window.RoseWorkspace) window.RoseWorkspace.render(state);
     const oxDots = device.dataset.theme === 'oxblood';
-    [...$('page-dots').children].forEach((d, i) => { d.setAttribute('aria-current', String(i === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
+    [...$('page-dots').children].forEach((d) => { d.setAttribute('aria-current', String(+d.dataset.page === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
     $('page-dots').setAttribute('aria-hidden', String(oxDots));
     const callLive = state.connection !== 'disconnected';
     $('tray-rose').setAttribute('aria-label', callLive ? 'Return to Rose call' : 'Open Rose');
@@ -373,6 +394,7 @@
     $('h-result').disabled = state.connection !== 'connected';
     $('h-tasklist').innerHTML = Object.entries(state.tasks).map(([id, t]) => '<div><span>' + M.TASKS[id].title + '</span><span>' + t.state + (t.state === 'running' ? ' · ' + t.step + '/' + M.MAX_STEP : '') + '</span></div>').join('');
     if (window.RoseViews) window.RoseViews.render(state, ctx);
+    if (window.RoseSystem) window.RoseSystem.afterRender(state);
     fit();
     if (peek && !peekable()) setPeek(false);
     if (pendingFocus) requestAnimationFrame(applyFocus);
@@ -408,7 +430,7 @@
     }
     // Task status announcements (not conversation cues).
     for (const id of Object.keys(state.tasks)) {
-      const a = before.tasks[id].state, b = state.tasks[id].state;
+      const a = before.tasks[id] ? before.tasks[id].state : 'idle', b = state.tasks[id].state;   // a task may be registered by this event
       if (a === b) continue;
       const words = { stopping: 'stopping', stopped: 'stopped', running: a === 'attention' ? 'working again' : a === 'idle' ? 'started' : '' }[b];
       if (words) $('announcer').textContent = M.TASKS[id].title + ': ' + words + '.';
@@ -429,7 +451,7 @@
     const app = e.target.closest('.app[data-app]');
     if (app) { dispatch({ type: 'openApp', value: app.dataset.app }); return; }
     const dot = e.target.closest('#page-dots button');
-    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: $('home-track').children.length }); return; }
+    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: homePages().length, min: wsMin() }); return; }
   });
   $('tray-rose').addEventListener('click', () => dispatch({ type: 'openRose' }));
   $('tray-overview').addEventListener('click', () => dispatch({ type: 'switcher' }));
@@ -475,10 +497,25 @@
     $('announcer').textContent = peek ? 'System controls shown. Swipe down to hide them.' : '';
   }
   function goHomeFromGesture() { setPeek(false, { leaving: true }); dispatch({ type: 'home' }); }
+  // Real touch: a swipe that starts on the bottom edge belongs to the edge gesture, so stop the
+  // browser from turning it into a scroll (which would cancel the pointer stream mid-swipe).
+  let edgeTouch = false;
+  screen.addEventListener('touchstart', (e) => {
+    edgeTouch = false;
+    if (device.dataset.theme !== 'oxblood' || e.touches.length !== 1) return;
+    const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight, up = (r.bottom - e.touches[0].clientY) / k;
+    const sys = window.RoseSystem, kbUp = sys && sys.kbOpen();
+    if (e.target.closest && e.target.closest('#kb,#shade')) return;
+    edgeTouch = peek ? up <= 104 : up <= (kbUp ? 24 : 56) && (peekable() || state.view === 'switcher');
+  }, { passive: true });
+  screen.addEventListener('touchmove', (e) => { if (edgeTouch && e.cancelable) e.preventDefault(); }, { passive: false });
+  screen.addEventListener('touchend', () => { edgeTouch = false; }, { passive: true });
   screen.addEventListener('pointerdown', (e) => {
     if (device.dataset.theme !== 'oxblood' || (e.button && e.button !== 0)) return;
     const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight;
-    const fromEdge = (r.bottom - e.clientY) / k <= 56;
+    // With the keyboard open the edge zone is its 24pt rail; swipes on the keyboard or shade belong to them.
+    if (e.target.closest && e.target.closest('#kb,#shade')) return;
+    const fromEdge = (r.bottom - e.clientY) / k <= (window.RoseSystem && window.RoseSystem.kbOpen() ? 24 : 56);
     // With the edge up, only a drag that starts on the edge itself moves it; the app above scrolls and taps normally.
     const onRaisedEdge = peek && (r.bottom - e.clientY) / k <= 104;
     if (onRaisedEdge || (!peek && fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
@@ -506,7 +543,8 @@
       if (homeSwipe) goHomeFromGesture();
       else if (dy < -36) setPeek(true);
     } else {
-      if (dy > 36) setPeek(false);
+      // The raised edge is short, so a small or quick downward swipe on it is enough to lower it.
+      if (dy > 22 || (dy > 10 && v > 0.35)) setPeek(false);
       else if (dy < -120) goHomeFromGesture();
     }
   };
@@ -527,6 +565,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || state.locked) return;
     if (peek) { setPeek(false); return; }
+    if (window.RoseSystem && window.RoseSystem.escape()) return;
     if (state.pendingStop) dispatch({ type: 'cancelStop' });
     else if (state.view !== 'home') dispatch({ type: 'back' });
   });
@@ -545,10 +584,14 @@
   // Visual direction: Oxblood (Nathan, 2026-11-02) is the prototype default; ?theme=classic keeps the
   // previous HiFi look, where the ten tray options (?tray=N) remain available unchanged.
   const params = new URLSearchParams(location.search);
+  // Glacier (GLACIER-1E-1110) is a palette of the Oxblood system: same geometry, icons and logic,
+  // its own colours and field. It is chosen only from the review harness or the Rose-Glacier launch
+  // file — there is no product-facing theme setting.
   function setTheme(v) {
     const t = v === 'classic' ? 'classic' : 'oxblood';
     device.dataset.theme = t;
-    $('h-theme').value = t;
+    if (v === 'glacier') device.dataset.palette = 'glacier'; else delete device.dataset.palette;
+    $('h-theme').value = v === 'glacier' ? 'glacier' : t;
     $('h-tray').disabled = t === 'oxblood';
     if (t === 'oxblood') setTray('');
     if (homeBuilt) { buildHome(); render(); }
@@ -563,7 +606,7 @@
   }
   $('h-tray').onchange = (e) => setTray(e.target.value);
   $('h-theme').onchange = (e) => setTheme(e.target.value);
-  setTheme(params.get('theme') || (params.get('tray') ? 'classic' : 'oxblood'));
+  setTheme(params.get('theme') || (params.get('tray') ? 'classic' : (window.ROSE_DEFAULT_THEME || 'oxblood')));
   setTray(params.get('tray'));
   $('h-reduced').checked = media.matches;
   $('h-reduced').onchange = (e) => { reducedOverride = e.target.checked; render(); };
@@ -580,7 +623,19 @@
     const stage = $('stage'), w = state.layout === 'unfolded' ? 748 : 384;
     const dw = w + 24, dh = 832 + 24;
     let k;
-    if (window.innerWidth <= 820) {
+    const phone = phoneMode();
+    document.documentElement.classList.toggle('phone-mode', phone);
+    if (!phone) document.documentElement.style.removeProperty('--screen-h');
+    if (phone) {
+      // The screen fills the real display edge to edge (no bezel); any spare space reads as black bezel.
+      stage.style.height = '';
+      // Match the real display's shape: width maps to the 384pt design width, and the simulated screen
+      // takes the real height (kept within 640–900pt so every layout still holds).
+      const vv = window.visualViewport, vw = vv ? vv.width : window.innerWidth, vh = vv ? vv.height : window.innerHeight;
+      const sh = Math.round(Math.max(640, Math.min(900, vh * w / vw)));
+      document.documentElement.style.setProperty('--screen-h', sh + 'px');
+      k = Math.min(vw / w, vh / sh);
+    } else if (window.innerWidth <= 820) {
       // Narrow screens: fit by width and let the page scroll to the controls below.
       k = Math.min(1, (window.innerWidth - 16) / dw);
       stage.style.height = Math.ceil(dh * k + 16) + 'px';
@@ -592,6 +647,13 @@
     if ($('fit').style.getPropertyValue('--fit') !== kk) { $('fit').style.setProperty('--fit', kk); renderer.refresh(); }
   }
   window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', () => setTimeout(fit, 250));
+  $('h-toggle').addEventListener('click', () => {
+    const open = !document.documentElement.classList.contains('harness-open');
+    document.documentElement.classList.toggle('harness-open', open);
+    $('h-toggle').setAttribute('aria-expanded', String(open));
+    $('h-toggle').setAttribute('aria-label', open ? 'Hide prototype controls' : 'Show prototype controls');
+  });
   // Glass sheen follows the pointer slightly, like light across a real display.
   let sheenRaf = 0;
   $('stage').addEventListener('pointermove', (e) => {
@@ -610,5 +672,6 @@
   buildHome(); bindHomeGestures();
   renderer.attach($('slot-tray'));
   render(); startClock();
-  window.__rose = { getState: () => state, dispatch, renderer, ctx };
+  window.__rose = { getState: () => state, dispatch, renderer, ctx, setPeek: (on) => setPeek(on), isPeek: () => peek };
+  if (window.RoseSystem) window.RoseSystem.init(window.__rose);
 })();

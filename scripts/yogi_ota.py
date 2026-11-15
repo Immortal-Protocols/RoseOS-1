@@ -42,6 +42,7 @@ import github_release_publisher as publisher  # noqa: E402
 import host_secrets  # noqa: E402
 import mustang_ota as ota_checks  # noqa: E402  (device-agnostic helpers only; Mustang behaviour is not changed)
 import release_receipts  # noqa: E402
+import yogi_compile  # noqa: E402
 
 DEVICE = 'yogi'
 CONFIG = ROOT/'os/ota/yogi.json'
@@ -364,7 +365,7 @@ def control_builder(cfg, action, ownership=None, gcloud='gcloud', timeout=420, i
 
     def describe():
         result = subprocess.run([gcloud, 'compute', 'instances', 'describe', t['instance'], *where,
-                                 '--format=json(id,name,zone,status,selfLink)'], capture_output=True, text=True)
+                                 '--format=json(id,name,zone,status,selfLink,scheduling,disks)'], capture_output=True, text=True)
         if result.returncode:
             raise Refused(f'Yogi builder describe failed (exit {result.returncode})')
         try:
@@ -376,6 +377,17 @@ def control_builder(cfg, action, ownership=None, gcloud='gcloud', timeout=420, i
                 raise ValueError
         except (KeyError, TypeError, ValueError):
             raise Refused('Yogi builder identity mismatch (project, zone, name or numeric ID); nothing requested') from None
+        if action == 'start' and env.get('STAGE') == 'one-shot':
+            full = cfg.get('fullRun') or {}
+            scheduling = seen.get('scheduling') or {}
+            disks = seen.get('disks') or []
+            expected_disk = f'/projects/{t["project"]}/zones/{t["zone"]}/disks/{t["instance"]}'
+            if full.get('enabled') is not True or full.get('stopSeconds') != 43200 \
+                    or scheduling.get('maxRunDuration') != {'seconds': '43200'} \
+                    or scheduling.get('instanceTerminationAction') != 'STOP' \
+                    or len(disks) != 1 or not disks[0].get('boot') or disks[0].get('autoDelete') is not False \
+                    or not str(disks[0].get('source', '')).endswith(expected_disk):
+                raise Refused('full Yogi STOP deadline or preserved dedicated disk binding differs')
         return seen['status']
     if action == 'state':
         return describe()
@@ -390,6 +402,8 @@ def control_builder(cfg, action, ownership=None, gcloud='gcloud', timeout=420, i
             f.flush()
             os.fsync(f.fileno())
         if state == 'RUNNING':
+            if env.get('STAGE') == 'one-shot':
+                raise Refused('full Yogi builder already running; not adopted and no new work queued')
             return 'RUNNING (not started by this run; never adopted or stopped by it)'
         if state != 'TERMINATED':
             raise Refused(f'Yogi builder is {state}; refusing to start it')
@@ -839,26 +853,45 @@ def compile_build(cfg, build, run=subprocess.run):
     directory = attempt_dir(cfg, build)
     allocation = read(directory/'allocation.json')
     read(directory/'integrate.json')
-    source, out_dir = directory/'src', f'out/yogi-{build}'
+    source, out_dir = directory/'src', yogi_compile.output_dir(cfg, build)
     if (source/out_dir).exists():
         raise Refused('output directory exists; no attempt is resumed')
-    env = {k: v for k, v in os.environ.items() if k not in SCRUBBED and not k.startswith('GIT_')}
+    env = yogi_compile.environment(os.environ)
     env.update(USE_STOCK_KERNEL='true', SOONG_NINJA='ninja', OUT_DIR=out_dir, BUILD_NUMBER=build,
                BUILD_DATETIME=allocation['timestamp'])
     steps = f'source build/envsetup.sh && lunch {LUNCH} && m -j{int(cfg["builder"]["jobs"])} ' + ' '.join(GOALS)
-    started = time.time()
-    with builder_lock(cfg), open(directory/'compile.log', 'x') as log:
-        result = run(['bash', '-euo', 'pipefail', '-c', steps], cwd=str(source), env=env, stdout=log,
-                     stderr=subprocess.STDOUT, timeout=6*3600)
     record = {'schema': 'roseos.yogi-compile.v1', 'build': build, 'timestamp': allocation['timestamp'],
               'source': allocation['source'], 'lunch': LUNCH, 'goals': list(GOALS), 'outDir': out_dir,
               'environment': {k: env[k] for k in ('USE_STOCK_KERNEL', 'SOONG_NINJA', 'OUT_DIR', 'BUILD_NUMBER', 'BUILD_DATETIME')},
-              'returncode': result.returncode, 'seconds': round(time.time()-started)}
-    if result.returncode == 0:
-        record['outputs'] = collect_outputs(source, out_dir, build, allocation['timestamp'])
-    release_receipts.write_once(directory/'compile.json', record)
-    if result.returncode:
-        raise Refused(f'make exited {result.returncode}; see the retained compile log; no retry')
+              'returncode': None, 'status': 'failed'}
+    state = None
+    try:
+        with builder_lock(cfg):
+            state = yogi_compile.prepare_cache(cfg, ROOT, out_dir)
+            if state:
+                import shlex
+                env.update(CC_WRAPPER=shlex.join(yogi_compile.cache.wrapper_argv(state, ROOT)), USE_CCACHE='1')
+            if run is subprocess.run:
+                outcome = yogi_compile.stream(['bash', '-euo', 'pipefail', '-c', steps], str(source), env,
+                                             directory/'compile.log', timeout=6*3600)
+            else:  # offline fixtures retain the existing injected runner interface
+                with open(directory/'compile.log', 'x') as log:
+                    result = run(['bash', '-euo', 'pipefail', '-c', steps], cwd=str(source), env=env, stdout=log,
+                                 stderr=subprocess.STDOUT, timeout=6*3600)
+                outcome = {'returncode': result.returncode, 'stopped': None}
+            record.update(outcome)
+            if outcome['returncode'] == 0 and outcome['stopped'] is None:
+                record['outputs'] = collect_outputs(source, out_dir, build, allocation['timestamp'])
+                record['status'] = 'complete'
+    finally:
+        try:
+            if state:
+                record['compilerCache'] = yogi_compile.cache.finish(state, ROOT)
+        finally:
+            release_receipts.write_once(directory/'compile.json', record)
+    if record['status'] != 'complete':
+        raise Refused(f'make exited {record["returncode"]} ({record.get("stopped") or "failure"}); '
+                      'see the retained compile log; no retry')
     return record
 
 
@@ -875,6 +908,24 @@ def sign_config(cfg, build, compiled, notes, versions, pins):
                               'updateNotes': {'file': str(notes), 'sha256': digest(notes), 'device': DEVICE, 'build': build}}}}
 
 
+def delivery_space(directory, *, target_bytes=0, copy_bytes=0, tools=None, free=shutil.disk_usage):
+    """Conservative phase allowance from actual inputs, plus room for logs/receipts.
+
+    Four target ZIP sizes cover copy, signing intermediates and OTA output;
+    tool expansion comes from the actual archive. This is a preflight estimate,
+    not a measured peak or filesystem quota. Never delete prior output to fit.
+    """
+    unpacked = 0
+    if tools is not None:
+        with zipfile.ZipFile(tools) as archive:
+            unpacked = sum(row.file_size for row in archive.infolist())
+    required = 4*target_bytes + copy_bytes + unpacked + (64 << 30)
+    available = free(directory).free
+    if available < required:
+        raise Refused(f'Yogi delivery needs {required} free bytes; observed {available}; existing output preserved')
+    return {'requiredBytes': required, 'availableBytes': available, 'kind': 'conservative-input-size-allowance'}
+
+
 def sign(cfg, build, stage, run=subprocess.run, env=os.environ):
     """The pinned release script through host-sign.main with the Yogi key set; OTA output only."""
     problem = profile_problem()
@@ -888,6 +939,8 @@ def sign(cfg, build, stage, run=subprocess.run, env=os.environ):
     allocation, compiled = read(directory/'allocation.json'), read(directory/'compile.json')
     for row in compiled['outputs'].values():
         ota_checks.checked_file(row)
+    space = delivery_space(directory, target_bytes=compiled['outputs']['targetFiles']['sizeBytes'],
+                           tools=compiled['outputs']['otatools']['path'])
     out = directory/'sign'
     out.mkdir(mode=0o700)
     notes = out/'UPDATE.md'
@@ -903,7 +956,8 @@ def sign(cfg, build, stage, run=subprocess.run, env=os.environ):
                  OUT_DIR=compiled['outDir'])
     record = {'schema': 'roseos.yogi-sign.v1', 'device': DEVICE, 'stage': stage, 'build': build,
               'timestamp': allocation['timestamp'], 'candidateSource': allocation['source'], 'recipeSource': head(),
-              'secrets': {k: {'name': SECRETS[k], 'version': v} for k, v in versions.items()}, 'status': 'failed'}
+              'secrets': {k: {'name': SECRETS[k], 'version': v} for k, v in versions.items()},
+              'spacePreflight': space, 'status': 'failed'}
     try:
         with builder_lock(cfg):
             # host-sign reads the release script relative to its working directory: the attempt's own tree.
@@ -929,6 +983,7 @@ def install_image(cfg, build, run=subprocess.run):
         raise Refused('a completed bootstrap signing receipt is required')
     pins, _ = identities(cfg)
     tf = ota_checks.checked_file(signed['outputs']['targetFiles'])
+    delivery_space(directory, target_bytes=tf.stat().st_size, tools=ota_checks.checked_file(signed['otatools']))
     avb = directory/'sign/release/public/avb_pkmd.bin'
     if digest(avb) != pins['avbPublicKeySha256']:
         raise Refused('produced AVB public key differs from the Yogi bootstrap pin')
@@ -977,21 +1032,26 @@ def observe_target(path, build, epoch, tools, pins, execute=subprocess.run):
             for name in (b'RoseChannels', b'RoseReleases'):
                 if not any(b'Lapp/seamlessupdate/client/'+name+b';' in dex for dex in compiled):
                     raise Refused('packaged Updater lacks the Rose discovery class ' + name.decode())
-        result = execute([tools['aapt'], 'dump', '--values', 'resources', str(apk)], capture_output=True, text=True, timeout=120)
+        modern = Path(tools['aapt']).name == 'aapt2'
+        resources = ['resources'] if modern else ['--values', 'resources']
+        result = execute([tools['aapt'], 'dump', *resources, str(apk)], capture_output=True, text=True, timeout=120)
         if result.returncode:
             raise Refused('packaged Updater resources could not be read')
         expected = {('string', 'url'): route['updaterUrl'], ('string', 'release_index'): route['releaseIndex'],
                     ('string', 'channel_default'): 'prod', ('array', 'channel_published'): ['stable'],
                     ('array', 'channel_values'): ['prod', 'stable', 'alpha']}
-        failures = pipeline.updater_failures(result.stdout, expected)
+        failures = (ota_checks.aapt2_updater_failures(result.stdout, expected) if modern
+                    else pipeline.updater_failures(result.stdout, expected))
         if failures:
             raise Refused('; '.join(failures))
         result = execute([tools['aapt'], 'dump', 'badging', str(apk)], capture_output=True, text=True, timeout=120)
         if result.returncode or not re.search(r"package: name='app\.seamlessupdate\.client'", result.stdout):
             raise Refused('packaged Updater package identity differs')
         result = execute([tools['apksigner'], 'verify', '--print-certs', str(apk)], capture_output=True, text=True, timeout=120)
-        certs = [x.lower() for x in re.findall(r'Signer #[0-9]+ certificate SHA-256 digest: ([0-9a-fA-F]+)', result.stdout)]
-        if result.returncode or certs != [pins['otaCertificateSha256']]:
+        lines = [line.strip() for line in result.stdout.splitlines() if ' certificate SHA-256 digest:' in line]
+        parsed = [re.fullmatch(r'.+ certificate SHA-256 digest: ([0-9a-fA-F]{64})', line) for line in lines]
+        certs = [match[1].lower() for match in parsed if match]
+        if result.returncode or not parsed or not all(parsed) or set(certs) != {pins['otaCertificateSha256']}:
             raise Refused('packaged Updater signer differs from the Yogi release identity')
         trust = []
         with zipfile.ZipFile(io.BytesIO(member(archive, 'SYSTEM/etc/security/otacerts.zip', 4 << 20))) as certificates:
@@ -1028,6 +1088,7 @@ def stage(cfg, build, out, run=subprocess.run):
     if signed.get('status') != 'signed' or signed.get('stage') != 'ota' or signed.get('build') != build:
         raise Refused('a completed OTA-stage Yogi signing receipt is required')
     tf, ota = (ota_checks.checked_file(signed['outputs'][k]) for k in ('targetFiles', 'ota'))
+    delivery_space(directory, copy_bytes=ota.stat().st_size, tools=ota_checks.checked_file(signed['otatools']))
     epoch, source = signed['timestamp'], Path(signed['sourceRoot'])
     tools = {k: str(source/v) for k, v in TOOLS.items() if k != 'java'}
     observed = observe_target(tf, build, epoch, tools, pins, run)

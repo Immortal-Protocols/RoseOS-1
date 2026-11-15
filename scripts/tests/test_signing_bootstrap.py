@@ -1834,8 +1834,10 @@ class YogiProfile(unittest.TestCase):
         flipped = copy.deepcopy(PROFILES)  # status alone never admits it while its missing list names prerequisites
         flipped['profiles']['yogi-v1']['status'] = 'resource-bound'
         self.assertEqual([c for c, _ in sb.readiness('yogi-v1', flipped, NOW)], ['profile-unbound'])
-        flipped['profiles']['yogi-v1']['missing'] = []  # and with nothing missing, the unmeasured proof spec refuses
-        self.assertIn('proof-spec-missing', [c for c, _ in sb.readiness('yogi-v1', flipped, NOW)])
+        flipped['profiles']['yogi-v1']['missing'] = []
+        # Reviewed Yogi roots are now specified. Installed bytes still require
+        # the real same-run proof; the source spec is not an installed identity.
+        self.assertNotIn('proof-spec-missing', [c for c, _ in sb.readiness('yogi-v1', flipped, NOW)])
 
     def test_nothing_is_fabricated(self):
         access = self.profile['access']
@@ -1843,11 +1845,13 @@ class YogiProfile(unittest.TestCase):
         self.assertTrue(access['liveCheck'] is True and self.profile['recheckEmptyBeforeImport'] is True)
         for key in ('resourceBasis', 'resourceEvidence', 'accessEvidence'):
             self.assertIsNone(self.profile[key], key)
-        self.assertIsNone(self.profile['localProof']['spec'])  # no assumed Yogi-builder tool roots
+        self.assertEqual({row['root'] for row in self.profile['localProof']['spec']['scripts'].values()},
+                         {'/srv/rose-yogi/src/development', '/srv/rose-yogi/src/script', '/srv/rose-yogi/src/external/avb'})
+        for tool in self.profile['tools'].values():
+            self.assertEqual(tool['installed'], {'path': None, 'sha256': None})
         self.assertNotIn('/home/pixelbuild', json.dumps(self.profile))  # never the Frankel builder's paths
         missing = ' '.join(self.profile['missing'])
-        for needed in ('approval', 'PIXEL_OS_SIGNING_KEYS_YOGI_V1', 'one binding per secret, at most 4 h',
-                       'localProof.spec', 'roseos-yogi-builder', 'never the Frankel builder', 'one approved bootstrap run'):
+        for needed in ('PIXEL_OS_SIGNING_KEYS_YOGI_V1', 'one binding per secret, at most 4 h'):
             self.assertIn(needed, missing)
         self.assertFalse((ROOT/'os/signing-bootstrap/yogi-bootstrap-receipt.json').exists())  # no pins without a run
 

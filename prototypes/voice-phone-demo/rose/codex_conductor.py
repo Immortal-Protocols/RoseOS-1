@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from . import customization, voice_identity
+from . import composer, customization, voice_identity
 from . import life as rosie_life
 from .life_world import Conflict as LifeConflict
 from .codex_client import CodexClient
@@ -75,6 +75,11 @@ CONVERSATION_TOOLS += voice_identity.TOOLS
 CONVERSATION_POLICY += voice_identity.POLICY_LINE + '\n'
 CONVERSATION_TOOLS += rosie_life.TOOLS
 CONVERSATION_POLICY += rosie_life.POLICY + '\n'
+# Project 2 (docs/APP-BUILDER.md §4): the owner's explicit requests for the workspace page. Every call asks the phone's
+# provider for the contract first (composer.call), so with no provider, or an older one, the answer is an honest
+# unavailable and nothing is sent; it never claims a page change the phone did not report.
+CONVERSATION_TOOLS += [composer.TOOL]
+CONVERSATION_POLICY += composer.POLICY_LINE + '\n'
 
 
 @dataclass
@@ -106,6 +111,8 @@ class Session:
     wake_id: str | None = None
     action_id: str | None = None
     blocked_reason: str | None = None
+    workspace_task: str | None = None  # the page task this conversation turn serves (docs/APP-BUILDER.md §4.3)
+    workspace_turn: tuple | None = None  # (turnId, page task) once that turn started: its tool calls report to it
 
 
 @dataclass(frozen=True)
@@ -155,6 +162,7 @@ class CodexConductor:
         self._identity_lock = threading.Lock()
         self.client = client_factory(self._events.put)
         self._wake_sinks = {}
+        self.workspace_tasks = None  # page tasks to report to (rose.workspace_tasks.connect), when enabled
         if self.life is not None and hasattr(self.life, 'bind'):
             self.life.bind(self)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
@@ -204,16 +212,22 @@ class CodexConductor:
     def _background(self, fn, *args):
         threading.Thread(target=fn, args=args, daemon=True).start()
 
-    def inject_text_turn(self, text):
-        self._background(self._user_turn, text)
+    def inject_text_turn(self, text, workspace_task=None):
+        self._background(self._user_turn, text, workspace_task)
 
-    def _user_turn(self, text):
+    def _user_turn(self, text, workspace_task=None):
         if self.life is not None:
             self.life.user_active()
         s = self.sessions['conversation']
         try:
             with s.submit_lock:
-                self._interrupt_reply('new user turn')
+                if self.sessions['conversation'] is not s:  # a reset replaced it while this turn waited:
+                    self._background(self._user_turn, text, workspace_task)  # run on the new one instead
+                    return
+                try:
+                    self._interrupt_reply('new user turn')  # a page task whose turn had not ended is cancelled
+                finally:
+                    s.workspace_task = workspace_task  # bound even if that failed, so _failed ends it
                 s.cancelled.clear()
                 s.rid = next(self._reply_ids)
                 s.turn = None
@@ -510,6 +524,11 @@ class CodexConductor:
 
     def _task_event(self, s):
         self.bus.emit('task', task=self.task_snapshot(s.task))
+        if self.workspace_tasks is not None and s.task is not None:
+            try:
+                self.workspace_tasks.phone_task(s.task.id, s.task.status)
+            except Exception:
+                self.log(s, 'workspace_task_unrecorded', task=s.task.id)
 
     def _life_event(self, event):
         # Reuse the existing task feed and scoped native inspect/Stop path.
@@ -595,12 +614,20 @@ class CodexConductor:
         if e.get('turnId', e.get('turn', {}).get('id')) in s.ignored_turns:
             return
         if kind == 'tool':
-            self._background(self._tool, s, e)
+            # Bound here, in event order before the turn's end: the call reports to its own turn's page task.
+            page = self._workspace_call_started(s, e)
+            try:
+                self._background(self._tool, s, e, page)
+            except BaseException:
+                self._workspace_call_ended(s, page)  # the call never ran: release its hold
+                raise
             return
         if s.cancelled.is_set():
             return
         if kind == 'started':
             s.turn = e['turnId']
+            if not s.task:
+                s.workspace_turn = (s.turn, s.workspace_task) if s.workspace_task else None
             self.log(s, 'turn_started')
             if s.task:
                 self._task_event(s)
@@ -630,6 +657,8 @@ class CodexConductor:
             status = e['turn'].get('status')
             self.log(s, 'turn_finished', status=status, elapsed_ms=round((time.monotonic()-s.started)*1000),
                      first_text_ms=None if not s.first_text else round((s.first_text-s.started)*1000))
+            if not s.task:
+                self._workspace_turn_ended(s, status)
             if s.task:
                 validation_error = None
                 if status == 'completed':
@@ -674,8 +703,49 @@ class CodexConductor:
             if s.busy:
                 self._failed(s)
 
+    def _workspace_turn_ended(self, s, status):
+        task_id, s.workspace_task = s.workspace_task, None
+        if task_id and self.workspace_tasks is not None:
+            try:
+                self.workspace_tasks.turn_ended(task_id, status)
+            except Exception:
+                self.log(s, 'workspace_task_unrecorded', task=task_id)
+
+    def _workspace_attach(self, page, task):
+        if task and page and self.workspace_tasks is not None:
+            try:
+                # The status is read under the store's lock: a phone task that ended before this is seen as ended,
+                # and one that ends after finds itself attached (its own report takes the same lock).
+                with getattr(self.workspace_tasks, 'lock', None) or contextlib.nullcontext():
+                    self.workspace_tasks.attach(page, task.id, task.status)
+            except Exception:
+                self.log(self.sessions.get('conversation'), 'workspace_task_unrecorded', task=page)
+
+    def _workspace_call_started(self, s, e):
+        """The page task a phone_task/update_task call reports to: its own turn's, held running until it returns."""
+        p = e.get('params') or {}
+        bound = s.workspace_turn
+        if (s.task or p.get('tool') not in ('phone_task', 'update_task') or not bound or bound[0] != p.get('turnId')
+                or self.workspace_tasks is None):
+            return None
+        try:
+            self.workspace_tasks.call_started(bound[1])
+        except Exception:
+            self.log(s, 'workspace_task_unrecorded', task=bound[1])
+            return None
+        return bound[1]
+
+    def _workspace_call_ended(self, s, page):
+        if page and self.workspace_tasks is not None:
+            try:
+                self.workspace_tasks.call_ended(page)
+            except Exception:
+                self.log(s, 'workspace_task_unrecorded', task=page)
+
     def _failed(self, s, error=None):
         s.busy = False
+        if not s.task:
+            self._workspace_turn_ended(s, 'failed')
         code = str(error) if str(error) in {'chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch'} else 'backend_operation_failed'
         message = 'Sign in with ChatGPT again on this backend, then restart Rose.' if code == 'chatgpt_login_required' else 'Codex or phone operation failed; check backend setup.'
         if isinstance(error, PhoneTaskError):
@@ -691,7 +761,17 @@ class CodexConductor:
             self.bus.emit('rose_turn', id=s.rid, text=message, interrupted=True)
             self.bus.emit('status', state='listening', detail=message)
 
-    def _tool(self, s, e):
+    _UNBOUND = object()
+
+    def _tool(self, s, e, page=_UNBOUND):
+        if page is self._UNBOUND:
+            page = self._workspace_call_started(s, e)
+        try:
+            self._run_tool(s, e, page)
+        finally:
+            self._workspace_call_ended(s, page)
+
+    def _run_tool(self, s, e, page):
         p = e['params']
         name, args = p['tool'], p['arguments']
         result, image = None, None
@@ -723,7 +803,7 @@ class CodexConductor:
                             if name not in ('complete_task','life_memory'):
                                 step = self.life.executor.before_action(s, name, args)
                         result, image = (self._app_tool(s, name, args) if s.task
-                                         else self._conversation_tool(name, args))
+                                         else self._conversation_tool(name, args, page, p['callId']))
                         if step is not None:
                             if not result.get('ok') and result.get('action_status') in (
                                     'locked','user_stopped','target_not_allowed','rejected','secure_window'):
@@ -858,12 +938,15 @@ class CodexConductor:
         while len(table) > limit:
             table.pop(next(iter(table)))
 
-    def _conversation_tool(self, name, a):
+    def _conversation_tool(self, name, a, page=None, call_id=None):
+        if name == composer.TOOL['name']:
+            return composer.call(self.phone, composer.PROVIDER, composer.request_id_for(call_id), a), None
         if name == 'rosie_life':
             return (self.life.call(a) if self.life is not None else
                     {'ok': False, 'reason': 'life_not_configured'}), None
         if name == 'phone_task':
             task = self.start_phone(str(a['app']), str(a['goal']))
+            self._workspace_attach(page, task)
             return {'ok': True, 'task_id': task.id, 'status': task.status}, None
         if name == 'update_task':
             s = next((s for s in self.sessions.values() if s.task and s.task.id == int(a['task_id'])), None)
@@ -871,6 +954,7 @@ class CodexConductor:
                 self.life.diary.action_state(s.action_id, 'handed_off')
                 s.origin, s.wake_id = 'user', None  # explicit user-directed takeover
             task = self.update(int(a['task_id']), str(a['instruction']))
+            self._workspace_attach(page, task)
             return {'ok': bool(task), 'task_id': task.id if task else None}, None
         if name == 'cancel_task':
             return {'ok': self.cancel(int(a['task_id']))}, None
@@ -997,6 +1081,7 @@ class CodexConductor:
         s = self.sessions['conversation']
         s.cancelled.set()
         with s.submit_lock:
+            self._workspace_turn_ended(s, 'interrupted')  # a hold, reset, new turn or shutdown cuts its turn off
             if s.turn:
                 s.ignored_turns.add(s.turn)
             if s.utterance:

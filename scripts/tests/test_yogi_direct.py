@@ -175,7 +175,9 @@ class ContractTest(unittest.TestCase):
             for name in ('builder.direct.status', 'builder.direct.route', 'builder.direct.sshUser',
                          'builder.direct.hostKey', 'builder.direct.runnerService', 'builder.direct.operatorAccess'):
                 self.assertIn(name, joined)
-        self.assertIn('signed app inputs are not bound', ' '.join(direct.blockers(cfg, 'compile')))
+        # The shared Release export is now bound. Direct access remains refused
+        # by its real SSH/identity/operator prerequisites, not an absent record.
+        self.assertEqual(yogi.app_record(cfg)['export']['run'], '43485652878')
         # The runner route's gates are untouched by this route.
         self.assertEqual(cfg['builder']['status'], 'runner-unregistered')
         self.assertIsNone(cfg['builder']['evidence']['runner']['organizationEligibility'])

@@ -1,0 +1,1884 @@
+{
+  "when": "2026-11-10T02:57:43.587Z",
+  "commit": "2ecceb9779cb491554a561964d753cf327acfa2e",
+  "tree_clean": true,
+  "html_sha256": "39dd5cebee31311bda7e30f84f59cf5dcf80e928bb399ef559c3c488410ade3b",
+  "html_blob": "259871e8278c08c18173e06446765aa28a95625f",
+  "committed_html_blob": "259871e8278c08c18173e06446765aa28a95625f",
+  "passed": 246,
+  "total": 246,
+  "results": [
+    {
+      "n": "design: Glacier palette active with the Illustrator field image",
+      "ok": true
+    },
+    {
+      "n": "design: tapping the composer opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "design: app window ends on the keyboard (adjust-resize above the 24pt rail)",
+      "ok": true
+    },
+    {
+      "n": "design: typing via keys, auto-capital",
+      "ok": true
+    },
+    {
+      "n": "design: suggestion strip shows typed | best | next",
+      "ok": true
+    },
+    {
+      "n": "contrast key label ≥ 4.5:1 on the rendered background (p5 8.03, min 6.74)",
+      "ok": true
+    },
+    {
+      "n": "contrast best suggestion ≥ 4.5:1 on the rendered background (p5 14.81, min 14.64)",
+      "ok": true
+    },
+    {
+      "n": "contrast composer text ≥ 4.5:1 on the rendered background (p5 9.46, min 9.28)",
+      "ok": true
+    },
+    {
+      "n": "design: shift once",
+      "ok": true
+    },
+    {
+      "n": "design: double-tap shift → caps lock",
+      "ok": true
+    },
+    {
+      "n": "design: ?123 → symbols page",
+      "ok": true
+    },
+    {
+      "n": "design: selection shows the edit strip (Cut/Copy/Paste/Select all/Undo/Redo)",
+      "ok": true
+    },
+    {
+      "n": "design: swipe up from the 24pt rail raises the chin; keyboard stays, 34pt higher (58pt)",
+      "ok": true
+    },
+    {
+      "n": "design: chin controls unobstructed with the keyboard open",
+      "ok": true
+    },
+    {
+      "n": "design: chin mic mutes; keyboard and draft untouched",
+      "ok": true
+    },
+    {
+      "n": "contrast muted mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 10.94, min 10.84)",
+      "ok": true
+    },
+    {
+      "n": "design: Rose opened from Messages keeps the origin; keyboard tucked away",
+      "ok": true
+    },
+    {
+      "n": "design: return control: leading edge of Rose content, above the chin and Disconnect",
+      "ok": true
+    },
+    {
+      "n": "design: return control matches V3: chevron + source name, 12px label, ≥48pt hit area",
+      "ok": true
+    },
+    {
+      "n": "contrast return label ≥ 4.5:1 on the rendered background (p5 11.29, min 11.29)",
+      "ok": true
+    },
+    {
+      "n": "contrast Rose caption ≥ 4.5:1 on the rendered background (p5 18.29, min 18.11)",
+      "ok": true
+    },
+    {
+      "n": "contrast Disconnect label ≥ 4.5:1 on the rendered background (p5 15.90, min 15.90)",
+      "ok": true
+    },
+    {
+      "n": "design: tap requests return directly → Returning… with a separate Cancel",
+      "ok": true
+    },
+    {
+      "n": "design: repeat taps while pending are ignored",
+      "ok": true
+    },
+    {
+      "n": "design: no departure without acknowledgement (Rose stays usable)",
+      "ok": true
+    },
+    {
+      "n": "design: Cancel invalidates the request and stays in Rose",
+      "ok": true
+    },
+    {
+      "n": "design: acknowledged failure → “Could not return.” sheet; stays in Rose; keyboard hidden",
+      "ok": true
+    },
+    {
+      "n": "contrast sheet text ≥ 4.5:1 on the rendered background (p5 7.31, min 7.31)",
+      "ok": true
+    },
+    {
+      "n": "design: Stay in Rose closes the sheet",
+      "ok": true
+    },
+    {
+      "n": "design: closed origin → “Your source app is unavailable.” with Stay / Open switcher / Go Home; no relaunch, no keyboard",
+      "ok": true
+    },
+    {
+      "n": "design: replaced task (new generation) is not the exact live task → unavailable",
+      "ok": true
+    },
+    {
+      "n": "design: acknowledged success departs to the exact app with draft, selection and keyboard",
+      "ok": true
+    },
+    {
+      "n": "design: reading position restored",
+      "ok": true
+    },
+    {
+      "n": "design: Rose work keeps running through the return",
+      "ok": true
+    },
+    {
+      "n": "design: pull down from the top opens the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast shade title ≥ 4.5:1 on the rendered background (p5 14.40, min 14.04)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification head ≥ 4.5:1 on the rendered background (p5 9.75, min 9.28)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification body ≥ 4.5:1 on the rendered background (p5 6.31, min 6.01)",
+      "ok": true
+    },
+    {
+      "n": "contrast primary action ≥ 4.5:1 on the rendered background (p5 7.04, min 1.20)",
+      "ok": true
+    },
+    {
+      "n": "contrast input status ≥ 4.5:1 on the rendered background (p5 8.17, min 7.83)",
+      "ok": true
+    },
+    {
+      "n": "design: Messages group expands",
+      "ok": true
+    },
+    {
+      "n": "design: inline reply types through the keyboard; shade sits above it",
+      "ok": true
+    },
+    {
+      "n": "design: shade content ends above the keyboard inset",
+      "ok": true
+    },
+    {
+      "n": "design: active reply: the composer and Send are both fully visible above the keyboard",
+      "ok": true
+    },
+    {
+      "n": "design: a scroll in the notification list while replying is not dragged back when the inset changes",
+      "ok": true
+    },
+    {
+      "n": "design: tapping the reply field again reveals the composer and Send",
+      "ok": true
+    },
+    {
+      "n": "design: hiding the keyboard never sends or dismisses; draft kept",
+      "ok": true
+    },
+    {
+      "n": "design: Send shows Sending… and blocks repeats",
+      "ok": true
+    },
+    {
+      "n": "design: failure: “Couldn’t send · Retry”, draft kept",
+      "ok": true
+    },
+    {
+      "n": "contrast reply error text (warm) ≥ 4.5:1 on the rendered background (p5 5.90, min 5.62)",
+      "ok": true
+    },
+    {
+      "n": "design: Retry sends after acknowledgement; draft cleared only then",
+      "ok": true
+    },
+    {
+      "n": "design: dismiss with Undo",
+      "ok": true
+    },
+    {
+      "n": "design: Undo restores the notification",
+      "ok": true
+    },
+    {
+      "n": "design: empty state",
+      "ok": true
+    },
+    {
+      "n": "contrast empty state text ≥ 4.5:1 on the rendered background (p5 7.61, min 7.40)",
+      "ok": true
+    },
+    {
+      "n": "design: Esc closes the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast Home date ≥ 4.5:1 on the rendered background (p5 13.21, min 13.10)",
+      "ok": true
+    },
+    {
+      "n": "contrast tray mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 10.09, min 8.70)",
+      "ok": true
+    },
+    {
+      "n": "design: reduced motion: keyboard appears without travel",
+      "ok": true
+    },
+    {
+      "n": "design: no console errors",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Glacier palette active with the Illustrator field image",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: tapping the composer opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: app window ends on the keyboard (adjust-resize above the 24pt rail)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: typing via keys, auto-capital",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: suggestion strip shows typed | best | next",
+      "ok": true
+    },
+    {
+      "n": "contrast key label ≥ 4.5:1 on the rendered background (p5 9.07, min 7.31)",
+      "ok": true
+    },
+    {
+      "n": "contrast best suggestion ≥ 4.5:1 on the rendered background (p5 15.97, min 15.97)",
+      "ok": true
+    },
+    {
+      "n": "contrast composer text ≥ 4.5:1 on the rendered background (p5 14.30, min 14.30)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: shift once",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: double-tap shift → caps lock",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: ?123 → symbols page",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: selection shows the edit strip (Cut/Copy/Paste/Select all/Undo/Redo)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: swipe up from the 24pt rail raises the chin; keyboard stays, 34pt higher (58pt)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: chin controls unobstructed with the keyboard open",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: chin mic mutes; keyboard and draft untouched",
+      "ok": true
+    },
+    {
+      "n": "contrast muted mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 10.32, min 10.24)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Rose opened from Messages keeps the origin; keyboard tucked away",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: return control: leading edge of Rose content, above the chin and Disconnect",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: return control matches V3: chevron + source name, 12px label, ≥48pt hit area",
+      "ok": true
+    },
+    {
+      "n": "contrast return label ≥ 4.5:1 on the rendered background (p5 11.29, min 11.29)",
+      "ok": true
+    },
+    {
+      "n": "contrast Rose caption ≥ 4.5:1 on the rendered background (p5 18.27, min 17.96)",
+      "ok": true
+    },
+    {
+      "n": "contrast Disconnect label ≥ 4.5:1 on the rendered background (p5 11.63, min 9.57)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: tap requests return directly → Returning… with a separate Cancel",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: repeat taps while pending are ignored",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: no departure without acknowledgement (Rose stays usable)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Cancel invalidates the request and stays in Rose",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: acknowledged failure → “Could not return.” sheet; stays in Rose; keyboard hidden",
+      "ok": true
+    },
+    {
+      "n": "contrast sheet text ≥ 4.5:1 on the rendered background (p5 7.31, min 7.31)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Stay in Rose closes the sheet",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: closed origin → “Your source app is unavailable.” with Stay / Open switcher / Go Home; no relaunch, no keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: replaced task (new generation) is not the exact live task → unavailable",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: acknowledged success departs to the exact app with draft, selection and keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: reading position restored",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Rose work keeps running through the return",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: pull down from the top opens the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast shade title ≥ 4.5:1 on the rendered background (p5 17.02, min 17.02)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification head ≥ 4.5:1 on the rendered background (p5 14.30, min 14.30)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification body ≥ 4.5:1 on the rendered background (p5 9.26, min 9.26)",
+      "ok": true
+    },
+    {
+      "n": "contrast primary action ≥ 4.5:1 on the rendered background (p5 12.27, min 1.20)",
+      "ok": true
+    },
+    {
+      "n": "contrast input status ≥ 4.5:1 on the rendered background (p5 11.02, min 11.02)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Messages group expands",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: inline reply types through the keyboard; shade sits above it",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: shade content ends above the keyboard inset",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: active reply: the composer and Send are both fully visible above the keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: a scroll in the notification list while replying is not dragged back when the inset changes",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: tapping the reply field again reveals the composer and Send",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: hiding the keyboard never sends or dismisses; draft kept",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Send shows Sending… and blocks repeats",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: failure: “Couldn’t send · Retry”, draft kept",
+      "ok": true
+    },
+    {
+      "n": "contrast reply error text (warm) ≥ 4.5:1 on the rendered background (p5 8.66, min 8.66)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Retry sends after acknowledgement; draft cleared only then",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: dismiss with Undo",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Undo restores the notification",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: empty state",
+      "ok": true
+    },
+    {
+      "n": "contrast empty state text ≥ 4.5:1 on the rendered background (p5 11.02, min 11.02)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: Esc closes the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast Home date ≥ 4.5:1 on the rendered background (p5 14.00, min 13.84)",
+      "ok": true
+    },
+    {
+      "n": "contrast tray mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 10.09, min 3.71)",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: reduced motion: keyboard appears without travel",
+      "ok": true
+    },
+    {
+      "n": "iphone13-390: no console errors",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Glacier palette active with the Illustrator field image",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: tapping the composer opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: app window ends on the keyboard (adjust-resize above the 24pt rail)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: typing via keys, auto-capital",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: suggestion strip shows typed | best | next",
+      "ok": true
+    },
+    {
+      "n": "contrast key label ≥ 4.5:1 on the rendered background (p5 9.07, min 7.31)",
+      "ok": true
+    },
+    {
+      "n": "contrast best suggestion ≥ 4.5:1 on the rendered background (p5 15.97, min 15.97)",
+      "ok": true
+    },
+    {
+      "n": "contrast composer text ≥ 4.5:1 on the rendered background (p5 14.30, min 14.30)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: shift once",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: double-tap shift → caps lock",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: ?123 → symbols page",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: selection shows the edit strip (Cut/Copy/Paste/Select all/Undo/Redo)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: swipe up from the 24pt rail raises the chin; keyboard stays, 34pt higher (58pt)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: chin controls unobstructed with the keyboard open",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: chin mic mutes; keyboard and draft untouched",
+      "ok": true
+    },
+    {
+      "n": "contrast muted mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 11.04, min 10.84)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Rose opened from Messages keeps the origin; keyboard tucked away",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: return control: leading edge of Rose content, above the chin and Disconnect",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: return control matches V3: chevron + source name, 12px label, ≥48pt hit area",
+      "ok": true
+    },
+    {
+      "n": "contrast return label ≥ 4.5:1 on the rendered background (p5 11.29, min 11.29)",
+      "ok": true
+    },
+    {
+      "n": "contrast Rose caption ≥ 4.5:1 on the rendered background (p5 18.27, min 18.11)",
+      "ok": true
+    },
+    {
+      "n": "contrast Disconnect label ≥ 4.5:1 on the rendered background (p5 12.90, min 10.23)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: tap requests return directly → Returning… with a separate Cancel",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: repeat taps while pending are ignored",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: no departure without acknowledgement (Rose stays usable)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Cancel invalidates the request and stays in Rose",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: acknowledged failure → “Could not return.” sheet; stays in Rose; keyboard hidden",
+      "ok": true
+    },
+    {
+      "n": "contrast sheet text ≥ 4.5:1 on the rendered background (p5 7.31, min 7.31)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Stay in Rose closes the sheet",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: closed origin → “Your source app is unavailable.” with Stay / Open switcher / Go Home; no relaunch, no keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: replaced task (new generation) is not the exact live task → unavailable",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: acknowledged success departs to the exact app with draft, selection and keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: reading position restored",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Rose work keeps running through the return",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: pull down from the top opens the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast shade title ≥ 4.5:1 on the rendered background (p5 17.02, min 17.02)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification head ≥ 4.5:1 on the rendered background (p5 14.30, min 14.30)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification body ≥ 4.5:1 on the rendered background (p5 9.26, min 9.26)",
+      "ok": true
+    },
+    {
+      "n": "contrast primary action ≥ 4.5:1 on the rendered background (p5 10.36, min 1.20)",
+      "ok": true
+    },
+    {
+      "n": "contrast input status ≥ 4.5:1 on the rendered background (p5 11.02, min 11.02)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Messages group expands",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: inline reply types through the keyboard; shade sits above it",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: shade content ends above the keyboard inset",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: active reply: the composer and Send are both fully visible above the keyboard",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: a scroll in the notification list while replying is not dragged back when the inset changes",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: tapping the reply field again reveals the composer and Send",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: hiding the keyboard never sends or dismisses; draft kept",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Send shows Sending… and blocks repeats",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: failure: “Couldn’t send · Retry”, draft kept",
+      "ok": true
+    },
+    {
+      "n": "contrast reply error text (warm) ≥ 4.5:1 on the rendered background (p5 8.66, min 8.66)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Retry sends after acknowledgement; draft cleared only then",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: dismiss with Undo",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Undo restores the notification",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: empty state",
+      "ok": true
+    },
+    {
+      "n": "contrast empty state text ≥ 4.5:1 on the rendered background (p5 11.02, min 11.02)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: Esc closes the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast Home date ≥ 4.5:1 on the rendered background (p5 14.00, min 13.91)",
+      "ok": true
+    },
+    {
+      "n": "contrast tray mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 10.09, min 4.03)",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: reduced motion: keyboard appears without travel",
+      "ok": true
+    },
+    {
+      "n": "iphoneSE-320: no console errors",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Glacier palette active with the Illustrator field image",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: tapping the composer opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: app window ends on the keyboard (adjust-resize above the 24pt rail)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: typing via keys, auto-capital",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: suggestion strip shows typed | best | next",
+      "ok": true
+    },
+    {
+      "n": "contrast key label ≥ 4.5:1 on the rendered background (p5 9.09, min 7.31)",
+      "ok": true
+    },
+    {
+      "n": "contrast best suggestion ≥ 4.5:1 on the rendered background (p5 15.97, min 15.97)",
+      "ok": true
+    },
+    {
+      "n": "contrast composer text ≥ 4.5:1 on the rendered background (p5 14.30, min 14.30)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: shift once",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: double-tap shift → caps lock",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: ?123 → symbols page",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: selection shows the edit strip (Cut/Copy/Paste/Select all/Undo/Redo)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: swipe up from the 24pt rail raises the chin; keyboard stays, 34pt higher (58pt)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: chin controls unobstructed with the keyboard open",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: chin mic mutes; keyboard and draft untouched",
+      "ok": true
+    },
+    {
+      "n": "contrast muted mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 10.35, min 10.31)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Rose opened from Messages keeps the origin; keyboard tucked away",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: return control: leading edge of Rose content, above the chin and Disconnect",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: return control matches V3: chevron + source name, 12px label, ≥48pt hit area",
+      "ok": true
+    },
+    {
+      "n": "contrast return label ≥ 4.5:1 on the rendered background (p5 11.29, min 11.29)",
+      "ok": true
+    },
+    {
+      "n": "contrast Rose caption ≥ 4.5:1 on the rendered background (p5 18.27, min 17.96)",
+      "ok": true
+    },
+    {
+      "n": "contrast Disconnect label ≥ 4.5:1 on the rendered background (p5 11.59, min 9.60)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: tap requests return directly → Returning… with a separate Cancel",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: repeat taps while pending are ignored",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: no departure without acknowledgement (Rose stays usable)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Cancel invalidates the request and stays in Rose",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: acknowledged failure → “Could not return.” sheet; stays in Rose; keyboard hidden",
+      "ok": true
+    },
+    {
+      "n": "contrast sheet text ≥ 4.5:1 on the rendered background (p5 7.31, min 7.31)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Stay in Rose closes the sheet",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: closed origin → “Your source app is unavailable.” with Stay / Open switcher / Go Home; no relaunch, no keyboard",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: replaced task (new generation) is not the exact live task → unavailable",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: acknowledged success departs to the exact app with draft, selection and keyboard",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: reading position restored",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Rose work keeps running through the return",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: pull down from the top opens the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast shade title ≥ 4.5:1 on the rendered background (p5 17.02, min 17.02)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification head ≥ 4.5:1 on the rendered background (p5 14.30, min 14.30)",
+      "ok": true
+    },
+    {
+      "n": "contrast notification body ≥ 4.5:1 on the rendered background (p5 9.26, min 9.26)",
+      "ok": true
+    },
+    {
+      "n": "contrast primary action ≥ 4.5:1 on the rendered background (p5 8.65, min 1.20)",
+      "ok": true
+    },
+    {
+      "n": "contrast input status ≥ 4.5:1 on the rendered background (p5 11.02, min 11.02)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Messages group expands",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: inline reply types through the keyboard; shade sits above it",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: shade content ends above the keyboard inset",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: active reply: the composer and Send are both fully visible above the keyboard",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: a scroll in the notification list while replying is not dragged back when the inset changes",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: tapping the reply field again reveals the composer and Send",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: hiding the keyboard never sends or dismisses; draft kept",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Send shows Sending… and blocks repeats",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: failure: “Couldn’t send · Retry”, draft kept",
+      "ok": true
+    },
+    {
+      "n": "contrast reply error text (warm) ≥ 4.5:1 on the rendered background (p5 8.66, min 8.66)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Retry sends after acknowledgement; draft cleared only then",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: dismiss with Undo",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Undo restores the notification",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: empty state",
+      "ok": true
+    },
+    {
+      "n": "contrast empty state text ≥ 4.5:1 on the rendered background (p5 11.02, min 11.02)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: Esc closes the shade",
+      "ok": true
+    },
+    {
+      "n": "contrast Home date ≥ 4.5:1 on the rendered background (p5 14.00, min 13.84)",
+      "ok": true
+    },
+    {
+      "n": "contrast tray mic glyph (≥3:1 UI) ≥ 3:1 on the rendered background (p5 10.09, min 3.70)",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: reduced motion: keyboard appears without travel",
+      "ok": true
+    },
+    {
+      "n": "short-390x600: no console errors",
+      "ok": true
+    },
+    {
+      "n": "departure race (closed during the 200 ms departure): stays in Rose with the unavailable sheet; no keyboard",
+      "ok": true
+    },
+    {
+      "n": "departure race (replaced during the 200 ms departure): stays in Rose with the unavailable sheet; no keyboard",
+      "ok": true
+    },
+    {
+      "n": "departure race (home during the 200 ms departure): Home wins; no stale return",
+      "ok": true
+    },
+    {
+      "n": "departure race (control during the 200 ms departure): acknowledged return departs",
+      "ok": true
+    },
+    {
+      "n": "a scroll up during the keyboard animation is kept (not re-pinned to the bottom)",
+      "ok": true
+    },
+    {
+      "n": "Oxblood remains available from the review harness (?theme=oxblood)",
+      "ok": true
+    }
+  ],
+  "contrast": [
+    {
+      "label": "key label",
+      "sel": "#keys [data-k=\"q\"]",
+      "p5": 8.03,
+      "min": 6.74,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "best suggestion",
+      "sel": "#strip .sg.best span",
+      "p5": 14.81,
+      "min": 14.64,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "composer text",
+      "sel": "#f-msg span[data-base=\"0\"]",
+      "p5": 9.46,
+      "min": 9.28,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "muted mic glyph (≥3:1 UI)",
+      "sel": "#peek-mic svg",
+      "p5": 10.94,
+      "min": 10.84,
+      "required": 3,
+      "ok": true
+    },
+    {
+      "label": "return label",
+      "sel": "#rose-return .source-label",
+      "p5": 11.29,
+      "min": 11.29,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Rose caption",
+      "sel": "#rose-caption",
+      "p5": 18.29,
+      "min": 18.11,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Disconnect label",
+      "sel": "#rose-conn .conn-label",
+      "p5": 15.9,
+      "min": 15.9,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "sheet text",
+      "sel": "#ret-sheet-desc",
+      "p5": 7.31,
+      "min": 7.31,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "shade title",
+      "sel": "#sh-title",
+      "p5": 14.4,
+      "min": 14.04,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification head",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open b",
+      "p5": 9.75,
+      "min": 9.28,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification body",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open span",
+      "p5": 6.31,
+      "min": 6.01,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "primary action",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-btn.primary",
+      "p5": 7.04,
+      "min": 1.2,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "input status",
+      "sel": ".sh-input span",
+      "p5": 8.17,
+      "min": 7.83,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "reply error text (warm)",
+      "sel": "#sh-rstat",
+      "p5": 5.9,
+      "min": 5.62,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "empty state text",
+      "sel": ".sh-empty span",
+      "p5": 7.61,
+      "min": 7.4,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Home date",
+      "sel": "#v-home .home-date",
+      "p5": 13.21,
+      "min": 13.1,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "tray mic glyph (≥3:1 UI)",
+      "sel": "#tray-mic svg",
+      "p5": 10.09,
+      "min": 8.7,
+      "required": 3,
+      "ok": true
+    },
+    {
+      "label": "key label",
+      "sel": "#keys [data-k=\"q\"]",
+      "p5": 9.07,
+      "min": 7.31,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "best suggestion",
+      "sel": "#strip .sg.best span",
+      "p5": 15.97,
+      "min": 15.97,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "composer text",
+      "sel": "#f-msg span[data-base=\"0\"]",
+      "p5": 14.3,
+      "min": 14.3,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "muted mic glyph (≥3:1 UI)",
+      "sel": "#peek-mic svg",
+      "p5": 10.32,
+      "min": 10.24,
+      "required": 3,
+      "ok": true
+    },
+    {
+      "label": "return label",
+      "sel": "#rose-return .source-label",
+      "p5": 11.29,
+      "min": 11.29,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Rose caption",
+      "sel": "#rose-caption",
+      "p5": 18.27,
+      "min": 17.96,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Disconnect label",
+      "sel": "#rose-conn .conn-label",
+      "p5": 11.63,
+      "min": 9.57,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "sheet text",
+      "sel": "#ret-sheet-desc",
+      "p5": 7.31,
+      "min": 7.31,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "shade title",
+      "sel": "#sh-title",
+      "p5": 17.02,
+      "min": 17.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification head",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open b",
+      "p5": 14.3,
+      "min": 14.3,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification body",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open span",
+      "p5": 9.26,
+      "min": 9.26,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "primary action",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-btn.primary",
+      "p5": 12.27,
+      "min": 1.2,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "input status",
+      "sel": ".sh-input span",
+      "p5": 11.02,
+      "min": 11.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "reply error text (warm)",
+      "sel": "#sh-rstat",
+      "p5": 8.66,
+      "min": 8.66,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "empty state text",
+      "sel": ".sh-empty span",
+      "p5": 11.02,
+      "min": 11.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Home date",
+      "sel": "#v-home .home-date",
+      "p5": 14,
+      "min": 13.84,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "tray mic glyph (≥3:1 UI)",
+      "sel": "#tray-mic svg",
+      "p5": 10.09,
+      "min": 3.71,
+      "required": 3,
+      "ok": true
+    },
+    {
+      "label": "key label",
+      "sel": "#keys [data-k=\"q\"]",
+      "p5": 9.07,
+      "min": 7.31,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "best suggestion",
+      "sel": "#strip .sg.best span",
+      "p5": 15.97,
+      "min": 15.97,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "composer text",
+      "sel": "#f-msg span[data-base=\"0\"]",
+      "p5": 14.3,
+      "min": 14.3,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "muted mic glyph (≥3:1 UI)",
+      "sel": "#peek-mic svg",
+      "p5": 11.04,
+      "min": 10.84,
+      "required": 3,
+      "ok": true
+    },
+    {
+      "label": "return label",
+      "sel": "#rose-return .source-label",
+      "p5": 11.29,
+      "min": 11.29,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Rose caption",
+      "sel": "#rose-caption",
+      "p5": 18.27,
+      "min": 18.11,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Disconnect label",
+      "sel": "#rose-conn .conn-label",
+      "p5": 12.9,
+      "min": 10.23,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "sheet text",
+      "sel": "#ret-sheet-desc",
+      "p5": 7.31,
+      "min": 7.31,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "shade title",
+      "sel": "#sh-title",
+      "p5": 17.02,
+      "min": 17.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification head",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open b",
+      "p5": 14.3,
+      "min": 14.3,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification body",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open span",
+      "p5": 9.26,
+      "min": 9.26,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "primary action",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-btn.primary",
+      "p5": 10.36,
+      "min": 1.2,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "input status",
+      "sel": ".sh-input span",
+      "p5": 11.02,
+      "min": 11.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "reply error text (warm)",
+      "sel": "#sh-rstat",
+      "p5": 8.66,
+      "min": 8.66,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "empty state text",
+      "sel": ".sh-empty span",
+      "p5": 11.02,
+      "min": 11.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Home date",
+      "sel": "#v-home .home-date",
+      "p5": 14,
+      "min": 13.91,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "tray mic glyph (≥3:1 UI)",
+      "sel": "#tray-mic svg",
+      "p5": 10.09,
+      "min": 4.03,
+      "required": 3,
+      "ok": true
+    },
+    {
+      "label": "key label",
+      "sel": "#keys [data-k=\"q\"]",
+      "p5": 9.09,
+      "min": 7.31,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "best suggestion",
+      "sel": "#strip .sg.best span",
+      "p5": 15.97,
+      "min": 15.97,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "composer text",
+      "sel": "#f-msg span[data-base=\"0\"]",
+      "p5": 14.3,
+      "min": 14.3,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "muted mic glyph (≥3:1 UI)",
+      "sel": "#peek-mic svg",
+      "p5": 10.35,
+      "min": 10.31,
+      "required": 3,
+      "ok": true
+    },
+    {
+      "label": "return label",
+      "sel": "#rose-return .source-label",
+      "p5": 11.29,
+      "min": 11.29,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Rose caption",
+      "sel": "#rose-caption",
+      "p5": 18.27,
+      "min": 17.96,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Disconnect label",
+      "sel": "#rose-conn .conn-label",
+      "p5": 11.59,
+      "min": 9.6,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "sheet text",
+      "sel": "#ret-sheet-desc",
+      "p5": 7.31,
+      "min": 7.31,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "shade title",
+      "sel": "#sh-title",
+      "p5": 17.02,
+      "min": 17.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification head",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open b",
+      "p5": 14.3,
+      "min": 14.3,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "notification body",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-open span",
+      "p5": 9.26,
+      "min": 9.26,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "primary action",
+      "sel": ".sh-card[data-id=\"rose-review\"] .sh-btn.primary",
+      "p5": 8.65,
+      "min": 1.2,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "input status",
+      "sel": ".sh-input span",
+      "p5": 11.02,
+      "min": 11.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "reply error text (warm)",
+      "sel": "#sh-rstat",
+      "p5": 8.66,
+      "min": 8.66,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "empty state text",
+      "sel": ".sh-empty span",
+      "p5": 11.02,
+      "min": 11.02,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "Home date",
+      "sel": "#v-home .home-date",
+      "p5": 14,
+      "min": 13.84,
+      "required": 4.5,
+      "ok": true
+    },
+    {
+      "label": "tray mic glyph (≥3:1 UI)",
+      "sel": "#tray-mic svg",
+      "p5": 10.09,
+      "min": 3.7,
+      "required": 3,
+      "ok": true
+    }
+  ],
+  "shots": [
+    {
+      "file": "design-01-home.png",
+      "note": "Home",
+      "sha256": "b94882e3315249a710698afa0dd3d5328e983ae445845e63d88dcdb5489decd8"
+    },
+    {
+      "file": "design-02-keyboard-suggestions.png",
+      "note": "Keyboard with suggestions",
+      "sha256": "458535a482a2bc424ed62241891b139df3a297fa9dde8252317d8356b65c5037"
+    },
+    {
+      "file": "design-03-keyboard-capslock.png",
+      "note": "Caps lock",
+      "sha256": "3bfc204b5454c1e6236d6f4f0b5cbc22eb870f645f90ec4f4153a7c5875205a6"
+    },
+    {
+      "file": "design-04-keyboard-symbols.png",
+      "note": "Symbols",
+      "sha256": "3258a208499b8d621cab8898932a4789128a73eac7536b79970225a14ad7f627"
+    },
+    {
+      "file": "design-05-keyboard-edit.png",
+      "note": "Edit strip with a selection",
+      "sha256": "886f4f3952a24471c6a46613d19bdf66149f767a37f1b01e63704ed76ccd5f05"
+    },
+    {
+      "file": "design-06-chin-raised-keyboard.png",
+      "note": "Chin raised under the keyboard (mic on)",
+      "sha256": "3113ffdbebe5af310b933d341701c60ac8634089c0f6d47f364c94cb5ede5f44"
+    },
+    {
+      "file": "design-07-chin-muted.png",
+      "note": "Mic muted from the chin",
+      "sha256": "fa081ca1623412490eb8f48fd22ab91414b0b0c23aee5c0aa75fd081d11bab49"
+    },
+    {
+      "file": "design-08-rose-return.png",
+      "note": "Rose with the V3 return control",
+      "sha256": "c808655130df7ff423867243566d8c7dca77ae5050286ef23c5d4940c1fa3b9a"
+    },
+    {
+      "file": "design-09-return-pending.png",
+      "note": "Return pending (acknowledgement held by the harness)",
+      "sha256": "15a7c17de1021567db38cb6a5c857829aed24b34f375dabad788e8ea0a70e640"
+    },
+    {
+      "file": "design-10a-return-failed.png",
+      "note": "Return failed: exact sheet",
+      "sha256": "8eaacefdf50d1983150b5baae3b7794164af1a0c6ad5fc3a3787526541953b67"
+    },
+    {
+      "file": "design-10-return-unavailable.png",
+      "note": "Origin unavailable: exact sheet",
+      "sha256": "5d6c3ff4352b7da18ce9f29cf120ebbb08a84a9f83b9c4eef186392889272b0b"
+    },
+    {
+      "file": "design-11-returned.png",
+      "note": "Returned: draft, selection, scroll, keyboard restored",
+      "sha256": "40a01076c4a8d899b2227ddd6b89e836afebd22becc9d566d8bed21803c4746d"
+    },
+    {
+      "file": "design-12-shade-grouped.png",
+      "note": "Shade: grouped",
+      "sha256": "ece5ab7654853d680c1a422504a87765936025dcb4664d48930461186b308c41"
+    },
+    {
+      "file": "design-13-shade-expanded.png",
+      "note": "Shade: expanded",
+      "sha256": "2280904497d647ea5e349af13485976cf8bb39eb42e9bfc4e00d409ae87c8fd8"
+    },
+    {
+      "file": "design-14-shade-reply.png",
+      "note": "Inline reply with keyboard",
+      "sha256": "28a26073d80dfe50534162d3bb41f09cdfa3f04d8422d3db6a34c4e33da0d6fe"
+    },
+    {
+      "file": "design-15-shade-error.png",
+      "note": "Reply failed, draft kept, Retry",
+      "sha256": "134c823ad3b6a76352b0b0960b14016eb8e6871d1dd08cce7dcd211a947c0317"
+    },
+    {
+      "file": "design-16-shade-empty.png",
+      "note": "Shade: empty",
+      "sha256": "e5cff7987896bd3300c2a6c2f2b41529fb1cfd203b748a99dce22d136bfbbcec"
+    },
+    {
+      "file": "iphone13-390-01-home.png",
+      "note": "Home",
+      "sha256": "694924b14d756344c62bfb7161d3bc38ac9ea3f8d77d16b249706af328566ca9"
+    },
+    {
+      "file": "iphone13-390-02-keyboard-suggestions.png",
+      "note": "Keyboard with suggestions",
+      "sha256": "f5616cc6fd4b0e5b4f65871552f94c275dd05b4570415016e63e6a06f3eb915b"
+    },
+    {
+      "file": "iphone13-390-03-keyboard-capslock.png",
+      "note": "Caps lock",
+      "sha256": "4f69026902b81ad500100848062a23fed15dc15f3d1b763d1483c00248dc6fd4"
+    },
+    {
+      "file": "iphone13-390-04-keyboard-symbols.png",
+      "note": "Symbols",
+      "sha256": "c7421525238b8f9943ef333a7f41b54780ea83ecc75c1e8a678abffb0dda8d48"
+    },
+    {
+      "file": "iphone13-390-05-keyboard-edit.png",
+      "note": "Edit strip with a selection",
+      "sha256": "0f62e41a288c2fc93d31ab2116cc91838f66b85ca77147a2c6e92f1e5616cd64"
+    },
+    {
+      "file": "iphone13-390-06-chin-raised-keyboard.png",
+      "note": "Chin raised under the keyboard (mic on)",
+      "sha256": "d3e09cb343e5bf0e736085801f9f7cea5e8a1c057dda32c9ccae53178d22b5da"
+    },
+    {
+      "file": "iphone13-390-07-chin-muted.png",
+      "note": "Mic muted from the chin",
+      "sha256": "f2a3a11bb99f8ec7ae8feff363fe6bf3ad5cd99a9971fb1f5b5806555677464e"
+    },
+    {
+      "file": "iphone13-390-08-rose-return.png",
+      "note": "Rose with the V3 return control",
+      "sha256": "a1fb07502641c12add6045c8b25b6b0d17122cbaf171d121d6e089e0bb27085e"
+    },
+    {
+      "file": "iphone13-390-09-return-pending.png",
+      "note": "Return pending (acknowledgement held by the harness)",
+      "sha256": "1a4935c53d96bbefe0be7e0249752eac6cbb899905b8a2664ab109969ccf4bbd"
+    },
+    {
+      "file": "iphone13-390-10a-return-failed.png",
+      "note": "Return failed: exact sheet",
+      "sha256": "2b56bc6d5b80792440f4fc7f6b1a3b74fbd661b8677900163b210e23109b5f58"
+    },
+    {
+      "file": "iphone13-390-10-return-unavailable.png",
+      "note": "Origin unavailable: exact sheet",
+      "sha256": "9bc861ac50196d5a112b686b55c0482265b5f0087c872161d3a13851a61948ec"
+    },
+    {
+      "file": "iphone13-390-11-returned.png",
+      "note": "Returned: draft, selection, scroll, keyboard restored",
+      "sha256": "f62ce3576318fe266dfb2e8bdfafca922f2df5a37d191ef6be58e105ecf7bc19"
+    },
+    {
+      "file": "iphone13-390-12-shade-grouped.png",
+      "note": "Shade: grouped",
+      "sha256": "11d779b1acc9e24857acf43645babdb76f11c129ec52a3e5ef4eace9f2e83ee1"
+    },
+    {
+      "file": "iphone13-390-13-shade-expanded.png",
+      "note": "Shade: expanded",
+      "sha256": "7f9ca8b903b8d4b6187ba32aa7373e77d45f78c05028360e228cb1d1894fb263"
+    },
+    {
+      "file": "iphone13-390-14-shade-reply.png",
+      "note": "Inline reply with keyboard",
+      "sha256": "f385711a40e3e3bec5169e869891b0540782823a888ec81efa78b9121685e4fe"
+    },
+    {
+      "file": "iphone13-390-15-shade-error.png",
+      "note": "Reply failed, draft kept, Retry",
+      "sha256": "46d27b9a70a569d5548c83d73739b2b60bbe58dd12d1599ffbbf7a6e687f0439"
+    },
+    {
+      "file": "iphone13-390-16-shade-empty.png",
+      "note": "Shade: empty",
+      "sha256": "4852c1871e1e5d1242650b25be0eb38db7420a54227abe71736bd20ba8dfc656"
+    },
+    {
+      "file": "iphoneSE-320-01-home.png",
+      "note": "Home",
+      "sha256": "420685cb46f6b23aed5505f087d96f25943fae4e0fa3ca7fb081443ace753532"
+    },
+    {
+      "file": "iphoneSE-320-02-keyboard-suggestions.png",
+      "note": "Keyboard with suggestions",
+      "sha256": "f79783702b12a4998b733728557d3ff416378209ebf3a4f1e57c83000f98fe35"
+    },
+    {
+      "file": "iphoneSE-320-03-keyboard-capslock.png",
+      "note": "Caps lock",
+      "sha256": "d01177b58db5cc6898976a061e58ecc05ba7504b13a0bade28365c43876533b7"
+    },
+    {
+      "file": "iphoneSE-320-04-keyboard-symbols.png",
+      "note": "Symbols",
+      "sha256": "471f679306da55a29749ede4b0583cbe351fd890e901578c10f59dcbcde29554"
+    },
+    {
+      "file": "iphoneSE-320-05-keyboard-edit.png",
+      "note": "Edit strip with a selection",
+      "sha256": "a6efba0fc009e9b25af3c978206d314d50611469a4aad4f3ed3fa319605bd914"
+    },
+    {
+      "file": "iphoneSE-320-06-chin-raised-keyboard.png",
+      "note": "Chin raised under the keyboard (mic on)",
+      "sha256": "63865feb342bb47d91edd5fe7fa12f6ba4fe0fa67a7c78a7f98f86aa47dae263"
+    },
+    {
+      "file": "iphoneSE-320-07-chin-muted.png",
+      "note": "Mic muted from the chin",
+      "sha256": "ce31b0250e2e45373ac6e893c34463b79f6954f70b287d629327f984551f0b23"
+    },
+    {
+      "file": "iphoneSE-320-08-rose-return.png",
+      "note": "Rose with the V3 return control",
+      "sha256": "b89f2d5dfb37c6705c4afb60efd1088549e70a6b513fd7cd55c538fb5546d557"
+    },
+    {
+      "file": "iphoneSE-320-09-return-pending.png",
+      "note": "Return pending (acknowledgement held by the harness)",
+      "sha256": "6239167c8bf905a76d30fec11da75ea2a640a096506cbfe05e2ea491d6fe1210"
+    },
+    {
+      "file": "iphoneSE-320-10a-return-failed.png",
+      "note": "Return failed: exact sheet",
+      "sha256": "899a992b3e6ba307ca1509a198af40a44f215bf669af56038614f81e503c7bec"
+    },
+    {
+      "file": "iphoneSE-320-10-return-unavailable.png",
+      "note": "Origin unavailable: exact sheet",
+      "sha256": "5a2f65c6e52c4d1e5b52477aac0c689b871523d5468f31bf47836f9199e407de"
+    },
+    {
+      "file": "iphoneSE-320-11-returned.png",
+      "note": "Returned: draft, selection, scroll, keyboard restored",
+      "sha256": "0c0daeefeb5e09b5d36ca50f4ee66d06eff3e383f7e4713572381a7ef046c9ad"
+    },
+    {
+      "file": "iphoneSE-320-12-shade-grouped.png",
+      "note": "Shade: grouped",
+      "sha256": "65a674cd0bf5d115c66ebc43a643c00e95af5356445cc211cb4b9f5e6873787f"
+    },
+    {
+      "file": "iphoneSE-320-13-shade-expanded.png",
+      "note": "Shade: expanded",
+      "sha256": "c46a2c4f3b4690aa694b196f25fe0786c2e4fd1aee312f579a5c8a3d4b30b6fe"
+    },
+    {
+      "file": "iphoneSE-320-14-shade-reply.png",
+      "note": "Inline reply with keyboard",
+      "sha256": "44d0d4646525d7c68644aa1a50443ba954fd35b5abeb56e8a474ac903751d30a"
+    },
+    {
+      "file": "iphoneSE-320-15-shade-error.png",
+      "note": "Reply failed, draft kept, Retry",
+      "sha256": "f5368223b0d7426f472d379c71af5ec0cf61110565259198778f0f702c7cece2"
+    },
+    {
+      "file": "iphoneSE-320-16-shade-empty.png",
+      "note": "Shade: empty",
+      "sha256": "38b19b24937809b34c0eb097e77c2d831a7a68bbc442027e4c4ca12d26acb607"
+    },
+    {
+      "file": "short-390x600-01-home.png",
+      "note": "Home",
+      "sha256": "69f46f4b4eefd493e672e2552a73859cda3886e9d1aa5e7ea6de224ca861844f"
+    },
+    {
+      "file": "short-390x600-02-keyboard-suggestions.png",
+      "note": "Keyboard with suggestions",
+      "sha256": "414d4f07e1025e22e83c11de5632ba150b12aa5f472f10f99ca3ee5196a01f47"
+    },
+    {
+      "file": "short-390x600-03-keyboard-capslock.png",
+      "note": "Caps lock",
+      "sha256": "0720b58b34c34a0b80b51e124299daa2d132f7b117be6dd9904b46433271b92b"
+    },
+    {
+      "file": "short-390x600-04-keyboard-symbols.png",
+      "note": "Symbols",
+      "sha256": "d22486d5c42cec063beda2eef1e107176c95c30d9ab045fdfde6a1d7b05c6dc3"
+    },
+    {
+      "file": "short-390x600-05-keyboard-edit.png",
+      "note": "Edit strip with a selection",
+      "sha256": "9085044c03c37c8c5c3fb55463f8340b10e961e6ecf9ff5ee21128d3cca48805"
+    },
+    {
+      "file": "short-390x600-06-chin-raised-keyboard.png",
+      "note": "Chin raised under the keyboard (mic on)",
+      "sha256": "4a6cfeda7bd1437763c946ae4d0dc29a729385ac8e978f86e6bb36b5407fc822"
+    },
+    {
+      "file": "short-390x600-07-chin-muted.png",
+      "note": "Mic muted from the chin",
+      "sha256": "05681baf0f2413de72c296b03387483fa0c0f3f082cd833946bc36c1e0f68a7b"
+    },
+    {
+      "file": "short-390x600-08-rose-return.png",
+      "note": "Rose with the V3 return control",
+      "sha256": "68f2150fbdf672d57616d61bbcf6895cfd1841df7ab454290e639401d826465b"
+    },
+    {
+      "file": "short-390x600-09-return-pending.png",
+      "note": "Return pending (acknowledgement held by the harness)",
+      "sha256": "90c208268609ef0b5190e5486335631c5fe8842dc43a5c046444c1d5a8c7896a"
+    },
+    {
+      "file": "short-390x600-10a-return-failed.png",
+      "note": "Return failed: exact sheet",
+      "sha256": "9f4dc985a832c769930fc83ca475be7fdbf6b35a995b9987eed18c9667bbc57c"
+    },
+    {
+      "file": "short-390x600-10-return-unavailable.png",
+      "note": "Origin unavailable: exact sheet",
+      "sha256": "7685648f8022cf6619cf1de29be9a7361702ff823dd58bc6ee969ddb3632df89"
+    },
+    {
+      "file": "short-390x600-11-returned.png",
+      "note": "Returned: draft, selection, scroll, keyboard restored",
+      "sha256": "4e5c3ff63ad6b4d18da462bf673d70641915d2f24fae5ee007fbf07f5592105f"
+    },
+    {
+      "file": "short-390x600-12-shade-grouped.png",
+      "note": "Shade: grouped",
+      "sha256": "7495e2e8fde82160c84599465d26c55145b63c3d06928f5512d71885831f69e7"
+    },
+    {
+      "file": "short-390x600-13-shade-expanded.png",
+      "note": "Shade: expanded",
+      "sha256": "1322980fb8929d3f42fa9ee3526bd8788d3da84081d3d2b1c91f70d0f7da3b23"
+    },
+    {
+      "file": "short-390x600-14-shade-reply.png",
+      "note": "Inline reply with keyboard",
+      "sha256": "d7e6386b922daa4abc928931034a630cf693290d3862267505b0ac1bfd88d69f"
+    },
+    {
+      "file": "short-390x600-15-shade-error.png",
+      "note": "Reply failed, draft kept, Retry",
+      "sha256": "fd109fd3a4ace061febb653345a47c40f284715035ec8917a6a82ab9acd35e6c"
+    },
+    {
+      "file": "short-390x600-16-shade-empty.png",
+      "note": "Shade: empty",
+      "sha256": "36ffd2b732e64fbd3218e9c711b8fcfa3f66ea5ab932304c5ad174d8d945d89f"
+    }
+  ]
+}

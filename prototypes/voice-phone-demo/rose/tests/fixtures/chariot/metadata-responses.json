@@ -1,0 +1,38 @@
+{
+  "description": "Consumer contract fixtures from synthetic bytes and an explicit fake verifier; no APK signing/install proof or live URLs.",
+  "origin": "https://downloads.example.invalid",
+  "app_id": "11111111-1111-4111-8111-111111111111",
+  "published": {
+    "path": "/apps/11111111-1111-4111-8111-111111111111/releases/1/metadata",
+    "status": 200,
+    "headers": {"cache-control": "public, max-age=600"},
+    "json": {
+      "app_id": "11111111-1111-4111-8111-111111111111",
+      "display_name": "Counter",
+      "package_name": "com.example.app",
+      "version_code": 1,
+      "version_name": "1.1",
+      "signer_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sha256": "82f001d69d6b74a272b0fde9013c81450c038a7b3167af108206049849d4ee80",
+      "size_bytes": 25,
+      "links": {
+        "app": "https://downloads.example.invalid/apps/11111111-1111-4111-8111-111111111111",
+        "latest": "https://downloads.example.invalid/apps/11111111-1111-4111-8111-111111111111/latest",
+        "release": "https://downloads.example.invalid/apps/11111111-1111-4111-8111-111111111111/releases/1",
+        "download": "https://downloads.example.invalid/apps/11111111-1111-4111-8111-111111111111/releases/1/app.apk"
+      }
+    }
+  },
+  "absent": {
+    "path": "/apps/11111111-1111-4111-8111-111111111111/releases/2/metadata",
+    "status": 404,
+    "headers": {"cache-control": "no-store"},
+    "json": {"detail": "release not found"}
+  },
+  "unavailable": {
+    "path": "/apps/11111111-1111-4111-8111-111111111111/releases/1/metadata",
+    "status": 503,
+    "headers": {"cache-control": "no-store", "retry-after": "60"},
+    "json": {"detail": "release store unavailable"}
+  }
+}

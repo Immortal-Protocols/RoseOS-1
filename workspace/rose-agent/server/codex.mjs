@@ -1,7 +1,7 @@
 import {spawn,spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {EventEmitter} from 'node:events';
-import {readFileSync,writeFileSync,mkdirSync,copyFileSync,renameSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,copyFileSync,renameSync,readdirSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -13,11 +13,12 @@ import {BasetenGateway,BASETEN_MODEL,BASETEN_PROVIDER} from './baseten/gateway.m
 import {CerebrasGateway,CEREBRAS_MODEL,CEREBRAS_PROVIDER} from './cerebras/gateway.mjs';
 import {EvaluationGateway,EVALUATION_PROVIDER} from './evaluation-gateway.mjs';
 import {researchConfig,verifyResearchMcp,supportsResearchVersion} from './life-research.mjs';
+import {appBuildConfig,appBuildSandbox} from './app-build.mjs';
 export class Codex extends EventEmitter {
  constructor(root,state,apiKeyFile=null,runtime={}){super();this.root=root;this.state=state;this.apiKeyFile=apiKeyFile;this.runtime=runtime;this.authMode=null;this.seq=0;this.pending=new Map();this.active=null;this.thread=null;this.starting=null;this.switchingTurns=new Set();this.endedTurns=new Set();this.provider='openai';this.providerThreads={};this.policyHashes={};this.memoryRevisions={};this.unstartedThread=false;}
  async init(){
   if(this.runtime.externalPhone&&this.apiKeyFile)throw Object.assign(Error('Sign in with ChatGPT is required'),{code:'chatgpt_login_required'});
-  if(this.runtime.publicResearch||this.runtime.characterLife){
+  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild){
    const version=spawnSync(process.env.PIXEL_CODEX_BIN||'codex',['--version'],{encoding:'utf8',timeout:3000,maxBuffer:4096});
    if(version.status!==0||!supportsResearchVersion(version.stdout||''))
     throw Object.assign(Error('Research requires a compatible Codex tool-isolation contract'),{code:'research_isolation_unavailable'});
@@ -36,11 +37,14 @@ export class Codex extends EventEmitter {
   const providerArgs=[],providerEnv={};let catalogPath=((process.env.PIXEL_VOICE_CONFIG_DIR||(process.env.HOME+"/.config/pixel-voice"))+"/model-catalog.json");
   if(this.runtime.publicResearch||this.runtime.characterLife)for(const name of ['hooks','memories','apps','plugins','shell_tool','multi_agent','view_image'])
    providerArgs.push('-c','features.'+name+'=false');
-  if(this.runtime.publicResearch||this.runtime.characterLife)providerArgs.push('-c','project_doc_max_bytes=0');
+  // app_build keeps only the sandboxed shell, which writing source needs (app-build.mjs).
+  if(this.runtime.appBuild)for(const name of ['hooks','memories','apps','plugins','multi_agent','view_image'])
+   providerArgs.push('-c','features.'+name+'=false');
+  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild)providerArgs.push('-c','project_doc_max_bytes=0');
   // This known ambient MCP is excluded before the research app-server starts.
   // Shared configuration and ordinary voice/desktop launches are unchanged;
   // effective-config and runtime checks still refuse any other enabled MCP.
-  if(this.runtime.publicResearch||this.runtime.characterLife)providerArgs.push('-c','mcp_servers.node_repl.enabled=false');
+  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild)providerArgs.push('-c','mcp_servers.node_repl.enabled=false');
   if(this.runtime.baseten?.enabled){
    this.baseten=await new BasetenGateway(this.runtime.baseten).listen();
    const catalog=JSON.parse(readFileSync(catalogPath,'utf8'));
@@ -83,7 +87,7 @@ export class Codex extends EventEmitter {
    for(const [key,value] of Object.entries({name:'Controlled Pixel evaluation',base_url:this.evaluation.url,wire_api:'responses',env_key:'PIXEL_EVALUATION_TOKEN',request_max_retries:0,stream_max_retries:0}))providerArgs.push('-c','model_providers.'+EVALUATION_PROVIDER+'.'+key+'='+JSON.stringify(value));
    providerEnv.PIXEL_EVALUATION_TOKEN=this.evaluation.token;
   }
-  this.child=spawn(process.env.PIXEL_CODEX_BIN||(this.runtime.externalPhone?'codex':'/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'),['app-server','--listen','stdio://','-c','agents.enabled=true','-c','tool_output_token_limit=15000',...providerArgs,...(this.apiKeyFile?['-c','cli_auth_credentials_store="ephemeral"','-c','model_catalog_json='+JSON.stringify(catalogPath)]:[])],{cwd:this.root,stdio:['pipe','pipe','pipe'],env:{...process.env,...providerEnv,...(this.baseten?{PIXEL_BASETEN_GATEWAY_TOKEN:this.baseten.token}:{})}});
+  this.child=spawn(process.env.PIXEL_CODEX_BIN||(this.runtime.externalPhone?'codex':'/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'),['app-server','--listen','stdio://','-c','agents.enabled=true','-c','tool_output_token_limit=15000',...providerArgs,...(this.apiKeyFile?['-c','cli_auth_credentials_store="ephemeral"','-c','model_catalog_json='+JSON.stringify(catalogPath)]:[])],{cwd:this.root,stdio:['pipe','pipe','pipe'],...(this.runtime.appBuild?{detached:true}:{}),env:{...process.env,...providerEnv,...(this.baseten?{PIXEL_BASETEN_GATEWAY_TOKEN:this.baseten.token}:{})}});
   this.child.stderr.on('data',()=>{});
   this.child.on('error',()=>this.emit('failure','Codex process failed to start'));
   this.child.on('exit',()=>{this.evaluation?.close();this.baseten?.close();this.cerebras?.close();for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new Error('Codex process stopped'));}this.pending.clear();this.emit('failure','Codex process stopped');});
@@ -170,23 +174,24 @@ export class Codex extends EventEmitter {
   if(!tier)throw Object.assign(Error('Terra Fast mode is unavailable to this account'),{code:'fast_unavailable'});
   this.serviceTier=tier.id;
   let isolated;
-  if(this.runtime.publicResearch||this.runtime.characterLife){
-   try{isolated=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)isolated.web_search='disabled';}
+  const isolation=config=>this.runtime.appBuild?appBuildConfig(config):researchConfig(config);
+  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild){
+   try{isolated=isolation((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)isolated.web_search='disabled';}
    catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
   }
   const r=await this.rpc('thread/start',{...options,model,modelProvider:'openai',ephemeral:true,
-   sandbox:'read-only',serviceTier:this.serviceTier,
+   sandbox:this.runtime.appBuild?'workspace-write':'read-only',serviceTier:this.serviceTier,
    ...((this.runtime.publicResearch||this.runtime.characterLife)?{environments:[]}:{}),
    config:isolated??{web_search:'disabled','features.fast_mode':true,'features.shell_tool':false,
     'features.apps':false,'features.multi_agent':false}});
   this.thread=r.thread.id;this.selectedModel=r.model;this.actualServiceTier=r.serviceTier;
   if(r.model!==model||!['fast','priority'].includes(r.serviceTier))
    throw Object.assign(Error('Requested Terra Fast mode was not selected'),{code:'model_mode_mismatch'});
-  if(this.runtime.publicResearch||this.runtime.characterLife){
+  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild){
    try{
     // Recheck after thread creation and before sending a topic. There is no
     // public atomic MCP deny-all field; live configuration changes are refused.
-    const current=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)current.web_search='disabled';
+    const current=isolation((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)current.web_search='disabled';
     if(JSON.stringify(current)!==JSON.stringify(isolated))throw Error('Research config changed');
     const names=Object.keys(isolated).filter(k=>k.startsWith('mcp_servers.')).map(k=>k.slice(12,-8));
     await verifyResearchMcp(this.rpc.bind(this),this.thread,names);
@@ -274,6 +279,7 @@ export class Codex extends EventEmitter {
  close(){this.child?.kill();}
  async closeConfirmed(waitMs=1500){
   const child=this.child;
+  if(this.runtime.appBuild&&child?.pid)return this.closeGroupConfirmed(child,waitMs);
   if(!child||child.exitCode!==null&&child.exitCode!==undefined||child.signalCode)return true;
   const wait=()=>new Promise(resolve=>{
    const ended=()=>{clearTimeout(timer);resolve(true);};
@@ -284,6 +290,34 @@ export class Codex extends EventEmitter {
   if(await ended)return true;
   ended=wait();child.kill('SIGKILL');
   return await ended;
+ }
+ // app_build: the writer's shell can leave processes behind, so a stop counts only once the app-server's whole
+ // process group is gone. A process that leaves the group (setsid) is not covered: the builder only ever reads a
+ // snapshot taken after this, and real containment is a separate user or container (docs/APP-BUILDER.md §5).
+ async closeGroupConfirmed(child,waitMs){
+  const group=-child.pid;
+  const alive=()=>{
+   try{process.kill(group,0);}catch(error){return error.code!=='ESRCH';}
+   // Killed members keep the group id as zombies until init reaps them, which can take seconds, and a zombie
+   // cannot write. Where /proc exists, count only members that are not zombies; elsewhere any member counts.
+   let pids;try{pids=readdirSync('/proc').filter(name=>/^\d+$/.test(name));}catch{return true;}
+   return pids.some(pid=>{
+    try{const stat=readFileSync('/proc/'+pid+'/stat','utf8'),fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');
+     return fields[0]!=='Z'&&Number(fields[2])===child.pid;}
+    catch{return false;}  // exited while it was read
+   });
+  };
+  const exited=()=>child.exitCode!==null&&child.exitCode!==undefined||!!child.signalCode;
+  const signal=name=>{try{process.kill(group,name);}catch{}};
+  const gone=async()=>{const end=Date.now()+waitMs;
+   while(Date.now()<end){if(exited()&&!alive())return true;await new Promise(resolve=>setTimeout(resolve,20));}
+   return exited()&&!alive();};
+  // SIGTERM lets the app-server exit cleanly. SIGKILL then always follows: a clean scan alone proves nothing while
+  // members can still fork, but a group SIGKILL is delivered to every member at once, after which the scan is sound.
+  signal('SIGTERM');
+  await gone();
+  signal('SIGKILL');
+  return gone();
  }
  async interrupt(){if(this.active)return this.rpc('turn/interrupt',{threadId:this.thread,turnId:this.active});}
  rpc(method,params){return new Promise((resolve,reject)=>{const id=++this.seq;const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(method+' timed out'));},45000);this.pending.set(id,{resolve,reject,timer});this.child.stdin.write(JSON.stringify({id,method,params})+'\n');});}
@@ -304,5 +338,5 @@ export class Codex extends EventEmitter {
  // origin: the task this new turn is created for. The turn is bound to it once, at creation
  // (turn/started or the turn/start response, whichever arrives first), via 'turnCreated'.
  bindCreatedTurn(turnId){const origin=this.creatingTurnFor;if(origin===undefined||!turnId)return;this.creatingTurnFor=undefined;this.emit('turnCreated',{turnId,origin});}
- async submit(text,route={model:"gpt-6-luna",effort:"medium",serviceTier:"priority"},attachments=[],origin=null){if(this.runtime.externalPhone){await this.verifyVoiceAccount();if(route.model!==this.selectedModel||route.serviceTier!==this.serviceTier)throw Error('Voice model and mode are fixed');}await this.prepareRoute(route);await this.ensureInstructions();const input=[{type:'text',text},...attachments];if(this.active){try{return await this.rpc('turn/steer',{threadId:this.thread,expectedTurnId:this.active,input})}catch(e){if(this.active)throw e;}}this.creatingTurnFor=origin;let r;try{r=await this.rpc('turn/start',{threadId:this.thread,input,model:route.model,effort:route.effort,serviceTierForTurn:route.serviceTier??(route.model==='gpt-6-astra'?'ultrafast':'priority')});}catch(error){this.creatingTurnFor=undefined;throw error;}this.bindCreatedTurn(r.turn.id);if(!this.endedTurns.has(r.turn.id))this.active=r.turn.id;this.unstartedThread=false;return r;}
+ async submit(text,route={model:"gpt-6-luna",effort:"medium",serviceTier:"priority"},attachments=[],origin=null){if(this.runtime.externalPhone){await this.verifyVoiceAccount();if(route.model!==this.selectedModel||route.serviceTier!==this.serviceTier)throw Error('Voice model and mode are fixed');}await this.prepareRoute(route);await this.ensureInstructions();const input=[{type:'text',text},...attachments];if(this.active){try{return await this.rpc('turn/steer',{threadId:this.thread,expectedTurnId:this.active,input})}catch(e){if(this.active)throw e;}}this.creatingTurnFor=origin;let r;try{r=await this.rpc('turn/start',{threadId:this.thread,input,model:route.model,effort:route.effort,serviceTierForTurn:route.serviceTier??(route.model==='gpt-6-astra'?'ultrafast':'priority'),...(this.runtime.appBuild?{sandboxPolicy:appBuildSandbox}:{})});}catch(error){this.creatingTurnFor=undefined;throw error;}this.bindCreatedTurn(r.turn.id);if(!this.endedTurns.has(r.turn.id))this.active=r.turn.id;this.unstartedThread=false;return r;}
 }

@@ -223,7 +223,7 @@ def infrastructure_tool_paths():
     return (mustang_ephemeral.NODE['install'], mustang_ephemeral.SDK['aapt'], mustang_ephemeral.SDK['apksigner'])
 
 
-def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
+def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run,*,collection_only=False):
     observed=observe_id()
     paths=host_identity(lane,cfg['dataFilesystemUuid'],lambda:observed,execute,cfg.get('dataMount'))
     space=os.statvfs(paths['home'])
@@ -232,7 +232,8 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     frsize=getattr(space,'f_frsize',0) or getattr(space,'f_bsize',0)
     if not frsize: raise ValueError('dedicated data filesystem has no available bytes/inodes')
     route.evaluate_guest(dict(instanceId=observed,filesystemUuid=cfg['dataFilesystemUuid'],mount=cfg.get('dataMount'),
-        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid()),lane,cfg)
+        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid()),lane,cfg,
+        phase='collection' if collection_only else 'full')
     if not paths['sourceRoot'].is_dir() or not paths['storageRoot'].is_dir():
         raise ValueError('dedicated source/storage must already be prepared')
     if any(os.stat(paths[key]).st_dev!=os.stat(paths['home']).st_dev for key in ('sourceRoot','storageRoot')):
@@ -442,7 +443,16 @@ def fetch_inputs(record_path,out,read=None,lane=None,cfg=None,root=ROOT):
 def context(publish=False):
     lane=mustang_lane.configuration()
     dry=os.environ.get('MUSTANG_DRY_RUN')=='true'
-    cfg=guard(lane,load(CONFIG),os.environ,publish,dry_run=dry)
+    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN') in ('43074045726','43150538877'):
+        import mustang_artifact_delivery
+        event=load(os.environ['GITHUB_EVENT_PATH'])
+        cfg=mustang_artifact_delivery.publisher_context(lane,load(CONFIG),os.environ,event,root=ROOT,publish=publish,
+            selected=os.environ['MUSTANG_RETAINED_COMPILE_RUN'])
+        if os.environ['MUSTANG_RETAINED_COMPILE_RUN']=='43150538877':
+            import mustang_signed_delivery
+            mustang_signed_delivery.authenticate(os.environ,event)
+    else:
+        cfg=guard(lane,load(CONFIG),os.environ,publish,dry_run=dry)
     if subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=os.environ['GITHUB_SHA'] \
             or subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():
         raise ValueError('dedicated checkout differs from the captured clean source')
@@ -451,9 +461,19 @@ def context(publish=False):
 
 def verify(directory,lane,cfg,publish=False):
     r=ota.verify_staged(directory,ota.config(),publication=publish)
+    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN')=='43074045726':
+        import mustang_artifact_delivery
+        compile_context=mustang_artifact_delivery.proof_identity(r.get('artifactProducer'))
+        if (r.get('compileRunId'),r.get('compileRunAttempt'),r.get('candidateSource'))!=compile_context:
+            raise ValueError('staged artifact producer context differs')
+    expected_run,expected_source=os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_SHA']
+    if os.environ.get('MUSTANG_RETAINED_COMPILE_RUN')=='43150538877':
+        import mustang_signed_delivery
+        mustang_signed_delivery.bind(Path(directory).parent,os.environ)
+        expected_run,expected_source=mustang_signed_delivery.RUN,mustang_signed_delivery.SOURCE
     if r.get('builder')!=lane['vm'] or r.get('workflow')!=WORKFLOW \
-            or r.get('runId')!=os.environ['GITHUB_RUN_ID'] or r.get('runAttempt')!=os.environ['GITHUB_RUN_ATTEMPT'] \
-            or r.get('recipeSource')!=os.environ['GITHUB_SHA']:
+            or r.get('runId')!=expected_run or r.get('runAttempt')!='1' \
+            or r.get('recipeSource')!=expected_source:
         raise ValueError('staged OTA differs from this dedicated builder/run/source')
     return r
 
@@ -571,7 +591,8 @@ def main():
             if path.is_file() and not path.is_symlink(): shutil.copyfile(path,out/name)
         if args.dir and Path(args.dir).is_file(): shutil.copyfile(args.dir,out/'baseline.json')
     else:
-        facts=host_check(lane,cfg)
+        import mustang_retained
+        facts=host_check(lane,cfg,collection_only=(args.action in ('collect','recover') or mustang_retained.selected(os.environ)))
         if args.action=='host-check': return 0
         if args.action=='recover':
             import mustang_retained, mustang_bootstrap_collector

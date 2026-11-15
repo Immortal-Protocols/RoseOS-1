@@ -1,0 +1,14 @@
+// RoseOS: the Rose authenticator, the system authenticator for rose-signin-v1 (docs/ROSE-SIGNIN-V1.md, D3/D8).
+// It claims otpauth://totp enrollment links, keeps each secret sealed by an Android Keystore key that works only
+// while the device is unlocked, and shows codes. Platform APIs only; no permission; no network.
+package { default_applicable_licenses: ["Android-Apache-2.0"] }
+
+android_app {
+    name: "RoseAuthenticator",
+    srcs: ["src/**/*.java"],
+    resource_dirs: ["res"],
+    manifest: "AndroidManifest.xml",
+    sdk_version: "current",
+    product_specific: true,
+    dex_preopt: { enabled: false },
+}

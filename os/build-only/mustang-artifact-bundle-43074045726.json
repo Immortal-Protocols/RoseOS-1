@@ -1,0 +1,428 @@
+{
+  "build": "2611111800",
+  "clockAllocation": {
+    "build": "2611111800",
+    "device": "mustang",
+    "integrationDir": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-reconcile-2611111800",
+    "observed": {
+      "clock": {
+        "context": {
+          "createdAt": "2026-11-11T18:03:16Z",
+          "policySha256": "17878c8bb77396dd86b05efa6fae70f213d6572e5f2b90df579578325ee91e5e",
+          "runAttempt": "1",
+          "runId": "43074045726",
+          "runNumber": 46,
+          "schema": "roseos.mustang-clock-context.v1",
+          "source": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+          "workflowId": 408460629
+        },
+        "legacyAllocationKnown": false,
+        "legacySuffixExcluded": "01..99",
+        "originSha256": "17d5c16b6a35e1a0565d2f855b27544568d13fe34889eef53951e3fbfe39316e",
+        "policySha256": "17878c8bb77396dd86b05efa6fae70f213d6572e5f2b90df579578325ee91e5e",
+        "previous": "a043bd1608e17448733c02c82ca3bab21d7f80de78c11b0ebc857e4195a41d33",
+        "publicChannelEvidence": [
+          {
+            "assetId": 707998673,
+            "sha256": "e3ae44d3a55708e060661b7d2038c454cf5e616d678fc6fc1b787059b521049e",
+            "tag": "mustang-2026110401",
+            "timestamp": "1793755347"
+          }
+        ],
+        "publicTimestampFloor": "1793755347",
+        "schema": "roseos.mustang-clock-hour00.v1",
+        "sequence": 8
+      },
+      "consumedBuilds": [
+        "2026110401",
+        "2611091300",
+        "2611091700",
+        "2611101700",
+        "2611102100",
+        "2611110100",
+        "2611110600",
+        "2611111500"
+      ],
+      "mustangStorageEntries": 14,
+      "releasesListed": 111,
+      "reservations": 0
+    },
+    "reservedAt": "2026-11-11T19:02:51Z",
+    "runAttempt": "1",
+    "runId": "43074045726",
+    "schema": "roseos.mustang-allocation.v1",
+    "source": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+    "workDir": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-integrate-2611111800"
+  },
+  "device": "mustang",
+  "fullRunSource": {
+    "copyReceipt": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "copyDataBytesRead": 107141702649,
+      "gitMetadataExcluded": true,
+      "nativeReceiptSha256": "f98e766c006aae23e5ca144d4da289ea6baf5c36e83da3f2199f8a03f0f308a6",
+      "otaAdmitted": false,
+      "portableInventorySha256": "99275651940ff0a293a8868d5013b49d24e2d077be7b30f6219e8539839c875e",
+      "pristine": false,
+      "run": {
+        "runAttempt": "1",
+        "runId": "43074045726",
+        "source": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "schema": "roseos.mustang-full-run-source-copy.v1",
+      "selectedEntryCount": 2047669,
+      "selectionRecordSha256": "9ea64ce311455bfda1073865807a3733cc65e8ba19f019d6116cb224db289e05",
+      "sourceCopyVerified": true,
+      "sourceRoot": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-prep-43074045726-1/source"
+    },
+    "nativeReceipt": {
+      "authenticatedStop": false,
+      "boundsKind": "proposal-ceilings-not-measurements",
+      "checkout": {
+        "bytesRead": 40081264,
+        "gitIndexTrusted": false,
+        "gitOutputBytesRead": 322747,
+        "inventorySha256": "2f57c3f7e33115dd508f12134405aa70b599c54be15f59e59ca8f0640dc14ad0",
+        "source": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+        "trackedEntries": 2987
+      },
+      "checkoutBytesVerified": true,
+      "completedChecks": [
+        "guest-before",
+        "checkout",
+        "bindings",
+        "source",
+        "readback"
+      ],
+      "controllerOwnershipSha256": "27bc276f8b8824d3f42621b7087058910efec49a96b2fb35d0f58282f7e62fc7",
+      "dataFilesystemIdentityObserved": true,
+      "elapsedSeconds": 1731.017,
+      "fullBootstrapVerified": false,
+      "guestChecksPassed": true,
+      "guestIdentityObserved": true,
+      "hostedLifecyclePending": true,
+      "identity": {
+        "builder": {
+          "instance": "roseos-mustang-builder-20261107-a",
+          "instanceId": "5585425566393384049",
+          "project": "protocols-465723",
+          "zone": "us-west2-a"
+        },
+        "device": "8:16",
+        "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+        "filesystem": "ext4",
+        "mount": "/mnt/disks/mustang-data",
+        "pathIdentities": {
+          "checkout": [
+            2064,
+            65553685
+          ],
+          "home": [
+            2064,
+            65536001
+          ],
+          "mount": [
+            2064,
+            2
+          ],
+          "sourceRoot": [
+            2064,
+            65536006
+          ],
+          "storageRoot": [
+            2064,
+            65536007
+          ]
+        }
+      },
+      "limits": {
+        "checkout_bytes": 1073741824,
+        "checkout_entries": 100000,
+        "receipt_bytes": 1048576,
+        "seconds": 7200
+      },
+      "observationKind": "native-read-only",
+      "otaAdmitted": false,
+      "pristine": false,
+      "pristineRuntimeAttestation": false,
+      "publicationStarted": false,
+      "readyForControlledStart": false,
+      "run": {
+        "runAttempt": "1",
+        "runId": "43074045726",
+        "source": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "runIdentityObserved": false,
+      "runtimeWired": false,
+      "schema": "roseos.mustang-bootstrap-collector.v1",
+      "scope": "selected-source-candidate-observation-only",
+      "signingStarted": false,
+      "sourceCandidate": {
+        "attributeScratchCharged": {
+          "bytes": 25055,
+          "directories": 160,
+          "files": 86,
+          "projects": 26
+        },
+        "attributeScratchLimits": {
+          "bytes": 16777216,
+          "directories": 8192,
+          "files": 4096,
+          "projects": 1024
+        },
+        "bounds": {
+          "bytes": 161061273600,
+          "entries": 4000000,
+          "git_command_seconds": 60,
+          "git_output_bytes": 134217728,
+          "git_total_output_bytes": 536870912,
+          "seconds": 7200
+        },
+        "boundsKind": "proposal-ceilings-not-measurements",
+        "checkoutConversionInventorySha256": "540834ef2d17071298c2e73e14d343069708edf551181139e68e7967b7085906",
+        "checkoutConversionPolicy": "pinned-attributes-isolated-crlf-v3",
+        "copyExclusionPolicySha256": "f1cb68fb0b4993cc71e2b347bf5e030219b3cabb61df2664a18f22702334dded",
+        "copyRecipeSha256": "00826d81b2c2bc63120095b22ff0d4f9c2ca4322c7fa8a61ea121fb6b5632332",
+        "dataFilesystemIdentityObserved": false,
+        "declaredBuilder": {
+          "instance": "roseos-mustang-builder-20261107-a",
+          "instanceId": "5585425566393384049",
+          "project": "protocols-465723",
+          "zone": "us-west2-a"
+        },
+        "elapsedSeconds": 1727.341,
+        "excludedContentUnchecked": true,
+        "excludedEntryCount": 1060,
+        "expectedEntryCount": 2014219,
+        "fullBootstrapVerified": false,
+        "gitIndexTrusted": false,
+        "gitOutputBytesRead": 238775051,
+        "gitlinkBoundaryCount": 58,
+        "gitlinkPolicy": "manifest-matched-child-or-no-selected-content",
+        "guestIdentityObserved": false,
+        "hostDependenciesReceiptSha256": "1324d6d8d4bd6c54ec93792f08695e597ca77986b79f023754944b6424a14977",
+        "manifestSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+        "observationRun": {
+          "runAttempt": "1",
+          "runId": "43074045726",
+          "source": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+          "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+        },
+        "otaAdmitted": false,
+        "portableInventorySha256": "99275651940ff0a293a8868d5013b49d24e2d077be7b30f6219e8539839c875e",
+        "preparedPayloadsVerified": true,
+        "preparedReceiptProvenanceVerified": true,
+        "pristine": false,
+        "pristineRuntimeAttestation": false,
+        "projectCount": 1057,
+        "readyForControlledStart": false,
+        "runIdentityObserved": false,
+        "runtimeWired": false,
+        "schema": "roseos.mustang-bootstrap-source-candidate.v1",
+        "selectedCheckoutConvertedEntries": 593,
+        "selectedEntryCount": 2047669,
+        "selectedInventorySha256": "99275651940ff0a293a8868d5013b49d24e2d077be7b30f6219e8539839c875e",
+        "selectedManifestTransferEntries": 11,
+        "selectedNamespaceReadback": true,
+        "selectedPinnedBytesVerified": true,
+        "selectedPinnedEntries": 1665819,
+        "selectedPreparedEntries": 27038,
+        "selectedResolvedManifestEntries": 1,
+        "signingStarted": false,
+        "sourceDataBytesRead": 107393496402,
+        "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+        "success": true,
+        "vendorReceiptSha256": "53397baa8dcb211da3413c100b916521a8078b77ff7ce0d8b5bb7161e827eb95"
+      },
+      "sourceLimits": {
+        "bytes": 161061273600,
+        "entries": 4000000,
+        "git_command_seconds": 60,
+        "git_output_bytes": 134217728,
+        "git_total_output_bytes": 536870912,
+        "seconds": 7200
+      },
+      "spaceAfter": {
+        "availableBytes": 1352201834496,
+        "availableInodes": 173773750,
+        "receiptReserveBytes": 67108864,
+        "receiptReserveInodes": 8,
+        "runtimeReserveVerified": false
+      },
+      "spaceBefore": {
+        "availableBytes": 1352201891840,
+        "availableInodes": 173773749,
+        "receiptReserveBytes": 67108864,
+        "receiptReserveInodes": 8,
+        "runtimeReserveVerified": false
+      },
+      "stage": "readback",
+      "stopOwnedByCollector": false,
+      "success": true,
+      "workflowContextValidated": true,
+      "workflowJob": "builder"
+    },
+    "nativeReceiptSha256": "f98e766c006aae23e5ca144d4da289ea6baf5c36e83da3f2199f8a03f0f308a6"
+  },
+  "generateRelease": {
+    "file": "inputs/generate-release.sh",
+    "sha256": "01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311",
+    "sizeBytes": 10840
+  },
+  "identity": {
+    "avbPublicKeySha256": "608b39aac976984e45ddbc39fc9ebc916f066656d8d4316395c9c408e06dbf2b",
+    "keysSecret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+    "otaCertificateSha256": "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8",
+    "passphraseSecret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+    "secretVersion": "1",
+    "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com"
+  },
+  "jdk": {
+    "file": "inputs/jdk.zip",
+    "sha256": "533336f6494c0c15897da6f2d0f475249a7c96dda76f6f8cab20a8539724b1cc",
+    "sizeBytes": 205780475
+  },
+  "jdkExtractedBytes": 355426634,
+  "otatools": {
+    "file": "inputs/otatools.zip",
+    "sha256": "9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32",
+    "sizeBytes": 536801287
+  },
+  "otatoolsExtractedBytes": 927318429,
+  "runAttempt": "1",
+  "runId": "43074045726",
+  "schema": "roseos.mustang-hosted-signing-bundle.v1",
+  "sourceSha": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+  "timestamp": "1794423771",
+  "toolQualification": {
+    "evidence": "os/build-only/mustang-otatools-42531345133.json",
+    "inspection": "os/build-only/mustang-otatools-inspection-42531345133.json",
+    "inventorySha256": "7e69d987fd0384e169467f1f9ded8c4986d6e9f8e0538f7aa6b4402808dd9912",
+    "packageSha256": "9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32"
+  },
+  "unsigned": {
+    "file": "inputs/unsigned-target_files.zip",
+    "sha256": "c5155e524f155dc82ee1cca8a6bc341e78d1d8fd0770509346998b22fbe37400",
+    "sizeBytes": 4340507995
+  },
+  "unsignedRaisedEdge": {
+    "binding": {
+      "build": "2611111800",
+      "candidateSource": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+      "compileRunAttempt": "1",
+      "compileRunId": "43074045726",
+      "device": "mustang",
+      "recipeSource": "091ea6c486f1421bf06fde571fa4c5a1feda02b6",
+      "runAttempt": "1",
+      "runId": "43074045726",
+      "timestamp": "1794423771"
+    },
+    "checker": {
+      "checker": "scripts/edge_artifact.py",
+      "checkerSha256": "f2b4a3ce0ce1a55167aad9c484b1730fbc2caaac514940cdcbd3ef5f1e34b174",
+      "spec": "os/release-pipeline/frankel.json",
+      "specSha256": "36cbb0eb7053e76558ecf52f100cbb97b406e26947222286e044677b07f285f0"
+    },
+    "evidence": {
+      "apkSha256": {
+        "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk": "780ec6533edb434977dd876cded5d00b76eec0d1f1ac440fe375cdbfd64b0c8a",
+        "SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk": "d695224be5b27ee4434c423af2f6a36fd08ae16133c06812da136fd8681af031"
+      },
+      "classes": [
+        {
+          "apks": [
+            "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk"
+          ],
+          "by": "class",
+          "class": "Lcom/android/quickstep/fallback/RoseEdgeGesture;",
+          "literal": null,
+          "method": null,
+          "pass": true,
+          "unreadable": [],
+          "where": "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk!classes2.dex"
+        },
+        {
+          "apks": [
+            "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk"
+          ],
+          "by": "class",
+          "class": "Lcom/android/quickstep/fallback/RoseEdgeSwipe;",
+          "literal": "persist.wm.debug.rose_edge_diag",
+          "method": null,
+          "pass": true,
+          "unreadable": [],
+          "where": "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk!classes2.dex"
+        },
+        {
+          "apks": [
+            "SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk"
+          ],
+          "by": "class",
+          "class": "Lcom/android/wm/shell/roseedge/RoseEdgeController;",
+          "literal": "com.android.wm.shell.roseedge.IRoseEdge",
+          "method": null,
+          "pass": true,
+          "unreadable": [],
+          "where": "SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk!classes3.dex"
+        },
+        {
+          "apks": [
+            "SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk"
+          ],
+          "by": "class",
+          "class": "Lcom/android/wm/shell/RoseEdgeMicSlot;",
+          "literal": "RoseEdgeMic",
+          "method": null,
+          "pass": true,
+          "unreadable": [],
+          "where": "SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk!classes3.dex"
+        }
+      ],
+      "literals": [
+        {
+          "apks": [
+            "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk"
+          ],
+          "literal": "persist.wm.debug.rose_edge_diag",
+          "pass": true,
+          "unreadable": [],
+          "where": "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk!classes2.dex"
+        }
+      ],
+      "props": [
+        {
+          "conflicting": [],
+          "files": [
+            "SYSTEM/build.prop"
+          ],
+          "pass": true,
+          "prop": "persist.wm.debug.rose_edge=true"
+        },
+        {
+          "conflicting": [],
+          "files": [
+            "SYSTEM/build.prop"
+          ],
+          "pass": true,
+          "prop": "persist.wm.debug.pixel_agent_tray=1"
+        }
+      ]
+    },
+    "failures": [],
+    "schema": "roseos.mustang-edge-proof.v1",
+    "stage": "unsigned",
+    "status": "passed",
+    "targetFiles": {
+      "sha256": "c5155e524f155dc82ee1cca8a6bc341e78d1d8fd0770509346998b22fbe37400",
+      "sizeBytes": 4340507995
+    }
+  },
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml"
+}

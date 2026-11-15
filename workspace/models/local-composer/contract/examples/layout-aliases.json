@@ -1,0 +1,32 @@
+{
+ "title": "Dinner",
+ "sections": [
+  {
+   "component": "grid",
+   "title": "Kitchen",
+   "items": [
+    "a1",
+    "a2",
+    "x1"
+   ]
+  },
+  {
+   "component": "card",
+   "title": "Timer",
+   "items": [
+    "n1"
+   ],
+   "actions": [
+    "x2"
+   ]
+  },
+  {
+   "component": "carousel",
+   "title": "Recipes",
+   "items": [
+    "c1",
+    "c2"
+   ]
+  }
+ ]
+}

@@ -29,8 +29,21 @@ test('the HOME activity identity is unchanged',()=>{
 });
 
 test('HOME and the app icon land on Rose Home; the icon opens the Rose conversation; other opens keep their page',()=>{
- // Page indices are named and set from the built page list (HomePages): Home, then the apps (#223: no Widgets or voice page).
- assert.match(main,/int homePage=0,ourAppsPage=1;\n/);
+ // Page indices are named and set from the built page list (HomePages): Project 2's workspace, Home, then the apps
+ // (#223: no Widgets or voice page).
+ assert.match(main,/int homePage=HomePages\.HOME,ourAppsPage=HomePages\.FIRST_APPS;WorkspacePage workspacePage;\n/);
+ // Project 2: the workspace is the one page before Home. It is added before Home and survives a rebuild; Home, its
+ // dock and the chin are unchanged.
+ const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
+ assert.match(pages,/titles\.add\("Workspace"\);pages\.add\(new ArrayList<>\(\)\);\n  titles\.add\("Home"\);pages\.add\(new ArrayList<>\(\)\);/);
+ assert.ok(pages.indexOf('launcherPager.addView(workspacePage);')>=0&&pages.indexOf('launcherPager.addView(workspacePage);')<pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView('),'the workspace before Home');
+ // A workspace page that fails to build leaves an empty page in its place, so Home is still HomePages.HOME.
+ assert.match(pages,/if\(workspacePage!=null\)launcherPager\.addView\(workspacePage\);else\{View none=new View\(this\);none\.setContentDescription\(titles\.get\(HomePages\.WORKSPACE\)\);launcherPager\.addView\(none\);\}/);
+ assert.match(pages,/if\(workspacePage!=null&&!workspacePage\.theme\.equals\(RoseThemeNow\.id\)\)\{workspacePage\.release\(\);workspacePage=null;\}\n  \/\/ A page that cannot be built never takes Home down[^\n]*\n  if\(workspacePage==null\)try\{workspacePage=new WorkspacePage\(this\);\}catch\(RuntimeException e\)\{workspacePage=null;\}\n  else if\(workspacePage\.getParent\(\) instanceof ViewGroup\)\(\(ViewGroup\)workspacePage\.getParent\(\)\)\.removeView\(workspacePage\);/);
+ assert.match(pages,/if\(workspacePage!=null\)workspacePage\.shown\(HomePages\.workspace\(index\)\);/,'the workspace knows when it is shown (inert otherwise)');
+ // A drag that starts on the workspace's request field or a carousel stays with it. (Back from the workspace, as from
+ // any page, goes to homePage, which is HomePages.HOME: pinned with onBackPressed below.)
+ assert.match(main,/if\(workspacePage!=null&&launcherPager!=null&&HomePages\.workspace\(launcherPager\.currentPage\(\)\)&&workspacePage\.keepsDrag\(event\)\)return false;/,'a drag on the field or a carousel stays with it');
  assert.match(main,/homePage=HomePages\.HOME;ourAppsPage=count>HomePages\.FIRST_APPS\?HomePages\.FIRST_APPS:HomePages\.HOME;\n/,'with no app page, Apps is Home');
  assert.match(main,/int appPages=appEntries\.isEmpty\(\)&&!entries\.isEmpty\(\)\?0:HomeAppLayout\.pages\(appEntries\.size\(\),appPerPage\);/,'no empty overflow page when Home holds every app');
  assert.ok(!/voicePage|widgetsPage|HomePages\.(voice|widgets)\(/.test(main),'no legacy page index remains');
@@ -428,7 +441,9 @@ test('app labels and page dots follow the Oxblood type and dot treatment (#410)'
  assert.ok(!/chatFont\(800\)/.test(label),'not the rounded 800 face');
  // oxblood.css:364-367,514-515: indicator dots 19dp apart; the current page is the view's selected state.
  const dots=main.slice(main.indexOf(' LinearLayout makePageDots('),main.indexOf(' View appTile('));
- assert.match(dots,/TextView dot=new TextView\(this\);dot\.setBackground\(new HomeDot\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);dot\.setTag\(i\);dot\.setSelected\(i==0\);/);
+ // Project 2: the workspace's dot is a star before Home's round dots, and Home's dot is the first one lit.
+ assert.match(dots,/TextView dot=new TextView\(this\);dot\.setBackground\(new HomeDot\(getResources\(\)\.getDisplayMetrics\(\)\.density,HomePages\.workspace\(i\)\)\);dot\.setTag\(i\);dot\.setSelected\(i==HomePages\.HOME\);/);
+ assert.match(dots,/if\(HomePages\.workspace\(i\)\)dot\.setContentDescription\(titles\.get\(i\)\);/);
  assert.match(dots,/new LinearLayout\.LayoutParams\(dp\(19\),dp\(HomeFrame\.DOTS_DP\)\)/);
  assert.ok(!/setOnClickListener/.test(dots),'the dots are an indicator only');
  assert.ok(!/●/.test(dots)&&!/dot\.setAlpha/.test(main),'no glyph dots or alpha dimming');
@@ -439,6 +454,10 @@ test('app labels and page dots follow the Oxblood type and dot treatment (#410)'
  assert.match(dot,/if \(s == android\.R\.attr\.state_selected\) now = true;/);
  const draw=dot.slice(dot.indexOf('@Override public void draw('),dot.indexOf('@Override public boolean isStateful'));
  assert.ok(!draw.includes('new '),'no allocation while drawing');
+ // Project 2: the star is lit on the workspace, outlined and unlit elsewhere, with its path built off the draw pass.
+ assert.match(draw,/if \(star\) \{\n   if \(current\) \{/);
+ assert.match(draw,/fill\.setStyle\(Paint\.Style\.STROKE\);/);
+ assert.match(dot,/HomeDot\(float density\) \{\n  this\(density, false\);\n \}/,'round dots are unchanged');
 });
 
 test('app tiles are the Oxblood glass with the reference marks; other apps keep their own icons (#410, #403)',()=>{
@@ -644,4 +663,79 @@ test('Settings opens a window-owned dialog without depending on the launcher fra
  assert.ok(!route.includes('homeFrame'));
  assert.match(route,/getWindow\(\)\.getDecorView\(\)\.post/);
  assert.match(main,/void homeOptions\(View anchor\)\{SettingsDialog\.show\(this\);\}/);
+});
+
+test('Project 2: Ask again is offered only after an unknown send, and always with the duplicate warning',()=>{
+ const page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
+ const confirm=page.slice(page.indexOf('private void confirmTask('),page.indexOf('private String labelOf('));
+ // Exactly one Ask again, inside the mayAskAgain branch, on a sheet whose message carries the warning.
+ assert.equal(confirm.split('"Ask again"').length-1,1);
+ assert.match(confirm,/if\(hub\.tasks\.mayAskAgain\(id\)\)b\.setMessage\(hub\.taskLine\(id\)\+"\\n\\n"\+WorkspaceTaskTracker\.ASK_AGAIN_WARNING\)\n\s*\.setPositiveButton\("Ask again",\(d,w\)->hub\.startTask\(id\)\)\.setNegativeButton\("Not now",null\);/);
+ // A fresh request is the person's own tap: startTask mints a new requestId; the client retries only that one.
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java');
+ assert.match(hub,/void startTask\(String id\)\{[\s\S]*?final String requestId="tap-"\+java\.util\.UUID\.randomUUID\(\);[\s\S]*?client\.start\(requestId,task,true\)/);
+ assert.equal((page+hub).split('startTask(').length-1,3,'startTask is called from Ask Rose and Ask again only, and defined once');
+});
+
+test('Project 2: a lost reply is recovered by a read by requestId, never by re-sending the task',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java');
+ const recover=hub.slice(hub.indexOf('void recoverTasks(){'),hub.indexOf('/**',hub.indexOf('void recoverTasks(){')));
+ assert.match(recover,/if\(!tasksEnabled\(\)\)return;/);
+ assert.match(recover,/lost=tasks\.lostReplies\(\)/);
+ assert.match(recover,/for\(String requestId:lost\)\{[\s\S]*?s=client\.lookupRequest\(requestId\);[\s\S]*?tasks\.apply\(s\)/);
+ assert.doesNotMatch(recover,/startTask|client\.start\(/,'recovery never starts a task');
+});
+
+test('Project 2: request-to-first-draw timing carries visibility, so a person\'s wait is never latency',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java'),page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
+ assert.match(hub,/void shown\(boolean now\)\{pageShown=now&&listener!=null;timing\.visibility\(onScreen\(\)\);/);
+ assert.match(hub,/void windowVisible\(boolean now\)\{windowVisible=now&&listener!=null;timing\.visibility\(onScreen\(\)\);/);
+ assert.match(hub,/void detach\(Listener page\)\{if\(listener==page\)\{listener=null;pageShown=false;windowVisible=false;timing\.visibility\(false\);\}\}/);
+ assert.match(hub,/timing\.resulted\([^;]*,at,onScreen\(\)\);/);
+ assert.match(page,/if\(done\[0\]\|\|!hub\.timing\.rendered\(requestId,System\.nanoTime\(\),hub\.onScreen\(\)\)\)return;/);
+});
+
+test('Project 2: the Rose server decides behind the compose route; Rose Agent runs no model',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java'),page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
+ const start=hub.slice(hub.indexOf('private void start(int gen){'),hub.indexOf('private void finish('));
+ assert.match(start,/final WorkspaceDecisionClient decider=WorkspaceDecisionGate\.enabled\(app\)/);
+ assert.match(start,/if\(cancelled\.get\(\)\)return WorkspaceEngine\.failed\(requestId,"cancelled"\);/);
+ assert.match(start,/if\(decider!=null\)return WorkspaceDecisionClient\.result\(requestId,decider\.decide\(requestId,request,cancelled::get,abort\)\);/);
+ // A server decision returns as text into the same finish() path, so the phone's own check is always applied.
+ assert.match(start,/finish\(gen,requestId,done,text,at\)/);
+ assert.match(hub,/boolean model\(\)\{return WorkspaceDecisionGate\.enabled\(app\)\|\|WorkspaceTiming\.isModel\(engine\.modelId\(\)\);\}/);
+ assert.match(page,/label\.setText\(hub\.deciderLabel\(\)\)/);
+ const gate=read('../app/src/dev/pixel/voice/WorkspaceDecisionGate.java');
+ assert.match(gate,/getBoolean\(KEY,true\)/);
+ assert.doesNotMatch(hub+page,/compose-route-enabled",true|putBoolean\(WorkspaceDecisionGate/,'the authorized default does not overwrite an explicit preference');
+});
+
+test('Project 2: a superseded compose request in flight is stopped, and the status line names who composes',()=>{
+ const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java'),transport=read('../app/src/dev/pixel/voice/WorkspaceTaskTransport.java');
+ const start=hub.slice(hub.indexOf('private void start(int gen){'),hub.indexOf('private void finish('));
+ // The previous request's socket is closed before the next one starts, and the new request carries its own abort.
+ assert.match(start,/inFlight\.fire\(\);inFlight=new WorkspaceAbort\(\);final WorkspaceAbort abort=inFlight;/);
+ assert.match(start,/decider\.decide\(requestId,request,cancelled::get,abort\)/);
+ assert.match(start,/composer\.routed\(decider!=null\);/);
+ // The transport attaches the raw socket before it connects, detaches it when done, and never fails over once stopped.
+ assert.match(transport,/if\(abort!=null&&!abort\.attach\(raw\)\)throw new IOException\("stopped"\);/);
+ assert.match(transport,/finally\{if\(abort!=null\)abort\.detach\(raw\);/);
+ assert.match(transport,/if\(abort!=null\)\{abort\.detach\(raw\);if\(abort\.fired\(\)\)throw e;\}/);
+});
+
+test('Project 2: notifications reach the workspace only after Notification access and the workspace\'s own consent',()=>{
+ const sources=read('../app/src/dev/pixel/voice/WorkspaceSources.java'),device=read('../app/src/dev/pixel/voice/WorkspaceDeviceInputs.java');
+ const page=read('../app/src/dev/pixel/voice/WorkspacePage.java'),notices=read('../app/src/dev/pixel/voice/WorkspaceNotices.java');
+ // The listener is declared for the system to bind only once the person grants access; Rose Agent requests nothing else.
+ const service=manifest.match(/<service android:name="\.WorkspaceNotificationListener"[\s\S]*?<\/service>/)[0];
+ assert.match(service,/android:permission="android\.permission\.BIND_NOTIFICATION_LISTENER_SERVICE"/);
+ assert.doesNotMatch(manifest,/uses-permission android:name="android\.permission\.(BIND_NOTIFICATION_LISTENER_SERVICE|ACCESS_NOTIFICATION_POLICY|MEDIA_CONTENT_CONTROL)"/);
+ // The phone read uses the device source, which needs both consents; the workspace's own consent is off by default.
+ assert.match(sources,/WorkspaceInputs\.Source inputs=new WorkspaceDeviceInputs\(context,byPackage\);/);
+ assert.match(device,/getBoolean\(CONSENT,false\)/);
+ assert.match(notices,/return accessGranted&&consented&&listenerConnected\?WorkspaceInputs\.AVAILABLE:WorkspaceInputs\.NOT_GRANTED;/);
+ // The disclosure is shown before consent is recorded, and says where titles go and that message text is never read.
+ assert.match(page,/setMessage\(NOTIFICATIONS_DISCLOSURE\)[\s\S]*?setPositiveButton\("Continue",\(d,w\)->\{WorkspaceDeviceInputs\.setConsent\(activity,true\);/);
+ assert.match(page,/NOTIFICATIONS_DISCLOSURE="[^"]*titles[^"]*"\s*\+"[^"]*your own Rose server[^"]*Message text is never read/);
+ assert.doesNotMatch(device+page,/setConsent\(activity,true\)[^;]*;[^\n]*setConsent|putBoolean\(CONSENT,true\)/,'nothing turns consent on except the person\'s Continue');
 });

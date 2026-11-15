@@ -16,16 +16,18 @@ run-name: yogi-ota ${{ inputs.stage }} ${{ github.run_id }}
 #              separately authorized). Nothing is published.
 #   ota:       build B and later - compile, sign, check and stage a full OTA newer than A; publish yogi-{build}
 #              (OTA first, yogi-stable last, never Latest) only when publish is true and publication is enabled.
+#   one-shot:  automatic key bootstrap (or journal-verified identity reuse), private baseline A, newer OTA B,
+#              verification, hosted publication and owned STOP. Setup remains refused until actually bound.
 on:
   workflow_dispatch:
     inputs:
       stage:
-        description: readiness (host checks only), key-bootstrap (one-time Yogi key generation, public receipt only), bootstrap (first Yogi-key image, private install image, no publication) or ota (newer OTA)
+        description: one-shot (automatic keys, private baseline A, newer signed OTA B and publication), or an existing individual stage
         type: choice
-        options: [ota, bootstrap, key-bootstrap, readiness]
+        options: [one-shot, ota, bootstrap, key-bootstrap, readiness]
         default: ota
       publish:
-        description: 'ota only: publish yogi-{build} to pixel-ota after every check (needs publicationEnabled in os/ota/yogi.json)'
+        description: 'ota or one-shot: publish yogi-{build} to pixel-ota after every check (needs publicationEnabled in os/ota/yogi.json)'
         type: boolean
         default: false
 
@@ -48,15 +50,23 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Main only, attempt 1 only
         run: |
           [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo "::error::yogi-ota runs once from main"; exit 1; }
-          [[ "$STAGE" == ota || "$PUBLISH" != true ]] || { echo "::error::only the ota stage publishes"; exit 1; }
+          [[ "$STAGE" == ota || "$STAGE" == one-shot || "$PUBLISH" != true ]] || { echo "::error::only ota and one-shot publish"; exit 1; }
       - name: Yogi prerequisites (refuses with the missing items by name)
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/roseos-yogi/providers/github-signer
+          GCP_SIGNER_SERVICE_ACCOUNT: roseos-build-signer@protocols-465723.iam.gserviceaccount.com
         run: |
-          python3 scripts/yogi_ota.py guard --stage "$STAGE" --access
-          if [[ "$PUBLISH" == true ]]; then python3 scripts/yogi_ota.py guard --stage publish; fi
+          if [[ "$STAGE" == one-shot ]]; then
+            python3 scripts/yogi_full.py guard
+          else
+            python3 scripts/yogi_ota.py guard --stage "$STAGE" --access
+            if [[ "$PUBLISH" == true ]]; then python3 scripts/yogi_ota.py guard --stage publish; fi
+          fi
 
   controller:
     needs: guard
@@ -310,8 +320,175 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  full:
+    needs: controller
+    if: inputs.stage == 'one-shot'
+    runs-on: [self-hosted, roseos-yogi-builder-20261105-b]
+    timeout-minutes: 660
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/roseos-yogi/providers/github-signer
+      GCP_SIGNER_SERVICE_ACCOUNT: roseos-build-signer@protocols-465723.iam.gserviceaccount.com
+      JAVA_HOME: /srv/rose-yogi/src/prebuilts/jdk/jdk21/linux-x86
+    steps:
+      - name: Exact Yogi identity before checkout
+        run: |
+          python3 -I - <<'PY'
+          import os, urllib.request
+          if os.environ.get('RUNNER_NAME') != 'roseos-yogi-builder-20261105-b':
+              raise SystemExit('Wrong Yogi runner; no checkout or signer login')
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          def meta(key):
+              req = urllib.request.Request('http://metadata.google.internal/computeMetadata/v1/'+key,
+                                           headers={'Metadata-Flavor': 'Google'})
+              with opener.open(req, timeout=5) as response:
+                  return response.read(4096).decode().strip()
+          actual = (meta('project/project-id'), meta('instance/zone').rsplit('/', 1)[-1], meta('instance/name'), meta('instance/id'))
+          if actual != ('protocols-465723', 'us-west2-b', 'roseos-yogi-builder-20261105-b', '2720796557371812468'):
+              raise SystemExit('Wrong Yogi instance; no checkout or signer login')
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: initialize
+        name: Same-run admission, actual filesystem and reusable identity
+        run: python3 scripts/yogi_full.py initialize --state "$RUNNER_TEMP/yogi-full.json"
+      - if: steps.initialize.outputs.needs_bootstrap == 'true'
+        name: Prove the installed bootstrap tools before signer login
+        run: |
+          python3 scripts/signing-bootstrap.py preflight --profile yogi-v1 --recipe-sha "$GITHUB_SHA"
+          python3 scripts/signing-bootstrap.py prove --profile yogi-v1 --recipe-sha "$GITHUB_SHA" --proof-dir "$RUNNER_TEMP/yogi-proof" --lock /srv/rose-yogi/yogi-build.lock
+      - if: steps.initialize.outputs.needs_bootstrap == 'true'
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - if: steps.initialize.outputs.needs_bootstrap == 'true'
+        name: Generate and import Yogi keys once, with durable recovery journal
+        run: python3 scripts/signing-bootstrap.py run --profile yogi-v1 --recipe-sha "$GITHUB_SHA" --state-dir /srv/rose-yogi/signing-bootstrap-state --receipt-dir "$RUNNER_TEMP/yogi-bootstrap" --proof-file "$RUNNER_TEMP/yogi-proof/fold-tool-proof.json" --lock /srv/rose-yogi/yogi-build.lock
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Retain the complete public identity receipt for subsequent attempts
+        run: python3 scripts/yogi_full.py accept-keys --state "$RUNNER_TEMP/yogi-full.json" --receipt "$RUNNER_TEMP/yogi-bootstrap/signing-bootstrap-receipt.json"
+      - id: inputs
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          record = json.load(open(json.load(open('os/ota/yogi.json'))['appInputs']['record']))
+          print('run='+record['export']['run'])
+          print('artifact='+str(record['export']['artifact']['id']))
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ steps.inputs.outputs.run }}
+          artifact-ids: ${{ steps.inputs.outputs.artifact }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/app-inputs
+      - name: Compile baseline A with live compiler output and persistent cache
+        run: python3 scripts/yogi_full.py compile-a --state "$RUNNER_TEMP/yogi-full.json" --apps "$RUNNER_TEMP/app-inputs"
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Sign private baseline A using only the Yogi key set
+        run: python3 scripts/yogi_full.py sign-a --state "$RUNNER_TEMP/yogi-full.json"
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Retain private baseline install image (no phone operation)
+        run: python3 scripts/yogi_full.py baseline --state "$RUNNER_TEMP/yogi-full.json"
+      - name: Compile strictly newer OTA B using the same cache and app inputs
+        run: python3 scripts/yogi_full.py compile-b --state "$RUNNER_TEMP/yogi-full.json" --apps "$RUNNER_TEMP/app-inputs"
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Sign OTA B using the same Yogi identity
+        run: python3 scripts/yogi_full.py sign-b --state "$RUNNER_TEMP/yogi-full.json"
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Verify OTA and packaged updater, then export same-run public bindings
+        run: python3 scripts/yogi_full.py stage --state "$RUNNER_TEMP/yogi-full.json" --out "$RUNNER_TEMP/yogi-ota" --bindings "$RUNNER_TEMP/yogi-bindings"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yogi-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/yogi-ota
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yogi-bindings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/yogi-bindings
+          retention-days: 7
+          if-no-files-found: error
+      - if: always() && steps.initialize.outcome == 'success'
+        name: Retain small public failure receipts; leave outputs and journal untouched
+        run: python3 scripts/yogi_full.py report --state "$RUNNER_TEMP/yogi-full.json" --out "$RUNNER_TEMP/yogi-full-receipts"
+      - if: always() && steps.initialize.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yogi-full-receipts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/yogi-full-receipts
+          retention-days: 14
+          if-no-files-found: warn
+
+  full-publisher:
+    needs: full
+    if: inputs.stage == 'one-shot' && inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: yogi-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/yogi-ota
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: yogi-bindings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/yogi-bindings
+      - name: Verify same-run source, baseline, pins and payload before publisher login
+        run: python3 scripts/yogi_full.py verify --out "$RUNNER_TEMP/yogi-ota" --bindings "$RUNNER_TEMP/yogi-bindings"
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Publish only yogi-{build}, stable metadata last, never Latest
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/yogi_full.py publish --out "$RUNNER_TEMP/yogi-ota" --bindings "$RUNNER_TEMP/yogi-bindings"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yogi-ota-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/yogi-publication/publication.json
+            ${{ runner.temp }}/yogi-publication/journal.jsonl
+          retention-days: 7
+          if-no-files-found: warn
+
+  full-queue-watch:
+    needs: controller
+    if: inputs.stage == 'one-shot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      actions: write # cancellation of this same run only if its native runner never starts
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Bound paid VM queue time; cancel only this run after five minutes without a native job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/yogi_full.py queue-watch
+
   cleanup:
-    needs: [controller, readiness, key-bootstrap, build, sign, publisher]
+    needs: [controller, readiness, key-bootstrap, build, sign, publisher, full, full-publisher, full-queue-watch]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

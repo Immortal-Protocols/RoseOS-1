@@ -147,7 +147,7 @@ function transition(previous, event) {
     case 'layout': if (['folded', 'unfolded'].includes(event.value)) s.layout = event.value; break;
     case 'lock': s.locked = true; break;
     case 'unlock': s.locked = false; break;
-    case 'homePage': s.homePage = Math.max(0, Math.min((event.max || HOME_PAGES.length) - 1, event.value | 0)); break;
+    case 'homePage': s.homePage = Math.max(event.min === -1 ? -1 : 0, Math.min((event.max || HOME_PAGES.length) - 1, event.value | 0)); break;
 
     case 'openRose':
       go('rose', { app: null, window: null });
@@ -192,6 +192,10 @@ function transition(previous, event) {
       break;
     }
     case 'switcher': if (s.view !== 'switcher') go('switcher'); break;
+    // Return from Rose to the exact live context the person came from (V3 return control).
+    case 'returnTo':
+      if ((event.view === 'app' && APPS[event.app]) || (event.view === 'window' && WINDOWS[event.window])) go(event.view, { app: event.app || null, window: event.window || null });
+      break;
     case 'agents': go('agents', { window: null }); break;
     case 'openApp':
       if (APPS[event.value]) {
@@ -207,6 +211,11 @@ function transition(previous, event) {
       break;
     }
 
+    case 'registerTask':
+      // Project 2 workspace: a sample Rose task named exactly like its workspace action joins the
+      // registry (TASKS/WINDOWS) only when the person confirms it, so existing flows are unchanged.
+      if (TASKS[event.id] && !s.tasks[event.id]) s.tasks[event.id] = { state: 'idle', step: 0 };
+      break;
     case 'startTask':
       if (task && ['idle', 'stopped', 'done'].includes(task.state)) { task.state = 'running'; task.step = 1; }
       break;

@@ -76,7 +76,8 @@ FRAMEWORKS_BASE_SEQUENCE = ('frameworks-base.patch', 'rose-agent-self-update-fra
 PATCH_SEQUENCES = {
     'frameworks/base': FRAMEWORKS_BASE_SEQUENCE,
     'build/make': ('agent-tray-build-make.patch', 'updater-product-build-make.patch',
-        'background-control-build-make.patch', 'rose-edge-build-make.patch', 'rose-keyboard-build-make.patch'),
+        'background-control-build-make.patch', 'rose-edge-build-make.patch', 'rose-keyboard-build-make.patch',
+        'rose-authenticator-build-make.patch'),
     'build/release': ('background-control-build-release.patch',),
     'packages/apps/Updater': ('updater-rose-channels.patch',),
     'packages/modules/Permission': ('rose-home-role-permission.patch',),

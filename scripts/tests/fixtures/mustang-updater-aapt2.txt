@@ -1,0 +1,16 @@
+Binary APK
+Package name=app.seamlessupdate.client id=7f
+  type array id=01 entryCount=2
+    resource 0x7f010000 array/channel_published
+      () (array) size=1
+        ["stable"]
+    resource 0x7f010001 array/channel_values
+      () (array) size=3
+        ["prod", "stable", "alpha"]
+  type string id=02 entryCount=3
+    resource 0x7f020000 string/channel_default
+      () "prod"
+    resource 0x7f020001 string/release_index
+      () "https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases"
+    resource 0x7f020002 string/url
+      () "https://github.com/Immortal-Protocols/pixel-ota/releases/download/"

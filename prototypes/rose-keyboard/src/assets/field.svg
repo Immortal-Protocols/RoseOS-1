@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice">
+  <!-- Rose HiFi · Oxblood field for Rose, Rose's apps and the switcher. Original procedural artwork
+       drawn to the study's Rose render (Rose-11): near-black field, a faint steep glass sheet from
+       the right edge, lit crimson planes only in the lower right. No raster, no grain, no blue. -->
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#120a0d"/><stop offset=".6" stop-color="#0e080b"/><stop offset="1" stop-color="#12060a"/></linearGradient>
+    <linearGradient id="sheet" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8a3a4c" stop-opacity=".35"/><stop offset="1" stop-color="#8a3a4c" stop-opacity="0"/></linearGradient>
+    <linearGradient id="plane" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a1428" stop-opacity=".9"/><stop offset=".45" stop-color="#36020d"/><stop offset="1" stop-color="#1a0207"/></linearGradient>
+    <radialGradient id="glint" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff0f0" stop-opacity=".9"/><stop offset="1" stop-color="#ff8a9a" stop-opacity="0"/></radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <rect width="390" height="844" fill="url(#base)"/>
+  <polygon points="390,118 390,292 295,580" fill="url(#sheet)"/>
+  <path d="M390 292 L295 580" stroke="#ffb3bd" stroke-opacity=".7" stroke-width="1"/>
+  <polygon points="295,580 390,515 390,844 123,844 206,642" fill="url(#plane)"/>
+  <path d="M206 642 L295 580 L390 515" stroke="#ffc4c8" stroke-width="4" opacity=".5" fill="none" filter="url(#soft)"/>
+  <path d="M206 642 L295 580 L390 515" stroke="#ffc4c8" stroke-width="1.2" fill="none"/>
+  <path d="M206 642 L123 844" stroke="#c2384c" stroke-opacity=".55" stroke-width="1"/>
+  <circle cx="295" cy="580" r="26" fill="url(#glint)"/>
+</svg>

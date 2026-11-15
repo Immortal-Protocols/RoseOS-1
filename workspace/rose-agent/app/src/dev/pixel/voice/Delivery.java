@@ -1,6 +1,9 @@
 package dev.pixel.voice;
 import android.app.*;import android.content.*;import android.content.pm.PackageInstaller;import android.net.Uri;import android.provider.Settings;import java.io.*;import java.net.*;import java.security.*;import javax.net.ssl.*;import org.json.JSONObject;
 public class Delivery {
+ static final String GENERATED_PREFIX="app.rose.gen.",GENERATED="Apps you build install from Rose App Builder";
+ /** Project 1's generated apps (App Core's app.rose.gen.p<projectId>): this generic path never installs them. */
+ static boolean generated(String pkg){return pkg!=null&&pkg.startsWith(GENERATED_PREFIX);}
  public static void install(VoiceService a,String id,String label,String endpoint,SSLSocketFactory ssl){
  if(!id.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("Invalid app identifier");
  if(!a.getPackageManager().canRequestPackageInstalls()){
@@ -13,7 +16,11 @@ public class Delivery {
   JSONObject metadata=manifest(endpoint+"/apps/"+id+"/manifest",ssl);
   // Rose Agent itself is installed only through the explicit Update Rose Agent flow (voice idle, identity checked).
   if(a.getPackageName().equals(metadata.optString("packageName")))throw new IOException("Use Update Rose Agent to update Rose Agent");
+  // Apps the owner builds (Project 1, app.rose.gen.*) install only from Rose App Builder, by the owner's tap, never here.
+  if(generated(metadata.optString("packageName")))throw new IOException(GENERATED);
   long size=download(endpoint+"/apps/"+id+"/apk",ssl,file,id,150L*1024*1024);
+  android.content.pm.PackageInfo archive=a.getPackageManager().getPackageArchiveInfo(file.getPath(),0);
+  if(archive==null||generated(archive.packageName))throw new IOException(archive==null?"The download isn't an Android app":GENERATED);
   JSONObject v4=metadata.optJSONObject("v4Signature");long signatureSize=0;
   if(v4!=null){String hash=v4.getString("sha256");if(!hash.matches("[a-f0-9]{64}"))throw new IOException("Invalid signature metadata");signatureSize=download(endpoint+"/apps/"+id+"/idsig",ssl,signature,hash,1024*1024);if(signatureSize!=v4.getLong("size"))throw new IOException("Signature size mismatch");}
   PackageInstaller pi=a.getPackageManager().getPackageInstaller();PackageInstaller.SessionParams params=new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);params.setSize(size+signatureSize);params.setAppLabel(label);if(android.os.Build.VERSION.SDK_INT>=31)params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);sessionId=pi.createSession(params);

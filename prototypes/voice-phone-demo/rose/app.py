@@ -829,12 +829,39 @@ class Server:
         self._floors = (0, 0)    # ids at the last reset: their late events are not shown
         self._ids_lock = threading.Lock()
         self._stopping = threading.Event()
+        self.workspace_tasks = None
+        if getattr(args, 'workspace_tasks', False):
+            from .remote import config_dir
+            from .workspace_tasks import WorkspaceTasks
+            self.workspace_tasks = WorkspaceTasks(config_dir() / 'workspace-tasks', None)
+        from .workspace_model import WorkspaceModel
+        self.workspace_model = WorkspaceModel.configured()
         self.bus.subscribe(self._watch)
         self.phone.listeners.append(self._on_phone)
 
     # ----------------------------------------------------------- lifecycle
+    def _start_conductor(self) -> None:
+        if self._stopping.is_set():
+            return
+        self.conductor.start()
+        tasks = self.workspace_tasks
+        if tasks is not None:
+            from .workspace_tasks import Unavailable, connect
+            with tasks.lock:
+                if tasks.stopping:
+                    return
+                connect(self.conductor, tasks)
+                start = tasks.start
+
+                def when_ready(*args):
+                    if not self.ready or self._stopping.is_set():
+                        raise Unavailable()
+                    return start(*args)
+                tasks.start = when_ready
+
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self.bus.loop = loop
+        if getattr(self, 'workspace_model', None) is not None: self.workspace_model.preload()
         threading.Thread(target=self._stats_loop, name="stats", daemon=True).start()
         if self.mode == "ui-only":
             self.conductor = FakeConductor(self.bus, self.phone)
@@ -849,11 +876,19 @@ class Server:
         if self._stopping.is_set():
             return
         self._stopping.set()
+        page_tasks = getattr(self, 'workspace_tasks', None)
+        if page_tasks is not None:
+            page_tasks.stop_accepting()
+        if getattr(self, "workspace_model", None) is not None: self.workspace_model.close()
         for obj, method in ((self.listener, "stop"), (self.conductor, "stop"),
                             (self.keepalive, "stop"), (self.transport, "stop"), (self.runtime, "stop")):
             if obj is not None and hasattr(obj, method):
                 with contextlib.suppress(Exception):
                     getattr(obj, method)()
+        if page_tasks is not None:
+            if getattr(self.conductor, 'workspace_tasks', None) is page_tasks:
+                self.conductor.workspace_tasks = None
+            page_tasks.close()
         # Close Rose's workspace on the phone (RealPhone.close() waits on the link: on a worker
         # thread, bounded, so a slow or gone phone cannot hold up the exit). The fake phone has none.
         close = getattr(self.phone, "close", None)
@@ -958,7 +993,7 @@ class Server:
                 self._step("tasks", "Preparing the phone agent and thinker", self.tasks.prepare)
                 self.conductor = Conductor(rt, self.brain, self.listener, self.speaker, self.tasks,
                                            self.phone, self.bus)
-            self._step("conductor", "Preparing Rose's conversation", self.conductor.start)
+            self._step("conductor", "Preparing Rose's conversation", self._start_conductor)
             self.listener.start()
             self.mic.sink = self.listener.push
             if isinstance(self.transport, LocalTransport):
@@ -1179,19 +1214,38 @@ class Server:
         await ws.accept()
         q = self.bus.subscribe_queue()
         try:
-            history = [m for m in list(self.bus.history) if not self._stale(m)]
+            device = (getattr(ws, 'scope', None) or {}).get('rose_device')  # a paired phone; None on the dashboard
+
+            def visible(m):  # a page task is shown only to the device that asked for it
+                return m.get('kind') != 'workspace_task' or device is None or m.get('device') == device
+
+            def wire(m):  # a page task's device and revision are internal
+                return ({k: v for k, v in m.items() if k not in ('device', 'rev')}
+                        if m.get('kind') == 'workspace_task' else m)
+
+            history = [m for m in list(self.bus.history) if not self._stale(m) and visible(m)]
             seen = {id(m) for m in history}
             state = self.snapshot()
             await ws.send_text(dumps({"kind": "hello", "t": time.time(), "history": len(history),
                                       "state": state}))
             for m in history:
-                await ws.send_text(dumps({**m, "replay": True}))
+                await ws.send_text(dumps({**wire(m), "replay": True}))
             await ws.send_text(dumps({"kind": "replay_done", "t": time.time()}))
             # Phone clients intentionally skip historical replay. Restore the
             # current task collection as live snapshots, using the same scoped
             # identity/binding as subsequent updates; never replay user actions.
             for task in state.get('tasks', []):
                 await ws.send_text(dumps({'kind': 'task', 't': time.time(), 'task': task}))
+            # Page tasks (docs/APP-BUILDER.md §4.3), only on a server that enabled them: their current states.
+            page_tasks, revision = getattr(self, 'workspace_tasks', None), None
+            if page_tasks is not None:
+                recent, revision = await asyncio.to_thread(page_tasks.snapshot, device)
+                for task in recent:
+                    await ws.send_text(dumps({'kind': 'workspace_task', 't': time.time(), 'task': task}))
+
+            def newer(m):  # a page-task change already in that snapshot is not sent again after it (older state)
+                return (m.get('kind') != 'workspace_task' or revision is None or not isinstance(m.get('rev'), int)
+                        or m['rev'] > revision)
             incoming = asyncio.create_task(ws.receive())
             outgoing = asyncio.create_task(q.get())
             try:
@@ -1205,8 +1259,8 @@ class Server:
                     if outgoing in ready:
                         m = outgoing.result()
                         outgoing = asyncio.create_task(q.get())
-                        if id(m) not in seen and not self._stale(m):
-                            await ws.send_text(dumps(m))
+                        if id(m) not in seen and not self._stale(m) and visible(m) and newer(m):
+                            await ws.send_text(dumps(wire(m)))
             finally:
                 incoming.cancel()
                 outgoing.cancel()
@@ -1479,6 +1533,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="local (default: $ROSE_BRAIN or brain.REPO), an MLX model for Rose's conversation, "
                         "or codex: GPT 6.1 Terra Fast via Sign in with ChatGPT")
     p.add_argument("--transcript-dir", help="durable private transcript directory (Codex mode)")
+    p.add_argument("--workspace-tasks", action="store_true",
+                   help="enable signed owner-confirmed workspace page tasks (requires live --brain codex)")
     p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
     p.add_argument("--pair-host", action="append", default=[], help="Tailscale MagicDNS/IPv4 host for the shared QR; repeatable")
     p.add_argument("--port", type=int, default=8091)
@@ -1507,6 +1563,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="MLX model for the phone agent and thinker (default $ROSE_TASK_BRAIN, else --brain)")
     p.add_argument("--log-level", default="warning")
     args = p.parse_args(argv)
+    if args.workspace_tasks and (args.brain != 'codex' or args.ui_only):
+        p.error('--workspace-tasks requires live --brain codex')
     if args.cloud_audio and args.brain != 'codex':
         p.error('--cloud-audio requires --brain codex')
     if args.vision_control and (args.brain != 'codex' or args.phone != 'real'):

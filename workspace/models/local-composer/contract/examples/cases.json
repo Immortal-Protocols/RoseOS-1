@@ -1,0 +1,680 @@
+{
+ "note": "Synthetic, public-safe snapshot and cases. `expect` is the IDs a useful layout should include; recall of them is a proxy for usefulness, not a judgement of quality.",
+ "cases": [
+  {
+   "id": "cooking-text",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-cook",
+    "trigger": "direct_text",
+    "prompt": "something for cooking dinner",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "snapshotVersion": "s-demo-1",
+     "catalogVersion": "cat-1",
+     "createdAtMs": 1794600000000,
+     "timeOfDay": "evening",
+     "apps": [
+      {
+       "id": "app.timer",
+       "label": "Timer",
+       "category": "tools",
+       "recentRank": 2
+      },
+      {
+       "id": "app.recipes",
+       "label": "Recipes",
+       "category": "cooking",
+       "recentRank": 4
+      },
+      {
+       "id": "app.groceries",
+       "label": "Grocery list",
+       "category": "cooking",
+       "recentRank": 6
+      },
+      {
+       "id": "app.music",
+       "label": "Music",
+       "category": "music",
+       "recentRank": 3
+      },
+      {
+       "id": "app.mail",
+       "label": "Mail",
+       "category": "work",
+       "recentRank": 1
+      },
+      {
+       "id": "app.calendar",
+       "label": "Calendar",
+       "category": "calendar",
+       "recentRank": 5
+      },
+      {
+       "id": "app.docs",
+       "label": "Documents",
+       "category": "work",
+       "recentRank": 7
+      },
+      {
+       "id": "app.calculator",
+       "label": "Calculator",
+       "category": "tools",
+       "recentRank": 9
+      },
+      {
+       "id": "app.video",
+       "label": "Video",
+       "category": "media",
+       "recentRank": 8
+      },
+      {
+       "id": "app.podcasts",
+       "label": "Podcasts",
+       "category": "media",
+       "recentRank": 10
+      }
+     ],
+     "notifications": [
+      {
+       "id": "ntf.1",
+       "appId": "app.timer",
+       "title": "Pasta timer done",
+       "recentRank": 1
+      },
+      {
+       "id": "ntf.2",
+       "appId": "app.mail",
+       "title": "Quarterly report due Friday",
+       "recentRank": 2
+      },
+      {
+       "id": "ntf.3",
+       "appId": "app.calendar",
+       "title": "Team meeting at 9:00",
+       "recentRank": 3
+      }
+     ],
+     "content": [
+      {
+       "id": "cnt.1",
+       "kind": "document",
+       "label": "Tomato pasta recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.2",
+       "kind": "document",
+       "label": "Weeknight curry recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.3",
+       "kind": "media",
+       "label": "Dinner jazz playlist",
+       "appId": "app.music"
+      },
+      {
+       "id": "cnt.4",
+       "kind": "document",
+       "label": "Q3 planning doc",
+       "appId": "app.docs"
+      },
+      {
+       "id": "cnt.5",
+       "kind": "media",
+       "label": "Evening news podcast",
+       "appId": "app.podcasts"
+      }
+     ],
+     "actions": [
+      {
+       "id": "act.timer10",
+       "label": "Start 10 minute timer",
+       "kind": "shortcut",
+       "targetId": "app.timer",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.dismiss1",
+       "label": "Dismiss",
+       "kind": "notification_action",
+       "targetId": "ntf.1",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.reply2",
+       "label": "Reply",
+       "kind": "notification_action",
+       "targetId": "ntf.2",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.play3",
+       "label": "Play",
+       "kind": "deeplink",
+       "targetId": "cnt.3",
+       "requiresConfirmation": false
+      }
+     ],
+     "pinned": [
+      "app.timer"
+     ]
+    }
+   },
+   "expect": [
+    "app.timer",
+    "app.recipes",
+    "cnt.1",
+    "cnt.2"
+   ]
+  },
+  {
+   "id": "work-text",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-work",
+    "trigger": "direct_text",
+    "prompt": "get ready for work tomorrow",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "snapshotVersion": "s-demo-1",
+     "catalogVersion": "cat-1",
+     "createdAtMs": 1794600000000,
+     "timeOfDay": "evening",
+     "apps": [
+      {
+       "id": "app.timer",
+       "label": "Timer",
+       "category": "tools",
+       "recentRank": 2
+      },
+      {
+       "id": "app.recipes",
+       "label": "Recipes",
+       "category": "cooking",
+       "recentRank": 4
+      },
+      {
+       "id": "app.groceries",
+       "label": "Grocery list",
+       "category": "cooking",
+       "recentRank": 6
+      },
+      {
+       "id": "app.music",
+       "label": "Music",
+       "category": "music",
+       "recentRank": 3
+      },
+      {
+       "id": "app.mail",
+       "label": "Mail",
+       "category": "work",
+       "recentRank": 1
+      },
+      {
+       "id": "app.calendar",
+       "label": "Calendar",
+       "category": "calendar",
+       "recentRank": 5
+      },
+      {
+       "id": "app.docs",
+       "label": "Documents",
+       "category": "work",
+       "recentRank": 7
+      },
+      {
+       "id": "app.calculator",
+       "label": "Calculator",
+       "category": "tools",
+       "recentRank": 9
+      },
+      {
+       "id": "app.video",
+       "label": "Video",
+       "category": "media",
+       "recentRank": 8
+      },
+      {
+       "id": "app.podcasts",
+       "label": "Podcasts",
+       "category": "media",
+       "recentRank": 10
+      }
+     ],
+     "notifications": [
+      {
+       "id": "ntf.1",
+       "appId": "app.timer",
+       "title": "Pasta timer done",
+       "recentRank": 1
+      },
+      {
+       "id": "ntf.2",
+       "appId": "app.mail",
+       "title": "Quarterly report due Friday",
+       "recentRank": 2
+      },
+      {
+       "id": "ntf.3",
+       "appId": "app.calendar",
+       "title": "Team meeting at 9:00",
+       "recentRank": 3
+      }
+     ],
+     "content": [
+      {
+       "id": "cnt.1",
+       "kind": "document",
+       "label": "Tomato pasta recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.2",
+       "kind": "document",
+       "label": "Weeknight curry recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.3",
+       "kind": "media",
+       "label": "Dinner jazz playlist",
+       "appId": "app.music"
+      },
+      {
+       "id": "cnt.4",
+       "kind": "document",
+       "label": "Q3 planning doc",
+       "appId": "app.docs"
+      },
+      {
+       "id": "cnt.5",
+       "kind": "media",
+       "label": "Evening news podcast",
+       "appId": "app.podcasts"
+      }
+     ],
+     "actions": [
+      {
+       "id": "act.timer10",
+       "label": "Start 10 minute timer",
+       "kind": "shortcut",
+       "targetId": "app.timer",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.dismiss1",
+       "label": "Dismiss",
+       "kind": "notification_action",
+       "targetId": "ntf.1",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.reply2",
+       "label": "Reply",
+       "kind": "notification_action",
+       "targetId": "ntf.2",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.play3",
+       "label": "Play",
+       "kind": "deeplink",
+       "targetId": "cnt.3",
+       "requiresConfirmation": false
+      }
+     ],
+     "pinned": [
+      "app.timer"
+     ]
+    }
+   },
+   "expect": [
+    "app.mail",
+    "app.calendar",
+    "ntf.2",
+    "ntf.3"
+   ]
+  },
+  {
+   "id": "unwind-text",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-unwind",
+    "trigger": "direct_text",
+    "prompt": "unwind with music and podcasts",
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "snapshotVersion": "s-demo-1",
+     "catalogVersion": "cat-1",
+     "createdAtMs": 1794600000000,
+     "timeOfDay": "evening",
+     "apps": [
+      {
+       "id": "app.timer",
+       "label": "Timer",
+       "category": "tools",
+       "recentRank": 2
+      },
+      {
+       "id": "app.recipes",
+       "label": "Recipes",
+       "category": "cooking",
+       "recentRank": 4
+      },
+      {
+       "id": "app.groceries",
+       "label": "Grocery list",
+       "category": "cooking",
+       "recentRank": 6
+      },
+      {
+       "id": "app.music",
+       "label": "Music",
+       "category": "music",
+       "recentRank": 3
+      },
+      {
+       "id": "app.mail",
+       "label": "Mail",
+       "category": "work",
+       "recentRank": 1
+      },
+      {
+       "id": "app.calendar",
+       "label": "Calendar",
+       "category": "calendar",
+       "recentRank": 5
+      },
+      {
+       "id": "app.docs",
+       "label": "Documents",
+       "category": "work",
+       "recentRank": 7
+      },
+      {
+       "id": "app.calculator",
+       "label": "Calculator",
+       "category": "tools",
+       "recentRank": 9
+      },
+      {
+       "id": "app.video",
+       "label": "Video",
+       "category": "media",
+       "recentRank": 8
+      },
+      {
+       "id": "app.podcasts",
+       "label": "Podcasts",
+       "category": "media",
+       "recentRank": 10
+      }
+     ],
+     "notifications": [
+      {
+       "id": "ntf.1",
+       "appId": "app.timer",
+       "title": "Pasta timer done",
+       "recentRank": 1
+      },
+      {
+       "id": "ntf.2",
+       "appId": "app.mail",
+       "title": "Quarterly report due Friday",
+       "recentRank": 2
+      },
+      {
+       "id": "ntf.3",
+       "appId": "app.calendar",
+       "title": "Team meeting at 9:00",
+       "recentRank": 3
+      }
+     ],
+     "content": [
+      {
+       "id": "cnt.1",
+       "kind": "document",
+       "label": "Tomato pasta recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.2",
+       "kind": "document",
+       "label": "Weeknight curry recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.3",
+       "kind": "media",
+       "label": "Dinner jazz playlist",
+       "appId": "app.music"
+      },
+      {
+       "id": "cnt.4",
+       "kind": "document",
+       "label": "Q3 planning doc",
+       "appId": "app.docs"
+      },
+      {
+       "id": "cnt.5",
+       "kind": "media",
+       "label": "Evening news podcast",
+       "appId": "app.podcasts"
+      }
+     ],
+     "actions": [
+      {
+       "id": "act.timer10",
+       "label": "Start 10 minute timer",
+       "kind": "shortcut",
+       "targetId": "app.timer",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.dismiss1",
+       "label": "Dismiss",
+       "kind": "notification_action",
+       "targetId": "ntf.1",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.reply2",
+       "label": "Reply",
+       "kind": "notification_action",
+       "targetId": "ntf.2",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.play3",
+       "label": "Play",
+       "kind": "deeplink",
+       "targetId": "cnt.3",
+       "requiresConfirmation": false
+      }
+     ],
+     "pinned": [
+      "app.timer"
+     ]
+    }
+   },
+   "expect": [
+    "app.music",
+    "app.podcasts",
+    "cnt.3",
+    "cnt.5"
+   ]
+  },
+  {
+   "id": "evening-button",
+   "request": {
+    "contract": "rose-layout-v1",
+    "requestId": "r-button",
+    "trigger": "button",
+    "prompt": null,
+    "catalogVersion": "cat-1",
+    "snapshot": {
+     "snapshotVersion": "s-demo-1",
+     "catalogVersion": "cat-1",
+     "createdAtMs": 1794600000000,
+     "timeOfDay": "evening",
+     "apps": [
+      {
+       "id": "app.timer",
+       "label": "Timer",
+       "category": "tools",
+       "recentRank": 2
+      },
+      {
+       "id": "app.recipes",
+       "label": "Recipes",
+       "category": "cooking",
+       "recentRank": 4
+      },
+      {
+       "id": "app.groceries",
+       "label": "Grocery list",
+       "category": "cooking",
+       "recentRank": 6
+      },
+      {
+       "id": "app.music",
+       "label": "Music",
+       "category": "music",
+       "recentRank": 3
+      },
+      {
+       "id": "app.mail",
+       "label": "Mail",
+       "category": "work",
+       "recentRank": 1
+      },
+      {
+       "id": "app.calendar",
+       "label": "Calendar",
+       "category": "calendar",
+       "recentRank": 5
+      },
+      {
+       "id": "app.docs",
+       "label": "Documents",
+       "category": "work",
+       "recentRank": 7
+      },
+      {
+       "id": "app.calculator",
+       "label": "Calculator",
+       "category": "tools",
+       "recentRank": 9
+      },
+      {
+       "id": "app.video",
+       "label": "Video",
+       "category": "media",
+       "recentRank": 8
+      },
+      {
+       "id": "app.podcasts",
+       "label": "Podcasts",
+       "category": "media",
+       "recentRank": 10
+      }
+     ],
+     "notifications": [
+      {
+       "id": "ntf.1",
+       "appId": "app.timer",
+       "title": "Pasta timer done",
+       "recentRank": 1
+      },
+      {
+       "id": "ntf.2",
+       "appId": "app.mail",
+       "title": "Quarterly report due Friday",
+       "recentRank": 2
+      },
+      {
+       "id": "ntf.3",
+       "appId": "app.calendar",
+       "title": "Team meeting at 9:00",
+       "recentRank": 3
+      }
+     ],
+     "content": [
+      {
+       "id": "cnt.1",
+       "kind": "document",
+       "label": "Tomato pasta recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.2",
+       "kind": "document",
+       "label": "Weeknight curry recipe",
+       "appId": "app.recipes"
+      },
+      {
+       "id": "cnt.3",
+       "kind": "media",
+       "label": "Dinner jazz playlist",
+       "appId": "app.music"
+      },
+      {
+       "id": "cnt.4",
+       "kind": "document",
+       "label": "Q3 planning doc",
+       "appId": "app.docs"
+      },
+      {
+       "id": "cnt.5",
+       "kind": "media",
+       "label": "Evening news podcast",
+       "appId": "app.podcasts"
+      }
+     ],
+     "actions": [
+      {
+       "id": "act.timer10",
+       "label": "Start 10 minute timer",
+       "kind": "shortcut",
+       "targetId": "app.timer",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.dismiss1",
+       "label": "Dismiss",
+       "kind": "notification_action",
+       "targetId": "ntf.1",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.reply2",
+       "label": "Reply",
+       "kind": "notification_action",
+       "targetId": "ntf.2",
+       "requiresConfirmation": false
+      },
+      {
+       "id": "act.play3",
+       "label": "Play",
+       "kind": "deeplink",
+       "targetId": "cnt.3",
+       "requiresConfirmation": false
+      }
+     ],
+     "pinned": [
+      "app.timer"
+     ]
+    }
+   },
+   "expect": [
+    "app.timer",
+    "app.recipes",
+    "app.music"
+   ]
+  }
+ ]
+}

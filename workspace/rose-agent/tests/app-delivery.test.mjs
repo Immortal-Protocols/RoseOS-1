@@ -72,6 +72,16 @@ test('APP-UPDATER-002: explicit self-update is admitted by the service and verif
  assert.match(receiver,/UpdateAttempts\.record\(c,target,/,'installer outcomes go through the same timestamped record');
 });
 
+test('Project 1: the generic delivery path refuses generated apps before and after download',()=>{
+ const delivery=fs.readFileSync(new URL('../app/src/dev/pixel/voice/Delivery.java',import.meta.url),'utf8');
+ const generic=delivery.slice(delivery.indexOf('public static void install('),delivery.indexOf('static void installSelf('));
+ const at=s=>{const i=generic.indexOf(s);assert.ok(i>0,s);return i;};
+ assert.match(delivery,/GENERATED_PREFIX="app\.rose\.gen\."/,'App Core\'s generated-package prefix');
+ assert.ok(at('generated(metadata.optString("packageName"))')<at('long size=download('),'refused by its manifest before any download');
+ assert.ok(at('getPackageArchiveInfo(file.getPath(),0)')<at('createSession'),'and by the downloaded archive itself before a session exists');
+ assert.ok(at('generated(archive.packageName)')<at('createSession'),'the archive check refuses the prefix');
+});
+
 test('APP-GITHUB-002: self-update discovery and download use public GitHub only, with no PixelVoice dependency',()=>{
  const src=n=>fs.readFileSync(new URL('../app/src/dev/pixel/voice/'+n,import.meta.url),'utf8');
  const delivery=src('Delivery.java'),activity=src('RoseConversationActivity.java'),voice=src('VoiceService.java');

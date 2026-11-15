@@ -1,0 +1,8 @@
+9a5c668e9548c15b1880afa379f34e53538dd52ebf0a0ee46a3358b9411d8628  P2-r2-6fcf8c9b-flow-glacier-design.png
+0ccaa5ab0ca76ec509a326e6be47da035518476b1a8f661fb039aa78a5b6251a  P2-r2-6fcf8c9b-review-items.png
+a2d7c3c17fbd98bd039c3b4e659c74245256b04e0a03968eee9e3ff9a7c08415  P2-r2-6fcf8c9b-sizes.png
+672e9d327353f6340294ce80bb13397fda12d8212dea1ca3b39d0491eaaa3f1c  workspace-check.json
+# P2 r2 bound run: workspace-check.cjs on commit 6fcf8c9b, 387/387, tree_clean=true (output written outside the tree),
+# HTML blobs equal committed blobs. 70 individual captures listed with SHA-256 in workspace-check.json "shots";
+# delivered in-session as P2-r2-6fcf8c9b-all-captures.zip (not committed, size). r1 (8edd8181 / a55ebbe2) unchanged.
+# Browser-emulated, not phone/native acceptance; not pixel-approved.

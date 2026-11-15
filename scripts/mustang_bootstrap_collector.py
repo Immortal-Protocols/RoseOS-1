@@ -483,10 +483,11 @@ class NoApiRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):raise git.Refused('collector-api-redirect-refused')
 
 
-def github_reader(run,token):
-    """Only the fixed run and attempt-jobs GETs. Denial stops without retry."""
+def github_reader(run,token,*,include_artifacts=False):
+    """Fixed run/jobs GETs, optionally its artifact list. Denial stops without retry."""
     base='/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+run['runId']
     allowed={base,base+'/attempts/1/jobs?per_page=100'}
+    if include_artifacts:allowed.add(base+'/artifacts?per_page=100')
     def read(path):
         if path not in allowed or not isinstance(token,str) or not token:
             raise git.Refused('collector-api-scope-differs')

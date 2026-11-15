@@ -21,9 +21,19 @@ final class HomeDot extends Drawable {
  final float density;
  final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), glow = new Paint(Paint.ANTI_ALIAS_FLAG);
  boolean current;
+ /** Project 2: the workspace's mark, a four-point star before Home's round dots (the approved HiFi r2). It is lit
+  * on the workspace; on any other page it is outlined and unlit. */
+ final boolean star;
+ static final float STAR_DP = 10, STAR_INNER = .36f, STAR_STROKE_DP = 1.2f;
+ final android.graphics.Path starPath = new android.graphics.Path();
 
  HomeDot(float density) {
+  this(density, false);
+ }
+
+ HomeDot(float density, boolean star) {
   this.density = density;
+  this.star = star;
  }
 
  /** Plan 1E: the theme the glow was built in; the glow is rebuilt when the theme changes. */
@@ -35,11 +45,32 @@ final class HomeDot extends Drawable {
   float r = CURRENT_DP * density / 2, outer = r + GLOW_DP * density;
   glow.setShader(new RadialGradient(bounds.exactCenterX(), bounds.exactCenterY(), outer,
     new int[]{glowColor, glowColor, glowColor & 0x00ffffff}, new float[]{0f, r / outer, 1f}, Shader.TileMode.CLAMP));
+  if (star) {
+   starPath.reset();
+   float cx = bounds.exactCenterX(), cy = bounds.exactCenterY(), outerStar = STAR_DP * density / 2, inner = outerStar * STAR_INNER;
+   for (int k = 0; k < 8; k++) {
+    double a = Math.PI / 4 * k - Math.PI / 2; float rad = k % 2 == 0 ? outerStar : inner;
+    float x = cx + (float) (Math.cos(a) * rad), y = cy + (float) (Math.sin(a) * rad);
+    if (k == 0) starPath.moveTo(x, y); else starPath.lineTo(x, y);
+   }
+   starPath.close();
+  }
  }
 
  @Override public void draw(Canvas canvas) {
   float cx = getBounds().exactCenterX(), cy = getBounds().exactCenterY();
   if (!RoseThemeNow.id.equals(glowTheme)) onBoundsChange(getBounds());
+  if (star) {
+   if (current) {
+    canvas.drawCircle(cx, cy, (CURRENT_DP / 2 + GLOW_DP) * density, glow);
+    fill.setStyle(Paint.Style.FILL); fill.setColor(RoseThemeNow.c(CURRENT));
+   } else {
+    fill.setStyle(Paint.Style.STROKE); fill.setStrokeWidth(STAR_STROKE_DP * density); fill.setColor(RoseThemeNow.c(IDLE));
+   }
+   canvas.drawPath(starPath, fill);
+   fill.setStyle(Paint.Style.FILL);
+   return;
+  }
   if (current) {
    float r = CURRENT_DP * density / 2, outer = r + GLOW_DP * density;
    canvas.drawCircle(cx, cy, outer, glow);

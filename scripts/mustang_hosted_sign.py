@@ -28,6 +28,7 @@ import re
 import shutil
 import stat
 import sys
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -207,6 +208,10 @@ def require_full_bundle_source(bundle,root=ROOT):
     native=bound.get('nativeReceipt',{});copied=bound.get('copyReceipt',{})
     import mustang_retained
     compile_run,compile_attempt,compile_source=mustang_retained.compile_context(bundle)
+    if bundle.get('artifactProducer') is not None:
+        import mustang_artifact_delivery
+        mustang_artifact_delivery.require_bundle(bundle,root)
+        mustang_artifact_delivery.compatible(bundle['sourceSha'],root)
     run=dict(runId=compile_run,runAttempt=compile_attempt,source=compile_source,
         workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
     if bundle.get('retainedProducer') is not None:
@@ -238,6 +243,11 @@ def require_full_bundle_source(bundle,root=ROOT):
 
 def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
     """Correlate completed native producer with this in-progress hosted signer."""
+    if bundle.get('artifactProducer') is not None:
+        import mustang_artifact_delivery
+        mustang_artifact_delivery.require_bundle(bundle,root)
+        event=read_json(env['GITHUB_EVENT_PATH'])
+        return mustang_artifact_delivery.authenticate(env,event,api=api,root=root)
     import base64
     import mustang_bootstrap_collector as collector
     import mustang_lane
@@ -274,9 +284,9 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
             or any((actual.get(k) or {}).get('id')!=1428996648 for k in ('repository','head_repository')):
         raise ValueError('full-run Actions metadata differs')
     if retained and (actual.get('workflow_id')!=408460629 or type(actual.get('run_number')) is not int \
-            or actual['run_number']<=36 or int(run['runId'])<=int(mustang_retained.RUN) \
+            or actual['run_number']<=mustang_retained.RUN_NUMBER or int(run['runId'])<=int(mustang_retained.RUN) \
             or mustang_retained.mustang_clock.utc(actual.get('created_at'))<=
-                mustang_retained.mustang_clock.utc('2026-11-09T17:23:51Z')):
+                mustang_retained.mustang_clock.utc(mustang_retained.CREATED_AT)):
         raise ValueError('retained delivery Actions epoch/order differs')
     if 'clockAllocation' in bundle:
         import mustang_clock
@@ -312,6 +322,61 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
     if retained:
         result.update(retainedProducerVerified=True,retainedProducerRunId=mustang_retained.RUN,
                       retainedProducerArtifactId=mustang_retained.ARTIFACT['id'])
+    return result
+
+
+def confirm_uploads(bundle_path,env=None,*,api=None,root=ROOT,poll_attempts=8,wait=time.sleep):
+    """Require finalized same-run artifacts; payload verification remains on the signer."""
+    import mustang_bootstrap_collector as collector
+    env=os.environ if env is None else env
+    bundle,_directory=bundle_document(bundle_path)
+    require_bundle_identity(bundle,env,root)
+    if env.get('GITHUB_JOB')!='builder' or str(bundle['runAttempt'])!='1' \
+            or not re.fullmatch(r'[1-9][0-9]{0,19}',str(bundle['runId'])):
+        raise ValueError('upload confirmation requires this fresh builder attempt')
+    api=api or collector.github_reader(dict(runId=bundle['runId']),env.get('GH_TOKEN',''),include_artifacts=True)
+    if type(poll_attempts) is not int or not 1 <= poll_attempts <= 8:
+        raise ValueError('artifact confirmation read bound differs')
+    path='/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+bundle['runId']+'/artifacts?per_page=100'
+    names={'mustang-signing-'+kind+'-'+bundle['runId']+'-1' for kind in ('bundle','inputs')}
+    for attempt in range(poll_attempts):
+        # A successful list can race the finalization index. Never retry an API
+        # denial/transport failure: the API call is deliberately outside try.
+        snapshot=api(path)
+        try:
+            rows=collector.listing(snapshot,'artifacts')
+        except collector.git.Refused:
+            rows=snapshot.get('artifacts');count=snapshot.get('total_count')
+            if type(count) is not int or not 0 <= count <= 100 or not isinstance(rows,list) \
+                    or len(rows)>100 or any(not isinstance(row,dict) for row in rows):
+                raise
+            if attempt+1==poll_attempts:
+                raise ValueError('artifact index did not settle: listed='+str(len(rows))+' reported='+str(count)) from None
+        else:
+            counts=[sum(row.get('name')==name for row in rows) for name in names]
+            if any(count>1 for count in counts):
+                raise ValueError('finalized signing artifact missing or ambiguous')
+            if all(count==1 for count in counts):break
+            if attempt+1==poll_attempts:
+                raise ValueError('finalized signing artifact missing or ambiguous after bounded metadata wait')
+        print(json.dumps(dict(artifactMetadataPending=True,read=attempt+1,maximumReads=poll_attempts,
+                              listed=len(rows),reported=snapshot['total_count'])))
+        wait(5)
+    found={}
+    for kind in ('bundle','inputs'):
+        name='mustang-signing-'+kind+'-'+bundle['runId']+'-1'
+        matches=[row for row in rows if row.get('name')==name]
+        if len(matches)!=1:raise ValueError('finalized signing artifact missing or ambiguous: '+kind)
+        row=matches[0];run=row.get('workflow_run') or {}
+        if type(row.get('id')) is not int or row['id']<=0 or row.get('expired') is not False \
+                or type(row.get('size_in_bytes')) is not int or row['size_in_bytes']<=0 \
+                or not re.fullmatch(r'sha256:[0-9a-f]{64}',str(row.get('digest',''))) \
+                or (run.get('id'),run.get('head_sha'),run.get('repository_id'),run.get('head_repository_id')) != (
+                    int(bundle['runId']),bundle['sourceSha'],1428996648,1428996648):
+            raise ValueError('finalized signing artifact identity differs: '+kind)
+        found[kind]=dict(id=row['id'],name=name,digest=row['digest'],sizeBytes=row['size_in_bytes'])
+    result=dict(finalizedArtifacts=found,payloadBytesVerified=False,signerAdmitted=False)
+    print(json.dumps(result))
     return result
 
 
@@ -1413,7 +1478,7 @@ def step_output(name, value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('export-bundle', 'preliminary', 'gate', 'preflight', 'sign', 'bind-outputs'))
+    parser.add_argument('action', choices=('export-bundle', 'preliminary', 'gate', 'preflight', 'sign', 'bind-outputs', 'confirm-uploads'))
     parser.add_argument('--collection')
     parser.add_argument('--out')
     parser.add_argument('--bundle')
@@ -1432,6 +1497,9 @@ def main(argv=None):
             return 0
         if not args.bundle:
             raise ValueError('signing bundle is missing')
+        if args.action == 'confirm-uploads':
+            confirm_uploads(args.bundle)
+            return 0
         if args.action == 'sign':
             if not args.out:
                 raise ValueError('hosted signed output is missing')

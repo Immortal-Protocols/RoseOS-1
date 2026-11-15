@@ -1,0 +1,1923 @@
+{
+  "when": "2026-11-14T01:06:33.798Z",
+  "commit": "6fcf8c9b38c47d599eebea2742d313bc677bedde",
+  "tree_clean": true,
+  "htmls": [
+    {
+      "file": "Rose-Glacier.html",
+      "sha256": "f910e784238f940211e5898c25c6929f1ae4de69a2db828aa3227f44d2016f57",
+      "blob": "27c0d9d40e9d994adb718599f375ef84b0cee873",
+      "committed_blob": "27c0d9d40e9d994adb718599f375ef84b0cee873"
+    },
+    {
+      "file": "Rose-HiFi.html",
+      "sha256": "ead6e3578c8c4c12524d91437590272818a1424ecedfbf6744413e6fc5fc4f71",
+      "blob": "5db15287245dbab45ca6c1f8521536af7e2f8eeb",
+      "committed_blob": "5db15287245dbab45ca6c1f8521536af7e2f8eeb"
+    }
+  ],
+  "passed": 387,
+  "total": 387,
+  "results": [
+    {
+      "n": "glacier-design: starts on Home page 1 with no workspace layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: workspace mark sits before Home’s dots, unlit on Home page 1 (Home dot 1 lit)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: swipe right from Home reaches the workspace page (left of Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: workspace is on screen and interactive; Home pages inert",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: dock and chin unchanged on the workspace page",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Home pages and icons unchanged (no workspace content inside Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: page is labelled “Simulated generation · sample data”",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: canvas ends above the page dots and dock",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: workspace mark (star, not a dot) is lit on the workspace; Home dots are not",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: further right swipe resists and stays on the workspace (no wrap)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Arrange → loading: “Composing on this phone… simulated”, skeleton, controls disabled, still on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: no control moves during loading",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: best-guess layout arrives (apps, actions, notification…)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: controls identical after the layout arrives",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: tapping the request field opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: typing via keys",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: action key submits; keyboard hides; cooking layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: cooking uses apps, direct + Rose actions, list and carousel",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: status echoes the interpreted request",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: carousel scrolls sideways (trackpad/wheel); page stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: a drag that starts on the carousel never flips the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Pin marks a card (aria-pressed, outline)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Regenerate → another arrangement of the same intent; pinned card keeps its exact position (index 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: pinned card is rendered at the same slot on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: a second Regenerate still keeps the pin in place",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Undo (twice) restores the earlier arrangement exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: request “work” → work layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: request “unwind” → unwinding layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: cooking, work and unwinding are materially different (no shared cards besides the carried pin)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: recent layouts row lists retained layouts (most recent first)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: direct action (timer) acts immediately, no confirmation",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Rose task is visibly different: pearl + “Rose task · asks first”, outline not fill",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Rose task asks first (confirm sheet; nothing started yet)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: “Not now” starts nothing",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: “Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: grocery action starts its own sample task, titled exactly like the action (not “Plan a quiet Saturday”)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Rose’s work shows the task under the same title, with grocery/recipe sample windows (no Saturday content)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: tapping a running Rose task opens Rose’s work",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: failure: “Couldn’t arrange · kept your last layout · Retry”; layout unchanged",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: no control moves on failure",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Retry succeeds",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: voice → listening (simulated)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: voice request “Something relaxing for tonight” → unwinding",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: mic muted from the chin → voice refused (no listening), toast and label say so",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: workspace keyboard/state does not leak into an app",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: layout retained after leaving to an app and returning",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: after reload the phone opens on Home (page 1)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: RELOAD: layout, arrangement, pins and recent layouts restored exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: RELOAD: undo history and status line restored; direct-action state kept",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: RELOAD: harness reports the restore source",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: RELOAD: pinned cards render as pinned",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: RELOAD: Undo still works on the restored history",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Undo shows the request that produced that layout (no stale echo)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: when ready: “Workspace ready: Work” offers Show workspace; the app stays in front",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: the offer never leaves the app by itself",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: offer controls are at least 44 pt (device units)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Show workspace (explicit tap) goes to the workspace with the prepared layout; offer gone",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Dismiss closes the offer and stays in the app; the layout is still prepared",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: failed preparation says so and keeps the last layout; no Show button",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: swipe left (outside a carousel) returns to Home page 1",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: back on Home the workspace mark is unlit",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: dock and chin unchanged back on Home",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: Home paging to the right still works (page 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-design: no console errors",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: starts on Home page 1 with no workspace layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: workspace mark sits before Home’s dots, unlit on Home page 1 (Home dot 1 lit)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: swipe right from Home reaches the workspace page (left of Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: workspace is on screen and interactive; Home pages inert",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: dock and chin unchanged on the workspace page",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Home pages and icons unchanged (no workspace content inside Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: page is labelled “Simulated generation · sample data”",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: canvas ends above the page dots and dock",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: workspace mark (star, not a dot) is lit on the workspace; Home dots are not",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: further right swipe resists and stays on the workspace (no wrap)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Arrange → loading: “Composing on this phone… simulated”, skeleton, controls disabled, still on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: no control moves during loading",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: best-guess layout arrives (apps, actions, notification…)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: controls identical after the layout arrives",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: tapping the request field opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: typing via keys",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: action key submits; keyboard hides; cooking layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: cooking uses apps, direct + Rose actions, list and carousel",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: status echoes the interpreted request",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: carousel scrolls sideways (touch drag); page stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Pin marks a card (aria-pressed, outline)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Regenerate → another arrangement of the same intent; pinned card keeps its exact position (index 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: pinned card is rendered at the same slot on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: a second Regenerate still keeps the pin in place",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Undo (twice) restores the earlier arrangement exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: request “work” → work layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: request “unwind” → unwinding layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: cooking, work and unwinding are materially different (no shared cards besides the carried pin)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: recent layouts row lists retained layouts (most recent first)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: direct action (timer) acts immediately, no confirmation",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Rose task is visibly different: pearl + “Rose task · asks first”, outline not fill",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Rose task asks first (confirm sheet; nothing started yet)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: “Not now” starts nothing",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: “Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: grocery action starts its own sample task, titled exactly like the action (not “Plan a quiet Saturday”)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Rose’s work shows the task under the same title, with grocery/recipe sample windows (no Saturday content)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: tapping a running Rose task opens Rose’s work",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: failure: “Couldn’t arrange · kept your last layout · Retry”; layout unchanged",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: no control moves on failure",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Retry succeeds",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: voice → listening (simulated)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: voice request “Something relaxing for tonight” → unwinding",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: mic muted from the chin → voice refused (no listening), toast and label say so",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: workspace keyboard/state does not leak into an app",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: layout retained after leaving to an app and returning",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: after reload the phone opens on Home (page 1)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: RELOAD: layout, arrangement, pins and recent layouts restored exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: RELOAD: undo history and status line restored; direct-action state kept",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: RELOAD: harness reports the restore source",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: RELOAD: pinned cards render as pinned",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: RELOAD: Undo still works on the restored history",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Undo shows the request that produced that layout (no stale echo)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: when ready: “Workspace ready: Work” offers Show workspace; the app stays in front",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: the offer never leaves the app by itself",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: offer controls are at least 44 pt (device units)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Show workspace (explicit tap) goes to the workspace with the prepared layout; offer gone",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Dismiss closes the offer and stays in the app; the layout is still prepared",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: failed preparation says so and keeps the last layout; no Show button",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: swipe left (outside a carousel) returns to Home page 1",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: back on Home the workspace mark is unlit",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: dock and chin unchanged back on Home",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: Home paging to the right still works (page 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphone13-390: no console errors",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: starts on Home page 1 with no workspace layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: workspace mark sits before Home’s dots, unlit on Home page 1 (Home dot 1 lit)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: swipe right from Home reaches the workspace page (left of Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: workspace is on screen and interactive; Home pages inert",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: dock and chin unchanged on the workspace page",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Home pages and icons unchanged (no workspace content inside Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: page is labelled “Simulated generation · sample data”",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: canvas ends above the page dots and dock",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: workspace mark (star, not a dot) is lit on the workspace; Home dots are not",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: further right swipe resists and stays on the workspace (no wrap)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Arrange → loading: “Composing on this phone… simulated”, skeleton, controls disabled, still on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: no control moves during loading",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: best-guess layout arrives (apps, actions, notification…)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: controls identical after the layout arrives",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: tapping the request field opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: typing via keys",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: action key submits; keyboard hides; cooking layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: cooking uses apps, direct + Rose actions, list and carousel",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: status echoes the interpreted request",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: carousel scrolls sideways (touch drag); page stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Pin marks a card (aria-pressed, outline)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Regenerate → another arrangement of the same intent; pinned card keeps its exact position (index 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: pinned card is rendered at the same slot on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: a second Regenerate still keeps the pin in place",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Undo (twice) restores the earlier arrangement exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: request “work” → work layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: request “unwind” → unwinding layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: cooking, work and unwinding are materially different (no shared cards besides the carried pin)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: recent layouts row lists retained layouts (most recent first)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: direct action (timer) acts immediately, no confirmation",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Rose task is visibly different: pearl + “Rose task · asks first”, outline not fill",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Rose task asks first (confirm sheet; nothing started yet)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: “Not now” starts nothing",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: “Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: grocery action starts its own sample task, titled exactly like the action (not “Plan a quiet Saturday”)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Rose’s work shows the task under the same title, with grocery/recipe sample windows (no Saturday content)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: tapping a running Rose task opens Rose’s work",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: failure: “Couldn’t arrange · kept your last layout · Retry”; layout unchanged",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: no control moves on failure",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Retry succeeds",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: voice → listening (simulated)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: voice request “Something relaxing for tonight” → unwinding",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: mic muted from the chin → voice refused (no listening), toast and label say so",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: workspace keyboard/state does not leak into an app",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: layout retained after leaving to an app and returning",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: after reload the phone opens on Home (page 1)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: RELOAD: layout, arrangement, pins and recent layouts restored exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: RELOAD: undo history and status line restored; direct-action state kept",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: RELOAD: harness reports the restore source",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: RELOAD: pinned cards render as pinned",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: RELOAD: Undo still works on the restored history",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Undo shows the request that produced that layout (no stale echo)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: when ready: “Workspace ready: Work” offers Show workspace; the app stays in front",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: the offer never leaves the app by itself",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: offer controls are at least 44 pt (device units)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Show workspace (explicit tap) goes to the workspace with the prepared layout; offer gone",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Dismiss closes the offer and stays in the app; the layout is still prepared",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: failed preparation says so and keeps the last layout; no Show button",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: swipe left (outside a carousel) returns to Home page 1",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: back on Home the workspace mark is unlit",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: dock and chin unchanged back on Home",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: Home paging to the right still works (page 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-iphoneSE-320: no console errors",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: starts on Home page 1 with no workspace layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: workspace mark sits before Home’s dots, unlit on Home page 1 (Home dot 1 lit)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: swipe right from Home reaches the workspace page (left of Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: workspace is on screen and interactive; Home pages inert",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: dock and chin unchanged on the workspace page",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Home pages and icons unchanged (no workspace content inside Home)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: page is labelled “Simulated generation · sample data”",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: canvas ends above the page dots and dock",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: workspace mark (star, not a dot) is lit on the workspace; Home dots are not",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: further right swipe resists and stays on the workspace (no wrap)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Arrange → loading: “Composing on this phone… simulated”, skeleton, controls disabled, still on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: no control moves during loading",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: best-guess layout arrives (apps, actions, notification…)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: controls identical after the layout arrives",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: tapping the request field opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: typing via keys",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: action key submits; keyboard hides; cooking layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: cooking uses apps, direct + Rose actions, list and carousel",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: status echoes the interpreted request",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: carousel scrolls sideways (touch drag); page stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Pin marks a card (aria-pressed, outline)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Regenerate → another arrangement of the same intent; pinned card keeps its exact position (index 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: pinned card is rendered at the same slot on the page",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: a second Regenerate still keeps the pin in place",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Undo (twice) restores the earlier arrangement exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: request “work” → work layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: request “unwind” → unwinding layout",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: cooking, work and unwinding are materially different (no shared cards besides the carried pin)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: recent layouts row lists retained layouts (most recent first)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: direct action (timer) acts immediately, no confirmation",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Rose task is visibly different: pearl + “Rose task · asks first”, outline not fill",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Rose task asks first (confirm sheet; nothing started yet)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: “Not now” starts nothing",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: “Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: grocery action starts its own sample task, titled exactly like the action (not “Plan a quiet Saturday”)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Rose’s work shows the task under the same title, with grocery/recipe sample windows (no Saturday content)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: tapping a running Rose task opens Rose’s work",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: failure: “Couldn’t arrange · kept your last layout · Retry”; layout unchanged",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: no control moves on failure",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Retry succeeds",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: voice → listening (simulated)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: voice request “Something relaxing for tonight” → unwinding",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: mic muted from the chin → voice refused (no listening), toast and label say so",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: workspace keyboard/state does not leak into an app",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: layout retained after leaving to an app and returning",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: after reload the phone opens on Home (page 1)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: RELOAD: layout, arrangement, pins and recent layouts restored exactly",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: RELOAD: undo history and status line restored; direct-action state kept",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: RELOAD: harness reports the restore source",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: RELOAD: pinned cards render as pinned",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: RELOAD: Undo still works on the restored history",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Undo shows the request that produced that layout (no stale echo)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: when ready: “Workspace ready: Work” offers Show workspace; the app stays in front",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: the offer never leaves the app by itself",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: offer controls are at least 44 pt (device units)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Show workspace (explicit tap) goes to the workspace with the prepared layout; offer gone",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Dismiss closes the offer and stays in the app; the layout is still prepared",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: failed preparation says so and keeps the last layout; no Show button",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: swipe left (outside a carousel) returns to Home page 1",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: back on Home the workspace mark is unlit",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: dock and chin unchanged back on Home",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: Home paging to the right still works (page 2)",
+      "ok": true
+    },
+    {
+      "n": "glacier-short-390x600: no console errors",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: starts on Home page 1 with no workspace layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: workspace mark sits before Home’s dots, unlit on Home page 1 (Home dot 1 lit)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: swipe right from Home reaches the workspace page (left of Home)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: workspace is on screen and interactive; Home pages inert",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: dock and chin unchanged on the workspace page",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Home pages and icons unchanged (no workspace content inside Home)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: page is labelled “Simulated generation · sample data”",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: canvas ends above the page dots and dock",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: workspace mark (star, not a dot) is lit on the workspace; Home dots are not",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: further right swipe resists and stays on the workspace (no wrap)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Arrange → loading: “Composing on this phone… simulated”, skeleton, controls disabled, still on the page",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: no control moves during loading",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: best-guess layout arrives (apps, actions, notification…)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: controls identical after the layout arrives",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: tapping the request field opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: typing via keys",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: action key submits; keyboard hides; cooking layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: cooking uses apps, direct + Rose actions, list and carousel",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: status echoes the interpreted request",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: carousel scrolls sideways (trackpad/wheel); page stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: a drag that starts on the carousel never flips the page",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Pin marks a card (aria-pressed, outline)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Regenerate → another arrangement of the same intent; pinned card keeps its exact position (index 2)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: pinned card is rendered at the same slot on the page",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: a second Regenerate still keeps the pin in place",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Undo (twice) restores the earlier arrangement exactly",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: request “work” → work layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: request “unwind” → unwinding layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: cooking, work and unwinding are materially different (no shared cards besides the carried pin)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: recent layouts row lists retained layouts (most recent first)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: direct action (timer) acts immediately, no confirmation",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Rose task is visibly different: pearl + “Rose task · asks first”, outline not fill",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Rose task asks first (confirm sheet; nothing started yet)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: “Not now” starts nothing",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: “Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: grocery action starts its own sample task, titled exactly like the action (not “Plan a quiet Saturday”)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Rose’s work shows the task under the same title, with grocery/recipe sample windows (no Saturday content)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: tapping a running Rose task opens Rose’s work",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: failure: “Couldn’t arrange · kept your last layout · Retry”; layout unchanged",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: no control moves on failure",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Retry succeeds",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: voice → listening (simulated)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: voice request “Something relaxing for tonight” → unwinding",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: mic muted from the chin → voice refused (no listening), toast and label say so",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: workspace keyboard/state does not leak into an app",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: layout retained after leaving to an app and returning",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: after reload the phone opens on Home (page 1)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: RELOAD: layout, arrangement, pins and recent layouts restored exactly",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: RELOAD: undo history and status line restored; direct-action state kept",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: RELOAD: harness reports the restore source",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: RELOAD: pinned cards render as pinned",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: RELOAD: Undo still works on the restored history",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Undo shows the request that produced that layout (no stale echo)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: when ready: “Workspace ready: Work” offers Show workspace; the app stays in front",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: the offer never leaves the app by itself",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: offer controls are at least 44 pt (device units)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Show workspace (explicit tap) goes to the workspace with the prepared layout; offer gone",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Dismiss closes the offer and stays in the app; the layout is still prepared",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: failed preparation says so and keeps the last layout; no Show button",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: swipe left (outside a carousel) returns to Home page 1",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: back on Home the workspace mark is unlit",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: dock and chin unchanged back on Home",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: Home paging to the right still works (page 2)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-design: no console errors",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: starts on Home page 1 with no workspace layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: workspace mark sits before Home’s dots, unlit on Home page 1 (Home dot 1 lit)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: swipe right from Home reaches the workspace page (left of Home)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: workspace is on screen and interactive; Home pages inert",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: dock and chin unchanged on the workspace page",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Home pages and icons unchanged (no workspace content inside Home)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: page is labelled “Simulated generation · sample data”",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: canvas ends above the page dots and dock",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: workspace mark (star, not a dot) is lit on the workspace; Home dots are not",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: further right swipe resists and stays on the workspace (no wrap)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Arrange → loading: “Composing on this phone… simulated”, skeleton, controls disabled, still on the page",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: no control moves during loading",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: best-guess layout arrives (apps, actions, notification…)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: controls identical after the layout arrives",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: tapping the request field opens the keyboard",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: typing via keys",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: action key submits; keyboard hides; cooking layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: cooking uses apps, direct + Rose actions, list and carousel",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: status echoes the interpreted request",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: carousel scrolls sideways (touch drag); page stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Pin marks a card (aria-pressed, outline)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Regenerate → another arrangement of the same intent; pinned card keeps its exact position (index 2)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: pinned card is rendered at the same slot on the page",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: a second Regenerate still keeps the pin in place",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Undo (twice) restores the earlier arrangement exactly",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: request “work” → work layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: request “unwind” → unwinding layout",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: cooking, work and unwinding are materially different (no shared cards besides the carried pin)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: recent layouts row lists retained layouts (most recent first)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: direct action (timer) acts immediately, no confirmation",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Rose task is visibly different: pearl + “Rose task · asks first”, outline not fill",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Rose task asks first (confirm sheet; nothing started yet)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: “Not now” starts nothing",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: “Ask Rose” starts Rose work; card reads “Rose is working”; stays on the workspace",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: grocery action starts its own sample task, titled exactly like the action (not “Plan a quiet Saturday”)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Rose’s work shows the task under the same title, with grocery/recipe sample windows (no Saturday content)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: tapping a running Rose task opens Rose’s work",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: failure: “Couldn’t arrange · kept your last layout · Retry”; layout unchanged",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: no control moves on failure",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Retry succeeds",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: voice → listening (simulated)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: voice request “Something relaxing for tonight” → unwinding",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: mic muted from the chin → voice refused (no listening), toast and label say so",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: workspace keyboard/state does not leak into an app",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: layout retained after leaving to an app and returning",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: after reload the phone opens on Home (page 1)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: RELOAD: layout, arrangement, pins and recent layouts restored exactly",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: RELOAD: undo history and status line restored; direct-action state kept",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: RELOAD: harness reports the restore source",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: RELOAD: pinned cards render as pinned",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: RELOAD: Undo still works on the restored history",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Undo shows the request that produced that layout (no stale echo)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: while preparing: “Preparing workspace: Work · simulated”, no navigation, still in the app",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: when ready: “Workspace ready: Work” offers Show workspace; the app stays in front",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: the offer never leaves the app by itself",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: offer controls are at least 44 pt (device units)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Show workspace (explicit tap) goes to the workspace with the prepared layout; offer gone",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Dismiss closes the offer and stays in the app; the layout is still prepared",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: failed preparation says so and keeps the last layout; no Show button",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: swipe left (outside a carousel) returns to Home page 1",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: back on Home the workspace mark is unlit",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: dock and chin unchanged back on Home",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: Home paging to the right still works (page 2)",
+      "ok": true
+    },
+    {
+      "n": "oxblood-iphone13-390: no console errors",
+      "ok": true
+    },
+    {
+      "n": "classic: no workspace page; Home cannot go left of page 1",
+      "ok": true
+    }
+  ],
+  "shots": [
+    {
+      "file": "glacier-design-01-empty.png",
+      "note": "Workspace, empty state",
+      "sha256": "76685043941e3cc7dc7cce2ab5f583c3269ed3bc32c4196d8dac3f742de48e54"
+    },
+    {
+      "file": "glacier-design-02-loading.png",
+      "note": "Arrange for me: loading (simulated, 2.5 s harness latency)",
+      "sha256": "49527980160e2078ccadabf06a782ecb55a8f179b25201132a5670bff2c65452"
+    },
+    {
+      "file": "glacier-design-03-best-guess.png",
+      "note": "Arrange for me: best guess",
+      "sha256": "b716cbe2a652ed2ea9f3873bc8f53b60d1be856331bf8a8916d40671a5c00603"
+    },
+    {
+      "file": "glacier-design-04-typing.png",
+      "note": "Typing a request with the keyboard",
+      "sha256": "2bdbb57eb1210e1afaacc1abf4e2b4320bc5bc758da2a89d8a818fbb66d769ab"
+    },
+    {
+      "file": "glacier-design-05-cooking.png",
+      "note": "Request “dinner tonight” → cooking",
+      "sha256": "fdc39d3b23349baf0da39ffdac58ad0ab2356002d6fece2c05b28cddb786f1e3"
+    },
+    {
+      "file": "glacier-design-05b-pinned.png",
+      "note": "Card 3 pinned (before Regenerate), canvas at top",
+      "sha256": "1fb6e15468dca8ff1a0597c8a3717ab02e7d0fd86fb353755534eb720e736ecb"
+    },
+    {
+      "file": "glacier-design-06-regenerated-pinned.png",
+      "note": "After Regenerate: the pinned card keeps slot 3, canvas at top",
+      "sha256": "f300e76ecf2a7c4b4a01622008e4f66e2fd3c3bd0966ed6576c8c285676471e6"
+    },
+    {
+      "file": "glacier-design-07-unwinding.png",
+      "note": "Request “unwind” → unwinding",
+      "sha256": "c39f767b8455b1091b79872b8bb0b2cd8158f06fa6583b6e353e9ca96c8c7cf6"
+    },
+    {
+      "file": "glacier-design-08-work.png",
+      "note": "Request “work” → work",
+      "sha256": "13532779b8e63516eda731d0022c205268c03919f29b1927e0b0fa29b87ac574"
+    },
+    {
+      "file": "glacier-design-09-agent-confirm.png",
+      "note": "Rose task: asks first",
+      "sha256": "a67ac31f3c3e4c9116cced1fa263b7840b72cf4af09f7191091fb2ee70b67ed1"
+    },
+    {
+      "file": "glacier-design-09b-work-view-task.png",
+      "note": "Rose’s work: the grocery task under its own title",
+      "sha256": "95023f7ca90db0887291ca28e1a9fba5e83fad9355642e769765c2d2a7fbcf68"
+    },
+    {
+      "file": "glacier-design-10-failed.png",
+      "note": "Generation failed; last layout kept",
+      "sha256": "c796b58276303fd517afaf28326c3b1d05c19db5839326974bea59947751431b"
+    },
+    {
+      "file": "glacier-design-11-voice-muted.png",
+      "note": "Voice refused while the mic is muted",
+      "sha256": "d79443a4dd51421145dfdfe15bfe855a40859bf35377c791eff5097cff0d2b46"
+    },
+    {
+      "file": "glacier-design-11b-after-reload.png",
+      "note": "After a full page reload: workspace restored",
+      "sha256": "9a89e7301857f7c3050b3df429214f5845289dd4eff1100f7ce610e913b87018"
+    },
+    {
+      "file": "glacier-design-12a-preparing-in-app.png",
+      "note": "Preparing from a conversation while in an app",
+      "sha256": "af1c704d71948fe14e7f642321aa6a500bb59c8ea5ed5cd4ad54b7ce79c9eccf"
+    },
+    {
+      "file": "glacier-design-12b-ready-offer-in-app.png",
+      "note": "Ready: Show workspace offered; the app stays in front",
+      "sha256": "49658f4ac418eaa35671dabc81eaceb9d2677b26e71522dbdf45cdaa1b5b927b"
+    },
+    {
+      "file": "glacier-design-13-home.png",
+      "note": "Home after visiting the workspace (unchanged)",
+      "sha256": "214c0606faf01aa9320d1e7d2909e39dff38f79077eec256d74decd53dd170a8"
+    },
+    {
+      "file": "glacier-iphone13-390-01-empty.png",
+      "note": "Workspace, empty state",
+      "sha256": "d41f8d21e88609f78f19ec84f5a21def14cc78e44412284c2309177da9885857"
+    },
+    {
+      "file": "glacier-iphone13-390-02-loading.png",
+      "note": "Arrange for me: loading (simulated, 2.5 s harness latency)",
+      "sha256": "d2e2916cc0c7ba1432dcab780eee8c3f86f376115fe47d09c87ffced732576c2"
+    },
+    {
+      "file": "glacier-iphone13-390-03-best-guess.png",
+      "note": "Arrange for me: best guess",
+      "sha256": "4965204d033fd31ca361e6dcc021ac3ae8297a0ab7a65f69defe44e0a738388b"
+    },
+    {
+      "file": "glacier-iphone13-390-04-typing.png",
+      "note": "Typing a request with the keyboard",
+      "sha256": "bf12b3bb915c1a4ea26942576ed0c254c1f539640de32b4bbc3c65f6bda21552"
+    },
+    {
+      "file": "glacier-iphone13-390-05-cooking.png",
+      "note": "Request “dinner tonight” → cooking",
+      "sha256": "2c70fe8e3deccdb30826debf02d3046a2c65f9d58ec104b3eea99cf67c7b00a4"
+    },
+    {
+      "file": "glacier-iphone13-390-05b-pinned.png",
+      "note": "Card 3 pinned (before Regenerate), canvas at top",
+      "sha256": "2c70fe8e3deccdb30826debf02d3046a2c65f9d58ec104b3eea99cf67c7b00a4"
+    },
+    {
+      "file": "glacier-iphone13-390-06-regenerated-pinned.png",
+      "note": "After Regenerate: the pinned card keeps slot 3, canvas at top",
+      "sha256": "0fc7b5b4a41cd8ab3eb423ad2b11f67027870f55607cf0e5118908f9bdb29ca4"
+    },
+    {
+      "file": "glacier-iphone13-390-07-unwinding.png",
+      "note": "Request “unwind” → unwinding",
+      "sha256": "89ce158a8261386395c13b9284edd546f91f520c129e0cd7122f2aaf63ea1994"
+    },
+    {
+      "file": "glacier-iphone13-390-08-work.png",
+      "note": "Request “work” → work",
+      "sha256": "aaeca65a51425dfc6d95e3a9bf1e14a0cb8980de7aa4f4e124657eedc980565b"
+    },
+    {
+      "file": "glacier-iphone13-390-09-agent-confirm.png",
+      "note": "Rose task: asks first",
+      "sha256": "e89ae43b0a595553e2784a4946db5bf6ed891cc89fb21e9b9d1479ece2fba8b9"
+    },
+    {
+      "file": "glacier-iphone13-390-09b-work-view-task.png",
+      "note": "Rose’s work: the grocery task under its own title",
+      "sha256": "00279b80504296775cdf3b828d387263a3e0c4b5087eed7eaf9169995e1b38fd"
+    },
+    {
+      "file": "glacier-iphone13-390-10-failed.png",
+      "note": "Generation failed; last layout kept",
+      "sha256": "e2bc3d8e12191c7b24b125c26e0cc712e4eb46b74049931bfed62640d8e06d8f"
+    },
+    {
+      "file": "glacier-iphone13-390-11-voice-muted.png",
+      "note": "Voice refused while the mic is muted",
+      "sha256": "d39e1fb4a0a706bc98299b2f9a09445cb7a25c26eabd862a7e656c9b2b076030"
+    },
+    {
+      "file": "glacier-iphone13-390-11b-after-reload.png",
+      "note": "After a full page reload: workspace restored",
+      "sha256": "4e891222f515c09763365bfd1d1816380019840692b9cf0be10ee496fd5791ac"
+    },
+    {
+      "file": "glacier-iphone13-390-12a-preparing-in-app.png",
+      "note": "Preparing from a conversation while in an app",
+      "sha256": "59ba647dd6815a79fc3031e7c1682ce11a39f96e82b0cb5086d175ef00409624"
+    },
+    {
+      "file": "glacier-iphone13-390-12b-ready-offer-in-app.png",
+      "note": "Ready: Show workspace offered; the app stays in front",
+      "sha256": "c31158f8a43dcad549016566fa6e1a47381c3721e9260ead00d76e5e5d374fe1"
+    },
+    {
+      "file": "glacier-iphone13-390-13-home.png",
+      "note": "Home after visiting the workspace (unchanged)",
+      "sha256": "2c77875401a8836ad95ec9d5207dd24a64b57020baad04df8cf58b589b0e67a6"
+    },
+    {
+      "file": "glacier-iphoneSE-320-01-empty.png",
+      "note": "Workspace, empty state",
+      "sha256": "00df06474bf60c3f5f47ae651149fbc46a1c4bdb491f4f806c007443aabf8c2b"
+    },
+    {
+      "file": "glacier-iphoneSE-320-03-best-guess.png",
+      "note": "Arrange for me: best guess",
+      "sha256": "3158dd75d765603a68a5ebdf5737a19945452df3fb40c20047fbe85bdb9bf812"
+    },
+    {
+      "file": "glacier-iphoneSE-320-05-cooking.png",
+      "note": "Request “dinner tonight” → cooking",
+      "sha256": "f312f766b84244c7dbcd9e31be77001418bd12ff0ffb86225f2ac08054a243bb"
+    },
+    {
+      "file": "glacier-iphoneSE-320-06-regenerated-pinned.png",
+      "note": "After Regenerate: the pinned card keeps slot 3, canvas at top",
+      "sha256": "de45fa79f4dd6f98f5746a2c619980f24ea75595053c7afce4aa476cb4e98446"
+    },
+    {
+      "file": "glacier-iphoneSE-320-07-unwinding.png",
+      "note": "Request “unwind” → unwinding",
+      "sha256": "034b9bd1af508e3d5412d4db39948347f6447665a4c249f910ba832939a3a6fb"
+    },
+    {
+      "file": "glacier-iphoneSE-320-08-work.png",
+      "note": "Request “work” → work",
+      "sha256": "cfec17ff736aafd9884453d752c9eefd86d6e6174b4104540d91b20e09cf4845"
+    },
+    {
+      "file": "glacier-iphoneSE-320-09-agent-confirm.png",
+      "note": "Rose task: asks first",
+      "sha256": "a561a00bb4157149b8f263c1179a5d822398360b0b41a5f7030bebb6e3d00d81"
+    },
+    {
+      "file": "glacier-iphoneSE-320-10-failed.png",
+      "note": "Generation failed; last layout kept",
+      "sha256": "222fb755983d61be2e436087831813c84034c012aec50da626bf9e97ba5931a4"
+    },
+    {
+      "file": "glacier-iphoneSE-320-13-home.png",
+      "note": "Home after visiting the workspace (unchanged)",
+      "sha256": "b719911b2233d7432a53fe3e2c9672170887e2c24f5f5ad18523bceacc09142f"
+    },
+    {
+      "file": "glacier-short-390x600-01-empty.png",
+      "note": "Workspace, empty state",
+      "sha256": "b75455b24395472f3b8ae8afc0ea943191de2717577e632fe657b8ba78662cfd"
+    },
+    {
+      "file": "glacier-short-390x600-03-best-guess.png",
+      "note": "Arrange for me: best guess",
+      "sha256": "2b692eaef994e8c724f7c3ac8620af8f2d9efcea5349cbb08326463d2fd30928"
+    },
+    {
+      "file": "glacier-short-390x600-05-cooking.png",
+      "note": "Request “dinner tonight” → cooking",
+      "sha256": "7a8044c825c54f86a23f66119dc945b2e8ace1e3f88659240e3b19b8082c9049"
+    },
+    {
+      "file": "glacier-short-390x600-06-regenerated-pinned.png",
+      "note": "After Regenerate: the pinned card keeps slot 3, canvas at top",
+      "sha256": "78e1beaecca865f86a057f8acfa760d2cee18825cc3a210d2f6a685f69f4ed8e"
+    },
+    {
+      "file": "glacier-short-390x600-07-unwinding.png",
+      "note": "Request “unwind” → unwinding",
+      "sha256": "14caabd920a5f5f85099a1f36d24842cfe587544129f52b85e81dd43f245af94"
+    },
+    {
+      "file": "glacier-short-390x600-08-work.png",
+      "note": "Request “work” → work",
+      "sha256": "2791e10376862784ad11d01f0c6fac7ffa840ae7339967d14a18a3d2fc31977b"
+    },
+    {
+      "file": "glacier-short-390x600-09-agent-confirm.png",
+      "note": "Rose task: asks first",
+      "sha256": "93559b71d7481628fd46d335e6bfe92cefc34ec8698a1fac2eac7af916199b94"
+    },
+    {
+      "file": "glacier-short-390x600-10-failed.png",
+      "note": "Generation failed; last layout kept",
+      "sha256": "61048e60c8426ca379ebfb9c9fa034a907179b66624b5be71f6486a2501e50a0"
+    },
+    {
+      "file": "glacier-short-390x600-13-home.png",
+      "note": "Home after visiting the workspace (unchanged)",
+      "sha256": "602cd4baed342a58223062d1d147abe5720401d5242ac4436d4284aeafd2c281"
+    },
+    {
+      "file": "oxblood-design-01-empty.png",
+      "note": "Workspace, empty state",
+      "sha256": "3d43247f65ed3b8b9f5f3cbab30b8c274d8c8033b69f452e55909491ab488d7e"
+    },
+    {
+      "file": "oxblood-design-03-best-guess.png",
+      "note": "Arrange for me: best guess",
+      "sha256": "c93c78882c41cca71e7aaad09e2988fa40e82b0155c9deb1c577251421c4e730"
+    },
+    {
+      "file": "oxblood-design-05-cooking.png",
+      "note": "Request “dinner tonight” → cooking",
+      "sha256": "d5b928fc6b6ffb2d6d8b2568aa054569f2cdb1f12f064143ddae20f0d539575b"
+    },
+    {
+      "file": "oxblood-design-06-regenerated-pinned.png",
+      "note": "After Regenerate: the pinned card keeps slot 3, canvas at top",
+      "sha256": "1cf16efb3c813a12bae73c357961e064ae48f24a11a25c4a7f26b36c53256b17"
+    },
+    {
+      "file": "oxblood-design-07-unwinding.png",
+      "note": "Request “unwind” → unwinding",
+      "sha256": "c8a44c361e11d781d29614e72fdcf9084bbd4c1a57bceadcb8f9877aee2e171a"
+    },
+    {
+      "file": "oxblood-design-08-work.png",
+      "note": "Request “work” → work",
+      "sha256": "1cb3c70c55fb40c6340de96a72cdbf52e9bbde87d65a966bd091120013d45c71"
+    },
+    {
+      "file": "oxblood-design-09-agent-confirm.png",
+      "note": "Rose task: asks first",
+      "sha256": "ffc6949aa0c514bfa6bdf1d4de6df496ca8864187c0db54e7031e9d4d64790de"
+    },
+    {
+      "file": "oxblood-design-10-failed.png",
+      "note": "Generation failed; last layout kept",
+      "sha256": "a2b47f4110815b915d12b5d8c5635adce4b1d49ffef84cc02503e3135c88903f"
+    },
+    {
+      "file": "oxblood-design-13-home.png",
+      "note": "Home after visiting the workspace (unchanged)",
+      "sha256": "4e44083034fbc5cb43bfa13bb6c06dc3b3e02b35b8d5d90293f346fc5a24440b"
+    },
+    {
+      "file": "oxblood-iphone13-390-01-empty.png",
+      "note": "Workspace, empty state",
+      "sha256": "2bb0636c05f8064b9d20377f00da7f73001fa2827dc2e81b58bf4674f11f8769"
+    },
+    {
+      "file": "oxblood-iphone13-390-03-best-guess.png",
+      "note": "Arrange for me: best guess",
+      "sha256": "e54789a2cb6b05090f7fd54f06c8f6377e6c1081800e11bfc1d936fe405b9936"
+    },
+    {
+      "file": "oxblood-iphone13-390-05-cooking.png",
+      "note": "Request “dinner tonight” → cooking",
+      "sha256": "4068ee92c2e2960a4eabbd0fdfea4a38166435616e2403649362f7dab566e47c"
+    },
+    {
+      "file": "oxblood-iphone13-390-06-regenerated-pinned.png",
+      "note": "After Regenerate: the pinned card keeps slot 3, canvas at top",
+      "sha256": "dc85925b758986c7bc554f994fcc971fc595c992ecf6116dfcdc5145d6285db2"
+    },
+    {
+      "file": "oxblood-iphone13-390-07-unwinding.png",
+      "note": "Request “unwind” → unwinding",
+      "sha256": "6b07a1878e76f8ae4ba6a34d27d21d0ce5c28c23025cf85a18c8a5a7474c9c4e"
+    },
+    {
+      "file": "oxblood-iphone13-390-08-work.png",
+      "note": "Request “work” → work",
+      "sha256": "df8b7a0735f6dab3cda5241a54bf49a0afa712b37f019ac0c8f3a38ffaffe3e6"
+    },
+    {
+      "file": "oxblood-iphone13-390-09-agent-confirm.png",
+      "note": "Rose task: asks first",
+      "sha256": "fad77f17dca35fce6369aa58939eec5c24a7f12d29aec1b815c7cc97fc89c05f"
+    },
+    {
+      "file": "oxblood-iphone13-390-10-failed.png",
+      "note": "Generation failed; last layout kept",
+      "sha256": "1eb4910175671081d4914a254c0c46d6fea1a5deb9cf0a84f9ea9e68410f183c"
+    },
+    {
+      "file": "oxblood-iphone13-390-13-home.png",
+      "note": "Home after visiting the workspace (unchanged)",
+      "sha256": "15d30080333c5a5f58bf7687ce776f2505253ead92657b935b5733560b869a99"
+    }
+  ]
+}

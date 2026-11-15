@@ -3,10 +3,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Build-host policy and pin checks only; Linux execution probes remain explicit opt-in.
+PYTHONPATH="$ROOT/prototypes/voice-phone-demo" python3 -m unittest rose.tests.test_app_host_provider
 # Nov 10 1F/1G: bounded private life and real background-task lifecycle.
 bash scripts/test-background-life.sh
 # Shared Codex voice adapter: synthetic account/model/turn replies, no provider access.
-node --test workspace/rose-agent/server/codex-voice.test.mjs workspace/rose-agent/server/codex-provider-start.test.mjs
+node --test workspace/rose-agent/server/codex-voice.test.mjs workspace/rose-agent/server/codex-provider-start.test.mjs workspace/rose-agent/server/app-build.test.mjs
 # Rose Agent page voice state, loaded with its real assets and a fake provider.
 node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent/tests/app-delivery.test.mjs workspace/rose-agent/tests/task-continuity.test.mjs workspace/rose-agent/tests/spoken-progress.test.mjs workspace/rose-agent/tests/renderer-recovery.test.mjs
 # Every Native.* call in the app's pages names a method its Java bridge exposes.
@@ -107,6 +109,7 @@ python3 scripts/tests/test_release_chain.py
 python3 scripts/tests/test_mustang_ota_chain_workflow.py
 # Yogi OTA route: contract, guards, allocation, packaged-Updater/trust and publication checks (synthetic; no host, key or network).
 python3 scripts/tests/test_yogi_ota.py
+python3 scripts/tests/test_yogi_full.py
 # Yogi direct operator route: plan/start/run/status/cancel/cleanup and the guest agent (fake gcloud/ssh; no VM, SSH or key).
 python3 scripts/tests/test_yogi_direct.py
 # Yogi replacement recovery: dry-run plan, fake control plane, in-memory guest (no GCP, SSH, or key).
@@ -308,6 +311,40 @@ java -cp "$JAVA_TESTS/HomeReuse" dev.pixel.voice.HomeReuseTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePages" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomePages.java workspace/rose-agent/app/tests/HomePagesTest.java
 java -cp "$JAVA_TESTS/HomePages" dev.pixel.voice.HomePagesTest
+# Project 2: the phone's check of rose-layout-v1 results (catalog cat-1), the page's saved state (pins, undo, recents),
+# its snapshot and requests, and the path through Models' composer core (with the labelled starter, not a model) to
+# request-to-render timing.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Workspace" \
+ workspace/models/local-composer/java/src/rose/models/composer/*.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceLayout.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceState.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceComposer.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceSnapshot.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTiming.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceStarter.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceEngine.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceAgent.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceRequests.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceRecovery.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/LocalRoseAuth.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTaskClient.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceHttp.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceTaskTracker.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceDecisionClient.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceAbort.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceInputs.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceNotices.java \
+ workspace/rose-agent/app/tests/WorkspaceTest.java workspace/rose-agent/app/tests/WorkspaceSnapshotTest.java \
+ workspace/rose-agent/app/tests/WorkspaceEngineTest.java workspace/rose-agent/app/tests/WorkspaceAgentTest.java \
+ workspace/rose-agent/app/tests/WorkspaceReplayTest.java workspace/rose-agent/app/tests/WorkspaceRecoveryTest.java \
+ workspace/rose-agent/app/tests/WorkspaceTaskClientTest.java workspace/rose-agent/app/tests/WorkspaceTaskWireTest.java \
+ workspace/rose-agent/app/tests/WorkspaceTaskTrackerTest.java workspace/rose-agent/app/tests/WorkspaceDecisionClientTest.java \
+ workspace/rose-agent/app/tests/WorkspaceInputsTest.java workspace/rose-agent/app/tests/WorkspaceNoticesTest.java
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceSnapshotTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceEngineTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceAgentTest
+# The approved HiFi r2 behaviour contracts replayed through the real phone path (scripted composer, not a model).
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceReplayTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceRecoveryTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTaskClientTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTaskWireTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceTaskTrackerTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceDecisionClientTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceInputsTest
+java -cp "$JAVA_TESTS/Workspace" dev.pixel.voice.WorkspaceNoticesTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeOverview" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeOverview.java workspace/rose-agent/app/tests/HomeOverviewTest.java
 java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
@@ -324,6 +361,47 @@ java -cp "$JAVA_TESTS/AppRemoval" dev.pixel.voice.AppRemovalTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ReturnModel" \
  workspace/rose-agent/app/src/dev/pixel/voice/ReturnModel.java workspace/rose-agent/app/tests/ReturnModelTest.java
 java -cp "$JAVA_TESTS/ReturnModel" dev.pixel.voice.ReturnModelTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderRules" \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/tests/BuilderRulesTest.java
+java -cp "$JAVA_TESTS/BuilderRules" dev.pixel.builder.BuilderRulesTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RequestIds" \
+ workspace/rose-builder/src/dev/pixel/builder/RequestIds.java workspace/rose-builder/tests/RequestIdsTest.java
+java -cp "$JAVA_TESTS/RequestIds" dev.pixel.builder.RequestIdsTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderWire" \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/src/dev/pixel/builder/Json.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ShareState.java workspace/rose-builder/src/dev/pixel/builder/ApiReport.java workspace/rose-builder/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/tests/BuilderWireTest.java
+java -cp "$JAVA_TESTS/BuilderWire" dev.pixel.builder.BuilderWireTest
+# Project 1: the advisory API level summary (§3.3) against App Core's shared fixtures; no status is ever worded as a pass.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ApiReport" \
+ workspace/rose-builder/src/dev/pixel/builder/ApiReport.java workspace/rose-builder/src/dev/pixel/builder/ServerSummary.java workspace/rose-builder/src/dev/pixel/builder/Json.java \
+ workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ShareState.java workspace/rose-builder/src/dev/pixel/builder/BuildJob.java \
+ workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java workspace/rose-builder/tests/ApiReportTest.java
+java -cp "$JAVA_TESTS/ApiReport" dev.pixel.builder.ApiReportTest prototypes/voice-phone-demo/rose/tests/fixtures/api-report-summary-v1.json
+# Project 1, slice 9: a client-server version's server summary (§3.3) against App Core's shared fixture; it never says
+# the server runs and never blocks an install.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ServerSummary" \
+ workspace/rose-builder/src/dev/pixel/builder/ServerSummary.java workspace/rose-builder/src/dev/pixel/builder/Json.java \
+ workspace/rose-builder/tests/ServerSummaryTest.java
+java -cp "$JAVA_TESTS/ServerSummary" dev.pixel.builder.ServerSummaryTest prototypes/voice-phone-demo/rose/tests/fixtures/server-summary-v1.json
+# Project 1, Level 3: a version's recorded share links, read strictly; anything off-spec is never a link.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ShareState" \
+ workspace/rose-builder/src/dev/pixel/builder/ShareState.java workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java workspace/rose-builder/src/dev/pixel/builder/Json.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ApiReport.java workspace/rose-builder/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/tests/ShareStateTest.java
+java -cp "$JAVA_TESTS/ShareState" dev.pixel.builder.ShareStateTest prototypes/voice-phone-demo/rose/tests/fixtures/share-summary-v1.json
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/FakeBuilderApi" \
+ workspace/rose-builder/src/dev/pixel/builder/BuildJob.java workspace/rose-builder/src/dev/pixel/builder/InstallPlan.java \
+ workspace/rose-builder/src/dev/pixel/builder/ShareMessage.java workspace/rose-builder/src/dev/pixel/builder/BuilderApi.java workspace/rose-builder/src/dev/pixel/builder/ShareState.java \
+ workspace/rose-builder/src/dev/pixel/builder/ApiReport.java workspace/rose-builder/src/dev/pixel/builder/ServerSummary.java workspace/rose-builder/src/dev/pixel/builder/BuilderWire.java \
+ workspace/rose-builder/src/dev/pixel/builder/Json.java \
+ workspace/rose-builder/src/dev/pixel/builder/FakeBuilderApi.java workspace/rose-builder/tests/FakeBuilderApiTest.java
+java -cp "$JAVA_TESTS/FakeBuilderApi" dev.pixel.builder.FakeBuilderApiTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
@@ -404,6 +482,13 @@ java -cp "$JAVA_TESTS/CallbackOwner" dev.pixel.voice.CallbackOwnerTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/PhoneCommandGate" \
  workspace/rose-agent/app/src/dev/pixel/voice/PhoneCommandGate.java workspace/rose-agent/app/tests/PhoneCommandGateTest.java
 java -cp "$JAVA_TESTS/PhoneCommandGate" dev.pixel.voice.PhoneCommandGateTest
+# Project 1 rose-signin-v1 (generated-app sign-in; distinct from the rose-auth-v1 phone<->server signature prefix):
+# the pure-Java client core against the shared vectors, and the name guard (the Rust library runs in
+# .github/workflows/rose-signin.yml, since cargo needs its locked crates).
+bash workspace/rose-signin/java/test.sh
+# rose-signin-v1 D3/D8: RoseOS's system authenticator (os/overlays/packages/apps/RoseAuthenticator): package
+# boundaries, the shared core copy, a compile against the platform jar and its vault on the JVM.
+python3 os/tests/test_rose_authenticator.py
 # Plan 1E: the shared theme definition (themes/rose-themes.json), its generated RoseTheme copies, Glacier's assets
 # and contrast, and the Java colour map against the approved prototype's own map (golden values).
 python3 -I scripts/tests/test_rose_themes.py

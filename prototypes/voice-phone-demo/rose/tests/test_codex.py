@@ -970,6 +970,71 @@ class CustomizationLink:
         return self.reply
 
 
+class ComposeLink:
+    """Rose Agent answering the Project 2 composer's capabilities and workspace_compose app commands (§4.1)."""
+    connected = True
+
+    def __init__(self, caps, reply):
+        self.caps, self.reply, self.sent = caps, reply, []
+
+    def call(self, action, **args):
+        self.sent.append((action, args['packageName'], args['operation'], dict(args['params'])))
+        if args['operation'] == 'capabilities':
+            return self.caps
+        return self.reply(args['params']) if callable(self.reply) else self.reply
+
+
+class ConversationCompose(Integration):
+    """compose_workspace is a conversation tool; every call asks the phone's provider for the contract first."""
+    CAPS = {'status': 'ok', 'schemaVersion': 1, 'kinds': ['prompt', 'arrange', 'regenerate', 'undo']}
+
+    def compose(self, caps, reply, **args):
+        self.phone.link = link = ComposeLink(caps, reply)
+        return self.call(self.engine.sessions['conversation'], 'compose_workspace', **args), link
+
+    def test_registered_on_the_conversation_thread_only_with_the_policy(self):
+        from rose import composer
+        from rose.codex_conductor import CONVERSATION_TOOLS, CONVERSATION_POLICY
+        names = [t['name'] for t in CONVERSATION_TOOLS]
+        self.assertIn('compose_workspace', names)
+        self.assertEqual(len(names), len(set(names)), 'no duplicate tool names')
+        self.assertIn(composer.POLICY_LINE, CONVERSATION_POLICY)
+        opened = [c for c in self.engine.client.calls if c[0] == 'open' and c[1] == 'conversation'][0][2]
+        self.assertIn('compose_workspace', {t['name'] for t in opened['tools']})
+        a = self.task('Calculator')
+        app = [c for c in self.engine.client.calls if c[0] == 'open' and c[1] == a.name][-1][2]
+        self.assertNotIn('compose_workspace', {t['name'] for t in app['tools']}, 'app threads never get it')
+
+    def test_a_request_reaches_rose_agent_and_is_done_only_when_shown(self):
+        from rose import composer
+        request_id = composer.request_id_for('tool-compose_workspace')
+        result, link = self.compose(self.CAPS, lambda p: {'schemaVersion': 1, 'requestId': p['requestId'],
+                                                          'status': 'shown', 'revision': 4},
+                                    kind='prompt', text='set up for cooking')
+        self.assertEqual((result['ok'], result['outcome'], result['revision'], result['requestId']),
+                         (True, 'shown', 4, request_id))
+        self.assertEqual([(s[1], s[2]) for s in link.sent],
+                         [('dev.pixel.voice', 'capabilities'), ('dev.pixel.voice', 'workspace_compose')])
+        self.assertEqual(link.sent[1][3], {'schemaVersion': 1, 'requestId': request_id, 'kind': 'prompt',
+                                           'text': 'set up for cooking'})
+
+    def test_without_the_contract_on_the_phone_nothing_is_sent(self):
+        for caps in ({'status': 'ok', 'schemaVersion': 4, 'multiSession': True}, {'status': 'ok', 'schemaVersion': 1,
+                                                                                 'kinds': ['arrange']}):
+            with self.subTest(caps=caps):
+                result, link = self.compose(caps, None, kind='prompt', text='unwind')
+                self.assertEqual((result['ok'], result['outcome']), (False, 'unavailable'))
+                self.assertEqual([s[2] for s in link.sent], ['capabilities'])  # nothing composed
+        self.phone.link = None
+        result = self.call(self.engine.sessions['conversation'], 'compose_workspace', kind='arrange')
+        self.assertEqual((result['ok'], result['outcome']), (False, 'unavailable'))
+
+    def test_a_refused_request_is_not_sent(self):
+        result, link = self.compose(self.CAPS, None, kind='prompt')  # prompt needs the owner's words
+        self.assertEqual((result['ok'], result['outcome']), (False, 'rejected'))
+        self.assertEqual(link.sent, [])
+
+
 class ConversationCustomization(Integration):
     """The 1O controls are conversation tools from the shared catalog, sent as the existing app_command."""
 

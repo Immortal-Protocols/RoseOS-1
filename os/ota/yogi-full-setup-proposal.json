@@ -1,0 +1,94 @@
+{
+  "schema": "roseos.yogi-full-setup-proposal.v1",
+  "status": "proposed-not-applied",
+  "observedAt": "2026-11-14T04:23:57Z",
+  "actor": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+  "observed": {
+    "instance": "projects/protocols-465723/zones/us-west2-b/instances/roseos-yogi-builder-20261105-b",
+    "instanceId": "2720796557371812468",
+    "status": "TERMINATED",
+    "machine": "n2-standard-64",
+    "diskId": "938743673401685238",
+    "diskGiB": 2000,
+    "stopSeconds": 2700,
+    "terminationAction": "STOP",
+    "bothYogiSecrets": "GET metadata HTTP 404; absent",
+    "controllerProvider": "projects/1072799993443/locations/global/workloadIdentityPools/roseos-yogi/providers/github",
+    "controllerProviderAdmission": "github-hosted only, exact Yogi main workflow",
+    "existingSignerProvider": "roseos-actions/providers/github admits os-release.yml only; cannot authenticate Yogi signer",
+    "runnerEligibility": "not re-read; prior organization runner-group HTTP 403 remains held",
+    "canApplyWithoutNewPermission": [
+      "compute.instances.setMetadata",
+      "compute.instances.setScheduling",
+      "secretmanager.secrets.create"
+    ],
+    "cannotApplyWithCurrentIdentity": [
+      "iam.serviceAccounts.setIamPolicy",
+      "secretmanager.secrets.setIamPolicy",
+      "iam.roles.create"
+    ]
+  },
+  "proposed": {
+    "provider": {
+      "name": "projects/1072799993443/locations/global/workloadIdentityPools/roseos-yogi/providers/github-signer",
+      "issuerUri": "https://token.actions.githubusercontent.com",
+      "allowedAudiences": [
+        "https://iam.googleapis.com/projects/1072799993443/locations/global/workloadIdentityPools/roseos-yogi/providers/github-signer"
+      ],
+      "attributeMapping": {
+        "google.subject": "assertion.sub",
+        "attribute.signer_workflow": "assertion.workflow_ref"
+      },
+      "attributeCondition": "assertion.repository_id == '1428996648' && assertion.repository_owner_id == '223367958' && assertion.repository == 'Immortal-Protocols/RoseOS-1' && assertion.repository_owner == 'Immortal-Protocols' && assertion.repository_visibility == 'public' && assertion.ref == 'refs/heads/main' && assertion.ref_type == 'branch' && assertion.workflow_ref == 'Immortal-Protocols/RoseOS-1/.github/workflows/yogi-ota.yml@refs/heads/main' && assertion.event_name == 'workflow_dispatch' && assertion.runner_environment == 'self-hosted'",
+      "isolation": "Does not map attribute.workflow_ref; this provider cannot use the existing Yogi controller binding."
+    },
+    "signerTrust": {
+      "resource": "projects/protocols-465723/serviceAccounts/roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "role": "roles/iam.workloadIdentityUser",
+      "member": "principalSet://iam.googleapis.com/projects/1072799993443/locations/global/workloadIdentityPools/roseos-yogi/attribute.signer_workflow/Immortal-Protocols/RoseOS-1/.github/workflows/yogi-ota.yml@refs/heads/main",
+      "condition": "request.time < timestamp(T0 + 24 hours), compute exact RFC3339 expiry at action time",
+      "preserveExisting": true
+    },
+    "secrets": {
+      "names": [
+        "PIXEL_OS_SIGNING_KEYS_YOGI_V1",
+        "PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1"
+      ],
+      "project": "protocols-465723",
+      "create": "Two empty containers only, automatic replication; no key generation or secret payload on administrator machine",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "bindings": [
+        {
+          "role": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+          "permissionsVerified": [
+            "secretmanager.secrets.get",
+            "secretmanager.versions.add",
+            "secretmanager.versions.list"
+          ],
+          "condition": "request.time < timestamp(T0 + 4 hours)"
+        },
+        {
+          "role": "roles/secretmanager.secretAccessor",
+          "condition": "request.time < timestamp(T0 + 24 hours)"
+        }
+      ],
+      "scope": "Each binding on each named secret only. Preserve all other policies; never project-wide."
+    },
+    "runner": {
+      "name": "roseos-yogi-builder-20261105-b",
+      "label": "roseos-yogi-builder-20261105-b",
+      "requiredEligibility": "Only this exact host may satisfy the route label; public RoseOS-1 allowed; main Yogi workflow only",
+      "protectedWorkflow": "Immortal-Protocols/RoseOS-1/.github/workflows/yogi-ota.yml@refs/heads/main",
+      "configuration": "Administrator confirms an existing protected route or registers the existing host into a dedicated protected organization runner group. No shared native VM, no alternate denied API read. Group/registration details are unverified; not provisioned by this change."
+    },
+    "vm": {
+      "newStopSeconds": 43200,
+      "terminationAction": "STOP",
+      "nativeJobMinutes": 660,
+      "startupPayload": "scripts/yogi-runner-startup.py",
+      "startupEffects": "Verify exact instance and filesystem; create only missing Yogi bootstrap/cache state directories owned by existing pixelbuild account; start the exact existing runner service. No SSH, registration credentials or service enablement change. Metadata is persistent until explicitly removed.",
+      "preserve": "Existing 2 TB disk, source, output, runner credentials, unrelated metadata and retired VM; no resize or new machine."
+    }
+  },
+  "activation": "After action-time approval/admin changes, verify permitted metadata and administrator runner evidence; bind real expiries/resource evidence and enable fullRun/publication. Then one workflow_dispatch stage=one-shot publish=true, no manual stage handoffs. No phone action or schedule."
+}
