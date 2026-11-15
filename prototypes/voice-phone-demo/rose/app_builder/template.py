@@ -111,13 +111,14 @@ def write_skeleton(source: Path, package: str, label: str):
         target.write_text(text, encoding='utf-8')
 
 
-def check(source: Path, package: str) -> None:
-    """Refuse generated source that could change the app's identity or escape the pinned toolchain."""
+def check(source: Path, package: str, *, extra_top: frozenset = frozenset()) -> None:
+    """Refuse generated source that could change the app's identity or escape the pinned toolchain. ``extra_top``
+    lets a declared profile (rose.app_builder.appprofile) add top-level entries; every other check still covers them."""
     source = Path(source)
     if os.lstat(source).st_mode & 0o700 != 0o700:
         raise TemplateRefused('The app\'s source folder is not readable and writable by the builder.')
     for entry in source.iterdir():
-        if entry.name not in ALLOWED_TOP:
+        if entry.name not in ALLOWED_TOP and entry.name not in extra_top:
             raise TemplateRefused(f'Unexpected top-level entry {entry.name!r}; only the app skeleton is built.')
     for path in source.rglob('*'):
         mode = os.lstat(path).st_mode  # never follow or open anything that is not a plain file or directory
