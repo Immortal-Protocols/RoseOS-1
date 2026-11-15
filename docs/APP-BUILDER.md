@@ -1132,7 +1132,11 @@ app-server client.
   surfaced as `research_isolation_unavailable`) unless all of these hold:
   - the version is a released `codex-cli` 0.167.1 or later;
   - the effective config has no `sandbox_mode` or `sandbox_workspace_write`
-    (either would make the legacy sandbox win);
+    (either would make the legacy sandbox win), at the top level or in a
+    selected config profile (`profile` + `[profiles.<name>]`, e.g. in the
+    owner's `~/.codex/config.toml`). A selected profile must exist and must not
+    set those keys, `default_permissions` or `permissions`. A field that is
+    absent or `null` counts as unset;
   - the config names `rose_app_build` as the default, and its definition is
     exactly the one passed, so an entry merged in from another config layer
     (an extra read path, network on) refuses;
@@ -1228,7 +1232,9 @@ Proof levels:
      `nextCursor`, entry `id` and `allowed`);
   3. the `activePermissionProfile` definition in the `thread/start` response,
      and `permissions` in the `thread/start` and `turn/start` params;
-  4. that `--strict-config` accepts the inline-table `-c` value.
+  4. that `--strict-config` accepts the inline-table `-c` value;
+  5. whether `config/read` resolves a selected `profile` into the top-level
+     keys, leaves it under `profiles`, or both. The check covers both forms.
 - **Live check before any enabling (Server Worker / Local Server):** a
   synthetic denial run under the profile, with no writer and no model. Reads
   of `ROSE_CONFIG_DIR`, home, `/tmp` and a sibling project must be refused;

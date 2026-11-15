@@ -341,8 +341,19 @@ test('the profile check and the version gate refuse anything else',()=>{
   {...PROFILED,default_permissions:':workspace'},{...PROFILED,permissions:{}},
   {...PROFILED,permissions:{[APP_BUILD_PROFILE]:{...appBuildProfile,extends:':danger-full-access'}}},
   {...PROFILED,permissions:{[APP_BUILD_PROFILE]:{...appBuildProfile,filesystem:{...appBuildProfile.filesystem,':root':'read'}}}},
-  {...PROFILED,permissions:{[APP_BUILD_PROFILE]:{...appBuildProfile,network:{enabled:true}}}},null,[]];
+  {...PROFILED,permissions:{[APP_BUILD_PROFILE]:{...appBuildProfile,network:{enabled:true}}}},null,[],
+  // A selected config profile is where an owner's legacy sandbox can also live: it would win over the profile.
+  {...PROFILED,profile:'dev',profiles:{dev:{sandbox_mode:'danger-full-access'}}},
+  {...PROFILED,profile:'dev',profiles:{dev:{sandbox_mode:'workspace-write',sandbox_workspace_write:{network_access:true}}}},
+  {...PROFILED,profile:'dev',profiles:{dev:{default_permissions:':workspace'}}},
+  {...PROFILED,profile:'dev',profiles:{dev:{permissions:{}}}},
+  {...PROFILED,profile:'dev',profiles:{}},{...PROFILED,profile:'dev'},{...PROFILED,profile:7,profiles:{7:{}}}];
  for(const config of bad)assert.throws(()=>checkAppBuildProfile(config),/app_build_isolation_unavailable/,JSON.stringify(config));
+ // Unset is unset whether absent or serialized as null, and a selected profile without isolation settings is fine.
+ for(const config of [{...PROFILED,sandbox_mode:null,sandbox_workspace_write:null},{...PROFILED,profile:null},
+  {...PROFILED,profile:'dev',profiles:{dev:{model:'x',sandbox_mode:null}}},
+  {...PROFILED,profiles:{other:{sandbox_mode:'danger-full-access'}}}])
+  assert.doesNotThrow(()=>checkAppBuildProfile(config),JSON.stringify(config));
  for(const v of ['codex-cli 0.167.1','codex-cli 0.168.0\n','codex-cli 1.0.0'])assert.equal(supportsAppBuildVersion(v),true,v);
  for(const v of ['codex-cli 0.167.0','codex-cli 0.167.1-alpha.2','codex-cli 0.166.9','unknown',''])assert.equal(supportsAppBuildVersion(v),false,v);
 });

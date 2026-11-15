@@ -149,11 +149,21 @@ function canonical(v){
  return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
 }
 
+// Settings that decide the writer's isolation. A selected config profile (`profile` + `[profiles.<name>]`) can
+// carry any of them; none may come from there.
+const ISOLATION_KEYS=['sandbox_mode','sandbox_workspace_write','default_permissions','permissions'];
+const isObject=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+
 /** The effective configuration must select exactly this profile, as defined here: no legacy sandbox (which takes
- * precedence over profiles), and no other layer adding to it (profile entries merge across layers). */
+ * precedence over profiles) at the top level or in a selected config profile, and no other layer adding to it
+ * (profile entries merge across layers). A field that is absent or null is unset. */
 export function checkAppBuildProfile(config) {
- if(!config||typeof config!=='object'||Array.isArray(config))throw Error('app_build_isolation_unavailable');
- if(config.sandbox_mode!==undefined||config.sandbox_workspace_write!==undefined)throw Error('app_build_isolation_unavailable');
+ if(!isObject(config))throw Error('app_build_isolation_unavailable');
+ if(config.sandbox_mode!=null||config.sandbox_workspace_write!=null)throw Error('app_build_isolation_unavailable');
+ if(config.profile!=null){
+  const selected=typeof config.profile==='string'&&isObject(config.profiles)?config.profiles[config.profile]:undefined;
+  if(!isObject(selected)||ISOLATION_KEYS.some(k=>selected[k]!=null))throw Error('app_build_isolation_unavailable');
+ }
  if(config.default_permissions!==APP_BUILD_PROFILE)throw Error('app_build_isolation_unavailable');
  if(canonical(config.permissions?.[APP_BUILD_PROFILE])!==canonical(appBuildProfile))throw Error('app_build_isolation_unavailable');
 }
