@@ -1680,19 +1680,24 @@ matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
   (`rose_app_runtime_signin::{start, Config, Keys, Migrations}`, slice 7b).
   - It declares the generated modules, `meta`, `migrations` and
     `#[path = "../src/handlers/mod.rs"] mod handlers;`.
-  - It reads `CHARIOT_APP_ID` (required) and `PORT` (decimal, 1 to 65535,
-    default 8080). The adapter reads `DATA_DIR` and
-    `CHARIOT_DEPLOYMENT_SHA256` and checks every value.
+  - It reads only `PORT` (decimal, 1 to 65535, default 8080). The adapter
+    reads and checks `DATA_DIR`, `CHARIOT_APP_ID`,
+    `CHARIOT_DEPLOYMENT_SHA256`, the optional `CHARIOT_REVISION_SHA256` and
+    the keyring file named by `CHARIOT_SEALING_KEY_FILE`.
   - It calls `Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION,
-    &app_id, Migrations { account: migrations::ACCOUNT, shared:
-    migrations::SHARED })`, then `start(config, Keys::Unavailable)`, then
-    `.server(routes::routes::<handlers::App>())`, and serves on
+    Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED })`,
+    then `let (keys, why) = Keys::from_env();`, then `start(config, keys)`,
+    then `.server(routes::routes::<handlers::App>())`, and serves on
     `0.0.0.0:$PORT`.
-  - **Keys.** It passes `Keys::Unavailable` until OS Core's keyring loader
-    exists (D9, `rose-signin-keyring/v1`). Until then sign-in answers
-    `auth_unavailable` and `/health` answers 503, so the server is honestly
-    not ready. No restore is run, because the restore marker (§7.7 item 5) is
-    still open.
+  - **Keys.** Only the adapter's loader reads the keyring
+    (`rose-signin-keyring/v1`), and its result never stops start-up. When
+    there is no usable keyring, `main.rs` prints
+    `rose server: sealing keys unavailable: <word>`. The word names the
+    problem, never the path or a byte of the file. Sign-in then answers
+    `auth_unavailable` and `/health` answers 503.
+  - **Not ready yet.** No restore is run, because the restore marker (§7.7
+    item 5) is still open. So the server stays honestly not ready even with
+    keys.
   - **Failures.** Any failure before serving prints `rose server: <reason>`
     and exits 1. The reason names the variable, never its value.
   - **Crates.** The runtime and the adapter come in as builder-owned path
@@ -1749,7 +1754,8 @@ reserved `src/<package>/rose/`:
     and says why. `ROSE_REQUIRE_ADAPTER_BUILD` turns that skip into a
     failure.
   - When the build does run, it checks every refusal before anything
-    listens. No server is started.
+    listens, including the keyring reason printed before a refusal. No
+    server is started.
 
 ### 7.6 Builder (planned)
 
