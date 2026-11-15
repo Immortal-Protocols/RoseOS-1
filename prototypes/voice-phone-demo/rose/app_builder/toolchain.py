@@ -35,9 +35,11 @@ SIGN_APK = REPO / 'scripts/sign-apk.py'
 class StepFailed(Exception):
     """A build step that failed, with a failure category and an owner-safe summary."""
 
-    def __init__(self, category: str, summary: str, retryable: bool = False, log: str = ''):
+    def __init__(self, category: str, summary: str, retryable: bool = False, log: str = '',
+                 returncode: int | None = None):
         super().__init__(summary)
         self.category, self.summary, self.retryable, self.log = category, summary, retryable, log
+        self.returncode = returncode  # the tool's exit status (negative: killed by that signal), when it ran
 
 
 JAVA_LEVEL = '17'
@@ -132,7 +134,7 @@ def run(args: list, cwd: Path, home: Path, tools: Tools, cancelled, category: st
                                  retryable=True)
     out = _redact(out or '', *redact)
     if proc.returncode:
-        raise StepFailed(category, f'{Path(str(args[0])).name} failed.', log=out)
+        raise StepFailed(category, f'{Path(str(args[0])).name} failed.', log=out, returncode=proc.returncode)
     return out
 
 

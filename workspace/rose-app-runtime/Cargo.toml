@@ -1,0 +1,11 @@
+[package]
+name = "rose-app-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The runtime a Rose-generated server is built on (docs/APP-BUILDER.md §7.4): HTTP, routing, sign-in routes over an injected authenticator, readiness and safe logs. Standard library only."
+
+[dependencies]
+
+[lib]
+path = "src/lib.rs"

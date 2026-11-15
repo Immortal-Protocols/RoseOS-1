@@ -86,12 +86,25 @@ class RustTools:
 
 class Isolation:
     """Runs one build command so that it can write only ``writable``, read only ``readonly`` (and the system's own
-    libraries and linker), and reach no network, with no cargo configuration in any folder above ``writable``. The builder host provides it (docs/APP-BUILDER.md §5, blocker 3);
-    returns the command and environment to run in its place."""
+    libraries and linker), and reach no network, with no cargo configuration in any folder above ``writable``. The
+    builder host provides it (docs/APP-BUILDER.md §5, blocker 3).
+
+    The failure contract: a build that fails because of the isolation (it could not start, or the kernel refused a
+    namespace or a mount) is the host's, never the app's. ``command`` raising, or its program missing, stops the
+    build as ``build_isolation_unavailable``; ``failed`` saying a non-zero exit was its own stops it as
+    ``build_isolation_failed``. Either is category ``toolchain``. A failure no one claims and that shows no compiler
+    error in the app's own code is also ``toolchain``: the app's code is blamed only on rustc's own word."""
 
     def command(self, argv: list[str], env: dict[str, str], *, writable: Path,
                 readonly: tuple[Path, ...]) -> tuple[list[str], dict[str, str]]:
+        """The command and environment to run in place of ``argv`` and ``env``."""
         raise NotImplementedError
+
+    def failed(self, returncode: int, output: str) -> bool:
+        """Whether a run that exited with ``returncode`` (negative: killed by that signal) and printed ``output``
+        failed in the isolation itself rather than in the command it ran. The provider knows its own messages and
+        exit statuses; the default claims nothing."""
+        return False
 
 
 @dataclass(frozen=True)
@@ -187,14 +200,31 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
     manifest = str(server / 'Cargo.toml')
 
     def cargo(*args):
-        argv, wrapped = isolation.command([str(tools.cargo), '--config', str(cargo_home / 'config.toml'), *args],
-                                          dict(env), writable=work, readonly=readonly)
+        try:
+            argv, wrapped = isolation.command([str(tools.cargo), '--config', str(cargo_home / 'config.toml'), *args],
+                                              dict(env), writable=work, readonly=readonly)
+        except BuildFailed:
+            raise  # the provider's own account of why it cannot isolate (rose.app_builder.providers.host)
+        except Exception:
+            raise BuildFailed('toolchain', 'build_isolation_unavailable',
+                              'The server was not built: the build isolation could not prepare the build.') from None
         try:
             return run(argv, server, home, tools, cancelled, 'cargo', redact=redact, env=wrapped)
         except StepFailed as failed:
             if failed.category != 'cargo':
                 raise  # cancelled or timeout, as the Android tools report them
-            raise classify(failed.log) from None
+            try:
+                own = failed.returncode is not None and isolation.failed(failed.returncode, failed.log)
+            except Exception:
+                own = True  # a provider that cannot judge its own failure is still not the app's
+            if own:
+                raise BuildFailed('toolchain', 'build_isolation_failed',
+                                  'The server was not built: the build isolation could not run the build.',
+                                  log=failed.log[-4000:]) from None
+            raise classify(failed.log, failed.returncode) from None
+        except OSError:  # the isolation's program (or cargo, for a provider that runs it as is) could not start
+            raise BuildFailed('toolchain', 'build_isolation_unavailable',
+                              'The server was not built: the build isolation could not be started.') from None
 
     cargo('metadata', '--offline', '--format-version', '1', '--manifest-path', manifest)
     try:
@@ -296,8 +326,10 @@ def _package_name(package_id: str) -> tuple[str, bool]:
     return name, source.startswith('path+') and name == PACKAGE
 
 
-def classify(log: str) -> BuildFailed:
-    """The job's failure for a cargo run that failed, from what cargo printed."""
+def classify(log: str, returncode: int | None = None) -> BuildFailed:
+    """The job's failure for a cargo run that failed, from what cargo printed. The app's code is blamed only on
+    rustc's own error in its package (or cargo's own `could not compile` for it); anything unexplained is the
+    toolchain's, never the app's (an isolation that failed to start, a killed process, a crash)."""
     text, errors = _messages(log)
     shown = '\n'.join(text + [e['rendered'] for e in errors])[-4000:]
     cargo_text = '\n'.join(text)
@@ -338,7 +370,9 @@ def classify(log: str) -> BuildFailed:
         if m.group(1) == PACKAGE:
             return BuildFailed('compile', 'server_compile', 'The server\'s Rust code did not compile.', log=shown)
         return BuildFailed('dependency', 'crate_compile', f'The crate {m.group(1)} did not compile.', log=shown)
-    return BuildFailed('compile', 'server_build', 'The server did not build.', log=shown)
+    killed = ' (it was stopped by a signal)' if returncode is not None and returncode < 0 else ''
+    return BuildFailed('toolchain', 'server_build', f'The server build failed, not in the app\'s code{killed}.',
+                       log=shown)
 
 
 def _copy_tree(src: Path, dst: Path):
