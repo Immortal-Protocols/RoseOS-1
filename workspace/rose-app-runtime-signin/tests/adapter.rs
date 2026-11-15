@@ -62,6 +62,7 @@ fn config(dir: &Path, admission: Admission, m: Migrations) -> Config {
         data_dir: dir.to_path_buf(),
         deployment_sha256: DEPLOYMENT.into(),
         expected_revision: None,
+        restore_marker: dir.join(".chariot-restore.json"),
         migrations: m,
     }
 }
@@ -143,18 +144,16 @@ fn field(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
-/// A started server with keys; `restore` stands in for the host contract that is not agreed yet (§7.7 item 5).
-fn server(dir: &Path, admission: Admission, restore: bool) -> Server {
+/// A started server with keys and no restore marker: ready.
+fn server(dir: &Path, admission: Admission) -> Server {
     let started = start(config(dir, admission, migrations(ACCOUNT_V1, None)), keys()).unwrap();
-    let server = started.server(routes()).unwrap();
-    server.readiness.restore_done.store(restore, Ordering::SeqCst);
-    server
+    started.server(routes()).unwrap()
 }
 
 #[test]
 fn enroll_confirm_sign_in_and_call_an_account_route_over_http() {
     let dir = Dir::new();
-    let server = server(&dir.0, Admission::Open, true);
+    let server = server(&dir.0, Admission::Open);
     let server = server.with_clock(Box::new(|| T0));
     assert_eq!(call(&server, request("GET", "/health", None, None)).0, 200);
 
@@ -228,10 +227,13 @@ fn without_a_key_the_server_is_honestly_not_ready() {
         Keys::Unavailable,
     )
     .unwrap();
-    assert_eq!(started.restore, Restore::Unresolved);
+    assert_eq!(started.restore, Restore::NotIndicated);
     assert!(!started.auth.ready());
     let server = started.server(routes()).unwrap();
-    server.readiness.restore_done.store(true, Ordering::SeqCst);
+    assert!(
+        server.readiness.restore_done.load(Ordering::SeqCst),
+        "only the key is missing"
+    );
     let (status, h) = call(&server, request("GET", "/health", None, None));
     assert_eq!(status, 503);
     assert_eq!(field(&h, "deployment_sha256"), DEPLOYMENT, "the host's value, echoed");
@@ -244,17 +246,147 @@ fn without_a_key_the_server_is_honestly_not_ready() {
 }
 
 #[test]
-fn with_a_key_the_server_waits_for_the_restore_contract() {
+fn with_a_key_and_no_restore_marker_the_server_is_ready() {
     let dir = Dir::new();
     let started = start(config(&dir.0, Admission::Open, migrations(ACCOUNT_V1, None)), keys()).unwrap();
     assert!(started.auth.ready());
+    assert_eq!(started.restore, Restore::NotIndicated);
     let server = started.server(routes()).unwrap();
     assert!(server.readiness.migrations_done.load(Ordering::SeqCst));
     assert!(
-        !server.readiness.restore_done.load(Ordering::SeqCst),
-        "no restore claim (§7.7 item 5)"
+        server.readiness.restore_done.load(Ordering::SeqCst),
+        "no marker: no restore indicated"
     );
+    assert_eq!(call(&server, request("GET", "/health", None, None)).0, 200);
+}
+
+/// What can be at the marker's path, each of which indicates a restore (Chariot `e592c4b1`: any marker blocks).
+fn markers(dir: &Path) -> Vec<(&'static str, PathBuf)> {
+    let file = dir.join("file-marker");
+    std::fs::write(&file, b"{}").unwrap();
+    let empty = dir.join("empty-marker");
+    std::fs::write(&empty, b"").unwrap();
+    let not_json = dir.join("not-json-marker");
+    std::fs::write(&not_json, b"\xff not json").unwrap();
+    let directory = dir.join("dir-marker");
+    std::fs::create_dir(&directory).unwrap();
+    let mut out = vec![
+        ("file", file),
+        ("empty", empty),
+        ("not json", not_json),
+        ("directory", directory),
+    ];
+    #[cfg(unix)]
+    {
+        let dangling = dir.join("dangling-marker");
+        std::os::unix::fs::symlink(dir.join("nowhere"), &dangling).unwrap();
+        out.push(("dangling link", dangling));
+    }
+    out
+}
+
+#[test]
+fn any_restore_marker_keeps_the_server_not_ready_and_is_left_alone() {
+    let markers_dir = Dir::new();
+    for (what, marker) in markers(&markers_dir.0) {
+        let dir = Dir::new();
+        let before = std::fs::symlink_metadata(&marker).unwrap();
+        let bytes = std::fs::read(&marker).ok();
+        let mut c = config(&dir.0, Admission::Open, migrations(ACCOUNT_V1, None));
+        c.restore_marker = marker.clone();
+        let started = start(c, keys()).unwrap();
+        assert_eq!(started.restore, Restore::Indicated, "{what}");
+        let server = started.server(routes()).unwrap();
+        assert!(!server.readiness.restore_done.load(Ordering::SeqCst), "{what}");
+        let (status, h) = call(&server, request("GET", "/health", None, None));
+        assert_eq!(status, 503, "{what}");
+        assert_eq!(
+            field(&h, "deployment_sha256"),
+            DEPLOYMENT,
+            "identity is still reported: {what}"
+        );
+        // Never read, parsed, run, removed or completed: still there, same type, same bytes.
+        let after = std::fs::symlink_metadata(&marker).unwrap();
+        assert_eq!(after.file_type(), before.file_type(), "{what}");
+        assert_eq!(std::fs::read(&marker).ok(), bytes, "{what}");
+    }
+}
+
+#[test]
+fn the_default_marker_is_in_the_data_dir() {
+    let env = |dir: PathBuf, restore: Option<&'static str>| {
+        move |name: &str| match name {
+            "DATA_DIR" => Some(dir.to_str().unwrap().to_string()),
+            "CHARIOT_APP_ID" => Some("app-1".into()),
+            "CHARIOT_DEPLOYMENT_SHA256" => Some(DEPLOYMENT.into()),
+            "CHARIOT_RESTORE_STATE_PATH" => restore.map(str::to_string),
+            _ => None,
+        }
+    };
+    let dir = Dir::new();
+    let m = migrations(ACCOUNT_V1, None);
+    let c = Config::from_lookup("notes", "Rose Notes", Admission::Open, m, env(dir.0.clone(), None)).unwrap();
+    assert_eq!(c.restore_marker, dir.0.join(".chariot-restore.json"));
+    assert_eq!(start(c.clone(), keys()).unwrap().restore, Restore::NotIndicated);
+    std::fs::write(dir.0.join(".chariot-restore.json"), b"{}").unwrap();
+    assert_eq!(start(c, keys()).unwrap().restore, Restore::Indicated);
+
+    let named = Config::from_lookup(
+        "notes",
+        "Rose Notes",
+        Admission::Open,
+        m,
+        env(dir.0.clone(), Some("/run/x/state")),
+    )
+    .unwrap();
+    assert_eq!(named.restore_marker, PathBuf::from("/run/x/state"));
+    let relative = Config::from_lookup(
+        "notes",
+        "Rose Notes",
+        Admission::Open,
+        m,
+        env(dir.0.clone(), Some("state")),
+    )
+    .unwrap();
+    assert!(matches!(
+        start(relative, keys()),
+        Err(StartError::Invalid("CHARIOT_RESTORE_STATE_PATH"))
+    ));
+    // What from_env keeps for a set but non-UTF-8 value: empty, refused, never the default.
+    let unreadable =
+        Config::from_lookup("notes", "Rose Notes", Admission::Open, m, env(dir.0.clone(), Some(""))).unwrap();
+    assert!(matches!(
+        start(unreadable, keys()),
+        Err(StartError::Invalid("CHARIOT_RESTORE_STATE_PATH"))
+    ));
+}
+
+#[test]
+fn a_marker_that_cannot_be_looked_up_is_not_ready() {
+    let dir = Dir::new();
+    // A path through a regular file is an error (not a directory), not absence.
+    let plain = dir.0.join("plain");
+    std::fs::write(&plain, b"").unwrap();
+    assert_eq!(
+        rose_app_runtime_signin::start::restore_state(&plain.join("marker")),
+        Restore::Unknown
+    );
+    let mut c = config(&dir.0, Admission::Open, migrations(ACCOUNT_V1, None));
+    c.restore_marker = plain.join("marker");
+    let server = start(c, keys()).unwrap().server(routes()).unwrap();
+    assert!(!server.readiness.restore_done.load(Ordering::SeqCst));
     assert_eq!(call(&server, request("GET", "/health", None, None)).0, 503);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let locked = dir.0.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let state = rose_app_runtime_signin::start::restore_state(&locked.join(".chariot-restore.json"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // As root, permissions do not stop the lookup and the answer is absence; otherwise it is an error.
+        assert!(matches!(state, Restore::Unknown | Restore::NotIndicated), "{state:?}");
+    }
 }
 
 #[test]

@@ -13,9 +13,10 @@
 //!   parsed into `AeadSealer` keys; any problem leaves the server without a key and not ready.
 //! - [`mod@start`]: opens the store, applies every migration and returns what a generated `main` hands the runtime.
 //!
-//! What stays open, so a server on this crate is honestly not ready: the restore marker (§7.7 item 5; no restore
-//! is run and readiness's `restore_done` is never set here). The host's key delivery is agreed and loaded by
-//! [`keys`], but no host delivers a keyring yet. The adapter invents no key, app id or deployment hash.
+//! Readiness: the server is ready only with a delivered keyring ([`keys`]), its migrations done and no restore
+//! indicated (Chariot's restore marker absent, [`start::Restore`]). A present marker keeps it not ready: no restore
+//! executor or completion is agreed, so the adapter never runs, reads or removes one. The adapter invents no key,
+//! app id or deployment hash.
 
 pub mod auth;
 pub mod data;
