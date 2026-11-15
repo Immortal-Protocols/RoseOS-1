@@ -18,13 +18,17 @@ import java.util.Set;
  * Android side and passes them in; this decides the ids, the bounds and the version.
  *
  * Only labels the OS already shows enter the snapshot, cut to 60 characters and stripped of control
- * characters. Notifications and content stay empty until D1 and a content source exist. The version is a
- * hash of every entry, so it changes whenever an entry does and a layout made for another snapshot is
- * stale_snapshot.
+ * characters. Notifications and content come from a WorkspaceInputs.Source, if any. Today there is none
+ * (WorkspaceInputs.NONE): D1 is undecided and no content source exists, so both stay empty. A notification enters
+ * only as its title, never its body text, and under a hashed key. The version is a hash of every entry, so it
+ * changes whenever an entry does and a layout made for another snapshot is stale_snapshot.
  */
 final class WorkspaceSnapshot {
  static final int LABEL=60,MAX_APPS=120,MAX_ACTIONS=60;
  static final int TASK_LABEL=60,TASK_ASK=200,TASK_GOAL=300;
+ static final int MAX_NOTIFICATIONS=12,MAX_NOTIFICATION_ACTIONS=2,MAX_CONTENT=12;
+ /** rose-layout-v1's content kinds. */
+ static final java.util.List<String> CONTENT_KINDS=java.util.Arrays.asList("media","contact","document","place","other");
 
  /** A launchable activity, as Home already lists it. recentRank is 1 for the most recent, 0 when unknown. */
  static final class App {
@@ -50,6 +54,20 @@ final class WorkspaceSnapshot {
   Task(String templateId,String label,String ask,String goal,App app){this.templateId=templateId;this.label=label;this.ask=ask;this.goal=goal;this.app=app;}
  }
 
+ /**
+  * A posted notification, as a source gives it. Only its title and action labels may enter the snapshot, and
+  * its key appears only hashed. The body text is never taken. The app must be one the snapshot lists.
+  */
+ static final class Notice {
+  final String key,title;final App app;final long postedAtMs;final List<String> actionLabels;
+  Notice(String key,App app,String title,long postedAtMs,List<String> actionLabels){this.key=key;this.app=app;this.title=title;this.postedAtMs=postedAtMs;this.actionLabels=actionLabels==null?java.util.Collections.<String>emptyList():actionLabels;}
+ }
+ /** One content item a source offers (media, a contact, a document, a place), opened in its own app. */
+ static final class Content {
+  final String source,id,kind,label;final App app;
+  Content(String source,String id,String kind,String label,App app){this.source=source;this.id=id;this.kind=kind;this.label=label;this.app=app;}
+ }
+
  final String snapshotVersion;
  final Map<String,Object> snapshot;
  final WorkspaceLayout.Registry registry;
@@ -57,20 +75,26 @@ final class WorkspaceSnapshot {
  private final Map<String,Shortcut> shortcutsById;
  private final Map<String,Template> templatesById;
  private final Map<String,Task> tasksById;
+ private final Map<String,Notice> noticesById;private final Map<String,Content> contentById;
 
- private WorkspaceSnapshot(String version,Map<String,Object> snapshot,WorkspaceLayout.Registry registry,Map<String,App> apps,Map<String,Shortcut> shortcuts,Map<String,Template> templates,Map<String,Task> tasks){
+ private WorkspaceSnapshot(String version,Map<String,Object> snapshot,WorkspaceLayout.Registry registry,Map<String,App> apps,Map<String,Shortcut> shortcuts,Map<String,Template> templates,Map<String,Task> tasks,Map<String,Notice> notices,Map<String,Content> content){
   this.snapshotVersion=version;this.snapshot=snapshot;this.registry=registry;
   this.appsById=apps;this.shortcutsById=shortcuts;this.templatesById=templates;this.tasksById=tasks;
+  this.noticesById=notices;this.contentById=content;
  }
 
  App app(String id){return appsById.get(id);}
  Shortcut shortcut(String id){return shortcutsById.get(id);}
  Template template(String id){return templatesById.get(id);}
  Task task(String id){return tasksById.get(id);}
+ Notice notice(String id){return noticesById.get(id);}
+ Content content(String id){return contentById.get(id);}
  /** Every id present now, for WorkspaceLayout.available at render time. */
  Set<String> present(){
   Set<String> s=new LinkedHashSet<>(appsById.keySet());
   s.addAll(shortcutsById.keySet());s.addAll(templatesById.keySet());s.addAll(tasksById.keySet());
+  s.addAll(noticesById.keySet());s.addAll(contentById.keySet());
+  for(Object o:(List<?>)snapshot.get("actions")){Object id=((Map<?,?>)o).get("id");if(id instanceof String&&((String)id).startsWith("nact:"))s.add((String)id);}
   return s;
  }
 
@@ -82,6 +106,20 @@ final class WorkspaceSnapshot {
   * timeOfDay, which are not part of the version.
   */
  static WorkspaceSnapshot build(List<App> apps,List<Shortcut> shortcuts,List<Template> templates,List<Task> tasks,Set<String> pinned,long nowMs,Calendar calendar){
+  return build(apps,shortcuts,templates,tasks,java.util.Collections.<Notice>emptyList(),java.util.Collections.<Content>emptyList(),pinned,nowMs,calendar);
+ }
+
+ /**
+  * The same, with a source's notifications and content (WorkspaceInputs.Source).
+  * <ul>
+  *   <li>A notification is kept only for an app listed here. Its title must be non-empty, and its id is
+  *   n:&lt;hash of its key&gt;. At most 12 are kept, most recent first.</li>
+  *   <li>A notification brings at most 2 actions, nact:&lt;hash&gt;/&lt;index&gt;.</li>
+  *   <li>A content item needs a rose-layout-v1 kind, a label, an app listed here and an unambiguous
+  *   c:&lt;source&gt;/&lt;id&gt;. At most 12 are kept.</li>
+  * </ul>
+  */
+ static WorkspaceSnapshot build(List<App> apps,List<Shortcut> shortcuts,List<Template> templates,List<Task> tasks,List<Notice> notices,List<Content> contents,Set<String> pinned,long nowMs,Calendar calendar){
   WorkspaceLayout.Registry registry;
   Map<String,App> appIds=new LinkedHashMap<>();
   List<Object> appEntries=new ArrayList<>(),actionEntries=new ArrayList<>();
@@ -127,13 +165,45 @@ final class WorkspaceSnapshot {
    taskIds.put(id,t);addAction(actions,actionEntries,id,label,WorkspaceLayout.AGENT_TASK,target,true);
   }
 
+  // Notifications: title only, hashed key, most recent first, each with up to 2 action labels.
+  Map<String,Notice> noticeIds=new LinkedHashMap<>();List<Object> noticeEntries=new ArrayList<>();
+  List<Notice> recent=new ArrayList<>();if(notices!=null)for(Notice n:notices)if(n!=null)recent.add(n);
+  java.util.Collections.sort(recent,(a,b)->Long.compare(b.postedAtMs,a.postedAtMs));
+  for(Notice n:recent){
+   if(noticeIds.size()>=MAX_NOTIFICATIONS)break;
+   if(n.key==null||n.key.isEmpty()||n.app==null)continue;
+   String target=appId(n.app),title=label(n.title,LABEL);
+   if(title==null||!appIds.containsKey(target))continue;
+   String hash=sha256("notification\n"+n.key).substring(0,16),id="n:"+hash;
+   if(noticeIds.containsKey(id))continue;
+   noticeIds.put(id,n);
+   Map<String,Object> e=new LinkedHashMap<>();e.put("id",id);e.put("appId",target);e.put("title",title);e.put("recentRank",(long)noticeIds.size());
+   noticeEntries.add(e);
+   for(int i=0;i<n.actionLabels.size()&&i<MAX_NOTIFICATION_ACTIONS;i++){
+    if(actions.size()>=MAX_ACTIONS)break;
+    addAction(actions,actionEntries,"nact:"+hash+"/"+i,label(n.actionLabels.get(i),LABEL),"notification_action",id,false);
+   }
+  }
+  // Content: a known kind, a label, an app listed here, and an id that cannot be ambiguous.
+  Map<String,Content> contentIds=new LinkedHashMap<>();List<Object> contentEntries=new ArrayList<>();
+  if(contents!=null)for(Content c:contents){
+   if(contentIds.size()>=MAX_CONTENT)break;
+   if(c==null||c.app==null||!component(c.source)||!component(c.id)||!CONTENT_KINDS.contains(c.kind))continue;
+   String target=appId(c.app),lbl=label(c.label,LABEL),id="c:"+c.source+"/"+c.id;
+   if(lbl==null||!appIds.containsKey(target)||contentIds.containsKey(id))continue;
+   contentIds.put(id,c);
+   Map<String,Object> e=new LinkedHashMap<>();e.put("id",id);e.put("kind",c.kind);e.put("label",lbl);e.put("appId",target);
+   contentEntries.add(e);
+  }
+
   Set<String> known=new LinkedHashSet<>(appIds.keySet());for(String[] a:actions)known.add(a[0]);
+  known.addAll(noticeIds.keySet());known.addAll(contentIds.keySet());
   List<Object> pins=new ArrayList<>();for(String p:pinned)if(known.contains(p))pins.add(p);
 
   Map<String,Object> versioned=new LinkedHashMap<>();
   versioned.put("catalogVersion",WorkspaceLayout.CATALOG);
-  versioned.put("apps",appEntries);versioned.put("notifications",new ArrayList<Object>());
-  versioned.put("content",new ArrayList<Object>());versioned.put("actions",actionEntries);versioned.put("pinned",pins);
+  versioned.put("apps",appEntries);versioned.put("notifications",noticeEntries);
+  versioned.put("content",contentEntries);versioned.put("actions",actionEntries);versioned.put("pinned",pins);
   String version="s-"+sha256(WorkspaceLayout.json(versioned)).substring(0,12);
 
   Map<String,Object> snapshot=new LinkedHashMap<>();
@@ -144,8 +214,10 @@ final class WorkspaceSnapshot {
 
   registry=new WorkspaceLayout.Registry(version);
   for(String id:appIds.keySet())registry.add(WorkspaceLayout.APPS,id);
+  for(String id:noticeIds.keySet())registry.add(WorkspaceLayout.NOTIFICATIONS,id);
+  for(String id:contentIds.keySet())registry.add(WorkspaceLayout.CONTENT,id);
   for(String[] a:actions)registry.action(a[0],a[1],a[2]);
-  return new WorkspaceSnapshot(version,snapshot,registry,appIds,shortcutIds,templateIds,taskIds);
+  return new WorkspaceSnapshot(version,snapshot,registry,appIds,shortcutIds,templateIds,taskIds,noticeIds,contentIds);
  }
 
  private static void addAction(List<String[]> actions,List<Object> entries,String id,String label,String kind,String target,boolean confirm){
