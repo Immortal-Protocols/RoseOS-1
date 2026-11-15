@@ -84,7 +84,7 @@ class RoseKeyboardBuildTest(unittest.TestCase):
         self.assertLess(patcher.index("projects['build/make'].append('rose-edge-build-make.patch')"),
             patcher.index(line))
         reconcile = (ROOT/'scripts/host-reconcile.py').read_text()
-        self.assertIn("'rose-edge-build-make.patch', 'rose-keyboard-build-make.patch')", reconcile)
+        self.assertIn("'rose-edge-build-make.patch', 'rose-keyboard-build-make.patch',", reconcile)
 
     def test_the_patch_applies_to_the_pinned_makefile(self):
         pinned = ROOT/'os/pinned-manifest.xml'

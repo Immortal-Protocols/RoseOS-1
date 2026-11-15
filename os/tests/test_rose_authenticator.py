@@ -8,6 +8,7 @@ byte; and the sources compile against the Android platform jar.
 """
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -128,6 +129,69 @@ class RoseAuthenticatorPackageTest(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn('checks passed', r.stdout)
+
+
+
+class RoseAuthenticatorProductTest(unittest.TestCase):
+    """The authenticator is in the product image: one PRODUCT_PACKAGES line beside the stock apps, registered with
+    the Rose product's other build/make patches and mirrored by host reconcile. Source inclusion only."""
+    PATCH = ROOT/'os/patches/rose-authenticator-build-make.patch'
+    KEYBOARD = ROOT/'os/patches/rose-keyboard-build-make.patch'
+    PINNED = ROOT/'os/tests/fixtures/cuttlefish-alpha/build-make/target/product/handheld_product.mk'
+
+    def test_the_patch_adds_one_product_package_and_removes_nothing(self):
+        text = self.PATCH.read_text()
+        self.assertEqual(re.findall(r'^\+\+\+ b/(\S+)', text, re.M), ['target/product/handheld_product.mk'])
+        added = [l for l in text.splitlines() if l.startswith('+') and not l.startswith('+++')]
+        removed = [l for l in text.splitlines() if l.startswith('-') and not l.startswith('---')]
+        self.assertEqual(added, ['+    RoseAuthenticator \\'])
+        self.assertEqual(removed, [])
+
+    def test_applies_to_the_pinned_makefile_after_the_keyboard(self):
+        pinned = (ROOT/'os/pinned-manifest.xml').read_text()
+        self.assertIn('path="build/make" remote="grapheneos" revision="b0f697df8cc9519408ca0a404e918cd51bde0735"', pinned)
+        with tempfile.TemporaryDirectory(prefix='rose-authenticator-mk-') as d:
+            tree = Path(d)
+            target = tree/'target/product/handheld_product.mk'
+            target.parent.mkdir(parents=True)
+            target.write_bytes(self.PINNED.read_bytes())
+            git = lambda *args: subprocess.run(['git', '-C', d, *args], capture_output=True, text=True)
+            git('init', '-q')
+            self.assertEqual(git('hash-object', str(target)).stdout.strip()[:7], '2a4602d', 'the pinned blob')
+            # Alone and in the product sequence (after the keyboard, which edits the same file).
+            self.assertEqual(git('apply', '--check', str(self.PATCH)).returncode, 0)
+            for patch in (self.KEYBOARD, self.PATCH):
+                r = git('apply', str(patch))
+                self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(git('hash-object', str(target)).stdout.strip()[:7], '8fd097b')
+            self.assertIn('index 4b66c5d..8fd097b', self.PATCH.read_text(), 'the blob chain after the keyboard')
+            block = target.read_text().split('PRODUCT_PACKAGES += \\\n', 1)[1].split('\n\n', 1)[0]
+            self.assertEqual(block.count('    RoseAuthenticator \\\n'), 1)
+            self.assertEqual(block.count('    RoseKeyboard \\\n'), 1)
+
+    def test_registered_in_the_product_build_after_the_keyboard_and_mirrored_by_reconcile(self):
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        line = "    projects['build/make'].append('rose-authenticator-build-make.patch')"
+        self.assertEqual(patcher.count('rose-authenticator-build-make.patch'), 1)
+        self.assertIn(line, patcher)
+        self.assertLess(patcher.index("projects['build/make'].append('rose-keyboard-build-make.patch')"),
+                        patcher.index(line))
+        # Inside the background-policy (RoseOS product) block, like the keyboard: indented under `if a.background_policy:`.
+        policy = patcher.index('if a.background_policy:')
+        self.assertLess(policy, patcher.index(line))
+        self.assertLess(patcher.index(line), patcher.index('preinstalls = preinstall_plan('))
+        reconcile = (ROOT/'scripts/host-reconcile.py').read_text()
+        self.assertIn("'rose-keyboard-build-make.patch',\n        'rose-authenticator-build-make.patch'),", reconcile)
+
+    def test_the_overlay_is_copied_into_every_build(self):
+        # apply-os-changes.py copies every overlay except the background and Updater ones; the app is neither.
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        for skipped in ("'packages/apps/PixelBackgroundControl/'", "'packages/apps/Updater/'"):
+            self.assertIn(skipped, patcher)
+        self.assertFalse(str(APP.relative_to(ROOT/'os/overlays')).startswith(
+            ('packages/apps/PixelBackgroundControl/', 'packages/apps/Updater/')))
+        self.assertTrue((APP/'Android.bp').is_file())
+        self.assertIn('name: "RoseAuthenticator"', (APP/'Android.bp').read_text(), 'the module the product lists')
 
 
 if __name__ == '__main__':
