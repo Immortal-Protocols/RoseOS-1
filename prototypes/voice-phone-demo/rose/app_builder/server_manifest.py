@@ -157,6 +157,10 @@ def manifest(project_id: str, version_code: int, server: dict, migrations=(), *,
     """The manifest of one version's server. ``server`` is its record ({sha256, size, target}, as
     rose.app_builder.server_build.ServerBuild.record gives it); ``migrations`` its migration lock entries
     ({scope, number, ...}), whose highest number per scope is the schema the server migrates to."""
+    migrations = list(migrations)
+    if any(not isinstance(m, dict) or m.get('scope') not in ('account', 'shared') or type(m.get('number')) is not int
+           for m in migrations):
+        raise Refused('A migration lock entry has no known scope or number.', 'manifest_invalid')
     schema = {'account': max((m['number'] for m in migrations if m['scope'] == 'account'), default=0)}
     if shared:
         schema['shared'] = max((m['number'] for m in migrations if m['scope'] == 'shared'), default=0)
@@ -178,7 +182,8 @@ def encode(m: dict) -> bytes:
 
 def decode(data: bytes) -> dict:
     """A manifest from bytes, strictly: UTF-8 JSON within bounds, no repeated key, no number JSON allows that the
-    manifest's own grammar does not, then ``check``."""
+    manifest's own grammar does not, then ``check``, and the bytes must be exactly ``encode``'s (one manifest has one
+    form, so one digest)."""
     if not isinstance(data, (bytes, bytearray)) or len(data) > MAX_MANIFEST:
         raise Refused(f'The server manifest is larger than {MAX_MANIFEST // 1024} KB.', 'manifest_invalid')
 
@@ -196,6 +201,8 @@ def decode(data: bytes) -> dict:
     except (UnicodeDecodeError, ValueError, RecursionError):
         raise Refused('The server manifest is not valid JSON.', 'manifest_invalid') from None
     check(m)
+    if encode(m) != bytes(data):
+        raise Refused('The server manifest is not in its canonical form.', 'manifest_invalid')
     return m
 
 

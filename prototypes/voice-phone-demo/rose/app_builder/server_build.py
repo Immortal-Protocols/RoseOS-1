@@ -220,9 +220,15 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
                           'machine (a crate\'s macro or build script put it there), so it was not used.')
     try:
         info = server_manifest.check_elf(elf)
-    except server_manifest.Refused as refused:  # a crate linking a shared library is the crate set's; the rest the
-        raise BuildFailed('dependency' if refused.reason == 'server_not_static' else 'toolchain',  # toolchain's
-                          refused.reason, str(refused)) from None
+    except server_manifest.Refused as refused:
+        # Not static: with no crate in the build it is the writer's own code (a link section, say); with crates the
+        # builder cannot tell a crate asking for a shared library from the writer, and reports the crate set, the
+        # usual cause. Any other mismatch is the toolchain's.
+        if refused.reason == 'server_not_static':
+            category = 'dependency' if used else 'compile'
+        else:
+            category = 'toolchain'
+        raise BuildFailed(category, refused.reason, str(refused)) from None
     return ServerBuild(elf, info.sha256, info.size, tools.target, lock_text, used)
 
 

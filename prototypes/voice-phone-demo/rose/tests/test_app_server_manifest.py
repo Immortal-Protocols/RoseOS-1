@@ -20,35 +20,34 @@ PHDR = struct.Struct('<IIQQQQQQ')
 
 
 def tiny_elf(*, e_type=M.ET_EXEC, machine=M.EM_X86_64, cls=M.ELFCLASS64, data=M.ELFDATA2LSB, osabi=0, entry=0x401000,
-             interp=False, needed=False, soname=False, dynamic=None, executable=True, phnum=None, phoff=None,
-             filesz_over_memsz=False, segment_past_end=False, ehsize=64, phentsize=56, magic=b'\x7fELF',
-             extra=b'') -> bytes:
-    """A minimal ELF: one PT_LOAD over the whole file, and optionally PT_INTERP and PT_DYNAMIC. ``dynamic`` defaults to
-    on for ET_DYN (a static-pie executable has one)."""
+             interp=False, needed=False, soname=False, dynamic=None, second_dynamic=None, executable=True, phnum=None,
+             phoff=None, load_filesz=None, load_memsz=None, dyn_offset=None, dyn_filesz=None, ident_version=1,
+             e_version=1, ehsize=64, phentsize=56, magic=b'\x7fELF', extra=b'') -> bytes:
+    """A minimal ELF: one PT_LOAD over the whole file, and optionally PT_DYNAMIC (a second one with
+    ``second_dynamic``'s entries) and PT_INTERP. ``dynamic`` defaults to on for ET_DYN (a static-pie executable has
+    one). The other arguments break one header field each."""
     if dynamic is None:
         dynamic = e_type == M.ET_DYN or needed or soname
-    entries = []
-    if needed:
-        entries.append((M.DT_NEEDED, 1))
-    if soname:
-        entries.append((M.DT_SONAME, 1))
-    entries += [(0x6ffffffb, 0x08000001), (M.DT_NULL, 0)]
+    entries = [(M.DT_NEEDED, 1)] * needed + [(M.DT_SONAME, 1)] * soname + [(0x6ffffffb, 0x08000001), (M.DT_NULL, 0)]
     dyn = b''.join(struct.pack('<qQ', t, v) for t, v in entries) if dynamic else b''
+    dyn2 = b''.join(struct.pack('<qQ', t, v) for t, v in second_dynamic) if second_dynamic else b''
     interp_bytes = b'/lib/ld-musl-x86_64.so.1\0' if interp else b''
-    count = 1 + bool(interp) + bool(dynamic)
+    count = 1 + bool(dynamic) + bool(second_dynamic) + bool(interp)
     start = 64 + count * 56
-    body = dyn + interp_bytes + b'\xc3' * 16 + extra
+    body = dyn + dyn2 + interp_bytes + b'\xc3' * 16 + extra
     size = start + len(body)
-    headers = []
-    headers.append((M.PT_LOAD, 5 if executable else 4, 0, 0x400000, 0x400000, size + (1 << 30 if segment_past_end
-                                                                                       else 0),
-                    size - 1 if filesz_over_memsz else size, 0x1000))
+    headers = [(M.PT_LOAD, 5 if executable else 4, 0, 0x400000, 0x400000,
+                size if load_filesz is None else load_filesz, size if load_memsz is None else load_memsz, 0x1000)]
     if dynamic:
-        headers.append((M.PT_DYNAMIC, 6, start, 0x400000 + start, 0x400000 + start, len(dyn), len(dyn), 8))
+        headers.append((M.PT_DYNAMIC, 6, start if dyn_offset is None else dyn_offset, 0, 0,
+                        len(dyn) if dyn_filesz is None else dyn_filesz, len(dyn) if dyn_filesz is None else dyn_filesz,
+                        8))
+    if second_dynamic:
+        headers.append((M.PT_DYNAMIC, 6, start + len(dyn), 0, 0, len(dyn2), len(dyn2), 8))
     if interp:
-        headers.append((M.PT_INTERP, 4, start + len(dyn), 0, 0, len(interp_bytes), len(interp_bytes), 1))
-    ident = magic + bytes([cls, data, 1, osabi]) + bytes(8)
-    out = EHDR.pack(ident, e_type, machine, 1, entry, 64 if phoff is None else phoff, 0, 0, ehsize, phentsize,
+        headers.append((M.PT_INTERP, 4, start + len(dyn) + len(dyn2), 0, 0, len(interp_bytes), len(interp_bytes), 1))
+    ident = magic + bytes([cls, data, ident_version, osabi]) + bytes(8)
+    out = EHDR.pack(ident, e_type, machine, e_version, entry, 64 if phoff is None else phoff, 0, 0, ehsize, phentsize,
                     count if phnum is None else phnum, 0, 0, 0)
     out += b''.join(PHDR.pack(*h) for h in headers)
     return out + body
@@ -97,15 +96,33 @@ class Elf(Tmp):
             'PIE without a dynamic section': tiny_elf(e_type=M.ET_DYN, dynamic=False),
             'no entry point': tiny_elf(entry=0),
             'no executable segment': tiny_elf(executable=False),
-            'no program headers': tiny_elf(phnum=0),
-            'too many program headers': tiny_elf(phnum=M.MAX_PHNUM + 1),
             'program headers past the end': tiny_elf(phnum=40),
-            'program headers inside the ELF header': tiny_elf(phoff=8),
             'a wrong header size': tiny_elf(ehsize=52),
             'a wrong program header size': tiny_elf(phentsize=32),
-            'a segment past the end': tiny_elf(segment_past_end=True),
-            'more file than memory': tiny_elf(filesz_over_memsz=True),
+            'a segment past the end': tiny_elf(load_filesz=1 << 30, load_memsz=1 << 30),
+            'a dynamic section starting past the end': tiny_elf(e_type=M.ET_DYN, dyn_offset=1 << 20),
+            'a dynamic section running past the end': tiny_elf(e_type=M.ET_DYN, dyn_filesz=1 << 20),
+            'more file than memory': tiny_elf(load_memsz=10),
+            'EI_VERSION 0': tiny_elf(ident_version=0),
+            'e_version 0': tiny_elf(e_version=0),
         }
+        # Each of these must be refused by its own check, not by one that happens to follow it.
+        header_cases = {
+            'no program headers': (tiny_elf(phnum=0), 'cannot read'),
+            'too many program headers': (tiny_elf(phnum=M.MAX_PHNUM + 1, extra=bytes(56 * 600)), 'cannot read'),
+            'program headers inside the ELF header': (tiny_elf(phoff=8), 'outside the file'),
+            'two dynamic sections': (tiny_elf(e_type=M.ET_DYN, second_dynamic=[(M.DT_NULL, 0)]), 'two dynamic'),
+            # Whichever of the two holds the needed library, neither is read alone.
+            'a needed library in the second': (tiny_elf(e_type=M.ET_DYN, second_dynamic=[(M.DT_NEEDED, 1),
+                                                                                         (M.DT_NULL, 0)]), 'two dynamic'),
+            'a needed library in the first': (tiny_elf(e_type=M.ET_DYN, needed=True, second_dynamic=[(M.DT_NULL, 0)]),
+                                              'two dynamic'),
+        }
+        for label, (data, words) in header_cases.items():
+            with self.subTest(label):
+                with self.assertRaises(M.Refused) as caught:
+                    M.check_elf(self.file(data))
+                self.assertIn(words, str(caught.exception))
         for reason, cases in (('server_not_static', not_static), ('server_binary_invalid', invalid)):
             for label, data in cases.items():
                 with self.subTest(label):
@@ -179,6 +196,23 @@ class Manifest(Tmp):
         self.assertEqual(M.manifest('0123456789abcdef', 1, ELF)['schema'], {'account': 0})
         with self.assertRaises(M.Refused):
             M.manifest('0123456789abcdef', 7, ELF, LOCK)  # shared migrations, no shared database
+        # Any iterable is read once, as a whole; an unknown scope is refused, not dropped.
+        self.assertEqual(M.manifest('0123456789abcdef', 7, ELF, iter(LOCK), shared=True)['schema'],
+                         {'account': 2, 'shared': 1})
+        with self.assertRaises(M.Refused):
+            M.manifest('0123456789abcdef', 7, ELF, iter(LOCK))
+        for bad in ([{'scope': 'Shared', 'number': 1}], [{'scope': 'account', 'number': True}], [{'scope': 'account'}],
+                    ['account']):
+            with self.subTest(bad=bad):
+                with self.assertRaises(M.Refused):
+                    M.manifest('0123456789abcdef', 7, ELF, bad, shared=True)
+        for bad in (dict(project_id='X'), dict(server={**ELF, 'target': 'x86_64-unknown-linux-gnu'}),
+                    dict(signin_revision='ee1e554f')):
+            with self.subTest(bad=bad):
+                args = {'project_id': '0123456789abcdef', 'server': ELF, **bad}
+                with self.assertRaises(M.Refused):
+                    M.manifest(args['project_id'], 7, args['server'],
+                               signin_revision=bad.get('signin_revision', M.SIGNIN_REVISION))
 
     def test_canonical_bytes_round_trip(self):
         m = M.manifest('0123456789abcdef', 7, ELF, LOCK, shared=True)
@@ -186,6 +220,8 @@ class Manifest(Tmp):
         self.assertEqual(data, (json.dumps(m, sort_keys=True, separators=(',', ':')) + '\n').encode())
         self.assertEqual(M.decode(data), m)
         self.assertEqual(M.encode(M.decode(data)), data)
+        with self.assertRaises(M.Refused):
+            M.encode({**m, 'app_id': '11111111-1111-4111-8111-111111111111'})  # never stored, never hashed
 
     def test_decoding_is_strict(self):
         good = M.encode(M.manifest('0123456789abcdef', 7, ELF))
@@ -197,13 +233,35 @@ class Manifest(Tmp):
             'a float': text.replace('"version_code":7', '"version_code":7.0').encode(),
             'NaN': text.replace('"version_code":7', '"version_code":NaN').encode(),
             'too large': good + b' ' * M.MAX_MANIFEST,
-            'deep': b'[' * 100000,
+            'deep': b'[' * 16000,  # within the size bound: refused for its depth
+            'deep objects': b'{"a":' * 3000,
             'not bytes': text,
+            # Well-formed JSON that is not the schema.
+            'an extra host field': (text[:-2] + ',"app_id":"x"}\n').encode(),
+            'schema version 2': text.replace('"schema_version":1', '"schema_version":2').encode(),
+            'a missing field': text.replace(',"health":"/health"', '').encode(),
+            'not an object': b'[]\n',
+            # The same manifest in another form: one manifest has one form, and one digest.
+            'spaces': json.dumps(json.loads(text), sort_keys=True).encode() + b'\n',
+            'another key order': (json.dumps(dict(reversed(json.loads(text).items())), separators=(',', ':'))
+                                  + '\n').encode(),
+            'no newline': good[:-1],
+            'leading space': b' ' + good,
+            'an escaped character': text.replace('"/health"', '"\\/health"').encode(),
+            'minus zero': text.replace('"account":0', '"account":-0').encode(),
         }.items():
             with self.subTest(label):
                 with self.assertRaises(M.Refused) as caught:
                     M.decode(data)
                 self.assertEqual(caught.exception.reason, 'manifest_invalid')
+        # The decoder itself refuses floats and constants, before the schema is even read.
+        with mock.patch.object(M, 'check', lambda m, *a, **k: m):
+            for label, data in (('a float', text.replace('"account":0', '"account":0.0')),
+                                ('NaN', text.replace('"account":0', '"account":NaN')),
+                                ('Infinity', text.replace('"account":0', '"account":Infinity'))):
+                with self.subTest(label):
+                    with self.assertRaises(M.Refused):
+                        M.decode(data.encode())
 
     def test_every_field_is_exactly_the_schema(self):
         good = M.manifest('0123456789abcdef', 7, ELF, LOCK, shared=True)
@@ -229,6 +287,17 @@ class Manifest(Tmp):
             'no account schema': {'schema': {'shared': 1}},
             'an unknown scope': {'schema': {'account': 1, 'other': 1}},
             'a negative schema': {'schema': {'account': -1}},
+            'a schema too high': {'schema': {'account': M.MAX_SCHEMA + 1}},
+            'a schema of true': {'schema': {'account': True}},
+            'a float schema': {'schema': {'account': 1.0}},
+            'a schema list': {'schema': ['account']},
+            'a numeric project id': {'project_id': 123},
+            'a project id one longer': {'project_id': '0123456789abcdef0'},
+            'a numeric digest': {'elf': {**ELF, 'sha256': 5}},
+            'a digest one longer': {'elf': {**ELF, 'sha256': 'e' * 65}},
+            'a binary too large': {'elf': {**ELF, 'size': M.MAX_ELF + 1}},
+            'a listen list': {'listen': ['PORT', 8080]},
+            'a port of true': {'listen': {'env': 'PORT', 'default': True}},
         }
         for label, change in changes.items():
             with self.subTest(label):
@@ -253,10 +322,14 @@ class Manifest(Tmp):
             with self.subTest(kw=kw):
                 with self.assertRaises(M.Refused):
                     M.check(m, **kw)
-        other = self.file(data + b'\0')
-        with self.assertRaises(M.Refused) as caught:
-            M.check(m, other)
-        self.assertEqual(caught.exception.reason, 'server_binary_invalid')
+        # Another binary: longer, or the same length with one byte changed (the digest binds it, not the size).
+        for other in (data + b'\0', data[:-1] + bytes([data[-1] ^ 1])):
+            with self.subTest(size=len(other)):
+                with self.assertRaises(M.Refused) as caught:
+                    M.check(m, self.file(other))
+                self.assertEqual(caught.exception.reason, 'server_binary_invalid')
+        with self.assertRaises(M.Refused):  # the same digest with another recorded size
+            M.check({**m, 'elf': {**m['elf'], 'size': len(data) + 1}}, elf)
         dynamic = tiny_elf(interp=True)
         m2 = M.manifest('0123456789abcdef', 7, {**record, 'sha256': hashlib.sha256(dynamic).hexdigest(),
                                                 'size': len(dynamic)})

@@ -684,6 +684,11 @@ class FakeCargo(Tmp):
                 with self.assertRaises(S.BuildFailed) as caught:
                     self.build()
                 self.assertEqual((caught.exception.category, caught.exception.reason), (category, reason))
+        # With no crate in the build, a binary that is not static is the writer's own code.
+        self.elf_file.write_bytes(tiny_elf(interp=True))
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(declared=[], source=None, lock='version = 4\n')
+        self.assertEqual((caught.exception.category, caught.exception.reason), ('compile', 'server_not_static'))
 
     def test_a_missing_binary_or_lock_is_the_toolchains_fault(self):
         cargo = self.toolchain / 'bin/cargo'
@@ -839,6 +844,13 @@ class RealCargo(Tmp):
                             Passthrough(), cache=self.tmp / 'cache', generated={S.ENTRY: MAIN})
                 self.assertEqual((caught.exception.category, caught.exception.reason),
                                  ('toolchain', 'rust_toolchain_unavailable'))
+
+    def test_the_writers_own_link_section_is_the_writers(self):
+        snap = snapshot(self.tmp / 'snap', handlers='#[used]\n#[link_section = ".interp"]\n'
+                        'static INTERP: [u8; 28] = *b"/lib64/ld-linux-x86-64.so.2\\0";\n' + HANDLERS)
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(snap)
+        self.assertEqual((caught.exception.category, caught.exception.reason), ('compile', 'server_not_static'))
 
     def test_a_cargo_config_above_the_job_never_applies(self):
         outer = self.tmp / 'home'

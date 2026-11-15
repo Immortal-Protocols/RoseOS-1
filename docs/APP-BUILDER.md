@@ -1662,7 +1662,7 @@ needing older clients to update, through the library's minClientVersionCode
   | `crate_changed` | dependency | A crate differs from the set's digest or from a delivered version's |
   | `crate_compile` | dependency | A crate, or its build script, failed |
   | `build_path_embedded` | dependency | The binary holds the job's or the set's path |
-  | `server_not_static` | dependency | The binary needs a program interpreter or a shared library (§7.7) |
+  | `server_not_static` | compile with no crates, else dependency | The binary needs a program interpreter or a shared library (§7.7) |
   | `server_binary_invalid` | toolchain | The binary is not a 64-bit x86-64 Linux executable (§7.7) |
   | `server_compile` | compile | The writer's server code didn't compile |
   | `server_build` | compile | Any other cargo failure |
@@ -1758,8 +1758,8 @@ do:
 
 It names no host identity and no secret: no `app_id`, no deployment hash,
 and nothing about the sealing key (item 3). The manifest's bytes are
-canonical JSON. Decoding is strict: no repeated key, no float or NaN, and
-at most 16 KB. `check` holds a manifest to exactly this schema, and, when
+canonical JSON, so one manifest has one digest. Decoding is strict: no
+repeated key, no float or NaN, at most 16 KB, and only the canonical bytes. `check` holds a manifest to exactly this schema, and, when
 given them, to its project, its version and its binary. That function is
 what the fake host checks now, and what the Chariot adapter will check later.
 
@@ -1771,8 +1771,11 @@ only a static 64-bit little-endian x86-64 Linux executable:
 - an entry point and an executable segment;
 - no program interpreter and no `DT_NEEDED`.
 
-A binary that needs a shared library is `server_not_static`, category
-`dependency`: only a crate can ask for one. Any other mismatch is
+A binary that needs an interpreter or a shared library is
+`server_not_static`. With no crate in the build, it is the writer's own code
+(a link section, say), category `compile`. With crates, the builder can't
+tell a crate asking for a shared library from the writer. It reports
+`dependency`, the usual cause. Any other mismatch is
 `server_binary_invalid`, category `toolchain`. The build passes
 `-Ctarget-feature=+crt-static`, the musl target's default, so every target
 the builder runs links the same way. The check decides nothing about what
