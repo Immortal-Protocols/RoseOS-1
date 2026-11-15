@@ -1612,10 +1612,9 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   server is given its host's client header (`Server::with_client_header`,
   Chariot's `X-Chariot-Client-Address`, §7.7). The header is then used
   when it holds exactly one IP address, and the peer otherwise. It is never
-  trusted by default. No generated server is given it yet (the adapter's
-  `Started::server` and the generated `main.rs` do not call it), so behind
-  Chariot's gateway every client of a generated server still shares the
-  gateway's address. This is a known limit until `main.rs` opts in.
+  trusted by default. Every generated server is given it: the generated
+  `main.rs` calls `.with_client_header("X-Chariot-Client-Address")`
+  (§7.5, #850).
 
 **The adapter (slice 7b)** (`workspace/rose-app-runtime-signin`, OS Core; source, built on by nothing yet) binds `Auth` to rose-signin `23062a04`.
 
@@ -2159,9 +2158,8 @@ Still open for the Chariot owner (App Core's proposal in brackets):
      the marker's sha256 to `revision_sha256`. Chariot verifies the receipt
      and removes the marker.]
 6. Client address: the header is agreed, `X-Chariot-Client-Address`
-   (above), and the runtime can use it. It is not yet wired into generated
-   servers: Home/App's `main.rs` is to call
-   `.with_client_header("X-Chariot-Client-Address")`.
+   (above). Every generated server counts rate limits by it, because the
+   generated `main.rs` calls `.with_client_header(..)` (§7.5).
 7. Rollback [keep the previous ELF; report the running sha256].
 8. Process and logs [SIGTERM within a grace period; no secrets in logs].
 
