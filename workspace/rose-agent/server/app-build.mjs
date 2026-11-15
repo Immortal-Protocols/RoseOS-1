@@ -52,7 +52,8 @@ cannot work until the host hosts it. Say so in your reply; never say the server 
   update that leaves one broken is refused at start-up (the database keeps its old version and nothing is
   lost). So PRAGMA foreign_keys changes nothing in a migration and ON DELETE actions do not fire there: delete
   child rows yourself, and re-key them yourself too (ON UPDATE does not act either). Rebuilding a table other
-  tables reference is fine when the new table keeps the rows they point at and its name. The PRAGMAs a migration may use are foreign_keys, defer_foreign_keys, recursive_triggers,
+  tables reference is fine when the new table keeps its name, the rows they point at and the key they
+  reference (its PRIMARY KEY, or a UNIQUE on those columns). The PRAGMAs a migration may use are foreign_keys, defer_foreign_keys, recursive_triggers,
   table_info, table_xinfo, index_list, index_info, index_xinfo, foreign_key_list, foreign_key_check,
   integrity_check and quick_check. A new migration must also work on tables that already hold rows.
 - server/src/handlers/mod.rs: Rust 2021 defining pub struct App; and impl crate::api::Handlers for App, one

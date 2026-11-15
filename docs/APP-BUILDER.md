@@ -1845,9 +1845,13 @@ runs these steps before signing:
    procedure): the pending ones together, with foreign keys off, in one
    transaction, then `foreign_key_check` over every table. A fresh
    install is one batch. An upgrade is the delivered set, then rows seeded
-   in every table (parents first, so a child's foreign keys point at its
-   parents' rows), then the new set. So a rebuilt table that loses rows its
-   children point at is refused here, as the adapter refuses it at start-up.
+   in every ordinary table on a fresh connection (parents first, so a
+   child's foreign keys point at its parents' rows), then the new set. So
+   a rebuilt table that loses rows its children point at is refused here,
+   as the adapter refuses it at start-up, whenever the seed can fill the
+   child table. Seeding is best effort: a child table whose constraints
+   refuse every sample row stays empty, and the adapter's check on a
+   phone's real rows is then the only one.
    They are then embedded in builder-owned files, which a generator may
    not write (it is the builder's failure, `toolchain`); the builder writes
    its other files with them:
