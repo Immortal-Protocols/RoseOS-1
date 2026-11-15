@@ -341,8 +341,9 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 
 
 MAIN_RS = '''//! The server's start-up (docs/APP-BUILDER.md §7.4, §7.7): OS Core's adapter opens and migrates the data, the
-//! runtime serves the contract's routes. The host passes `CHARIOT_APP_ID` and `PORT` (read here) and `DATA_DIR` and
-//! `CHARIOT_DEPLOYMENT_SHA256` (read by the adapter); the build passes `meta` and `migrations`. Nothing is made up.
+//! runtime serves the contract's routes. The host passes `PORT` (read here) and, read by the adapter, `DATA_DIR`,
+//! `CHARIOT_APP_ID`, `CHARIOT_DEPLOYMENT_SHA256`, the optional `CHARIOT_REVISION_SHA256` and the sealing keyring
+//! `CHARIOT_SEALING_KEY_FILE`; the build passes `meta` and `migrations`. Nothing is made up.
 
 mod api;
 #[path = "../src/handlers/mod.rs"]
@@ -357,8 +358,6 @@ use std::sync::Arc;
 
 use rose_app_runtime_signin::{start, Config, Keys, Migrations};
 
-/// The variable the host passes its app id in (§7.7 item 2).
-const APP_ID_ENV: &str = "CHARIOT_APP_ID";
 /// The variable the host passes the port in, and the port when it passes none (§7.7).
 const PORT_ENV: &str = "PORT";
 const DEFAULT_PORT: u16 = 8080;
@@ -382,14 +381,16 @@ fn port(value: Option<String>) -> Result<u16, String> {
 }
 
 fn run() -> Result<(), String> {
-    let app_id = var(APP_ID_ENV)?.ok_or_else(|| format!("{APP_ID_ENV} is not set"))?;
     let port = port(var(PORT_ENV)?)?;
     let migrations = Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED };
-    let config = Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, &app_id, migrations)
-        .map_err(|e| e.to_string())?;
-    // The sealing keys' loader is not in the adapter yet (D9). Without keys sign-in answers `auth_unavailable` and
-    // `/health` answers 503: the server is honestly not ready. Nothing here reads, derives or makes up a key.
-    let started = start(config, Keys::Unavailable).map_err(|e| e.to_string())?;
+    let config = Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations).map_err(|e| e.to_string())?;
+    // The adapter loads the host's keyring. Any problem leaves no key, never a stop: sign-in answers
+    // `auth_unavailable` and `/health` answers 503, and the reason is one word, never the path or a byte of the file.
+    let (keys, why) = Keys::from_env();
+    if let Some(why) = why {
+        eprintln!("rose server: {why}");
+    }
+    let started = start(config, keys).map_err(|e| e.to_string())?;
     let server = started.server(routes::routes::<handlers::App>()).map_err(|e| format!("routes: {e}"))?;
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("listening on {PORT_ENV}: {e}"))?;
     Arc::new(server).serve(listener).map_err(|e| format!("serving: {e}"))

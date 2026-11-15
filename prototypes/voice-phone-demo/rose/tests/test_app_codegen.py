@@ -97,22 +97,26 @@ class Server(unittest.TestCase):
         for line in ('mod api;', '#[path = "../src/handlers/mod.rs"]\nmod handlers;', 'mod meta;', 'mod migrations;',
                      'mod routes;', 'mod wire;', 'use rose_app_runtime_signin::{start, Config, Keys, Migrations};',
                      'Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED }',
-                     'Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, &app_id, migrations)',
-                     'start(config, Keys::Unavailable)', 'started.server(routes::routes::<handlers::App>())',
-                     'const APP_ID_ENV: &str = "CHARIOT_APP_ID";', 'const PORT_ENV: &str = "PORT";',
+                     'Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations)',
+                     'let (keys, why) = Keys::from_env();', 'eprintln!("rose server: {why}");',
+                     'start(config, keys)', 'started.server(routes::routes::<handlers::App>())',
+                     'const PORT_ENV: &str = "PORT";',
                      'const DEFAULT_PORT: u16 = 8080;', 'TcpListener::bind(("0.0.0.0", port))'):
             self.assertIn(line, main)
-        # The only variables it reads itself; DATA_DIR and CHARIOT_DEPLOYMENT_SHA256 are the adapter's.
+        # The only variable it reads itself; the host's identity, data directory and keyring are the adapter's.
         self.assertEqual(main.count('std::env::var('), 1)
-        self.assertEqual((main.count('var('), main.count('var(APP_ID_ENV)'), main.count('var(PORT_ENV)')), (4, 1, 1))
-        for invented in ('Keys::Supplied', 'restore', 'http://', 'https://', 'DATA_DIR"', 'secret'):
+        self.assertEqual((main.count('var('), main.count('var(PORT_ENV)')), (3, 1))
+        # Keys come only from the adapter's loader, which never stops start-up (no `?` on it).
+        self.assertNotIn('Keys::from_env()?', main)
+        for invented in ('Keys::Supplied', 'Keys::Unavailable', 'restore', 'http://', 'https://', 'DATA_DIR"',
+                         'secret', 'CHARIOT_APP_ID"', 'KEY_FILE"'):
             self.assertNotIn(invented, main)
 
     def test_main_reads_its_port_and_variables_strictly(self):
         # main.rs's own parts that need only std, compiled and run alone (the adapter's build is the next test).
         require('ROSE_REQUIRE_CARGO', 'rustc')
         main = G.MAIN_RS
-        own = main[main.index('/// The variable the host passes its app id'):main.index('fn run()')]
+        own = main[main.index('/// The variable the host passes the port in'):main.index('fn run()')]
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / 'startup.rs'
             source.write_text(own + STARTUP_CHECKS, encoding='utf-8')
@@ -157,18 +161,24 @@ class Server(unittest.TestCase):
             host = {'PATH': os.environ.get('PATH', '')}
             ready = {**host, 'CHARIOT_APP_ID': 'app-1', 'DATA_DIR': str(data),
                      'CHARIOT_DEPLOYMENT_SHA256': '0' * 64}
-            # Every case stops before anything listens: no server is started here.
-            for case, words in (
-                    (host, 'CHARIOT_APP_ID is not set'),
-                    ({**ready, 'PORT': 'http'}, 'PORT is not a port'),
-                    ({**ready, 'PORT': '+80'}, 'PORT is not a port'),
-                    ({**ready, 'PORT': '0'}, 'PORT is not a port'),
-                    ({**ready, 'PORT': '65536'}, 'PORT is not a port'),
-                    ({k: v for k, v in ready.items() if k != 'DATA_DIR'}, 'DATA_DIR is not set'),
-                    ({**ready, 'CHARIOT_DEPLOYMENT_SHA256': 'x'}, 'CHARIOT_DEPLOYMENT_SHA256 is not valid'),
-                    ({**ready, 'CHARIOT_APP_ID': 'two words'}, "the host's app id is not valid")):
+            keyless = 'rose server: sealing keys unavailable: not_configured'
+            # Every case stops before anything listens: no server is started here. The keyring is read only once
+            # the configuration is whole, and its absence is reported, never fatal.
+            for case, lines in (
+                    ({**ready, 'PORT': 'http'}, ['PORT is not a port']),
+                    ({**ready, 'PORT': '+80'}, ['PORT is not a port']),
+                    ({**ready, 'PORT': '0'}, ['PORT is not a port']),
+                    ({**ready, 'PORT': '65536'}, ['PORT is not a port']),
+                    (host, ['DATA_DIR is not set']),
+                    ({k: v for k, v in ready.items() if k != 'CHARIOT_APP_ID'}, ['CHARIOT_APP_ID is not set']),
+                    ({**ready, 'CHARIOT_DEPLOYMENT_SHA256': 'x'}, [keyless, 'CHARIOT_DEPLOYMENT_SHA256 is not valid']),
+                    ({**ready, 'CHARIOT_REVISION_SHA256': 'x'}, [keyless, 'CHARIOT_REVISION_SHA256 is not valid']),
+                    ({**ready, 'CHARIOT_APP_ID': 'two words'}, [keyless, 'CHARIOT_APP_ID is not valid']),
+                    ({**ready, 'CHARIOT_APP_ID': 'two words', 'CHARIOT_SEALING_KEY_FILE': 'keys.json'},
+                     ['rose server: sealing keys unavailable: not_absolute', 'CHARIOT_APP_ID is not valid'])):
                 run = subprocess.run([binary], env=case, capture_output=True, text=True, timeout=60)
-                self.assertEqual((run.returncode, run.stderr.strip()), (1, f'rose server: {words}'), case)
+                want = lines[:-1] + [f'rose server: {lines[-1]}']
+                self.assertEqual((run.returncode, run.stderr.strip().splitlines()), (1, want), case)
             self.assertEqual(list(data.iterdir()), [])  # refused before the adapter opened anything
 
     def test_same_contract_same_bytes(self):
@@ -329,7 +339,6 @@ rose-app-runtime = { path = @RUNTIME@ }
 
 STARTUP_CHECKS = textwrap.dedent('''
     fn main() {
-        assert_eq!(APP_ID_ENV, "CHARIOT_APP_ID");
         assert_eq!(port(None), Ok(8080));
         assert_eq!(port(Some("443".into())), Ok(443));
         assert_eq!(port(Some("65535".into())), Ok(65535));
