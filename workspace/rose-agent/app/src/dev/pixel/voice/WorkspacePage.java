@@ -164,6 +164,7 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   arrange.setEnabled(true);regenerate.setEnabled(state.request()!=null);undo.setEnabled(state.canUndo());
   renderRecents();
   sections.removeAllViews();carousels.clear();
+  sections.addView(notificationsRow(),margins(new LinearLayout.LayoutParams(-1,-2),0,0,0,10));
   WorkspaceLayout layout=state.layout();
   if(layout!=null&&hub.lastRead==null){
    // A saved layout waits for the first read of the phone, so it never draws an app that has gone.
@@ -208,7 +209,10 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
    case "grid":box.addView(grid(c.items));break;
    case "carousel":{HorizontalScrollView s=new HorizontalScrollView(activity);s.setHorizontalScrollBarEnabled(false);LinearLayout row=new LinearLayout(activity);for(String id:c.items)row.addView(tile(id),new LinearLayout.LayoutParams(dp(84),-2));s.addView(row);carousels.add(s);box.addView(s);break;}
    case "button":{LinearLayout row=new LinearLayout(activity);row.setGravity(Gravity.CENTER_VERTICAL);for(String id:c.items)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,-2,1),0,0,6,0));box.addView(row);break;}
-   default:{for(String id:c.items)box.addView(text(labelOf(id),14,RoseThemeNow.c(0xfff4ede0)),new LinearLayout.LayoutParams(-1,dp(HIT_DP)));
+   default:{for(String id:c.items){TextView t=text(labelOf(id),14,RoseThemeNow.c(0xfff4ede0));
+    // A notification or a media item opens in its own app when tapped, as it would from the shade.
+    if(id.startsWith("n:")||id.startsWith("c:")){t.setOnClickListener(v->act(id));t.setContentDescription(labelOf(id)+", opens");}
+    box.addView(t,new LinearLayout.LayoutParams(-1,dp(HIT_DP)));}
     if(!c.actions.isEmpty()){LinearLayout row=new LinearLayout(activity);for(String id:c.actions)row.addView(action(id),margins(new LinearLayout.LayoutParams(0,-2,1),0,0,6,0));box.addView(row);}}
   }
   return box;
@@ -275,6 +279,63 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
    .setNegativeButton("Not now",null).show();
  }
 
+ /** A notification (its content intent), one of its plain actions, or a media session (its session activity). */
+ private boolean openNotice(String id){
+  if(hub.lastRead==null)return false;
+  if(id.startsWith("c:media/"))return WorkspaceNotificationListener.openMedia(activity,id.substring("c:media/".length()));
+  if(id.startsWith("n:")){WorkspaceSnapshot.Notice n=hub.lastRead.snapshot.notice(id);return n!=null&&WorkspaceNotificationListener.open(n.key);}
+  int slash=id.lastIndexOf('/');if(slash<0)return false;
+  WorkspaceSnapshot.Notice n=hub.lastRead.snapshot.notice("n:"+id.substring("nact:".length(),slash));
+  try{return n!=null&&WorkspaceNotificationListener.action(n.key,Integer.parseInt(id.substring(slash+1)));}catch(NumberFormatException e){return false;}
+ }
+
+ // ---------- notifications on this page: disclosure and consent ----------
+
+ static final String NOTIFICATIONS_DISCLOSURE="Rose can show the titles of your notifications, and what is playing, on this page. "
+  +"To arrange the page, those titles go to your own Rose server over your paired connection. Message text is never read. "
+  +"You turn on Notification access for Rose Agent in Settings, and you can turn this off here at any time.";
+
+ /** The row or card about notifications, at the top of the canvas; null while nothing needs saying. */
+ private View notificationsRow(){
+  boolean consent=WorkspaceDeviceInputs.consented(activity),granted=WorkspaceDeviceInputs.accessGranted(activity);
+  int muted=RoseThemeNow.c(0xb3f4ede0);
+  LinearLayout row=new LinearLayout(activity);row.setGravity(Gravity.CENTER_VERTICAL);
+  if(consent&&granted){
+   row.addView(text("Notification titles shown here",12,muted),new LinearLayout.LayoutParams(0,-2,1));
+   row.addView(button("Turn off",()->{WorkspaceDeviceInputs.setConsent(activity,false);hub.refreshSources();}),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+   return row;
+  }
+  if(consent){
+   row.addView(text("Turn on Notification access for Rose Agent to show them here",12,muted),new LinearLayout.LayoutParams(0,-2,1));
+   row.addView(button("Settings",this::openNotificationAccess),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+   row.addView(button("Cancel",()->{WorkspaceDeviceInputs.setConsent(activity,false);hub.refreshSources();}),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+   return row;
+  }
+  row.addView(text(WorkspaceDeviceInputs.dismissed(activity)?"Notifications aren't shown here":"Show your notifications here?",12,muted),new LinearLayout.LayoutParams(0,-2,1));
+  row.addView(button("Set up",this::askNotifications),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+  if(!WorkspaceDeviceInputs.dismissed(activity))row.addView(button("Not now",()->{WorkspaceDeviceInputs.dismiss(activity);render(null);}),new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
+  return row;
+ }
+
+ /** The disclosure first; only "Continue" records consent, and only Settings can grant access. */
+ private void askNotifications(){
+  new AlertDialog.Builder(activity).setTitle("Notifications on your workspace").setMessage(NOTIFICATIONS_DISCLOSURE)
+   .setPositiveButton("Continue",(d,w)->{WorkspaceDeviceInputs.setConsent(activity,true);if(WorkspaceDeviceInputs.accessGranted(activity))hub.refreshSources();else openNotificationAccess();})
+   .setNegativeButton("Not now",null).show();
+ }
+
+ private void openNotificationAccess(){
+  Intent i;
+  if(android.os.Build.VERSION.SDK_INT>=30)i=new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+   .putExtra(android.provider.Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,WorkspaceNotificationListener.component(activity).flattenToString());
+  else i=new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+  try{activity.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
+  catch(ActivityNotFoundException|SecurityException e){
+   try{activity.startActivity(new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
+   catch(ActivityNotFoundException|SecurityException ignored){status.setText("Open Settings › Notifications › Device & app notifications");}
+  }
+ }
+
  private String labelOf(String id){
   if(hub.lastRead!=null){
    for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("apps"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
@@ -296,6 +357,9 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
    }
    else if(id.startsWith("intent:")){Intent i=WorkspaceSources.template(id.substring("intent:".length()));if(i!=null){activity.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));hub.actionResult(id,"opened");}}
    else if(id.startsWith("task:"))confirmTask(id);
+   else if(id.startsWith("n:")||id.startsWith("nact:")||id.startsWith("c:media/")){
+    if(openNotice(id))hub.actionResult(id,"opened");else{hub.actionResult(id,"failed");status.setText("Couldn't open "+labelOf(id));}
+   }
   }catch(ActivityNotFoundException|SecurityException|IllegalStateException e){
    hub.actionResult(id,"failed");status.setText("Couldn't open "+labelOf(id));
   }

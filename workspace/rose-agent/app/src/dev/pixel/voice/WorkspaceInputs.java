@@ -8,24 +8,16 @@ import java.util.List;
  * apps, shortcuts, templates and tasks (WorkspaceSnapshot.build).
  *
  * <ul>
- *   <li><b>Notifications: none, because D1 is undecided.</b> No source on this phone may read them. Rose Agent has
- *   no notification listener and holds no notification-access grant. The Rose shade (OS Core's SystemUI) reads
- *   them inside SystemUI only and offers Rose Agent nothing. D1 is Nathan's choice:
- *   <ul>
- *     <li>(a) a listener in Rose Agent, behind the person's own notification-access grant;</li>
- *     <li>(b) a bounded, signature-protected snapshot from the Rose shade, which is OS Core's, with a security
- *     review;</li>
- *     <li>(c) none.</li>
- *   </ul>
- *   With the compose route on, any notification titles in the snapshot go to the owner's Rose server, so the
- *   choice includes that.</li>
- *   <li><b>Content: none, because no source exists.</b> The HiFi's recipes, documents and media are sample data.
- *   Rose's book, podcast and sky entries are hand-offs the person starts for a conversation, not a standing
- *   feed, and are not repurposed here.</li>
+ *   <li><b>The phone's source is WorkspaceDeviceInputs.</b> It gives notification titles and media sessions only
+ *   after the person has turned on Notification access for Rose Agent in Settings and accepted the workspace's
+ *   own disclosure (WorkspaceNotices.status). Otherwise it is not_granted and gives none.</li>
+ *   <li><b>Content is media only.</b> Rose Agent has no other content source. Documents, contacts, places and
+ *   recipes would each need a new source and permission, so none is offered. The HiFi's examples are sample data,
+ *   and Rose's book, podcast and sky hand-offs are not repurposed.</li>
  * </ul>
  *
- * Until a source is chosen, NONE is used. The snapshot then has empty notifications and content, which the
- * composer reads as "there are none". The status says why, and never pretends a source exists. Pure.
+ * NONE is the source with nothing: notifications not_decided and content no_source. A source counts only when it
+ * says available, and one that throws gives none, so nothing is ever fabricated. Pure.
  */
 final class WorkspaceInputs {
  private WorkspaceInputs() {}
@@ -53,7 +45,7 @@ final class WorkspaceInputs {
   public List<WorkspaceSnapshot.Content> content(){return Collections.emptyList();}
  };
 
- /** The source the phone reads: NONE until D1 and a content source are decided. */
+ /** The pure default, for code and tests without a phone. The phone reads WorkspaceDeviceInputs instead. */
  static final Source SOURCE=NONE;
 
  /**

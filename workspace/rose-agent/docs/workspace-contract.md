@@ -58,10 +58,10 @@ layouts survive a new snapshot.
 | actions: `shortcut` | `sc:<package>/<shortcut id>` | `LauncherApps.getShortcuts` (Home holds the HOME role; no new permission) | yes |
 | actions: `deeplink` | `intent:<template>` | intent templates Rose already has (alarm, timer, directions, music; `LocalRosePhone`) | yes |
 | actions: `agent_task` | `task:<template id>` | the phone's task templates: `label` ≤ 60, `ask` ≤ 200, `goal` ≤ 300. The target is Rose Agent's own app entry, because every rose-layout-v1 action names one. The ask and goal never enter the model, and `requiresConfirmation` is always true. | after App Core's route |
-| actions: `notification_action` | `nact:<hash>/<index>` | a notification's actions, at most 2, targeting its `n:` id | after D1 (inputs ready, no source) |
+| actions: `notification_action` | `nact:<hash>/<index>` | a notification's plain actions (no reply), at most 2, targeting its `n:` id | with consent (see "Notification and content inputs") |
 | actions: `app_function` | — | needs a privileged permission, so not inferred | no |
-| notifications | `n:<hash>`, 16 hex of SHA-256 over the notification's key | see D1; only the title enters, never the body or the raw key | after D1 (inputs ready, no source) |
-| content | `c:<source>/<id>` | no source yet (recipes, documents and media in the HiFi are sample data) | no (inputs ready, no source) |
+| notifications | `n:<hash>`, 16 hex of SHA-256 over the notification's key | the workspace's notification listener; only the title enters, never the body or the raw key | with consent |
+| content | `c:media/<hash>` | active media sessions, through the same listener; no other content source exists | with consent (media only) |
 
 A package, activity, shortcut or template name that is empty, longer than 200 characters, or contains a
 space, `/`, `"` or `\` cannot make an unambiguous id, so it is left out.
@@ -77,9 +77,9 @@ offered exactly the ids the phone can open.
 - **Labels** are display text the OS already shows. Control characters become one space, invisible format
   characters are dropped, and the text is cut to 60 code points. An entry with no visible label is left out.
 - **Bounds:** at most 120 apps and 60 actions, and the first entry of a repeated id wins.
-- **Notifications and content** come from `WorkspaceInputs.SOURCE`, which is `WorkspaceInputs.NONE` today:
-  notifications are `not_decided` (D1) and content is `no_source`. So both lists are empty, and with no inputs
-  the snapshot and its version are exactly as before. See "Notification and content inputs".
+- **Notifications and media** come from `WorkspaceDeviceInputs`, only once the person has turned on Notification
+  access and accepted the workspace's disclosure. Until then both lists are empty, and the snapshot and its
+  version are exactly as before. See "Notification and content inputs".
 - **Pins:** `pinned` keeps only ids that are present.
 - **The version** is `s-` plus 12 hex digits of SHA-256 over every entry and the pins. `createdAtMs` and
   `timeOfDay` are not part of it, so a new hour alone never makes a layout stale.
@@ -88,37 +88,44 @@ offered exactly the ids the phone can open.
 
 ## Notification and content inputs
 
-The snapshot side is ready for a source, but no source is attached, and none will be until D1 and a content
-source are decided.
+Project 2's notification and media inputs come from the phone, and only with the person's consent. Nathan's
+original goal includes notifications and content, so D1 is settled as option (a): a standard notification
+listener, behind the person's own consent.
 
-- **What exists on the phone today.** Rose Agent has no notification listener and holds no notification-access
-  grant. The Rose shade (OS Core's SystemUI overlay) reads notifications only inside SystemUI and offers Rose
-  Agent nothing. Rose's book, podcast and sky entry points are hand-offs the person starts for a conversation,
-  not a standing feed. They are not repurposed as content.
-- **The inputs.** `WorkspaceInputs.Source` has a status and items for each feed: `available`, `not_granted`,
-  `not_decided` or `no_source`. Only an `available` source's items are used. A source that throws gives none,
-  so nothing is ever fabricated.
-- **A notification** (`WorkspaceSnapshot.Notice`):
-  - It is kept only for an app the snapshot lists, and only with a non-empty title.
-  - It enters as `{id: n:<hash>, appId, title, recentRank}`, exactly rose-layout-v1's fields. The body text is
-    never taken, and the raw key never leaves the phone; the phone maps the hash back.
-  - At most 12 are kept, most recent first, each with at most 2 actions (`nact:<hash>/<i>`).
-- **A content item** (`WorkspaceSnapshot.Content`) needs:
-  - a rose-layout-v1 kind (`media`, `contact`, `document`, `place` or `other`);
-  - a label, and an app the snapshot lists;
-  - an unambiguous `c:<source>/<id>`.
+- **Two consents, both required** (`WorkspaceNotices.status`):
+  - the person turns on Notification access for Rose Agent in Android Settings, which only they can grant;
+  - they accept the workspace's own disclosure, stored as the `notifications-consent` preference, which is
+    off unless set.
 
-  At most 12 are kept.
-- **Rendering.** Lists and cards show a notification's title or a content item's label. Opening one, or running
-  a notification action, needs the source and does nothing until there is one.
-- **The decisions this waits on.**
-  - **D1 (Nathan):** (a) a listener in Rose Agent behind the person's own grant; (b) a bounded,
-    signature-protected snapshot from the Rose shade, which is OS Core's, with a security review; or (c) none.
-    With the compose route on, any notification titles in the snapshot go to the owner's Rose server, so D1
-    includes that.
-  - **A content source:** which one, if any.
+  Both must hold, and the listener must be connected, for the source to be `available`. Otherwise it is
+  `not_granted` and nothing is read. Turning either off stops it at the next read.
+- **The disclosure** (`WorkspacePage.NOTIFICATIONS_DISCLOSURE`) is shown before consent is recorded. It says
+  that the titles of notifications, and what is playing, go to the person's own Rose server to arrange the page,
+  and that message text is never read.
+- **The page's row.** The top of the canvas carries one row:
+  - "Show your notifications here? · Set up · Not now";
+  - after consent, "Turn on Notification access … · Settings · Cancel";
+  - with access granted, "Notification titles shown here · Turn off".
+- **The listener** (`WorkspaceNotificationListener`, bound with `BIND_NOTIFICATION_LISTENER_SERVICE`, so only the
+  system binds it) keeps nothing. Each read asks the system for the active notifications and media sessions, and
+  copies titles and action labels into plain data.
+- **What enters** (`WorkspaceNotices`):
+  - a notification's title and the labels of its plain actions, under `n:<hash>` and `nact:<hash>/<i>`;
+  - a playing or paused media session's title, as `c:media/<hash>`.
 
-`app/tests/WorkspaceInputsTest.java` checks this with made-up items. Nothing reads a real notification.
+  Message text, people, pictures and extras are never copied. These are left out: Rose Agent's own
+  notifications, ongoing ones, group summaries, those marked secret, actions that need typed input (reply), and
+  anything from an app the snapshot doesn't list.
+- **The snapshot's rules** (`WorkspaceSnapshot.Notice` and `Content`): at most 12 notifications, most recent first,
+  each with at most 2 actions, and at most 12 content items. A raw key never enters the snapshot.
+- **Opening.** Tapping a notification sends its own content intent. Tapping an action sends that action's intent.
+  Tapping a media item opens its session's activity. If the item has gone, the page says it couldn't open it.
+- **Content limitation.** Media sessions are the only real content Rose Agent can read today. Documents,
+  contacts, places and recipes would each need a new source and permission, so none is offered and none is
+  invented. The HiFi's examples remain sample data.
+
+`app/tests/WorkspaceInputsTest.java` and `WorkspaceNoticesTest.java` check this with made-up data. Nothing has
+read a real notification.
 
 ## The phone's own check
 
@@ -423,7 +430,7 @@ mounted only when the server enables it, which nothing does yet. The phone treat
 
 | # | Decision | Status |
 | --- | --- | --- |
-| D1 | How Home gets notifications and their actions: (a) a notification listener in Rose Agent, which needs the person's notification-access grant; (b) the SystemUI Rose shade offers a bounded, signature-protected snapshot and action call, an OS Core change with security review; or (c) no notification cards at first. | Not decided. No permission is inferred. Until it is decided, the snapshot has no notifications. |
+| D1 | How Home gets notifications and their actions. | Settled as (a), per Nathan's original Project 2 goal: a notification listener in Rose Agent, behind the person's Notification-access grant and the workspace's own disclosure and consent. See "Notification and content inputs". |
 | D2 | Where voice requests are transcribed. A transcript reaches the composer as `direct_text`. | Not decided |
 | D3 | The hook in Home's shared files that adds the page before Home: `MainActivity.attachLauncherPages`, `HomePages`, and the page dots with the workspace's star. | Agreed with Home/App Product and in source: `WORKSPACE=0`, `HOME=1`, `FIRST_APPS=2`. HOME on Home goes to Home, Back goes to Home, a stale page restores to Home, and the dots match the pages. |
 | D4 | Where the "Workspace ready · Show workspace" offer appears while the person is in another app: a notification, an overlay, or nothing (the page shows it when reached). | Not decided. No permission is inferred. Today: nothing outside Home. |
