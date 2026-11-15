@@ -2448,6 +2448,56 @@ the server does.
     `clientServer` configuration is supplied (§6). Production DNS, TLS and
     ingress for an endpoint are unverified.
 
+- **Creator invites (agreed source contract; the guest channel is
+  unbound).** Chariot's source is ProtocolsBackend #2564 at `814fd66c`
+  (`chariot/docs/native-invites.md`, `hosting/native_invites.py`). It runs the
+  generated server's `invite <account>` command (Home, §7.5) on a native host
+  for the creator. The command calls OS Core's `invite` (§7.4).
+  - **Call.** `POST /v1/app-hosts/{host_id}/invites`, under Chariot's existing
+    owner authentication. It takes a nonzero UUID `Idempotency-Key` and
+    `{account, revision_sha256, deployment_sha256}`. `host_id` is the native
+    host record (above), never the hosted APK app id. The account is passed
+    exactly as given, 1 to 128 UTF-8 bytes, and OS Core's adapter judges it.
+  - **Execution.** Under the host's execution lease, Chariot refuses a pending
+    operation, a host that isn't running, or a revision or deployment other
+    than the request's. It never wakes, deploys or retries.
+    - It measures the recorded executable's SHA-256 and checks it against the
+      active revision before running anything. The command itself runs no
+      revision check.
+    - It runs `[executable, "invite", account]` with the service's own UID,
+      GID, working directory and exactly its environment: `DATA_DIR`,
+      `CHARIOT_APP_ID`, `CHARIOT_DEPLOYMENT_SHA256`, and
+      `CHARIOT_REVISION_SHA256` and `CHARIOT_RESTORE_STATE_PATH` with their
+      original values when present. Absent ones stay absent, and the restore
+      path is never rebuilt from `DATA_DIR`.
+    - stdin is null, with no TTY and no keyring. Output is captured privately,
+      never into the journal or any log.
+  - **Limits:** 30 s; stdout exactly the 53-byte token line
+    `^[A-Z2-7]{52}\n$` with empty stderr; stderr capped at 256 bytes.
+  - **Result:** `{outcome, reason, exit_code, replayed, token}`, sent
+    `no-store` with no `Retry-After`.
+    - `issued`: the token is in the first delivery only. A replay of the same
+      key gets `token: null`; a token can't be retrieved or reissued.
+    - `refused`: the adapter's words. `invalid_name` is 422;
+      `already_enrolled`, `not_found` and `restore_pending` are 409;
+      `store_unavailable` is 503. Chariot's own lease refusals
+      (`operation_pending`, `deployment_changed`, `host_unavailable`) are 409
+      or 503. The command's usage refusal is 502.
+    - `outcome_unknown`: any other exit or output, including
+      `the invite could not be written`, a timeout, a signal or an inconsistent
+      receipt. A token may exist, so nothing is reissued automatically; a new
+      invite needs a new explicit request.
+    - Chariot keeps a non-secret attempt record only: no account, token or
+      output.
+  - **Fixture.** Chariot's `chariot/test/fixtures/native_invites/results.json`
+    is copied byte for byte to
+    `rose/tests/fixtures/chariot/native-invites-results.json` (git blob
+    `925b85f8`). `rose/tests/test_app_native_invites.py` holds it to OS Core's
+    refusal words and the token's shape. Home's generated command is checked by
+    Home's own tests.
+  - **Not done.** The real inspector and runner (the authenticated guest
+    channel) are unbound, the router is unmounted, and no invite has been
+    created anywhere.
 - **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
   on every request, and guest ingress admits only the gateway (Chariot's
   boundary to enforce). A server given `Server::with_client_header` counts
