@@ -1661,8 +1661,9 @@ keys.
 **Server: `server_files(contract)`.** This returns `rose/api.rs`,
 `rose/routes.rs`, `rose/wire.rs` and `rose/main.rs` (the entry point), all
 matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
-(`APP`, `ISSUER`, `ADMISSION`) and `rose/migrations.rs` (`ACCOUNT`,
-`SHARED`), and codegen never writes those.
+(`APP`, `ISSUER`, `ADMISSION`), `rose/migrations.rs` (`ACCOUNT`, `SHARED`)
+and `rose/assets.rs` (`get`, the writer's `server/assets/`, §7.6), and
+codegen never writes those.
 - `api.rs` has:
   - one struct per contract type, with `from_value` and `to_value` over the
     runtime's `json::Value`;
@@ -1720,8 +1721,10 @@ matching `server_build.GENERATED`. The builder adds its own `rose/meta.rs`
     ```
 - **`rose/main.rs`** is the start-up, over OS Core's adapter
   (`rose_app_runtime_signin::{start, Config, Keys, Migrations}`, slice 7b).
-  - It declares the generated modules, `meta`, `migrations` and
-    `#[path = "../src/handlers/mod.rs"] mod handlers;`.
+  - It declares the generated modules, `assets`, `meta`, `migrations` and
+    `#[path = "../src/handlers/mod.rs"] mod handlers;`. So handlers read a
+    bundled data file with `crate::assets::get("data/x.json")`, which
+    returns `None` when there is no such file.
   - It reads only `PORT` (decimal, 1 to 65535, default 8080). The adapter
     reads and checks `DATA_DIR`, `CHARIOT_APP_ID`,
     `CHARIOT_DEPLOYMENT_SHA256`, the optional `CHARIOT_REVISION_SHA256` and
@@ -1766,12 +1769,17 @@ reserved `src/<package>/rose/`:
   trailing data, lone surrogates and nesting deeper than 64.
 - `RoseTypes`: one class per contract type, the same shapes as the server.
 - `RoseApi`: `Client(transport, tokens)` with one method per route.
-  `HttpsTransport(baseUrl)` takes the base URL from the caller: the
-  builder-written `RoseServer.URL` (§7.6), which `RoseApi.serverUrl()` is to
-  return once Home/App's codegen reads it. It accepts `https` only, with no user info, query or
-  fragment, and does not follow redirects. Errors come back as
-  `RoseApi.Error(status, word, retryAfterSeconds)`. A 401 `session_invalid`
-  forgets the token.
+  `RoseApi.serverUrl()` returns the builder's hosting record, its own
+  `RoseServer.URL` (§7.6), and codegen never writes that file.
+  - It returns null until the app is hosted. The app then says the server is
+    not set up yet and never guesses one.
+  - The value is fixed at build time, so the first hosted version needs a
+    build after the record exists.
+  - The caller passes the value to `HttpsTransport(baseUrl)`. That accepts
+    `https` only, with no user info, query or fragment, and does not follow
+    redirects.
+  - Errors come back as `RoseApi.Error(status, word, retryAfterSeconds)`. A
+    401 `session_invalid` forgets the token.
 - `RoseSignin`: enroll, confirm, sign in, recover authenticator, recover
   passphrase and sign out, over the `/signin/v1/*` routes.
 - `RoseSession`: keeps only the bearer token, in `getNoBackupFilesDir()`.
