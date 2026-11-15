@@ -49,6 +49,8 @@ environment before invoking the absolute command. No shell parses arguments or
 environment values. The caller supplies `server_build`'s scrubbed environment,
 not arbitrary host environment or loader overrides. The inner working directory
 is the job; `server_build` uses absolute manifest/config paths.
+Host loader overrides (`LD_*`, `GLIBC_TUNABLES`, `GCONV_PATH`, `LOCPATH`) are
+explicitly refused, since they could affect bubblewrap before confinement.
 
 Host ownership is part of this boundary: the executable, system runtime,
 toolchain and vendor trees must be trusted and immutable to jobs, including during
@@ -99,3 +101,6 @@ Those execution probes have **not been run on the development Mac**. Neither
 ordinary argv tests nor App Core's native-host offline Cargo tests establish
 Linux isolation, a pinned musl build, service wiring, deployment or phone
 acceptance. Host preparation and real Linux acceptance remain separate work.
+
+The namespace, mount and lifetime flags follow the
+[upstream bubblewrap manual](https://github.com/containers/bubblewrap/blob/main/bwrap.xml).

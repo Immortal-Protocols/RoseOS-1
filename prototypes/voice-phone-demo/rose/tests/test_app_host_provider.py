@@ -193,6 +193,11 @@ class Policy(Trees):
         with mock.patch.object(host, '_RUNTIME', (private,)):
             self.refused(readonly=(self.tools,))
 
+    def test_host_loader_cannot_run_code_before_confinement(self):
+        for name in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'GLIBC_TUNABLES', 'GCONV_PATH', 'LOCPATH'):
+            with self.subTest(name=name):
+                self.refused(env={**self.env, name: '/host/untrusted'})
+
 
 @unittest.skipUnless(os.environ.get('ROSE_TEST_LINUX_ISOLATION') == '1',
                      'Linux confinement not requested; argv policy checks do not prove confinement')

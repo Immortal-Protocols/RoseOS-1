@@ -142,6 +142,11 @@ class BubblewrapIsolation(Isolation):
             if any(not isinstance(k, str) or not k or '=' in k or '\0' in k or
                    not isinstance(v, str) or '\0' in v for k, v in env.items()):
                 raise ValueError('invalid command environment')
+            # These affect the host loader before bwrap can enter a namespace.
+            # The build's scrubbed env never needs them; refuse, do not inherit
+            # or silently remove an override and pretend env was unchanged.
+            if any(k.startswith('LD_') or k in ('GLIBC_TUNABLES', 'GCONV_PATH', 'LOCPATH') for k in env):
+                raise ValueError('host loader overrides are not a build environment')
             runtime = []
             for path in _RUNTIME:
                 if path.exists():
