@@ -292,6 +292,27 @@ class HonestFailures(Base):
                 self.assertFailed(job, 'toolchain', words)
                 self.assertIs(job['failure']['retryable'], retryable)
 
+    def test_the_ledgers_native_host_record_is_what_the_build_bakes(self):
+        # §7.7: a host passes its ledger's native_host_endpoint as server_url. Synthetic record (reserved names).
+        for record in (None, ('7b7b7b7b-4444-4444-8444-44444444444c', 'https://notes.example.org/app')):
+            with self.subTest(record=record):
+                b = self.fresh(client_server_app(), codegen=Codegen())
+                b.server_url = b.ledger.native_host_endpoint
+                seen = {}
+
+                def build(snapshot, work, *args, **kw):
+                    seen['client'] = Path(work).parent / 'client'
+                    raise server_build.BuildFailed('toolchain', 'server_build', 'stopped here by the test')
+                out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r1', 'description': 'Notes'})
+                if record is not None:
+                    b.ledger.record_native_host(out['projectId'], *record)
+                with mock.patch.object(server_build, 'build', build):
+                    b.run_next()
+                self.assertFailed(b.job(out['jobId']), 'toolchain', 'stopped here by the test')
+                text = next(seen['client'].glob('src/**/rose/RoseServer.java')).read_text()
+                want = 'null' if record is None else f'"{record[1]}"'
+                self.assertIn(f'static final String URL = {want};', text)
+
     def test_a_contract_too_large_to_keep_is_refused_before_anything_is_built(self):
         # Between the file's size (251 bytes) and its normalised form's (353): the limit is on what the ledger keeps.
         with mock.patch.object(service, 'MAX_CONTRACT', 300):

@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS version_contracts (
 CREATE TABLE IF NOT EXISTS project_hosting (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), hosted_app_id TEXT NOT NULL UNIQUE,
   recorded REAL NOT NULL);
+-- Level 2 (§7.7): the native host serving a project's server, recorded only from owner tooling (Chariot's
+-- HostView: the host's UUID and its endpoint), never derived or guessed. Its own record, never the hosted APK app id
+-- above. The endpoint is what a client-server build bakes into RoseServer.URL.
+CREATE TABLE IF NOT EXISTS project_native_hosts (
+  project_id TEXT PRIMARY KEY REFERENCES projects(project_id), host_id TEXT NOT NULL UNIQUE,
+  endpoint TEXT NOT NULL UNIQUE, recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -89,6 +95,14 @@ class LedgerError(ValueError):
 CLIENT_SERVER = 'client-server-v1'
 HEX64 = re.compile(r'[0-9a-f]{64}')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+# What RoseApi.HttpsTransport accepts, narrowed: https, a lower-case DNS name (no IP address: as java.net.URI reads
+# a host, its last label starts with a letter), an optional port, a plain path.
+HOSTED_URL = re.compile(r'https://(?=[^/:]{1,253}(?:[:/]|$))(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*'
+                        r'[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?'
+                        r'(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]'
+                        r'|6553[0-5]))?'
+                        r"(?:/[A-Za-z0-9._~!$&'()*+,;=:@/-]*)?")
+MAX_ENDPOINT = 2048
 SCOPES = ('account', 'shared')
 MIGRATION_NAME = re.compile(r'[a-z0-9_]{1,40}')
 CRATE_NAME = re.compile(r'[A-Za-z0-9_-]{1,64}')
@@ -529,6 +543,52 @@ class Ledger:
                 self.db.execute('INSERT INTO project_hosting VALUES (?,?,?)', (project, hosted_app_id, self.clock()))
             except sqlite3.IntegrityError:
                 raise LedgerError('that hosted app id belongs to another project') from None
+
+    def native_host(self, project: str) -> dict | None:
+        """The native host owner tooling recorded for the project, ``{hostId, endpoint}``, or None."""
+        with self.lock:
+            row = self.db.execute('SELECT host_id, endpoint FROM project_native_hosts WHERE project_id=?',
+                                  (project,)).fetchone()
+        return None if row is None else {'hostId': row[0], 'endpoint': row[1]}
+
+    def native_host_endpoint(self, project: str) -> str | None:
+        """The recorded endpoint, or None when the project has no native host: what a host passes as the
+        Builder's ``server_url``, so a client-server build bakes it into ``RoseServer.URL``."""
+        host = self.native_host(project)
+        return None if host is None else host['endpoint']
+
+    def record_native_host(self, project: str, host_id: str, endpoint: str, *, replaces: dict | None = None) -> None:
+        """Record the project's native host, from owner tooling only (Chariot's HostView: the host's UUID and its
+        endpoint). The same record again is a no-op. A different one is refused unless ``replaces`` names the
+        current record exactly (``{hostId, endpoint}``): a replaced host or a changed domain is an explicit change,
+        never a silent move, and versions already built keep the endpoint they baked until they are rebuilt. A host
+        id or endpoint another project holds is refused, so one app's clients never reach another app's server."""
+        if not isinstance(host_id, str) or not UUID.fullmatch(host_id):
+            raise LedgerError('a native host id is a lower-case UUID')
+        if not isinstance(endpoint, str) or len(endpoint) > MAX_ENDPOINT or not HOSTED_URL.fullmatch(endpoint):
+            raise LedgerError('a native host endpoint is an https address the generated client accepts')
+        record = {'hostId': host_id, 'endpoint': endpoint}
+        with self.lock:
+            if self._project(project) is None:
+                raise LedgerError('unknown project')
+            current = self.native_host(project)
+            if current == record:
+                return
+            if replaces is not None and replaces != current:
+                raise LedgerError('the native host to replace is not the one recorded')
+            if current is not None and replaces is None:
+                raise LedgerError('this project already has a native host; replacing it names the current one')
+            try:  # one statement each, under the ledger's lock
+                if current is None:
+                    self.db.execute('INSERT INTO project_native_hosts VALUES (?,?,?,?)',
+                                    (project, host_id, endpoint, self.clock()))
+                else:
+                    self.db.execute('UPDATE project_native_hosts SET host_id=?, endpoint=?, recorded=? WHERE '
+                                    'project_id=? AND host_id=? AND endpoint=?',
+                                    (host_id, endpoint, self.clock(), project, current['hostId'],
+                                     current['endpoint']))
+            except sqlite3.IntegrityError:
+                raise LedgerError('that native host id or endpoint belongs to another project') from None
 
     def library_lock(self, project: str) -> dict:
         """coordinate -> sha256 for every library any delivered version of the project used (the newest digest if

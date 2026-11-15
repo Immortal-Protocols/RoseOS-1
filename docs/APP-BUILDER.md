@@ -2268,12 +2268,39 @@ the server does.
 - **Publication** uses Chariot's existing creator auth, by sha256, never the
   phone or the APK. The publication adapter isn't finished, and there is no
   live URL or credential.
-- **Client base URL.** The builder bakes the hosted base URL into each
-  client-server APK as `RoseServer.URL` (§7.6), from the injected
-  `server_url` hosting record. No record is defined or written yet, so every
-  build carries `null` and the generated client reports that the app is not
-  hosted. The record's form, and who writes it, is slice 10's to agree with
-  the Chariot owner.
+- **Client base URL (Chariot owner's answer, relayed by Chief,
+  2026-11-15).** The builder bakes the native host's `HostView.endpoint`,
+  as recorded from owner tooling, into each client-server APK as
+  `RoseServer.URL` (§7.6).
+  - **Stability:** the endpoint is stable through deploys, rollbacks,
+    restarts and sleep while the native host id and its domain stay the
+    same. A replaced host or a changed domain can need the client rebuilt.
+  - **Before the first deploy:** Chariot's authenticated
+    `POST /v1/app-hosts` returns the endpoint before any binary is
+    deployed, but it provisions a VM. It is **held**: nothing here calls
+    it, and no host is provisioned.
+  - **Not from public metadata:** Chariot's public APK metadata has no
+    native host or server mapping. The builder never derives the endpoint
+    from it, or from anything else.
+  - **The record** (the ledger; source; called by no host yet). Owner
+    tooling records `record_native_host(project, hostId, endpoint)`: the
+    host's lower-case UUID (`CHARIOT_APP_ID`, above) and its endpoint,
+    checked with `HOSTED_URL` (what the generated client accepts), at most
+    2048 characters.
+    - It is its own record, never the hosted APK app id (§3.3 `share`).
+    - The same record again changes nothing. A different one is refused
+      unless `replaces` names the current record exactly, so a replaced host
+      or a changed domain is an explicit change, never a silent move.
+    - A host id or endpoint another project holds is refused, so one app's
+      clients never reach another app's server.
+    - `native_host_endpoint(project)` is what a host passes as the Builder's
+      `server_url`, and the build checks the value again. Versions already
+      built keep the endpoint they baked until they are rebuilt.
+  - **Not done:** nothing writes the record yet, because the owner tooling
+    that would is Chariot's and the call that gives the endpoint is held.
+    No host passes `server_url` (the builder host is the Local Server
+    Worker's), so every build still carries `null`. Production DNS, TLS and
+    ingress for an endpoint are unverified.
 
 - **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
   on every request, and guest ingress admits only the gateway (Chariot's
@@ -2393,3 +2420,7 @@ need no hosting and no further OS Core change.
    Home/App's.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
     until §7.7 is answered.
+    - **The native host record (§7.7 client base URL).** Done:
+      `rose/tests/test_app_ledger_level2.py` (`NativeHost`) and
+      `rose/tests/test_app_level2_pipeline.py`, which builds with the
+      ledger's record as `server_url`. Synthetic fixtures only.
