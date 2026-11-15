@@ -2471,10 +2471,21 @@ the server does.
     stored binary that is missing or changed. The other statuses follow
     `owner_records`: `usage` 2, `not_found` 4 (no such ledger, project or
     version), `error` 6.
-  - **It only reads.** It uploads, deploys, records and contacts nothing, and
-    holds no credential. Chariot's owner tooling makes both calls with its
-    own creator authentication and its own Idempotency-Key, then reads
-    `HostView`; a running host is not a ready app.
+  - **It only reads.** It opens the ledger read-only (`Ledger.reader`,
+    SQLite `mode=ro`: no directory mode, pragma or schema is touched). It
+    uploads, deploys, records and contacts nothing, and holds no credential.
+    Chariot's owner tooling makes both calls with its own creator
+    authentication and its own Idempotency-Key, then reads `HostView`; a
+    running host is not a ready app.
+  - **Readiness needs the host's sealing key (D9).** The server reports
+    ready only with its keyring loaded, so a host with no sealing-key binding
+    stays at 503 and the deploy never becomes ready. That is the designed
+    fail-closed path, not a plan error.
+  - **No data snapshot yet.** Chariot v1's pre-deploy `.backup` covers only
+    `CHARIOT_SQLITE_PATH` (`DATA_DIR/app.sqlite`), which the generated server
+    never creates. Its data is `auth.sqlite3`, `accounts/*.sqlite3` and
+    `shared.sqlite3` under `DATA_DIR`. So a deploy today replaces the code with
+    no snapshot of that data, and a rollback restores no database (item 9).
   - **Schema changes.** Chariot v1 refuses (409) a deploy whose
     `data_schema` differs from the active one. So a version that adds a
     migration can't be deployed over an older one until §7.7 item 4
@@ -2589,6 +2600,13 @@ Still open for the Chariot owner (App Core's proposal in brackets):
    generated `main.rs` calls `.with_client_header(..)` (§7.5).
 7. Rollback [keep the previous ELF; report the running sha256].
 8. Process and logs [SIGTERM within a grace period; no secrets in logs].
+9. Pre-deploy data snapshot [with the service stopped, back up every regular,
+   non-symlinked `*.sqlite3` under `DATA_DIR` (`auth.sqlite3`,
+   `shared.sqlite3`, `accounts/*.sqlite3`) with `sqlite3 -readonly .backup`
+   into `backups/pre-<deployment>/<relative path>`. Use the symlink refusal
+   Chariot already applies to `app.sqlite`, and refuse a symlinked
+   `accounts/`. Item 4's "snapshot `DATA_DIR` first" is the same need for
+   schema-changing deploys].
 
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.

@@ -13,7 +13,8 @@ The plan maps App Core's manifest (rose.app_builder.server_manifest) onto Chario
    command), so ``args`` is always empty. ``data_schema`` is ``1 + account * 10000 + shared`` over the manifest's
    highest migration numbers: one integer per schema, at least 1, changed by any new migration.
 
-This module only reads: it records, uploads, deploys and contacts nothing, and holds no credential. Chariot's owner
+This module only reads: it opens the ledger read-only (Ledger.reader) and records, uploads, deploys and contacts
+nothing, and holds no credential. Chariot's owner
 tooling makes the calls with Chariot's own creator authentication, an Idempotency-Key of its own, and then reads the
 host's status; a running or allocated host is not a ready app. Chariot v1 refuses a deploy whose ``data_schema``
 differs from the active one (no schema-changing deploys yet, §7.7 item 4).
@@ -126,7 +127,7 @@ def main(argv=None, out=sys.stdout) -> int:
         say('not_found', message='no builder ledger there')
         return 4
     try:
-        ledger = Ledger(root)
+        ledger = Ledger.reader(root)  # read-only: the plan changes nothing in the builder's records
     except (OSError, sqlite3.Error) as e:
         say('error', message=f'the ledger could not be opened: {e}')
         return 6

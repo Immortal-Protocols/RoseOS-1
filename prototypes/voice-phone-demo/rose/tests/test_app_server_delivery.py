@@ -6,6 +6,7 @@ import io
 import itertools
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -39,7 +40,7 @@ class Base(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name) / 'builder'
         self.l = L.Ledger(self.root)
-        self.addCleanup(self.l.close)
+        self.addCleanup(lambda: self.l.close())
         self.project = self.l.create('d', 'r0', 'x', 'X')['projectId']
         self.n = 0
 
@@ -167,13 +168,33 @@ class Cli(Base):
     def test_it_runs_as_a_module_and_changes_nothing(self):
         self.deliver()
         self.host()
+        self.l.close()
+        self.root.chmod(0o750)  # a mode the builder's own open would reset to 0700
+        schema = lambda: sqlite3.connect(self.root / 'builder.sqlite3').execute(
+            'SELECT name, sql FROM sqlite_master ORDER BY name').fetchall()
+        before = (schema(), self.root.stat().st_mode)
+        with sqlite3.connect(self.root / 'builder.sqlite3') as db:
+            db.execute('DROP TABLE installs')  # a table an older ledger lacks: the plan must not create it
+        dropped = schema()
         result = subprocess.run([sys.executable, '-m', 'rose.app_builder.server_delivery', 'plan', '--ledger',
                                  str(self.root), '--project', self.project], cwd=ROOT, capture_output=True, text=True,
                                 timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(chariot_accepts(json.loads(result.stdout)['plan']['deploy']))
-        self.assertEqual(self.l.native_host(self.project), {'hostId': HOST, 'endpoint': ENDPOINT})
-        self.assertEqual(len(self.l.versions(self.project)), 1)
+        self.assertEqual(schema(), dropped)  # nothing created
+        self.assertEqual(self.root.stat().st_mode, before[1])  # directory mode untouched
+        self.assertNotEqual(dropped, before[0])
+
+    def test_the_reader_cannot_write(self):
+        self.deliver()
+        reader = L.Ledger.reader(self.root)
+        self.addCleanup(reader.close)
+        self.assertEqual(len(reader.versions(self.project)), 1)
+        with self.assertRaises(sqlite3.OperationalError):
+            reader.db.execute("UPDATE projects SET name='y'")
+        with self.assertRaises(sqlite3.OperationalError):
+            L.Ledger.reader(self.root.parent / 'nowhere')
+        self.assertFalse((self.root.parent / 'nowhere').exists())
 
 
 if __name__ == '__main__':

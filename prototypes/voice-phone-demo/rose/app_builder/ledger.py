@@ -162,6 +162,22 @@ class Ledger:
         self.lock = threading.RLock()
         self.clock = clock
 
+    @classmethod
+    def reader(cls, root: Path) -> 'Ledger':
+        """An existing ledger opened read-only (SQLite ``mode=ro``) for tools that must change nothing: no directory
+        mode, journal mode, pragma or schema is touched, and every write fails. A WAL ledger's ``-shm`` file must
+        already exist, or the directory be writable, for SQLite to read it."""
+        self = cls.__new__(cls)
+        self.root = Path(root)
+        self.path = self.root / 'builder.sqlite3'
+        if not self.path.is_file():
+            raise sqlite3.OperationalError('no builder ledger there')
+        self.db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, check_same_thread=False,
+                                  isolation_level=None)
+        self.lock = threading.RLock()
+        self.clock = time.time
+        return self
+
     def close(self):
         self.db.close()
 
