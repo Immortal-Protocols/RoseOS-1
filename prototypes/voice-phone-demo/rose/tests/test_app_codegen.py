@@ -25,6 +25,7 @@ from pathlib import Path
 from rose.app_builder import codegen as G
 from rose.app_builder import contract as C
 from rose.app_builder import server_build as S
+from rose.app_builder import service as V
 
 REPO = Path(__file__).resolve().parents[4]
 RUNTIME = Path(os.environ.get('ROSE_APP_RUNTIME', REPO / 'workspace/rose-app-runtime'))
@@ -91,10 +92,12 @@ class Server(unittest.TestCase):
         # The builder's own modules: codegen never writes them.
         self.assertNotIn('rose/meta.rs', self.files)
         self.assertNotIn('rose/migrations.rs', self.files)
+        self.assertNotIn('rose/assets.rs', self.files)
+        self.assertFalse(set(self.files) & set(V.BUILDER_SERVER_FILES))
 
     def test_main_takes_everything_from_the_host_and_the_build(self):
         main = self.files['rose/main.rs']
-        for line in ('mod api;', '#[path = "../src/handlers/mod.rs"]\nmod handlers;', 'mod meta;', 'mod migrations;',
+        for line in ('mod api;', 'mod assets;', '#[path = "../src/handlers/mod.rs"]\nmod handlers;', 'mod meta;', 'mod migrations;',
                      'mod routes;', 'mod wire;', 'use rose_app_runtime_signin::{start, Config, Keys, Migrations};',
                      'Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED }',
                      'Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations)',
@@ -152,6 +155,7 @@ class Server(unittest.TestCase):
             write_tree(crate, {'Cargo.toml': ADAPTER_CARGO.replace('@RUNTIME@', json.dumps(str(RUNTIME)))
                                .replace('@ADAPTER@', json.dumps(str(ADAPTER))),
                                'rose/meta.rs': META_RS, 'rose/migrations.rs': MIGRATIONS_RS,
+                               'rose/assets.rs': S.assets_rs(Path(tmp) / 'no-assets'),
                                'src/handlers/mod.rs': RUST_WRITER})
             env = {**os.environ, 'CARGO_TARGET_DIR': str(crate / 'target'), 'CARGO_NET_OFFLINE': 'true'}
             built = subprocess.run(['cargo', 'build', '--offline', '--quiet'], cwd=crate, env=env,
@@ -248,6 +252,20 @@ class Client(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 G.client_files(self.contract, bad)
 
+    def test_the_builders_server_record_is_not_written_here(self):
+        self.assertNotIn(self.base + V.ROSE_SERVER, self.files)
+        self.assertTrue(all('RoseServer.java' not in k for k in self.files))
+
+    def test_server_url_is_the_builders_record(self):
+        require('ROSE_REQUIRE_APP_BUILD', 'javac')
+        for url, shown in ((None, 'null'), ('https://notes.example.com:8443/api', 'https://notes.example.com:8443/api')):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = self.compile(Path(tmp), {'test/Check.java': JAVA_HARNESS}, android=False, url=url)
+                run = subprocess.run(['java', '-cp', str(out), 'Check', 'server-url'], capture_output=True, text=True,
+                                     timeout=60)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                self.assertEqual(run.stdout.strip(), shown)
+
     def test_no_url_is_invented(self):
         text = '\n'.join(v for k, v in self.files.items() if not k.endswith('RoseSigninCore.java'))
         self.assertNotIn('https://', text)
@@ -257,8 +275,9 @@ class Client(unittest.TestCase):
         reordered = json.loads(json.dumps(CONTRACT), object_pairs_hook=lambda kv: dict(reversed(kv)))
         self.assertEqual(G.client_files(C.parse(reordered), PACKAGE), self.files)
 
-    def compile(self, tmp: Path, extra: dict[str, str], android: bool) -> Path:
+    def compile(self, tmp: Path, extra: dict[str, str], android: bool, url: str | None = None) -> Path:
         write_tree(tmp, self.files)
+        write_tree(tmp, {self.base + V.ROSE_SERVER: V.rose_server_java(PACKAGE, url)})  # the builder's own file
         write_tree(tmp, extra)
         sources = [str(p) for p in tmp.rglob('*.java') if android or p.name != 'RoseSession.java']
         out = tmp / 'classes'
@@ -309,6 +328,7 @@ class Parity(unittest.TestCase):
                                    capture_output=True, text=True, timeout=600)
             self.assertEqual(built.returncode, 0, built.stderr[-4000:])
             write_tree(java, G.client_files(contract, PACKAGE))
+            write_tree(java, {'src/com/example/notes/rose/' + V.ROSE_SERVER: V.rose_server_java(PACKAGE, None)})
             write_tree(java, {'test/Check.java': JAVA_HARNESS})
             out = java / 'classes'
             javac = subprocess.run(['javac', '--release', '17', '-d', str(out)] +
@@ -648,6 +668,12 @@ JAVA_HARNESS = textwrap.dedent('''\
         public static void main(String[] args) throws Exception {
             switch (args[0]) {
                 case "checks": checks(); break;
+                case "server-url": {
+                    String url = RoseApi.serverUrl();
+                    if (url != null) new RoseApi.HttpsTransport(url);  // the builder's record is one the client takes
+                    System.out.println(url);
+                    break;
+                }
                 case "request": System.out.println(RoseJson.write(note().toJson())); break;
                 case "reply": {
                     String text = new String(System.in.readAllBytes(), StandardCharsets.UTF_8).trim();

@@ -14,8 +14,9 @@ URL from the caller, and the server takes its app id, port, data directory and d
 - ``rose/wire.rs``: the JSON helpers they share;
 - ``rose/main.rs``: the crate root and start-up (``MAIN_RS``), over OS Core's adapter (rose-app-runtime-signin).
 
-The crate root declares those modules, the builder's own ``rose/meta.rs`` (``APP``, ``ISSUER``, ``ADMISSION``) and
-``rose/migrations.rs`` (``ACCOUNT``, ``SHARED``), which codegen never writes, and the writer's code,
+The crate root declares those modules, the builder's own ``rose/meta.rs`` (``APP``, ``ISSUER``, ``ADMISSION``),
+``rose/migrations.rs`` (``ACCOUNT``, ``SHARED``) and ``rose/assets.rs`` (``get``, the writer's ``server/assets``),
+which codegen never writes, and the writer's code,
 ``#[path = "../src/handlers/mod.rs"] mod handlers;``, which defines ``pub struct App;`` and
 ``impl crate::api::Handlers for App`` (the convention is App Core's: rose.app_builder.appprofile ``HANDLERS``).
 
@@ -27,6 +28,9 @@ The crate root declares those modules, the builder's own ``rose/meta.rs`` (``APP
 - ``RoseSession.java``: the bearer token in no-backup storage, and opening an ``otpauth://`` URI with
   ``ACTION_VIEW`` (sharing the app's identity on API 34+, §7.5);
 - ``RoseSigninCore.java``: OS Core's client core, byte for byte at the pinned digest.
+
+``RoseApi.serverUrl()`` reads the builder's own ``RoseServer.java`` (the hosting record's base URL, or null before the
+app is hosted), which codegen never writes.
 
 Wire rules, the same on both sides (§7.3): an ``optional`` field may be absent or null; fields neither side knows are
 ignored; ``max`` bounds a string's characters, bytes' length and a list's or map's entries in requests only (the
@@ -351,6 +355,7 @@ MAIN_RS = '''//! The server's start-up (docs/APP-BUILDER.md §7.4, §7.7): OS Co
 //! lookup that fails, keeps it at 503; nothing here or in the adapter runs, reads or removes a restore.
 
 mod api;
+mod assets;
 #[path = "../src/handlers/mod.rs"]
 mod handlers;
 mod meta;
@@ -423,8 +428,8 @@ def _route_types(route: dict) -> tuple[str | None, str]:
 
 def server_files(contract: Contract) -> dict[str, str]:
     """The server's generated Rust, keyed by path under the server crate (rose.app_builder.server_build
-    ``GENERATED``; ``rose/main.rs`` is its ``ENTRY``). The builder adds ``rose/meta.rs`` and ``rose/migrations.rs``
-    itself (docs/APP-BUILDER.md §7.5)."""
+    ``GENERATED``; ``rose/main.rs`` is its ``ENTRY``). The builder adds ``rose/meta.rs``, ``rose/migrations.rs``
+    and ``rose/assets.rs`` itself (docs/APP-BUILDER.md §7.5)."""
     data = contract.data
     head = HEADER.format(sha=contract.sha256)
     types = '\n'.join(_rust_struct(n, t['fields']) for n, t in sorted(data['types'].items()))
@@ -821,12 +826,21 @@ public final class RoseJson {
 ROSE_API = r'''package {pkg}.rose;
 
 /**
- * The app's API client (docs/APP-BUILDER.md §7.3): one method per contract route. The base URL comes from the caller
- * (the library's record of the app's server); nothing here invents one. Account routes send the signed-in session's
- * bearer token; a 401 {"error":"session_invalid"} forgets it.
+ * The app's API client (docs/APP-BUILDER.md §7.3): one method per contract route. The base URL is the builder's
+ * hosting record, {@link #serverUrl()}, which the caller hands to {@link HttpsTransport}; nothing here invents one.
+ * Account routes send the signed-in session's bearer token; a 401 {"error":"session_invalid"} forgets it.
  */
 public final class RoseApi {
     private RoseApi() {}
+
+    /**
+     * The app server's base URL from the builder's hosting record, or null while the app is not hosted yet (then
+     * say the server is not set up; never guess one). It is fixed when the app is built, so the first hosted
+     * version of the app needs a build after the record exists.
+     */
+    public static String serverUrl() {
+        return RoseServer.URL;
+    }
 
     /** A refusal or failure: the HTTP status (0 when the server could not be reached) and an error word. */
     public static final class Error extends Exception {

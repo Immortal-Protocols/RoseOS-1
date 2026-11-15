@@ -413,6 +413,8 @@ class Pieces(unittest.TestCase):
                 if Path(path).name in ('RoseApi.java', 'RoseJson.java', 'RoseTypes.java'):
                     (Path(tmp) / path).parent.mkdir(parents=True, exist_ok=True)
                     (Path(tmp) / path).write_text(text)
+            # RoseApi.serverUrl() reads the builder's own RoseServer.java, written beside it on every build.
+            (src / 'p/q/rose' / service.ROSE_SERVER).write_text(service.rose_server_java('p.q', None))
             (src / 'p/q/rose/Check.java').write_text(
                 'package p.q.rose;\npublic final class Check { public static void main(String[] a) {\n'
                 '  for (String u : a) { try { new RoseApi.HttpsTransport(u); System.out.println("ok"); }\n'
