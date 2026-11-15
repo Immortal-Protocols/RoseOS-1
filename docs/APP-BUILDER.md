@@ -762,6 +762,9 @@ shown/prepared through the unchanged outer contract. No Project 1 build dependen
 endpoint or renderer format is added. Direct page requests now require the paired Rose server. Model setup
 and source/runtime evidence are in `workspace/models/local-composer/README.md`.
 
+The same device/requestId with a changed body is refused with 400; identical concurrent requests share the
+first result. Loading is prewarmed independently of the phone request and returns 503 while unavailable.
+
 ### 4.3 Agent tasks chosen on the page (workspace task handoff v1)
 
 The approved HiFi R2 prototype (`prototypes/rose-hifi`, source `6fcf8c9b`)

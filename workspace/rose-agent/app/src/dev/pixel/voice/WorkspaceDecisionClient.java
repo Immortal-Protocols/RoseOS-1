@@ -3,6 +3,7 @@ package dev.pixel.voice;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import rose.models.composer.LocalInference;
 
 /**
  * Project 2: the workspace's decision comes from the Rose server's model, not from Rose Agent (Nathan,
@@ -12,6 +13,7 @@ import java.util.Map;
  * <ul>
  *   <li>The body is {schemaVersion: 1, requestId, request}, device-scoped. A repeat of the same (device,
  *   requestId, body) returns the first result.</li>
+ *   <li>A different body for the same device/requestId is refused with 400.</li>
  *   <li>A 200 carries a rose-layout-v1 result, ok or failed. The other replies are 503 unavailable, 400 refused
  *   and 401 when unsigned.</li>
  * </ul>
@@ -22,7 +24,7 @@ import java.util.Map;
  *   keeps the last layout.</li>
  *   <li><b>One attempt, read strictly.</b> There is no retry: the request has its own deadline. A 200 whose
  *   envelope is not rose-layout-v1 for this requestId is uncertain, never shown.</li>
- *   <li><b>Off by default.</b> Behind the gate, nothing is sent.</li>
+ *   <li><b>Explicit opt-out.</b> With the route disabled, nothing is sent.</li>
  * </ul>
  * Pure (no Android types): the transport and signer are WorkspaceTaskClient's interfaces, and tests use fakes.
  */
@@ -53,6 +55,12 @@ final class WorkspaceDecisionClient {
 
  /** One decision, off the main thread. */
  Outcome decide(String requestId,String requestJson){
+  return decide(requestId,requestJson,LocalInference.Cancellation.NEVER);
+ }
+
+ /** Superseded queued work is never sent; an in-flight reply is discarded after cancellation. */
+ Outcome decide(String requestId,String requestJson,LocalInference.Cancellation cancellation){
+  if(cancellation.isCancelled())return new Outcome(Kind.NOT_SENT,null,"cancelled");
   if(!gate.enabled())return new Outcome(Kind.NOT_SENT,null,"disabled");
   byte[] body=body(requestId,requestJson);
   if(body==null)return new Outcome(Kind.NOT_SENT,null,"bad_request");
@@ -60,8 +68,10 @@ final class WorkspaceDecisionClient {
   WorkspaceTaskClient.Response r;
   try{
    Map<String,String> headers=new LinkedHashMap<>(signer.headers("POST",PATH));headers.put("Content-Type","application/json");
+   if(cancellation.isCancelled())return new Outcome(Kind.NOT_SENT,null,"cancelled");
    r=transport.post(PATH,headers,body);
   }catch(Exception e){return new Outcome(Kind.UNCERTAIN,null,"no_reply");}
+  if(cancellation.isCancelled())return new Outcome(Kind.UNCERTAIN,null,"cancelled");
   return read(r,requestId);
  }
 
