@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from . import appprofile, contract, dependencies, migrations, server_build, template, toolchain
-from .ledger import CLIENT_SERVER, MAX_CONTRACT, Ledger, LedgerError
+from .ledger import CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
 MAX_TEXT = 4000
@@ -205,13 +205,7 @@ def _note(note, request: str) -> str:
 # The builder's own server files, which a code generator may not write (rose.app_builder.server_build).
 BUILDER_SERVER_FILES = ('rose/migrations.rs', 'rose/meta.rs', 'rose/assets.rs')
 ROSE_SERVER = 'RoseServer.java'  # the builder's client file under src/<package>/rose/: the hosted base URL
-# What RoseApi.HttpsTransport accepts, narrowed: https, a lower-case DNS name (no IP address: as java.net.URI reads
-# a host, its last label starts with a letter), an optional port, a plain path.
-HOSTED_URL = re.compile(r'https://(?=[^/:]{1,253}(?:[:/]|$))(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*'
-                        r'[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?'
-                        r'(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]'
-                        r'|6553[0-5]))?'
-                        r"(?:/[A-Za-z0-9._~!$&'()*+,;=:@/-]*)?")
+# HOSTED_URL (from the ledger, which checks a recorded endpoint with it too): what the generated client accepts.
 
 
 def rose_server_java(package: str, url: str | None) -> str:

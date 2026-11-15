@@ -165,6 +165,92 @@ class Hosting(Base):
         self.assertIsNone(self.l.hosted_app(other))
 
 
+
+# Synthetic fixtures only: reserved example names (RFC 2606) and made-up UUIDs, never a live host.
+HOST = '4a4a4a4a-4444-4444-8444-44444444444b'
+HOST2 = '55555555-5555-4555-8555-555555555555'
+ENDPOINT = 'https://notes.example.org'
+ENDPOINT2 = 'https://notes.example.net/app'
+
+
+class NativeHost(Base):
+    """§7.7: the native host (Chariot's HostView host id and endpoint), recorded only from owner tooling, kept apart
+    from the hosted APK app id, and the endpoint a client-server build bakes into RoseServer.URL."""
+
+    def test_recorded_once_then_replaced_only_by_naming_the_current_record(self):
+        self.assertIsNone(self.l.native_host(self.project))
+        self.assertIsNone(self.l.native_host_endpoint(self.project))
+        self.l.record_native_host(self.project, HOST, ENDPOINT)
+        self.l.record_native_host(self.project, HOST, ENDPOINT)  # the same again changes nothing
+        self.assertEqual(self.l.native_host(self.project), {'hostId': HOST, 'endpoint': ENDPOINT})
+        self.assertEqual(self.l.native_host_endpoint(self.project), ENDPOINT)
+        for host, endpoint in ((HOST2, ENDPOINT), (HOST, ENDPOINT2), (HOST2, ENDPOINT2)):
+            with self.subTest(host=host, endpoint=endpoint), self.assertRaises(L.LedgerError):
+                self.l.record_native_host(self.project, host, endpoint)  # never a silent move
+        for stale in ({'hostId': HOST2, 'endpoint': ENDPOINT}, {'hostId': HOST, 'endpoint': ENDPOINT2},
+                      {'hostId': HOST}, {}):
+            with self.subTest(replaces=stale), self.assertRaises(L.LedgerError):
+                self.l.record_native_host(self.project, HOST2, ENDPOINT2, replaces=stale)
+        self.assertEqual(self.l.native_host_endpoint(self.project), ENDPOINT)
+        # A domain change on the same host, then a replaced host: each names the record it replaces.
+        self.l.record_native_host(self.project, HOST, ENDPOINT2, replaces={'hostId': HOST, 'endpoint': ENDPOINT})
+        self.assertEqual(self.l.native_host(self.project), {'hostId': HOST, 'endpoint': ENDPOINT2})
+        self.l.record_native_host(self.project, HOST2, ENDPOINT2, replaces={'hostId': HOST, 'endpoint': ENDPOINT2})
+        self.assertEqual(self.l.native_host(self.project), {'hostId': HOST2, 'endpoint': ENDPOINT2})
+
+    def test_nothing_to_replace_is_refused(self):
+        with self.assertRaises(L.LedgerError):
+            self.l.record_native_host(self.project, HOST, ENDPOINT, replaces={'hostId': HOST2, 'endpoint': ENDPOINT2})
+        self.assertIsNone(self.l.native_host(self.project))
+
+    def test_another_projects_host_or_endpoint_is_refused(self):
+        self.l.record_native_host(self.project, HOST, ENDPOINT)
+        other = self.l.create('d', 'other', 'y', 'Y')['projectId']
+        for host, endpoint in ((HOST, ENDPOINT2), (HOST2, ENDPOINT)):
+            with self.subTest(host=host, endpoint=endpoint), self.assertRaises(L.LedgerError):
+                self.l.record_native_host(other, host, endpoint)
+        self.assertIsNone(self.l.native_host(other))
+        self.l.record_native_host(other, HOST2, ENDPOINT2)
+        with self.assertRaises(L.LedgerError):  # nor by a replacement
+            self.l.record_native_host(other, HOST, ENDPOINT2, replaces={'hostId': HOST2, 'endpoint': ENDPOINT2})
+        self.assertEqual(self.l.native_host(other), {'hostId': HOST2, 'endpoint': ENDPOINT2})
+        with self.assertRaises(L.LedgerError):
+            self.l.record_native_host('nope', '66666666-6666-4666-8666-666666666666', 'https://x.example.org')
+
+    def test_the_host_id_and_endpoint_are_checked(self):
+        for bad in ('', HOST.upper(), 'not-a-uuid', None, 7, self.project, HOST + '0', 'x' + HOST):
+            with self.subTest(host=bad), self.assertRaises(L.LedgerError):
+                self.l.record_native_host(self.project, bad, ENDPOINT)
+        for bad in ('http://notes.example.org', 'https://Notes.example.org', 'https://notes.example.org/#x',
+                    'https://notes.example.org?q=1', 'https://user@notes.example.org', 'https://10.0.0.1',
+                    'https://notes.example.org:0', 'https://' + 'a' * 2050 + '.org', '', None, b'https://x.org',
+                    ' https://notes.example.org', 'https://notes.example.org\n',
+                    'https://notes.example.org/', 'https://notes.example.org/app/', 'https://notes.example.org:443',
+                    'https://notes.example.org:443/app', 'https://notes.example.org/' + 'a' * 2048):
+            with self.subTest(endpoint=bad), self.assertRaises(L.LedgerError):
+                self.l.record_native_host(self.project, HOST, bad)
+        self.assertIsNone(self.l.native_host(self.project))
+        longest = 'https://notes.example.org/' + 'a' * (L.MAX_ENDPOINT - len('https://notes.example.org/'))
+        self.l.record_native_host(self.project, HOST, longest)  # at the bound; one more is refused above
+        other = self.l.create('d', 'o', 'y', 'Y')['projectId']
+        self.l.record_native_host(other, HOST2, 'https://notes.example.org:8443/app')  # another port is kept
+
+    def test_another_spelling_of_a_recorded_endpoint_is_refused(self):
+        self.l.record_native_host(self.project, HOST, ENDPOINT)
+        other = self.l.create('d', 'other', 'y', 'Y')['projectId']
+        for spelling in (ENDPOINT + '/', ENDPOINT + ':443', ENDPOINT + ':443/'):
+            with self.subTest(spelling=spelling), self.assertRaises(L.LedgerError):
+                self.l.record_native_host(other, HOST2, spelling)
+        self.assertIsNone(self.l.native_host(other))
+
+    def test_it_is_not_the_hosted_apk_app_id(self):
+        self.l.record_hosted_app(self.project, HOSTED)
+        self.assertIsNone(self.l.native_host(self.project))  # neither record stands in for the other
+        self.l.record_native_host(self.project, HOST, ENDPOINT)
+        self.assertEqual(self.l.hosted_app(self.project), HOSTED)
+        self.assertEqual(self.l.native_host(self.project)['hostId'], HOST)
+
+
 class Upgrade(unittest.TestCase):
     def test_a_ledger_from_before_level2_opens_and_keeps_its_versions(self):
         with tempfile.TemporaryDirectory() as tmp:
