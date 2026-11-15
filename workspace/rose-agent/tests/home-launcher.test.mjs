@@ -723,9 +723,19 @@ test('Project 2: a superseded compose request in flight is stopped, and the stat
  assert.match(transport,/if\(abort!=null\)\{abort\.detach\(raw\);if\(abort\.fired\(\)\)throw e;\}/);
 });
 
-test('Project 2: no notification source or permission exists; the snapshot reads WorkspaceInputs.SOURCE, which is NONE',()=>{
- const inputs=read('../app/src/dev/pixel/voice/WorkspaceInputs.java'),sources=read('../app/src/dev/pixel/voice/WorkspaceSources.java');
- assert.match(inputs,/static final Source SOURCE=NONE;/);
- assert.match(sources,/WorkspaceInputs\.notices\(WorkspaceInputs\.SOURCE\),WorkspaceInputs\.content\(WorkspaceInputs\.SOURCE\)/);
- assert.doesNotMatch(manifest,/BIND_NOTIFICATION_LISTENER_SERVICE|NotificationListenerService/,'no notification listener is declared (D1 is undecided)');
+test('Project 2: notifications reach the workspace only after Notification access and the workspace\'s own consent',()=>{
+ const sources=read('../app/src/dev/pixel/voice/WorkspaceSources.java'),device=read('../app/src/dev/pixel/voice/WorkspaceDeviceInputs.java');
+ const page=read('../app/src/dev/pixel/voice/WorkspacePage.java'),notices=read('../app/src/dev/pixel/voice/WorkspaceNotices.java');
+ // The listener is declared for the system to bind only once the person grants access; Rose Agent requests nothing else.
+ const service=manifest.match(/<service android:name="\.WorkspaceNotificationListener"[\s\S]*?<\/service>/)[0];
+ assert.match(service,/android:permission="android\.permission\.BIND_NOTIFICATION_LISTENER_SERVICE"/);
+ assert.doesNotMatch(manifest,/uses-permission android:name="android\.permission\.(BIND_NOTIFICATION_LISTENER_SERVICE|ACCESS_NOTIFICATION_POLICY|MEDIA_CONTENT_CONTROL)"/);
+ // The phone read uses the device source, which needs both consents; the workspace's own consent is off by default.
+ assert.match(sources,/WorkspaceInputs\.Source inputs=new WorkspaceDeviceInputs\(context,byPackage\);/);
+ assert.match(device,/getBoolean\(CONSENT,false\)/);
+ assert.match(notices,/return accessGranted&&consented&&listenerConnected\?WorkspaceInputs\.AVAILABLE:WorkspaceInputs\.NOT_GRANTED;/);
+ // The disclosure is shown before consent is recorded, and says where titles go and that message text is never read.
+ assert.match(page,/setMessage\(NOTIFICATIONS_DISCLOSURE\)[\s\S]*?setPositiveButton\("Continue",\(d,w\)->\{WorkspaceDeviceInputs\.setConsent\(activity,true\);/);
+ assert.match(page,/NOTIFICATIONS_DISCLOSURE="[^"]*titles[^"]*"\s*\+"[^"]*your own Rose server[^"]*Message text is never read/);
+ assert.doesNotMatch(device+page,/setConsent\(activity,true\)[^;]*;[^\n]*setConsent|putBoolean\(CONSENT,true\)/,'nothing turns consent on except the person\'s Continue');
 });
