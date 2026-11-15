@@ -30,6 +30,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from . import dependencies, toolchain
+from .ledger import Ledger
 from .service import Builder
 
 SCHEMA_VERSION = 1
@@ -282,7 +283,9 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
         backup = CommandBackup(config.backup)
     tools = toolchain.Tools(config.sdk, config.java_home, timeout_s=config.build_timeout_s,
                             key_creation=config.key_creation)
-    builder = Builder(config.root, tools, generate, backup=backup, resolver=resolver)
+    ledger = Ledger(config.root)
+    builder = Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
+                      server_url=ledger.native_host_endpoint)
     remote = Remote(directory=config.remote_dir, port=config.port, name=config.name,
                     hosts=lambda: list(config.hosts))
     remote_app = build_remote_app(SimpleNamespace(app_builder=builder, phone=None), remote, voice=False)

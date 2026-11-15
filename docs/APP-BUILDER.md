@@ -1216,6 +1216,14 @@ Rose conversation server. It reads one strict JSON config file:
   or listeners are constructed; it is never silently disabled. Job resolution
   still verifies artifact digests, structure and prior-version locks. No
   downloads or store population are performed by the host.
+- **Native host endpoint.** The host passes its one ledger and that same
+  ledger's `native_host_endpoint` reader to `Builder(server_url=...)` (§7.7).
+  A client-server job reads its project's current recorded endpoint when it
+  generates `RoseServer.URL`; a missing record yields `null`. An explicitly
+  replaced record affects later builds, not previously generated clients.
+  This adds no configuration field, record writer, owner route or provisioning
+  call. Chariot's owner tooling still owns recording the binding in this ledger.
+  Other Level 2 build inputs remain unwired in the standalone host.
 - **Signing-key backup before first delivery.**
   - After a project's first signed build, and before its signer is bound or
     anything is delivered, `Builder(backup=…)` must return a receipt. The
@@ -1251,6 +1259,9 @@ Proof level: container tests only (`rose/tests/test_app_host.py`). They cover:
 - config refusals, and `main` refusing a bad file without serving;
 - configured-library advertisement and job-local resolution through the host,
   live catalog updates, and missing/malformed store refusals;
+- the host's own ledger endpoint reader, persistence through reconstruction,
+  and synthetic missing/recorded/replaced endpoints in generated client files
+  (other Level 2 inputs faked; compilation deliberately stopped);
 - the wired host: pairing through the admin app, signed `/hello`, the
   websockets absent, unsigned requests refused, and a signed create;
 - no writer configured, and starting and stopping the worker;
@@ -2285,7 +2296,7 @@ the server does.
   - **Not from public metadata:** Chariot's public APK metadata has no
     native host or server mapping. The builder never derives the endpoint
     from it, or from anything else.
-  - **The record** (the ledger; source; called by no host yet). Owner
+  - **The record** (the ledger; source; no real binding recorded). Owner
     tooling records `record_native_host(project, hostId, endpoint)`: the
     host's lower-case UUID (`CHARIOT_APP_ID`, above) and its endpoint,
     checked with `HOSTED_URL` (what the generated client accepts), at most
@@ -2334,10 +2345,11 @@ the server does.
       is safe while the builder runs. A build already running keeps the
       endpoint it read.
   - **Not done:** nothing runs the writer yet. No caller has been agreed,
-    and the call that gives the endpoint is held.
-    No host passes `server_url` (the builder host is the Local Server
-    Worker's), so every build still carries `null`. Production DNS, TLS and
-    ingress for an endpoint are unverified.
+    and the call that gives the endpoint is held. The standalone builder
+    host passes its ledger's endpoint reader as `server_url` (#861); with no
+    recorded binding it still yields `null`. That wiring enables no other
+    Level 2 build input and no hosting. Production DNS, TLS and ingress for
+    an endpoint are unverified.
 
 - **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
   on every request, and guest ingress admits only the gateway (Chariot's
