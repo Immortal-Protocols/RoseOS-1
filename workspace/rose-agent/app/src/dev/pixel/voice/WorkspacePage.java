@@ -279,6 +279,8 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   if(hub.lastRead!=null){
    for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("apps"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
    for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("actions"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("notifications"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("title"));
+   for(Object o:(List<?>)hub.lastRead.snapshot.snapshot.get("content"))if(id.equals(((java.util.Map<?,?>)o).get("id")))return String.valueOf(((java.util.Map<?,?>)o).get("label"));
   }
   return "Unavailable";
  }

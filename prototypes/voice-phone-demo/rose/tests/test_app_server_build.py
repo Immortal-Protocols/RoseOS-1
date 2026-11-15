@@ -618,7 +618,8 @@ class FakeCargo(Tmp):
              'dependency', 'crate_unavailable', 'aa'),
             ('build', 'error: could not compile `serde` (lib) due to 3 previous errors', 'dependency', 'crate_compile',
              'serde'),
-            ('build', '{"reason": "build-finished", "success": false}\nSegmentation fault', 'compile',
+            # Nothing shows the app's code failed: never the app's.
+            ('build', '{"reason": "build-finished", "success": false}\nSegmentation fault', 'toolchain',
              'server_build', ''),
         ]
         for step, text, category, reason, named in cases:
@@ -641,6 +642,65 @@ class FakeCargo(Tmp):
         with self.assertRaises(S.StepFailed) as caught:
             self.build(cancelled=lambda: True, tools=S.RustTools(self.toolchain, timeout_s=60))
         self.assertEqual(caught.exception.category, 'cancelled')
+
+    def test_a_failing_isolation_is_never_the_apps_code(self):
+        record, elf_file, lock = str(self.record), str(self.elf_file), LOCK.format(aa=self.digest)
+
+        class Wrapper(Passthrough):
+            """An isolation whose own launcher fails the way bwrap does when the kernel refuses a namespace."""
+
+            def __init__(self, script, claims=None):
+                super().__init__({'FAKE_RECORD': record, 'FAKE_ELF_FILE': elf_file, 'FAKE_LOCK': lock})
+                self.script, self.claims = script, claims
+
+            def command(self, argv, env, *, writable, readonly):
+                argv, env = super().command(argv, env, writable=writable, readonly=readonly)
+                return [sys.executable, '-c', self.script], env
+
+            def failed(self, returncode, output):
+                if self.claims == 'raise':
+                    raise RuntimeError('cannot tell')
+                return bool(self.claims) and output.startswith('bwrap:')
+
+        refused = ('import sys; sys.stderr.write("bwrap: setting up uid map: Permission denied\\n"); '
+                   'sys.exit(1)')
+        killed = 'import os, signal; os.kill(os.getpid(), signal.SIGKILL)'
+        cases = [
+            (Wrapper(refused, claims=True), 'build_isolation_failed'),
+            (Wrapper(refused, claims='raise'), 'build_isolation_failed'),
+            (Wrapper(refused), 'server_build'),  # unclaimed, and still not the app's
+            (Wrapper(killed), 'server_build'),
+        ]
+        for isolation, reason in cases:
+            with self.subTest(reason=reason, claims=isolation.claims, script=isolation.script[:20]):
+                with self.assertRaises(S.BuildFailed) as caught:
+                    self.build(isolation=isolation)
+                self.assertEqual((caught.exception.category, caught.exception.reason), ('toolchain', reason))
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(isolation=Wrapper(killed))
+        self.assertIn('signal', caught.exception.summary)
+
+        class Broken(Passthrough):
+            def command(self, argv, env, *, writable, readonly):
+                raise PermissionError('user namespaces are disabled')
+
+        class Missing(Passthrough):
+            def command(self, argv, env, *, writable, readonly):
+                return [str(self.tmp / 'no-such-bwrap'), *argv], env
+        Missing.tmp = self.tmp
+        class Explains(Passthrough):
+            def command(self, argv, env, *, writable, readonly):
+                raise S.BuildFailed('toolchain', 'build_isolation_unavailable', 'Linux build isolation is unavailable.')
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(isolation=Explains())
+        self.assertEqual(caught.exception.summary, 'Linux build isolation is unavailable.')  # kept as the provider said
+        for isolation in (Broken(), Missing()):
+            with self.subTest(isolation=type(isolation).__name__):
+                with self.assertRaises(S.BuildFailed) as caught:
+                    self.build(isolation=isolation)
+                self.assertEqual((caught.exception.category, caught.exception.reason),
+                                 ('toolchain', 'build_isolation_unavailable'))
+        self.assertFalse(S.Isolation().failed(1, 'bwrap: anything'))  # the default claims nothing
 
     def test_a_cargo_config_above_the_job_stops_the_build(self):
         for name in ('config.toml', 'config'):
