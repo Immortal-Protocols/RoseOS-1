@@ -532,3 +532,30 @@ fn names_that_break_the_otpauth_label_are_refused() {
         );
     }
 }
+
+#[test]
+fn a_server_for_one_app_never_accepts_or_revokes_another_apps_session() {
+    let mut a = auth();
+    let k = enrolled(&mut a, "recipes", "ana");
+    let t = T0 + 90;
+    let tok = token(&a.sign_in("recipes", "ana", &code(&k, t), PASS, "c", t));
+    assert_eq!(a.validate_for("notes", &tok, t + 1).unwrap(), None);
+    assert_eq!(
+        a.validate_for("recipes", &tok, t + 1).unwrap(),
+        Some(principal("recipes", "ana"))
+    );
+    // Another app's token is not touched: its idle timer runs from the last use by its own app.
+    let idle = a.session.idle_seconds;
+    assert_eq!(a.validate_for("notes", &tok, t + idle).unwrap(), None);
+    assert_eq!(
+        a.validate_for("recipes", &tok, t + 1 + idle).unwrap(),
+        None,
+        "not refreshed by notes"
+    );
+    // A sign-out on the wrong app's server leaves the session alone.
+    let tok2 = token(&a.sign_in("recipes", "ana", &code(&k, t + 30), PASS, "c", t + 30));
+    a.revoke_for("notes", &tok2).unwrap();
+    assert!(a.validate_for("recipes", &tok2, t + 31).unwrap().is_some());
+    a.revoke_for("recipes", &tok2).unwrap();
+    assert!(a.validate_for("recipes", &tok2, t + 32).unwrap().is_none());
+}
