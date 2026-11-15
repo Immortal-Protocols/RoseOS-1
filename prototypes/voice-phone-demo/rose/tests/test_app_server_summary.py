@@ -34,6 +34,11 @@ class Summary(unittest.TestCase):
             with self.subTest(bad['why']):
                 self.assertFalse(S.readable(bad['server'], bad['versionCode']))
 
+    def test_edge_values_a_client_must_accept(self):
+        for good in FIXTURE['clientReadable']:
+            with self.subTest(good['why']):
+                self.assertTrue(S.readable(good['server'], good['versionCode']))
+
     def test_any_history(self):
         # Every summary is readable, names no later version, and names only a version at the same api with
         # client-server versions at that api all the way up to it.
@@ -82,6 +87,24 @@ class Library(unittest.TestCase):
                         self.assertEqual('server' in v, want is not None)
                 finally:
                     ledger.close()
+
+    def test_a_record_too_deep_to_parse_is_unavailable_and_the_library_still_served(self):
+        deep = '{"api":1,"x":' + '[' * 200000 + ']' * 200000 + '}'
+        self.assertEqual(S.summaries([(1, True, deep)]), {1: {'schemaVersion': 1, 'status': 'unavailable'}})
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = L.Ledger(Path(tmp) / 'b')
+            try:
+                for request, contract in (('r1', deep), ('r2', json.dumps({'api': 1}))):
+                    job = ledger.create('d', request, 'x', request)
+                    ledger.advance(job['jobId'], 'building', 'b', 'b')
+                    self.assertEqual(ledger.allocate_version(job['jobId']), 1)
+                    ledger.bind_signer(job['projectId'], 'a' * 64)
+                    self.assertTrue(ledger.deliver(job['jobId'], '1', 'rev', '1' * 64, 10, 'x', profile=L.CLIENT_SERVER,
+                                                   server=SERVER, cargo_lock='v', contract=contract))
+                self.assertEqual(sorted(p['versions'][0]['server']['status'] for p in ledger.projects()),
+                                 ['ok', 'unavailable'])
+            finally:
+                ledger.close()
 
 
 if __name__ == '__main__':

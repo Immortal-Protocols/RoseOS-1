@@ -697,9 +697,12 @@ still serves. Like `apiReport` it was added after v1 and is optional.
 Rules for a client:
 - The summary is treated as `unavailable` if it has an unknown
   `schemaVersion` or `status`, a field missing or extra for its status,
-  an `api` or `minClientVersionCode` that is not a whole number of at least
-  1 (at most 2³¹−1), or a `minClientVersionCode` above the version's own
-  `versionCode`. Only the summary is refused, never the library.
+  an `api` or `minClientVersionCode` that is not a JSON integer from 1 to
+  2³¹−1, or a `minClientVersionCode` above the version's own `versionCode`.
+  A JSON integer has no fraction or exponent, so `1.0` is refused, as is
+  `true`; the phone's parser already types numbers this way (`Long`). The
+  same holds for `schemaVersion`. Only the summary is refused, never the
+  library.
 - `unavailable` never blocks an install and never says an older client
   still works.
 - It describes compatibility between a version's client and its server.
@@ -711,11 +714,15 @@ The exact cases are in
 - `cases`: one project's delivered versions (whether each had a server, and
   the contract recorded), with the `server` served for each (`null`: absent);
 - `clientUnreadable`: values the server never sends, which a client must
-  read as `unavailable`.
+  read as `unavailable`;
+- `clientReadable`: edge values a client must accept (the largest numbers,
+  and a version that is its own minimum).
 
 `rose/tests/test_app_server_summary.py` checks every case through the
 ledger's library, checks that each served summary meets the rules above,
-and checks every short history. The phone's parsing and display are
+and checks every short history. A contract record the server can't parse,
+even one nested too deep, reads as `unavailable` and never fails the
+library. The phone's parsing and display are
 Home/App's, and are not implemented here.
 
 ### 3.4 Baseline
@@ -1886,7 +1893,10 @@ runs these steps before signing:
 2. **Migrations.** They are checked against the delivered lock and in the
    sandbox, which applies them as the adapter does (SQLite's schema-change
    procedure): the pending ones together, with foreign keys off, in one
-   transaction, then `foreign_key_check` over every table. A fresh
+   transaction, then `foreign_key_check` over every table and the
+   adapter's check that no foreign key names a table that no longer exists
+   (a dropped or renamed parent, which `foreign_key_check` misses while the
+   child table is empty), under a step budget. A fresh
    install is one batch. An upgrade is the delivered set, then rows seeded
    in every ordinary table on a fresh connection (parents first, so a
    child's foreign keys point at its parents' rows), then the new set. So
@@ -2115,7 +2125,7 @@ builder's too. A plain app's job is unchanged.
   | `server_build` | toolchain | Any other cargo failure: with no compiler error in the app's own code, it is never the app's |
 
   Logs have the job's, the toolchain's and the set's paths redacted.
-- **One version** (the ledger; source, not yet called by the builder):
+- **One version** (the ledger; source, called by the job's delivery):
   - **Pairing.** A client-server version records its APK and its server ELF
     (`{sha256, size, target}`) and its migration lock, in the same
     transaction as the version row. A failure anywhere rolls all of it back,

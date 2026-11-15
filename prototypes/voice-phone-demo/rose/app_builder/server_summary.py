@@ -37,21 +37,25 @@ def summaries(versions: list[tuple[int, bool, str | None]]) -> dict[int, dict]:
 
 
 def _api(text: str) -> int | None:
-    try:
+    try:  # a record nested too deep to parse is as unreadable as any other: never the whole library's failure
         api = json.loads(text).get('api')
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, TypeError, RecursionError):
         return None
     return api if type(api) is int and 1 <= api <= 2 ** 31 - 1 else None
 
 
 def readable(summary, version_code: int) -> bool:
     """Whether a served summary is one a client may act on (the rules §3.3 gives a phone): anything else is read
-    as `unavailable`, which never blocks an install and never says an older client still works."""
-    if not isinstance(summary, dict) or summary.get('schemaVersion') != SCHEMA_VERSION:
+    as `unavailable`, which never blocks an install and never says an older client still works. Numbers are JSON
+    integers (as the phone's parser types them, `Long`): `1.0` and `true` are refused, though Python compares them
+    equal to 1."""
+    if not isinstance(summary, dict) or type(summary.get('schemaVersion')) is not int \
+            or summary['schemaVersion'] != SCHEMA_VERSION:
         return False
     if summary.get('status') == 'unavailable':
         return set(summary) == {'schemaVersion', 'status'}
     if summary.get('status') != 'ok' or set(summary) != {'schemaVersion', 'status', 'api', 'minClientVersionCode'}:
         return False
     api, first = summary['api'], summary['minClientVersionCode']
-    return (type(api) is int and 1 <= api <= 2 ** 31 - 1 and type(first) is int and 1 <= first <= version_code)
+    return (type(api) is int and 1 <= api <= 2 ** 31 - 1 and type(first) is int
+            and 1 <= first <= min(version_code, 2 ** 31 - 1))

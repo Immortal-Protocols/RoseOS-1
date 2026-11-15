@@ -1,6 +1,6 @@
 {
  "contract": "Builder API v1 library versions[].server, schemaVersion 1 (docs/APP-BUILDER.md §3.3)",
- "comment": "Each case: one project's delivered versions, oldest first: whether each was delivered with a server (hasServer), and the canonical contract the ledger recorded for it (null: none), with the server summary the library serves for each (null: the field is absent, a plain version). Home/App clients parse server only. clientUnreadable: values the server never sends, which a client must read as unavailable.",
+ "comment": "Each case: one project's delivered versions, oldest first: whether each was delivered with a server (hasServer), and the canonical contract the ledger recorded for it (null: none), with the server summary the library serves for each (null: the field is absent, a plain version). Home/App clients parse server only. clientUnreadable: values the server never sends, which a client must read as unavailable; clientReadable: edge values a client must accept. Numbers are JSON integers: 1.0 is refused.",
  "cases": [
   {
    "case": "plain-app",
@@ -292,7 +292,7 @@
     "api": 1,
     "minClientVersionCode": 1.0
    },
-   "why": "minClientVersionCode not a whole number"
+   "why": "minClientVersionCode not a JSON integer (1.0)"
   },
   {
    "versionCode": 3,
@@ -307,6 +307,132 @@
    "versionCode": 3,
    "server": "ok",
    "why": "not an object"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": true,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1
+   },
+   "why": "schemaVersion a boolean"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1.0,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1
+   },
+   "why": "schemaVersion not a JSON integer (1.0)"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1.0,
+    "status": "unavailable"
+   },
+   "why": "schemaVersion not a JSON integer (1.0), unavailable"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 1,
+    "extra": 1
+   },
+   "why": "ok carries nothing else"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": true,
+    "minClientVersionCode": 1
+   },
+   "why": "api a boolean"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": true
+   },
+   "why": "minClientVersionCode a boolean"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1.0,
+    "minClientVersionCode": 1
+   },
+   "why": "api not a JSON integer (1.0)"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1.5,
+    "minClientVersionCode": 1
+   },
+   "why": "api a fraction"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 2147483648,
+    "minClientVersionCode": 1
+   },
+   "why": "api above 2^31-1"
+  },
+  {
+   "versionCode": 2147483648,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 2147483648
+   },
+   "why": "minClientVersionCode above 2^31-1"
+  },
+  {
+   "versionCode": 3,
+   "server": null,
+   "why": "null"
+  }
+ ],
+ "clientReadable": [
+  {
+   "versionCode": 2147483647,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 2147483647,
+    "minClientVersionCode": 2147483647
+   },
+   "why": "the largest api and minClientVersionCode"
+  },
+  {
+   "versionCode": 3,
+   "server": {
+    "schemaVersion": 1,
+    "status": "ok",
+    "api": 1,
+    "minClientVersionCode": 3
+   },
+   "why": "minClientVersionCode equal to the version itself"
   }
  ]
 }
