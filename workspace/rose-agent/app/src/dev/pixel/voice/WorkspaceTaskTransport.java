@@ -27,23 +27,31 @@ final class WorkspaceTaskTransport implements WorkspaceTaskClient.Transport {
  private final Context context;
  WorkspaceTaskTransport(Context context){this.context=context.getApplicationContext();}
 
- @Override public WorkspaceTaskClient.Response post(String path,Map<String,String> headers,byte[] body)throws Exception{return exchange(path,headers,body,true);}
- @Override public WorkspaceTaskClient.Response get(String path,Map<String,String> headers)throws Exception{return exchange(path,headers,null,false);}
+ @Override public WorkspaceTaskClient.Response post(String path,Map<String,String> headers,byte[] body)throws Exception{return exchange(path,headers,body,true,null);}
+ @Override public WorkspaceTaskClient.Response post(String path,Map<String,String> headers,byte[] body,WorkspaceAbort abort)throws Exception{return exchange(path,headers,body,true,abort);}
+ @Override public WorkspaceTaskClient.Response get(String path,Map<String,String> headers)throws Exception{return exchange(path,headers,null,false,null);}
 
- private WorkspaceTaskClient.Response exchange(String path,Map<String,String> headers,byte[] body,boolean post)throws Exception{
+ /**
+  * One exchange. With abort, the raw socket is attached before it connects, so WorkspaceAbort.fire() from
+  * another thread ends a connect, the TLS handshake or a blocked read at once. A stopped request never moves
+  * on to the next address.
+  */
+ private WorkspaceTaskClient.Response exchange(String path,Map<String,String> headers,byte[] body,boolean post,WorkspaceAbort abort)throws Exception{
   LocalRoseConnection.Paired p=LocalRoseConnection.paired(context);
   if(p==null)throw new IOException("not paired");
   IOException last=null;
   for(String host:p.order()){
+   if(abort!=null&&abort.fired())throw new IOException("stopped");
    Socket raw=new Socket();SSLSocket s;
+   if(abort!=null&&!abort.attach(raw))throw new IOException("stopped");
    try{s=LocalRoseConnection.tls(raw,host,p.port,p.pin);}
-   catch(IOException e){last=e;try{raw.close();}catch(IOException ignored){}continue;}
+   catch(IOException e){if(abort!=null){abort.detach(raw);if(abort.fired())throw e;}last=e;try{raw.close();}catch(IOException ignored){}continue;}
    try{
     s.setSoTimeout(READ_TIMEOUT_MS);
     OutputStream out=s.getOutputStream();
     out.write(post?WorkspaceHttp.post(host,p.port,path,headers,body):WorkspaceHttp.get(host,p.port,path,headers));out.flush();
     return WorkspaceHttp.read(s.getInputStream());
-   }finally{try{s.close();}catch(IOException ignored){}try{raw.close();}catch(IOException ignored){}}
+   }finally{if(abort!=null)abort.detach(raw);try{s.close();}catch(IOException ignored){}try{raw.close();}catch(IOException ignored){}}
   }
   throw last!=null?last:new IOException("no address for the backend");
  }

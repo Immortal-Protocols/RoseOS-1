@@ -55,11 +55,19 @@ final class WorkspaceDecisionClient {
 
  /** One decision, off the main thread. */
  Outcome decide(String requestId,String requestJson){
-  return decide(requestId,requestJson,LocalInference.Cancellation.NEVER);
+  return decide(requestId,requestJson,LocalInference.Cancellation.NEVER,null);
  }
 
- /** Superseded queued work is never sent; an in-flight reply is discarded after cancellation. */
- Outcome decide(String requestId,String requestJson,LocalInference.Cancellation cancellation){
+ Outcome decide(String requestId,String requestJson,LocalInference.Cancellation cancellation){return decide(requestId,requestJson,cancellation,null);}
+
+ /**
+  * Superseded queued work is never sent, and an in-flight reply is discarded after cancellation. With abort,
+  * a superseded request in flight is also stopped: WorkspaceAbort.fire() closes its socket, so the phone's
+  * worker moves on at once and the server cancels the composition. The answer is then uncertain and is
+  * discarded; there is no retry.
+  */
+ Outcome decide(String requestId,String requestJson,LocalInference.Cancellation cancellation,WorkspaceAbort abort){
+  if(abort!=null&&abort.fired())return new Outcome(Kind.NOT_SENT,null,"cancelled");
   if(cancellation.isCancelled())return new Outcome(Kind.NOT_SENT,null,"cancelled");
   if(!gate.enabled())return new Outcome(Kind.NOT_SENT,null,"disabled");
   byte[] body=body(requestId,requestJson);
@@ -68,9 +76,9 @@ final class WorkspaceDecisionClient {
   WorkspaceTaskClient.Response r;
   try{
    Map<String,String> headers=new LinkedHashMap<>(signer.headers("POST",PATH));headers.put("Content-Type","application/json");
-   if(cancellation.isCancelled())return new Outcome(Kind.NOT_SENT,null,"cancelled");
-   r=transport.post(PATH,headers,body);
-  }catch(Exception e){return new Outcome(Kind.UNCERTAIN,null,"no_reply");}
+   if(cancellation.isCancelled()||(abort!=null&&abort.fired()))return new Outcome(Kind.NOT_SENT,null,"cancelled");
+   r=abort==null?transport.post(PATH,headers,body):transport.post(PATH,headers,body,abort);
+  }catch(Exception e){return new Outcome(Kind.UNCERTAIN,null,abort!=null&&abort.fired()?"cancelled":"no_reply");}
   if(cancellation.isCancelled())return new Outcome(Kind.UNCERTAIN,null,"cancelled");
   return read(r,requestId);
  }
