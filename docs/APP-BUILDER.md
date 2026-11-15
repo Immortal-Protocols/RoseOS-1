@@ -1282,8 +1282,10 @@ Owners:
 - **Chariot owner:** hosting (§7.7).
 - **Home/App:** the builder's phone UI.
 
-Nothing here is built into a job, hosted, deployed or run on a phone. Only
-§7.2's checks and §7.3's contract exist in source.
+Nothing here is built into a job, hosted, deployed or run on a phone. What
+exists in source is §7.2's checks, §7.3's contract, and §7.6's migration
+checks, ledger records, crate set and server build. None of it is called by
+the builder yet.
 
 ### 7.1 Facts the design rests on
 
@@ -1548,6 +1550,78 @@ needing older clients to update, through the library's minClientVersionCode
     under build isolation.
 - **Honest failures.** A missing toolchain, crate set or isolation is a
   `toolchain` or `dependency` failure, never a skipped half.
+- **The crate set** (`app_builder/crates.py`; source, called nowhere).
+  Crates come from a `CrateSource` that the builder host injects, for
+  example `RecordedCrates`, a host-owned `index.json` of
+  `name@version → sha256` plus one `<sha256>.crate` file each. Nothing
+  downloads a crate, and filling the set is the host's job (blocker 6).
+  - **Checked before use.** The whole set is unpacked once into a read-only
+    cargo directory source, which the builder then reuses. Each crate must
+    meet all of these:
+    - its file is read without following a link, and hashes to the digest
+      the set records;
+    - it is a gzip tar of plain files and folders only, all under
+      `<name>-<version>/`;
+    - it has no absolute path, no `.`, `..` or empty segment, no control
+      character, and no entry listed twice;
+    - it stays within bounds on file size, entry count and unpacked bytes;
+    - its own `Cargo.toml` names exactly that crate and version.
+
+    A crate that fails refuses the whole set (`crate_set_invalid`,
+    category `toolchain`). The host fixes its set; the builder never quietly
+    builds without the crate.
+  - **The lock.** Cargo resolves dependencies of dependencies from the set,
+    starting from the last delivered version's `Cargo.lock`. A rebuild
+    therefore keeps the versions that version used, and only adds or drops
+    what the declaration changed. Every crate the resulting lock names must
+    be in the set with the set's digest. A crate any delivered version used
+    must also keep that version's digest (`crate_changed`).
+  - **Not decided here: which crates are safe.** A crate's build script and
+    procedural macros run while the server compiles, like any server
+    operator's dependencies. The boundary for that is build isolation
+    (blocker 3), and the host chooses its set.
+- **The server build** (`app_builder/server_build.py`; source, called
+  nowhere). The builder writes the server's `Cargo.toml` itself:
+  - one binary at the builder's entry point `rose/main.rs`;
+  - exact `=version` dependencies;
+  - `build = false`, and Cargo's own target discovery off, so the writer's
+    files are only modules.
+
+  It then runs two commands, each through the host's `Isolation`:
+  1. `cargo metadata --offline`, which resolves the lock;
+  2. after the lock check, `cargo build --offline --frozen --release
+     --target <target>`.
+
+  `Isolation` lets a command write only the job's folder, read only the
+  toolchain and the crate set, and reach no network. Without one, nothing
+  runs (`build_isolation_unavailable`): the builder neither provides nor
+  imitates isolation.
+
+  Cargo's environment is scrubbed:
+  - nothing is inherited;
+  - `HOME`, `CARGO_HOME`, the target folder and `TMPDIR` are all inside the
+    job;
+  - the network is off;
+  - the job's and the set's paths are remapped out of the binary.
+
+  The toolchain is a Rust toolchain's own folder, never rustup's proxies.
+  The product target is `x86_64-unknown-linux-musl` (§7.7).
+
+  Failures, each with a stable `reason`:
+
+  | `reason` | Category | When |
+  |---|---|---|
+  | `build_isolation_unavailable` | toolchain | The host supplied no isolation |
+  | `rust_toolchain_unavailable` | toolchain | No cargo or rustc, no standard library for the target, no linker, or cargo wrote no lock or binary |
+  | `crate_set_invalid` | toolchain | The set can't be read, or a crate in it fails the checks above |
+  | `no_crate_source` | dependency | Crates are declared and the host has no set |
+  | `crate_unavailable` | dependency | A declared crate, or one it needs, isn't in the set, or no version in the set fits |
+  | `crate_changed` | dependency | A crate differs from the set's digest or from a delivered version's |
+  | `crate_compile` | dependency | A crate didn't compile |
+  | `server_compile` | compile | The writer's server code didn't compile |
+  | `server_build` | compile | Any other cargo failure |
+
+  Logs have the job's, the toolchain's and the set's paths redacted.
 - **One version** (the ledger; source, not yet called by the builder):
   - **Pairing.** A client-server version records its APK and its server ELF
     (`{sha256, size, target}`) and its migration lock, in the same
@@ -1560,6 +1634,15 @@ needing older clients to update, through the library's minClientVersionCode
     ledger enforces it too: a client-server version whose migrations leave
     out or differ from a delivered one is refused, so the lock can't
     become contradictory.
+  - **Crates.** A client-server version also records the crates its server
+    was built with and its `Cargo.lock`, in the same transaction. Two reads
+    feed the next build:
+    - `crate_lock(project)`: every `name@version → sha256` any delivered
+      version used;
+    - `cargo_lock(project)`: the newest version's `Cargo.lock`.
+
+    A version that lists a delivered crate version with other contents is
+    refused. Dropping a crate, or moving to a new version of it, is allowed.
   - **Level 1.** Its versions and their library entries are unchanged, and
     an older ledger file opens with the new tables added.
 - **Migrations** (`app_builder/migrations.py`; source, called nowhere) are
@@ -1696,8 +1779,18 @@ need no hosting and no further OS Core change.
 4. **Ledger pairing of client and server artifacts, the migration lock, and
    the hosted app mapping (§7.6, §3.3).** Done:
    `rose/tests/test_app_ledger_level2.py`.
-5. The injected crate source and server build plumbing, with a fake `cargo`,
-   then a real build of a dependency-free fixture.
+5. **The injected crate set and the server build plumbing (§7.6).** Done:
+   `rose/tests/test_app_server_build.py`.
+   - **Fake cargo.** It records what the builder runs and in what
+     environment, and maps cargo's failures.
+   - **Real cargo, offline.** It builds a dependency-free fixture, and one
+     against a small crate set made in the test. That second build shows
+     resolution, a rebuild keeping its lock, `crate_changed` and
+     `crate_unavailable`.
+
+   These real builds use the machine's own toolchain for its own target.
+   CI requires them (`ROSE_REQUIRE_CARGO`). The pinned musl toolchain on the
+   builder host is still the Local Server Worker's (blocker 6).
 6. The manifest and ELF checks.
 7. The runtime crate on rose-signin `23062a04`, with its own CI.
 8. Codegen and the client sign-in overlay.

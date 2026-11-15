@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS version_servers (
 CREATE TABLE IF NOT EXISTS version_migrations (
   project_id TEXT NOT NULL, version_code INTEGER NOT NULL, scope TEXT NOT NULL, number INTEGER NOT NULL,
   name TEXT NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY (project_id, version_code, scope, number));
+-- The crates each client-server version's server was built with, and its Cargo.lock (rose.app_builder.server_build
+-- starts the next build from it, so a rebuild keeps the versions this one used).
+CREATE TABLE IF NOT EXISTS version_crates (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
+  sha256 TEXT NOT NULL, PRIMARY KEY (project_id, version_code, name, version));
+CREATE TABLE IF NOT EXISTS version_cargo_locks (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, lock TEXT NOT NULL, PRIMARY KEY (project_id, version_code));
 -- Level 3 (§3.3 share): the hosted app id for a project, recorded only from owner tooling or the publisher.
 CREATE TABLE IF NOT EXISTS project_hosting (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), hosted_app_id TEXT NOT NULL UNIQUE,
@@ -79,6 +86,9 @@ HEX64 = re.compile(r'[0-9a-f]{64}')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 SCOPES = ('account', 'shared')
 MIGRATION_NAME = re.compile(r'[a-z0-9_]{1,40}')
+CRATE_NAME = re.compile(r'[A-Za-z0-9_-]{1,64}')
+CRATE_VERSION = re.compile(r'[0-9A-Za-z.+-]{1,64}')
+MAX_CARGO_LOCK = 1024 * 1024
 
 
 def _server(server) -> tuple:
@@ -97,6 +107,14 @@ def _migration(lock) -> tuple:
             or not isinstance(lock['sha256'], str) or not HEX64.fullmatch(lock['sha256']):
         raise LedgerError('a migration lock entry is {scope, number, name, sha256}')
     return lock['scope'], lock['number'], lock['name'], lock['sha256']
+
+
+def _crate(crate) -> tuple:
+    name, version, digest = (getattr(crate, a, None) for a in ('name', 'version', 'sha256'))
+    if not isinstance(name, str) or not CRATE_NAME.fullmatch(name) or not isinstance(version, str) \
+            or not CRATE_VERSION.fullmatch(version) or not isinstance(digest, str) or not HEX64.fullmatch(digest):
+        raise LedgerError('a crate entry is {name, version, sha256}')
+    return name, version, digest
 
 
 def _id() -> str:
@@ -303,10 +321,11 @@ class Ledger:
 
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
                 dependencies=(), api_report: dict | None = None, profile: str | None = None, server=None,
-                migrations=()):
+                migrations=(), crates=(), cargo_lock: str | None = None):
         """Record the delivered version and, in the same transaction, the libraries it was built with (its lock).
-        A client-server version (profile CLIENT_SERVER) also records its server ELF and its migration lock, and binds
-        the project's profile; once bound, a version without its server is refused. Nothing is half recorded."""
+        A client-server version (profile CLIENT_SERVER) also records its server ELF, its migration lock, the crates
+        its server was built with and its Cargo.lock, and binds the project's profile; once bound, a version without
+        its server is refused. Nothing is half recorded."""
         if profile not in (None, CLIENT_SERVER):
             raise LedgerError('unknown profile')
         if profile == CLIENT_SERVER:
@@ -314,8 +333,14 @@ class Ledger:
             migration_rows = [_migration(m) for m in migrations]
             if len({(r[0], r[1]) for r in migration_rows}) != len(migration_rows):
                 raise LedgerError('a migration is listed twice')
-        elif server is not None or migrations:
-            raise LedgerError('only a client-server version has a server and migrations')
+            crate_rows = [_crate(c) for c in crates]
+            if len({(r[0], r[1]) for r in crate_rows}) != len(crate_rows):
+                raise LedgerError('a crate is listed twice')
+            if not isinstance(cargo_lock, str) or not cargo_lock or len(cargo_lock.encode('utf-8', 'replace')) \
+                    > MAX_CARGO_LOCK:
+                raise LedgerError('a client-server version needs its Cargo.lock')
+        elif server is not None or migrations or crates or cargo_lock is not None:
+            raise LedgerError('only a client-server version has a server, migrations and crates')
         with self.lock:
             job = self.job(job_id)
             if job['state'] not in ACTIVE or self.cancel_requested(job_id):
@@ -331,6 +356,10 @@ class Ledger:
                     if mine.get(key) != delivered:
                         raise LedgerError(f'migration {key[0]}/{key[1]:04d} was delivered and must stay exactly as '
                                           'it was')
+                crate_lock = self._crate_lock(job['projectId'])
+                for name, version, digest in crate_rows:  # a crate version never changes under an app
+                    if crate_lock.get(f'{name}@{version}', digest) != digest:
+                        raise LedgerError(f'the crate {name}@{version} was delivered with other contents')
             newest = self.db.execute('SELECT MAX(version_code) FROM versions WHERE project_id=?',
                                      (job['projectId'],)).fetchone()[0] or 0
             if job['versionCode'] is None or job['versionCode'] <= newest:
@@ -354,6 +383,11 @@ class Ledger:
                     for row in migration_rows:
                         self.db.execute('INSERT INTO version_migrations VALUES (?,?,?,?,?,?)',
                                         (job['projectId'], job['versionCode'], *row))
+                    for row in crate_rows:
+                        self.db.execute('INSERT INTO version_crates VALUES (?,?,?,?,?)',
+                                        (job['projectId'], job['versionCode'], *row))
+                    self.db.execute('INSERT INTO version_cargo_locks VALUES (?,?,?)',
+                                    (job['projectId'], job['versionCode'], _text(cargo_lock)))
                 self.db.execute("UPDATE jobs SET state='ready', stage='ready', message='Ready to install.', "
                                 "updated=? WHERE job_id=?", (self.clock(), job_id))
                 self.db.execute('COMMIT')
@@ -427,6 +461,31 @@ class Ledger:
         if len({(r[0], r[1]) for r in rows}) != len(rows):
             raise LedgerError('delivered versions disagree about a migration')
         return [{'scope': r[0], 'number': r[1], 'name': r[2], 'sha256': r[3]} for r in rows]
+
+    def crate_lock(self, project: str) -> dict:
+        """name@version -> sha256 for every crate any delivered version's server used
+        (rose.app_builder.crates.check_lock holds later builds to it; the ledger refuses a contradicting one)."""
+        with self.lock:
+            return self._crate_lock(project)
+
+    def _crate_lock(self, project: str) -> dict:
+        rows = self.db.execute('SELECT DISTINCT name, version, sha256 FROM version_crates WHERE project_id=?',
+                               (project,)).fetchall()
+        return {f'{n}@{v}': h for n, v, h in rows}
+
+    def cargo_lock(self, project: str) -> str | None:
+        """The newest delivered client-server version's Cargo.lock, which the next server build starts from."""
+        with self.lock:
+            row = self.db.execute('SELECT lock FROM version_cargo_locks WHERE project_id=? ORDER BY version_code DESC '
+                                  'LIMIT 1', (project,)).fetchone()
+        return row[0] if row else None
+
+    def crates(self, project: str, version_code: int) -> list[dict]:
+        """The crates a delivered client-server version's server was built with."""
+        with self.lock:
+            rows = self.db.execute('SELECT name, version, sha256 FROM version_crates WHERE project_id=? AND '
+                                   'version_code=? ORDER BY name, version', (project, version_code)).fetchall()
+        return [{'name': n, 'version': v, 'sha256': h} for n, v, h in rows]
 
     def hosted_app(self, project: str) -> str | None:
         """The hosted app id owner tooling or the publisher recorded for the project (never derived from it)."""
