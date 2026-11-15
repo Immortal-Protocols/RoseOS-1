@@ -27,6 +27,14 @@ transcription remains the existing Rose voice path; this change does not claim o
   Metal on Apple hosts with CPU fallback. No network model fallback or extra model HTTP listener.
 - The model loads once per worker, with serialized requests. The server bounds request/reply sizes, startup,
   IPC and cancellation. It terminates only its own model child when it cannot safely continue.
+- Rose starts background preload during its normal startup. A cold request returns 503 promptly while loading
+  continues independently; disconnecting that request cannot repeatedly kill the cold load. No server is
+  started by preparation or tests. The 5 s IPC watchdog is transport/recovery headroom, not a longer model
+  deadline: the Java composer still enforces the request's deadline (at most 4 s).
+- A device/requestId is bound to one body within the bounded 15-minute replay window. A changed body is 400,
+  including while the first request is pending; concurrent identical requests share the same result. Phone
+  page requests use fresh IDs across process restarts. Superseded queued requests are skipped before sending;
+  an already-sent request remains bounded by the existing watchdog and its late result is discarded.
 
 Selection work compared Qwen3 0.6B and 1.7B on the public fixture. Asking either to reproduce the full layout
 schema produced duplicate/mismatched references. The implementation instead asks 1.7B for a short selection of

@@ -837,6 +837,7 @@ class Server:
     # ----------------------------------------------------------- lifecycle
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self.bus.loop = loop
+        if getattr(self, 'workspace_model', None) is not None: self.workspace_model.preload()
         threading.Thread(target=self._stats_loop, name="stats", daemon=True).start()
         if self.mode == "ui-only":
             self.conductor = FakeConductor(self.bus, self.phone)

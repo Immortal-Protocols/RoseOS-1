@@ -699,7 +699,8 @@ test('Project 2: the Rose server decides behind the compose route; Rose Agent ru
  const hub=read('../app/src/dev/pixel/voice/WorkspaceHub.java'),page=read('../app/src/dev/pixel/voice/WorkspacePage.java');
  const start=hub.slice(hub.indexOf('private void start(int gen){'),hub.indexOf('private void finish('));
  assert.match(start,/final WorkspaceDecisionClient decider=WorkspaceDecisionGate\.enabled\(app\)/);
- assert.match(start,/if\(decider!=null\)return WorkspaceDecisionClient\.result\(requestId,decider\.decide\(requestId,request\)\);/);
+ assert.match(start,/if\(cancelled\.get\(\)\)return WorkspaceEngine\.failed\(requestId,"cancelled"\);/);
+ assert.match(start,/if\(decider!=null\)return WorkspaceDecisionClient\.result\(requestId,decider\.decide\(requestId,request,cancelled::get\)\);/);
  // A server decision returns as text into the same finish() path, so the phone's own check is always applied.
  assert.match(start,/finish\(gen,requestId,done,text,at\)/);
  assert.match(hub,/boolean model\(\)\{return WorkspaceDecisionGate\.enabled\(app\)\|\|WorkspaceTiming\.isModel\(engine\.modelId\(\)\);\}/);

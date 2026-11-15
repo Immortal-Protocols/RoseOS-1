@@ -218,10 +218,11 @@ final class WorkspaceHub {
    // (WorkspaceRecovery.compose): otherwise the composer would stay busy for ever.
    final WorkspaceSources.Read[] read={null};
    final String text=WorkspaceRecovery.compose(requestId,()->{
+    if(cancelled.get())return WorkspaceEngine.failed(requestId,"cancelled");
     read[0]=WorkspaceSources.read(app,pinned);
     String request=WorkspaceSnapshot.request(requestId,trigger,prompt,read[0].snapshot,WorkspaceEngine.DEADLINE_MS,avoid);
     // A server decision is only passed on: finish() checks it against this read's registry, like any result.
-    if(decider!=null)return WorkspaceDecisionClient.result(requestId,decider.decide(requestId,request));
+    if(decider!=null)return WorkspaceDecisionClient.result(requestId,decider.decide(requestId,request,cancelled::get));
     return engine.compose(request,cancelled::get);
    });
    final WorkspaceSources.Read done=read[0];final long at=System.nanoTime();

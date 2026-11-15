@@ -226,7 +226,7 @@ public final class WorkspaceEngineTest {
   t.resulted(c.requestId(),o,c.lastFailure(),WorkspaceTiming.modelId(result),WorkspaceTiming.composerTiming(result),20,true);
   t.rendered(c.requestId(),30,true);
   expect(o==WorkspaceComposer.Outcome.COMMITTED&&state.layout().sections.size()==2,"Arrange commits the starter layout");
-  expect("request-to-first-draw".equals(t.record("page-1").basis()),"and its first draw is timed");
+  expect("request-to-first-draw".equals(t.record(c.requestId()).basis()),"and its first draw is timed");
 
   // Pin the grid, regenerate: the grid keeps its place, and the request carries avoid.
   String grid=state.layout().sections.get(0).key;state.togglePin(grid);
