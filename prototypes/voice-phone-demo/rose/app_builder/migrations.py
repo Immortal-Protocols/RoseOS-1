@@ -1,4 +1,4 @@
-"""A client-server app's SQL migrations, checked offline before a version is delivered (docs/APP-BUILDER.md §7.4).
+"""A client-server app's SQL migrations, checked offline before a version is delivered (docs/APP-BUILDER.md §7.6).
 Source only and called nowhere yet.
 
 A generated server keeps each user's data in SQLite and changes its shape only through numbered migrations, one
@@ -31,6 +31,9 @@ NAME = re.compile(r'(\d{4})_([a-z0-9_]{1,40})\.sql')
 MAX_FILE = 256 * 1024
 MAX_MIGRATIONS = 1000
 MAX_STEPS = 50_000_000  # SQLite VM steps for one whole check: a runaway query is refused, never waited on
+READ_PRAGMAS = {'data_version', 'page_size'}  # read (never set) by SQLite's own fts5 and rtree modules
+TEMP_CREATES = (sqlite3.SQLITE_CREATE_TEMP_INDEX, sqlite3.SQLITE_CREATE_TEMP_TABLE, sqlite3.SQLITE_CREATE_TEMP_TRIGGER,
+                sqlite3.SQLITE_CREATE_TEMP_VIEW)
 PRAGMAS = {'foreign_keys', 'defer_foreign_keys', 'recursive_triggers', 'table_info', 'table_xinfo', 'index_list',
            'index_info', 'index_xinfo', 'foreign_key_list', 'foreign_key_check', 'integrity_check', 'quick_check'}
 
@@ -74,8 +77,10 @@ def read(snapshot: Path) -> dict[str, list[Migration]]:
                 data = path.read_bytes()
                 try:
                     sql = data.decode('utf-8')
+                    if '\x00' in sql:
+                        raise UnicodeDecodeError('utf-8', data, 0, 1, 'NUL')
                 except UnicodeDecodeError:
-                    raise MigrationRefused(f'migrations/{scope}/{path.name} is not UTF-8.',
+                    raise MigrationRefused(f'migrations/{scope}/{path.name} is not UTF-8 text.',
                                            'migration_invalid') from None
                 found.append(Migration(scope, int(match.group(1)), match.group(2), hashlib.sha256(data).hexdigest(),
                                        sql))
@@ -107,29 +112,70 @@ def check_lock(current: dict[str, list[Migration]], delivered: list[dict]) -> No
 
 def _authorizer(action, arg1, arg2, database, trigger):
     if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH, sqlite3.SQLITE_TRANSACTION,
-                  sqlite3.SQLITE_SAVEPOINT):
-        return sqlite3.SQLITE_DENY
-    if action == sqlite3.SQLITE_PRAGMA and (arg1 or '').lower() not in PRAGMAS:
-        return sqlite3.SQLITE_DENY
+                  sqlite3.SQLITE_SAVEPOINT) + TEMP_CREATES:
+        return sqlite3.SQLITE_DENY  # temp objects outlive a migration on this connection, never on a phone's
+    if action == sqlite3.SQLITE_PRAGMA:
+        name = (arg1 or '').lower()
+        return sqlite3.SQLITE_OK if name in PRAGMAS or name in READ_PRAGMAS and arg2 is None else sqlite3.SQLITE_DENY
     if action == sqlite3.SQLITE_FUNCTION and (arg2 or '').lower() == 'load_extension':
         return sqlite3.SQLITE_DENY
-    if database not in (None, 'main', 'temp'):
+    if action == sqlite3.SQLITE_ALTER_TABLE:  # (schema, table) here; the last argument is a column, not a database
+        return sqlite3.SQLITE_OK if arg1 == 'main' else sqlite3.SQLITE_DENY
+    if database == 'temp' and action in (sqlite3.SQLITE_READ, sqlite3.SQLITE_UPDATE) \
+            and arg1 in ('sqlite_temp_master', 'sqlite_temp_schema'):
+        return sqlite3.SQLITE_OK  # ALTER TABLE reads and rewrites SQLite's own temp catalog, always empty here
+    if database not in (None, 'main'):
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
 
 
+# sqlite3_complete's own state machine (SQLite complete.c), so statements end exactly where SQLite says, in one pass.
+_SEMI, _WS, _OTHER, _EXPLAIN, _CREATE, _TEMP, _TRIGGER, _END = range(8)
+_TRANS = ((1, 0, 2, 3, 4, 2, 2, 2), (1, 1, 2, 3, 4, 2, 2, 2), (1, 2, 2, 2, 2, 2, 2, 2), (1, 3, 3, 2, 4, 2, 2, 2),
+          (1, 4, 2, 2, 2, 4, 5, 2), (6, 5, 5, 5, 5, 5, 5, 5), (6, 6, 5, 5, 5, 5, 5, 7), (1, 7, 5, 5, 5, 5, 5, 5))
+_KEYWORDS = {'create': _CREATE, 'trigger': _TRIGGER, 'temp': _TEMP, 'temporary': _TEMP, 'end': _END,
+             'explain': _EXPLAIN}
+
+
 def _statements(sql: str):
-    """Split a migration into statements the way sqlite3 reads them (a ';' inside a string or trigger body is not an
-    end). Raises SyntaxError for text left over that is not a complete statement."""
-    start = 0
-    for i, c in enumerate(sql):
-        if c == ';' and sqlite3.complete_statement(sql[start:i + 1]):
-            statement = sql[start:i + 1].strip()
+    """Split a migration into statements the way SQLite reads them (a ';' inside a string, comment or trigger body
+    is not an end), in one linear pass. Raises SyntaxError for an unterminated literal or comment, or for text left
+    over that is not a complete statement."""
+    state, start, i, n = 0, 0, 0, len(sql)
+    while i < n:
+        c = sql[i]
+        if c == ';':
+            token, i = _SEMI, i + 1
+        elif c in ' \t\n\r\f':
+            token, i = _WS, i + 1
+        elif sql.startswith('/*', i):
+            end = sql.find('*/', i + 2)
+            if end < 0:
+                raise SyntaxError('a comment does not end')
+            token, i = _WS, end + 2
+        elif sql.startswith('--', i):
+            end = sql.find('\n', i)
+            token, i = _WS, n if end < 0 else end + 1
+        elif c in '\'"`[':
+            close = ']' if c == '[' else c
+            end = sql.find(close, i + 1)
+            if end < 0:
+                raise SyntaxError('a quoted name or string does not end')
+            token, i = _OTHER, end + 1
+        elif c.isalnum() or c in '_$' or ord(c) >= 0x80:
+            j = i + 1
+            while j < n and (sql[j].isalnum() or sql[j] in '_$' or ord(sql[j]) >= 0x80):
+                j += 1
+            token, i = _KEYWORDS.get(sql[i:j].lower(), _OTHER), j
+        else:
+            token, i = _OTHER, i + 1
+        state = _TRANS[state][token]
+        if token == _SEMI and state == 1:
+            statement = sql[start:i].strip()
             if statement.strip(';').strip():
                 yield statement
-            start = i + 1
-    rest = sql[start:]
-    if re.sub(r'--[^\n]*|/\*.*?\*/', '', rest, flags=re.S).strip():
+            start = i
+    if state not in (0, 1):
         raise SyntaxError('the last statement does not end with ;')
 
 
@@ -144,6 +190,7 @@ class _Sandbox:
             return 1 if self.steps > MAX_STEPS else 0
         self.db.set_progress_handler(progress, 1000)
         self.db.execute('PRAGMA foreign_keys = ON')
+        self.db.execute('PRAGMA temp_store = MEMORY')  # sorts and temporary results never spill to temporary files
 
     def apply(self, migration: Migration):
         try:
@@ -164,33 +211,81 @@ class _Sandbox:
             message = 'it ran too long' if self.steps > MAX_STEPS else str(error).split('\n')[0][:200]
             raise MigrationRefused(f'{migration.file} failed: {message}.', 'migration_sql') from None
 
+    def _refused(self, what: str, error: sqlite3.Error) -> MigrationRefused:
+        reason = 'it ran too long' if self.steps > MAX_STEPS else str(error).split('\n')[0][:200]
+        return MigrationRefused(f'{what} failed: {reason}.', 'migration_sql')
+
     def verify(self, label: str):  # a second check: enforcement inside each migration normally refuses first
-        problems = [r[0] for r in self.db.execute('PRAGMA integrity_check').fetchall() if r[0] != 'ok']
-        problems += [f'{r[0]} row {r[1]} references {r[2]}' for r in self.db.execute('PRAGMA foreign_key_check')]
+        try:
+            problems = [r[0] for r in self.db.execute('PRAGMA integrity_check').fetchall() if r[0] != 'ok']
+            problems += [f'{r[0]} row {r[1]} references {r[2]}' for r in self.db.execute('PRAGMA foreign_key_check')]
+        except sqlite3.Error as error:
+            raise self._refused(f'Checking the database after the {label}', error) from None
         if problems:
             raise MigrationRefused(f'After the {label}, the database is not consistent: {problems[0][:200]}.',
                                    'migration_sql')
 
+    # Values by declared type affinity (SQLite's rules): a phone's rows have values, not only defaults and NULLs.
+    _VALUES = (("INT", (1, 2)), ("CHAR", ("a", "b")), ("CLOB", ("a", "b")), ("TEXT", ("a", "b")),
+               ("BLOB", (b"\x00", b"\x01")), ("REAL", (1.5, 2.5)), ("FLOA", (1.5, 2.5)), ("DOUB", (1.5, 2.5)))
+
+    def _value(self, declared: str, variant: int):
+        upper = (declared or '').upper()
+        for marker, values in self._VALUES:
+            if marker in upper:
+                return values[variant]
+        return (1, 2)[variant] if upper else ('a', 'b')[variant]  # NUMERIC, or no type at all
+
     def seed(self) -> int:
-        """Rows like a phone's: two of default values in every table that takes them, so an upgrade runs over data
-        (a unique index over duplicates, an update, a rebuilt table) and not only over empty tables. Returns how
-        many were added; a table whose constraints refuse default rows is left empty."""
+        """Rows like a phone's, so an upgrade runs over data (a unique index over duplicates, a NOT NULL rebuild,
+        an update) and not only over empty tables. Each table gets two rows of typed values: identical ones where
+        its constraints allow, else two different ones, else default rows; rowid keys and foreign keys are left to
+        SQLite. Best effort: a table whose constraints refuse all three stays empty. Returns the rows added."""
         added = 0
-        tables = [r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT "
-                                                "LIKE 'sqlite\\_%' ESCAPE '\\'")]
-        self.db.set_authorizer(_authorizer)  # a migration's triggers fire here too, under the same rules (a second
-        # line: SQLite itself keeps ATTACH, PRAGMA and transactions out of triggers)
+        self.db.set_authorizer(_authorizer)  # a migration's triggers fire here too, under the same rules
         try:
+            tables = [r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND sql "
+                                                    "NOT LIKE 'CREATE VIRTUAL%' AND name NOT LIKE 'sqlite\\_%' "
+                                                    "ESCAPE '\\'")]
             for table in tables:
-                for _ in range(2):
+                quoted = '"' + table.replace('"', '""') + '"'
+                columns = self.db.execute(f'PRAGMA table_xinfo({quoted})').fetchall()
+                keys = {r[3] for r in self.db.execute(f'PRAGMA foreign_key_list({quoted})')}
+                pk = [c for c in columns if c[5]]
+                rowid = len(pk) == 1 and (pk[0][2] or '').upper() == 'INTEGER'
+                cols = [c for c in columns if c[6] == 0 and c[1] not in keys and not (rowid and c[5])]
+                names = ', '.join('"' + c[1].replace('"', '""') + '"' for c in cols)
+                for rows in ((0, 0), (0, 1), None):
+                    inserted = 0
                     try:
-                        self.db.execute(f'INSERT INTO "{table.replace(chr(34), chr(34) * 2)}" DEFAULT VALUES')
-                        added += 1
+                        for variant in (rows or (None, None)):
+                            if variant is None or not cols:
+                                self.db.execute(f'INSERT INTO {quoted} DEFAULT VALUES')
+                            else:
+                                values = [self._value(c[2], variant) for c in cols]
+                                self.db.execute(f'INSERT INTO {quoted} ({names}) VALUES '
+                                                f'({", ".join("?" * len(values))})', values)
+                            inserted += 1
                     except sqlite3.Error:
                         if self.steps > MAX_STEPS:
                             raise MigrationRefused('A trigger in these migrations ran too long.',
                                                    'migration_sql') from None
+                    if inserted:
+                        added += inserted
+                        if inserted == 2:
+                            break
+                        # one row went in: try for a second, different one, then stop
+                        try:
+                            values = [self._value(c[2], 1) for c in cols]
+                            if cols:
+                                self.db.execute(f'INSERT INTO {quoted} ({names}) VALUES '
+                                                f'({", ".join("?" * len(values))})', values)
+                                added += 1
+                        except sqlite3.Error:
+                            pass
                         break
+        except sqlite3.Error as error:
+            raise self._refused('Filling the delivered tables with sample rows', error) from None
         finally:
             self.db.set_authorizer(None)
         return added

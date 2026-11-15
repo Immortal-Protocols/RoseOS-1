@@ -1556,17 +1556,37 @@ needing older clients to update, through the library's minClientVersionCode
     each version's lock (slice 4).
   - **A sandbox.** The migrations are applied in an in-memory SQLite, one
     transaction each as the runtime does, with foreign keys on and a step
-    budget. An authorizer refuses anything that could touch the builder's
-    files or the server's own settings: `ATTACH` (and `VACUUM INTO`, which
-    attaches), `DETACH`, transaction control, `load_extension`, any other
-    database, and every PRAGMA outside a short list (`foreign_keys`,
-    `table_info` and the like).
+    budget. Temporary data stays in memory (`temp_store = MEMORY`), and a
+    trace showed that no file is created even for a large sort.
+  - **Statements** are split by a one-pass port of SQLite's own
+    `sqlite3_complete` state machine, which is linear in file size.
+  - **An authorizer** refuses anything that could touch the builder's files
+    or the server's own settings:
+    - `ATTACH` (and `VACUUM INTO`, which attaches) and `DETACH`;
+    - transaction control and `load_extension`;
+    - any other database;
+    - temp objects, which would outlive their migration on one connection,
+      never on a phone's;
+    - every PRAGMA outside a short list (`foreign_keys`, `table_info` and
+      the like). `page_size` and `data_version` may be read, as fts5 and
+      rtree do, but never set.
+
+    Common DDL passes: `DROP COLUMN`, `RENAME`, rebuilds, generated columns,
+    `STRICT`, `WITHOUT ROWID`, upsert, fts5 and rtree.
   - **Fresh and upgrade runs.** The set is applied from an empty database.
-    It is also applied as an upgrade: the delivered set first, then two
-    default rows seeded into every table that takes them, then the new
-    migrations. So a change that only fails over a phone's data, such as a
-    unique index over duplicates, is caught and says so. Integrity and
-    foreign key checks follow each run.
+    It is also applied as an upgrade: the delivered set first, then sample
+    rows, then the new migrations.
+    - **Sample rows.** Every table gets two rows of values typed by column
+      affinity. They are identical where its constraints allow, otherwise
+      two different rows, otherwise default rows. Rowid keys and foreign
+      keys are left to SQLite. This is best effort: a table whose
+      constraints refuse all three stays empty.
+    - **Effect.** A change that only fails over a phone's data is caught and
+      says so. Examples are a unique index over duplicates, and a rebuild
+      that loses NOT NULL values.
+
+    Integrity and foreign key checks follow each run, and running out of
+    steps anywhere is a refusal.
   - **Results.** Any failure is `migration_sql`, naming the file. Only
     generated SQL runs, never generated Rust, and nothing is written to disk.
 
