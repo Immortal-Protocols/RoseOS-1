@@ -389,12 +389,13 @@ class RetainedIntegrationOutputTest(unittest.TestCase):
             'rose-shade-systemui.patch'))
         self.assertIs(reconcile.PATCH_SEQUENCES['frameworks/base'], reconcile.FRAMEWORKS_BASE_SEQUENCE)
         # build/make: the tray's list, then the updater product, the background controller, the edge switch and the
-        # Rose keyboard (1M).
+        # Rose keyboard (1M), then the Rose authenticator (rose-signin-v1 D8).
         make = ["if a.agent_tray:projects['build/make'] = ['agent-tray-build-make.patch']",
             "if a.updater_url:projects.setdefault('build/make', []).append('updater-product-build-make.patch')",
             "projects.setdefault('build/make', []).append('background-control-build-make.patch')",
             "if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')",
-            "projects['build/make'].append('rose-keyboard-build-make.patch')"]
+            "projects['build/make'].append('rose-keyboard-build-make.patch')",
+            "projects['build/make'].append('rose-authenticator-build-make.patch')"]
         positions = [patcher.index(line) for line in make]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(reconcile.PATCH_SEQUENCES['build/make'],

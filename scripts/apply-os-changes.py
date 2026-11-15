@@ -114,6 +114,8 @@ if a.background_policy:
     if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')
     # 1M: the Rose keyboard (os/overlays/packages/apps/RoseKeyboard) in the product, beside the stock keyboard.
     projects['build/make'].append('rose-keyboard-build-make.patch')
+    # rose-signin-v1 D8: the Rose authenticator (os/overlays/packages/apps/RoseAuthenticator) in the product.
+    projects['build/make'].append('rose-authenticator-build-make.patch')
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
 projects.update(rose_home_projects(preinstalls))
 if a.installed_identities:

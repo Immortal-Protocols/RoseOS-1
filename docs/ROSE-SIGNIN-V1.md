@@ -179,7 +179,7 @@ Known limitation: a passphrase or authenticator changed after the backup reverts
 | Layer | State |
 |---|---|
 | Source + host tests | `workspace/rose-signin`: Rust library, `cargo test` with and without `--features sqlite` (shared vectors, flow, sealer, store conformance on memory and SQLite, two-connection concurrency, restore, invites and recovery); Java client core, `java/test.sh` (the same vectors). Workflow: `.github/workflows/rose-signin.yml`. The Java core also runs in `scripts/test-local.sh`. |
-| Build into RoseOS | The system authenticator's source compiles against the Android platform jar (host test). It is not yet in the product: adding it to an image is a `build/make` product change through the authorized OS build route, coordinated with Release. |
+| Build into RoseOS | Source inclusion is done. The system authenticator's source compiles against the Android platform jar (host test). The RoseOS product build lists it: `os/patches/rose-authenticator-build-make.patch` adds `RoseAuthenticator` to `PRODUCT_PACKAGES` in `handheld_product.mk`, and `scripts/apply-os-changes.py` registers it in the product (background policy) block after the keyboard, as `scripts/host-reconcile.py` mirrors. A test applies the patch to the pinned makefile. No image has been built with it yet: a Soong build, signing and phone proof come with the next authorized OS build. |
 | Deployment | None. No Chariot endpoint exists for it, and the Rose server stays stopped. |
 | Phone proof | None. |
 
