@@ -112,6 +112,7 @@ class WorkspaceModel:
             self.preload()
             return failed(request, 'model_unavailable')
         if not self.lock.acquire(blocking=False): return failed(request, 'model_unavailable')
+        sent = False
         try:
             cancel_requested = cancelled
             cancelled = lambda: self.closed or cancel_requested()
@@ -128,7 +129,10 @@ class WorkspaceModel:
                     left = deadline - time.monotonic()
                     if left <= 0: raise TimeoutError()
                     if selector.select(min(left, 0.05)):
-                        try: remaining = remaining[os.write(self.process.stdin.fileno(), remaining):]
+                        try:
+                            count = os.write(self.process.stdin.fileno(), remaining)
+                            sent = sent or count > 0
+                            remaining = remaining[count:]
                         except BlockingIOError: continue
             reply = self._line(deadline, cancelled)
             if (not isinstance(reply, dict) or reply.get('contract') != 'rose-layout-v1'
@@ -136,7 +140,8 @@ class WorkspaceModel:
                     or reply.get('status') not in ('ok', 'failed')): raise ValueError('worker protocol')
             return reply
         except InterruptedError:
-            self._stop(); return failed(request, 'cancelled')
+            if sent: self._stop()
+            return failed(request, 'cancelled')
         except TimeoutError:
             self._stop(); return failed(request, 'timeout')
         except Exception:

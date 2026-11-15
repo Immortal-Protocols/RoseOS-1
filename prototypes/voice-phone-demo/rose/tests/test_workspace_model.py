@@ -59,6 +59,12 @@ class WorkerTests(unittest.TestCase):
   self.assertEqual(self.model.compose({'requestId':'one'},lambda:True)['failure'],'cancelled')
   self.assertEqual(self.model.compose({'requestId':'one','text':'x'*MAX_BODY})['failure'],'bad_request')
   self.assertIsNone(self.model.process)
+ def test_cancel_before_writing_keeps_the_warm_worker(self):
+  self.ready();child=self.model.process;polls=[]
+  def stop():polls.append(True);return len(polls)>1
+  self.assertEqual(self.model.compose({'requestId':'cancel'},stop)['failure'],'cancelled')
+  self.assertIs(self.model.process,child);self.assertIsNone(child.poll())
+  self.assertEqual(self.model.compose({'requestId':'next'})['failure'],'empty_context')
  def test_in_flight_cancel_and_busy_are_bounded(self):
   self.ready();child=self.model.process
   self.model.compose({'requestId':'preload'});stop=threading.Event();results=[]
