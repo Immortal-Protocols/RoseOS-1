@@ -236,3 +236,72 @@ fn an_invite_waits_for_a_busy_store_instead_of_failing() {
         "waited for the writer instead of failing"
     );
 }
+
+#[test]
+fn a_store_no_server_set_up_is_not_found_and_left_alone() {
+    let dir = Dir::new();
+    let c = config(&dir.0, Admission::Invite);
+    let path = dir.0.join("auth.sqlite3");
+    // An empty file (a first start that died between creating the file and writing the schema).
+    std::fs::write(&path, b"").unwrap();
+    assert_eq!(invite(&c, "ana", T0), Err(InviteError::NotFound));
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 0, "nothing written");
+    // A SQLite file without the sign-in tables.
+    std::fs::remove_file(&path).unwrap();
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE other (x INTEGER);")
+        .unwrap();
+    assert_eq!(invite(&c, "ana", T0), Err(InviteError::NotFound));
+    let auth_tables: i64 = Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT count(*) FROM sqlite_master WHERE name LIKE 'auth_%'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(auth_tables, 0, "no sign-in table created");
+}
+
+#[test]
+fn a_store_at_another_schema_is_not_migrated() {
+    let dir = Dir::new();
+    let c = config(&dir.0, Admission::Invite);
+    started(&dir.0, Admission::Invite);
+    let path = dir.0.join("auth.sqlite3");
+    let version = |p: &Path| -> i64 {
+        Connection::open(p)
+            .unwrap()
+            .query_row("SELECT value FROM auth_meta WHERE key = 'schema_version'", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+    let current = version(&path);
+    for other in [current - 1, current + 1] {
+        Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE auth_meta SET value = ?1 WHERE key = 'schema_version'", [other])
+            .unwrap();
+        assert_eq!(
+            invite(&c, "ana", T0),
+            Err(InviteError::StoreUnavailable),
+            "version {other}"
+        );
+        assert_eq!(
+            version(&path),
+            other,
+            "left at {other}: the server migrates, not the invite"
+        );
+    }
+}
+
+#[test]
+fn a_restore_marker_that_cannot_be_looked_up_refuses() {
+    let dir = Dir::new();
+    started(&dir.0, Admission::Invite);
+    let plain = dir.0.join("plain");
+    std::fs::write(&plain, b"").unwrap();
+    let mut c = config(&dir.0, Admission::Invite);
+    c.restore_marker = plain.join("marker"); // through a regular file: ENOTDIR, not absence
+    assert_eq!(invite(&c, "ana", T0), Err(InviteError::RestorePending));
+}

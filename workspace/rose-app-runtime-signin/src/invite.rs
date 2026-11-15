@@ -11,8 +11,8 @@
 
 use rose_signin::flow::{self, EnrollError};
 use rose_signin::secret::AeadSealer;
-use rose_signin::store::sqlite::SqliteStore;
-use rusqlite::{Connection, OpenFlags};
+use rose_signin::store::sqlite::{SCHEMA_VERSION, SqliteStore};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::start::{AUTH_STORE, Config, Restore, restore_state};
 
@@ -42,12 +42,13 @@ pub enum InviteError {
     InvalidName,
     /// The account is already enrolled: it needs no invite.
     AlreadyEnrolled,
-    /// `DATA_DIR` holds no sign-in store yet: the server has never started there, and none is created here.
+    /// `DATA_DIR` holds no sign-in store yet (no file, or a file no server has set up): none is created here.
     NotFound,
     /// A restore marker is present (or its lookup failed): the store may be about to be replaced, and the server
     /// would not start either.
     RestorePending,
-    /// The store could not be opened or written, or the build's app name, issuer or `DATA_DIR` is not valid.
+    /// The store could not be opened or written, is at another schema version than this build's (start the server
+    /// first; nothing is migrated here), or the build's app name, issuer or `DATA_DIR` is not valid.
     StoreUnavailable,
 }
 
@@ -90,15 +91,26 @@ pub fn invite(config: &Config, account: &str, now: u64) -> Result<InviteToken, I
         return Err(InviteError::RestorePending);
     }
     let path = config.data_dir.join(AUTH_STORE);
-    // Never create the store: an absent one is `NotFound`.
-    let conn = match Connection::open_with_flags(
+    // Never create the store: only a lookup that finds nothing is `NotFound`; any other failure is not absence.
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(InviteError::NotFound),
+        Err(_) => return Err(InviteError::StoreUnavailable),
+    }
+    let conn = Connection::open_with_flags(
         &path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) {
-        Ok(conn) => conn,
-        Err(_) if !path.exists() => return Err(InviteError::NotFound),
-        Err(_) => return Err(InviteError::StoreUnavailable),
-    };
+    )
+    .map_err(|_| InviteError::StoreUnavailable)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| InviteError::StoreUnavailable)?;
+    // Only a store a server has already set up, at exactly this build's schema: rose-signin's store would otherwise
+    // create its tables in an empty or foreign file, or migrate an older store forward under a running server.
+    match initialised_version(&conn)? {
+        None => return Err(InviteError::NotFound),
+        Some(v) if v != SCHEMA_VERSION => return Err(InviteError::StoreUnavailable),
+        Some(_) => {}
+    }
     // rose-signin's store sets its own busy timeout (5 s) first, so a serving server's write is waited for.
     let store = SqliteStore::new(conn).map_err(|_| InviteError::StoreUnavailable)?;
     // No key: create_invite writes only the invite's hash and expiry.
@@ -113,4 +125,24 @@ pub fn invite(config: &Config, account: &str, now: u64) -> Result<InviteToken, I
         Err(EnrollError::InvalidName) => Err(InviteError::InvalidName),
         Err(_) => Err(InviteError::StoreUnavailable),
     }
+}
+
+/// The sign-in store's recorded schema version, or `None` when the file holds no sign-in store (an empty file, or
+/// one without `auth_meta` or its version). Reads only.
+fn initialised_version(conn: &Connection) -> Result<Option<i64>, InviteError> {
+    let has_meta: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'auth_meta')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| InviteError::StoreUnavailable)?;
+    if !has_meta {
+        return Ok(None);
+    }
+    conn.query_row("SELECT value FROM auth_meta WHERE key = 'schema_version'", [], |r| {
+        r.get(0)
+    })
+    .optional()
+    .map_err(|_| InviteError::StoreUnavailable)
 }
