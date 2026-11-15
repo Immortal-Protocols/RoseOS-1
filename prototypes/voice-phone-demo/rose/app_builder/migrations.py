@@ -13,8 +13,8 @@ declares it, server/migrations/shared/NNNN_name.sql. Data must survive every upd
 
 Only the generated SQL is executed, never generated Rust. The sandbox refuses what could touch the builder's files or
 the server's own settings: ATTACH (and VACUUM INTO, which attaches), extension loading, transaction control (the
-runtime gives each migration its own transaction) and any PRAGMA outside a short list. That is isolation, not a rule
-on what an app may store.
+runtime runs the pending migrations in one transaction) and any PRAGMA outside a short list. That is isolation, not a
+rule on what an app may store.
 """
 from __future__ import annotations
 
@@ -197,7 +197,9 @@ class _Sandbox:
             statements = list(_statements(migration.sql))
         except SyntaxError as error:
             raise MigrationRefused(f'{migration.file}: {error.msg}.', 'migration_sql') from None
-        self.db.execute('BEGIN IMMEDIATE')  # as the runtime does: one transaction per migration
+        # One transaction per migration, where the runtime commits all pending ones together: each migration's
+        # deferred constraints are checked at its own end, so what passes here also commits there.
+        self.db.execute('BEGIN IMMEDIATE')
         self.db.set_authorizer(_authorizer)
         try:
             for statement in statements:
