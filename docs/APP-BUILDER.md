@@ -530,7 +530,7 @@ updatedAt, failure?}`
 
 `[{projectId, name, packageName, signerSha256, activeJob: {jobId, state} |
 null, versions: [{versionCode, versionName, createdAt, jobId, sourceRevision,
-apk: {sha256, size}, notes, apiReport}]}]`
+apk: {sha256, size}, notes, apiReport, server?}]}]`
 
 - `activeJob` is the project's queued or running job, so a restarted client or
   a second phone can show progress and Cancel.
@@ -674,6 +674,49 @@ share.
 - **Not yet done.** The library doesn't serve `share` yet. That needs a
   metadata reader on the builder host, and nothing is published. Until then phones read the absent field as
   "Not shared yet".
+
+**`server`** (schemaVersion 1; `app_builder/server_summary.py`; served,
+slice 9) says, for a client-server version (§7), which contract `api` its
+server speaks and the oldest installed version whose client that server
+still serves. Like `apiReport` it was added after v1 and is optional.
+- **Plain versions** have no `server` field: a plain version's client never
+  talks to a server. A client reads an absent field as "no server".
+- **`ok`:** `{schemaVersion: 1, status: "ok", api, minClientVersionCode}`.
+  A revision that breaks what installed clients rely on must raise `api`
+  (§7.3), and the server keeps serving every client since `api` last rose.
+  So `minClientVersionCode` is the first version of the unbroken run of
+  readable client-server versions at this `api` that ends with this one. An
+  installed version older than that must update before it uses this
+  version's server. A project's first client-server version is its own
+  minimum, since plain versions before it never talked to a server.
+- **`unavailable`:** `{schemaVersion: 1, status: "unavailable"}`. The ledger
+  has no contract record for the version, or one this server can't read.
+  Nothing is claimed about it, and the next readable version claims nothing
+  older than itself.
+
+Rules for a client:
+- The summary is treated as `unavailable` if it has an unknown
+  `schemaVersion` or `status`, a field missing or extra for its status,
+  an `api` or `minClientVersionCode` that is not a whole number of at least
+  1 (at most 2³¹−1), or a `minClientVersionCode` above the version's own
+  `versionCode`. Only the summary is refused, never the library.
+- `unavailable` never blocks an install and never says an older client
+  still works.
+- It describes compatibility between a version's client and its server.
+  It never limits what may be asked for or built, and the server is not
+  hosted yet (§7.7), so nothing in it says the server runs.
+
+The exact cases are in
+`prototypes/voice-phone-demo/rose/tests/fixtures/server-summary-v1.json`:
+- `cases`: one project's delivered versions (whether each had a server, and
+  the contract recorded), with the `server` served for each (`null`: absent);
+- `clientUnreadable`: values the server never sends, which a client must
+  read as `unavailable`.
+
+`rose/tests/test_app_server_summary.py` checks every case through the
+ledger's library, checks that each served summary meets the rules above,
+and checks every short history. The phone's parsing and display are
+Home/App's, and are not implemented here.
 
 ### 3.4 Baseline
 
@@ -1512,8 +1555,8 @@ would trip on.
 
 A breaking change at the same `api` is refused as `breaking_without_major`,
 naming what breaks. Raising `api` allows it, and marks the version as
-needing older clients to update, through the library's minClientVersionCode
-(slice 9). `api` can never go down (`api_lowered`).
+needing older clients to update, through the library's `server` summary
+(`minClientVersionCode`, §3.3). `api` can never go down (`api_lowered`).
 
 ### 7.4 Server profile (`workspace/rose-app-runtime`: the core in source, the rose-signin adapter next)
 
@@ -2104,9 +2147,11 @@ builder's too. A plain app's job is unchanged.
     there under its number, with the same name and bytes. New ones may only
     follow (`migration_removed`, `migration_changed`). The ledger records
     each version's lock (slice 4).
-  - **A sandbox.** The migrations are applied in an in-memory SQLite, one
-    transaction each as the runtime does, with foreign keys on and a step
-    budget. Temporary data stays in memory (`temp_store = MEMORY`), and a
+  - **A sandbox.** The migrations are applied in an in-memory SQLite as
+    the adapter applies them: the pending ones together in one transaction
+    with foreign keys off, then `foreign_key_check` and the check for
+    references to a table that no longer exists, under a step budget
+    (step 2 above). Temporary data stays in memory (`temp_store = MEMORY`), and a
     trace showed that no file is created even for a large sort.
   - **Statements** are split by a one-pass port of SQLite's own
     `sqlite3_complete` state machine, which is linear in file size.
@@ -2331,6 +2376,9 @@ need no hosting and no further OS Core change.
    - **7b, the adapter onto rose-signin `23062a04`** and per-user SQLite:
      next. It builds only where rose-signin's locked crates are available.
 8. Codegen and the client sign-in overlay.
-9. The library wire summary and its fixture for Home/App.
+9. **The library wire summary and its fixture for Home/App (§3.3
+   `server`).** Done: `rose/tests/test_app_server_summary.py`, with
+   `rose/tests/fixtures/server-summary-v1.json`. The phone's parsing is
+   Home/App's.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
     until §7.7 is answered.
