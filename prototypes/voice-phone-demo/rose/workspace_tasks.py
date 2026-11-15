@@ -2,9 +2,8 @@
 
 The page's "Rose task · asks first" buttons come from OS Product's registry (`agent_task`, id ``task:<template>``).
 After the owner confirms, the phone sends ``POST /workspace/v1/tasks``; this module checks it and hands the task to
-an injected ``start(label, goal, request_id)`` that runs it as the owner's own request through the existing
-conversation route and returns the task id (or None when the task id is known only once the task appears in the
-task events). It never runs anything itself, and nothing is mounted until a host enables it.
+an injected ``start(label, goal, request_id, task_id)`` that runs it as the owner's own request through the existing
+conversation route. The store mints the durable task id before starting. Nothing is mounted until a host enables it.
 
 - ``accepted`` means started, never done; progress and the result arrive as the existing task events.
 - A repeated ``requestId`` from the same device returns the first reply and starts nothing (stored durably).
@@ -107,13 +106,25 @@ class WorkspaceTasks:
                         'action_id TEXT NOT NULL, turn TEXT NOT NULL, phone TEXT NOT NULL, state TEXT NOT NULL, '
                         'detail TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, device TEXT NOT NULL)')
         self.lock = threading.RLock()
+        self.closed = self.stopping = False
         self.start, self.emit, self.clock = start, emit, clock
         self._calls = {}  # task_id -> phone_task/update_task calls of its turn still in flight (not durable)
         self.revision = 0  # counts emitted changes (this process): a snapshot taken at revision n reflects them all
         self._recover()
 
     def close(self):
-        self.db.close()
+        with self.lock:
+            if not self.closed:
+                self.stop_accepting()
+                self.closed = True
+                self.emit = None
+                self.db.close()
+
+    def stop_accepting(self):
+        """Refuse new work while the conductor drains its final task events."""
+        with self.lock:
+            self.stopping = True
+            self.start = None
 
     # Requests.
 
@@ -124,9 +135,13 @@ class WorkspaceTasks:
             return {'schemaVersion': 1, 'status': 'refused', 'reason': reason}
         key = f'{device}\n{body["requestId"]}'
         with self.lock:  # one request at a time, so a retry never starts a second task
+            if self.closed:
+                return {'schemaVersion': 1, 'status': 'unavailable'}
             row = self.db.execute('SELECT reply FROM requests WHERE key=?', (key,)).fetchone()
             if row:
                 return {**json.loads(row[0]), 'status': 'duplicate'}
+            if self.stopping or self.start is None:
+                return {'schemaVersion': 1, 'status': 'unavailable'}
             task_id, now = new_task_id(), self.clock()
             reply = {'schemaVersion': 1, 'status': 'accepted', 'taskId': task_id}
             # Recorded before starting, so the turn's own events always find their task; removed again if nothing
@@ -164,6 +179,8 @@ class WorkspaceTasks:
             return
         key = str(phone_task_id)
         with self.lock:
+            if self.closed:
+                return
             rows = self.db.execute("SELECT task_id, phone FROM tasks WHERE state='running'").fetchall()
             for task_id, phone in rows:
                 if key in json.loads(phone):
@@ -178,11 +195,15 @@ class WorkspaceTasks:
         """A phone_task/update_task call of this page task's turn began. Until ``call_ended``, the page task stays
         running even if its turn ends or is superseded, so phone work the call starts is never missed."""
         with self.lock:
+            if self.closed:
+                return
             self._calls[task_id] = self._calls.get(task_id, 0) + 1
 
     def call_ended(self, task_id: str):
         """That call returned (its phone task, if any, already attached); the state is evaluated again."""
         with self.lock:
+            if self.closed:
+                return
             left = self._calls.get(task_id, 0) - 1
             if left > 0:
                 self._calls[task_id] = left
@@ -192,6 +213,8 @@ class WorkspaceTasks:
 
     def _change(self, task_id, turn=None, phone=None):
         with self.lock:  # changes and their events in one order, so the event stream never goes back
+            if self.closed:
+                return
             row = self.db.execute('SELECT turn, phone, state, updated FROM tasks WHERE task_id=?',
                                   (task_id,)).fetchone()
             if row is None or row[2] in FINAL:  # a final state never changes
@@ -240,6 +263,8 @@ class WorkspaceTasks:
         if not _text(request_id, LIMITS['requestId']):
             return None
         with self.lock:  # a request still starting is decided first, so this sees it accepted or gone
+            if self.closed:
+                return None
             row = self.db.execute('SELECT reply FROM requests WHERE key=?', (f'{device}\n{request_id}',)).fetchone()
             if row is None:
                 return None
@@ -249,6 +274,8 @@ class WorkspaceTasks:
         if not isinstance(task_id, str) or not re.fullmatch(r'wt-[0-9a-f]{16}', task_id):
             return None
         with self.lock:
+            if self.closed:
+                return None
             row = self.db.execute('SELECT task_id, request_id, action_id, phone, state, detail, created, updated, '
                                   'device FROM tasks WHERE task_id=?', (task_id,)).fetchone()
         if row is None:
@@ -264,6 +291,8 @@ class WorkspaceTasks:
     def recent(self, device=None, limit: int = RECENT) -> list:
         """The most recent page tasks, oldest first; with ``device``, only that device's."""
         with self.lock:
+            if self.closed:
+                return []
             if device is None:
                 rows = self.db.execute('SELECT task_id FROM tasks ORDER BY updated DESC, rowid DESC LIMIT ?',
                                        (limit,)).fetchall()

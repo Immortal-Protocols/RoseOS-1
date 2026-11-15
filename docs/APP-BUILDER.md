@@ -847,9 +847,8 @@ grocery list", "Summarise prep notes") always asks first, on a confirm sheet
 with an `ask` text. After the owner confirms, it runs as ordinary Rose work, and
 the card and Rose's work read the same task state.
 
-Today the producer has no route for the phone to start such a task over the
-signed link: typed turns exist only on the loopback dashboard. This handoff adds
-one.
+The producer has an opt-in signed route for these confirmed tasks, using the
+same conversation policy and tools as typed requests.
 
 - **Snapshot entry** (OS Product's registry, in `rose-layout-v1` terms): an
   action `{id, label, kind: "agent_task", targetId, ask, requiresConfirmation:
@@ -884,8 +883,19 @@ one.
 - **Implemented (source, tests only):** the route
   (`rose/workspace_routes.py`) and its checks and durable once-per-request
   store (`rose/workspace_tasks.py`), with a test suite
-  (`rose/tests/test_workspace_tasks.py`). They are mounted only when the server
-  has `workspace_tasks` set, and `rose.app` sets none.
+  (`rose/tests/test_workspace_tasks.py`). Normal `rose.app` startup sets
+  `workspace_tasks` only with explicit `--workspace-tasks` in live
+  `--brain codex` mode. The default is off. The store is private at
+  `ROSE_CONFIG_DIR/workspace-tasks/workspace-tasks.sqlite3`, created before
+  route construction. Requests return `unavailable` while the conductor is
+  loading or Rose is not ready; rejected/unavailable requests start nothing.
+  Startup connects the existing conductor callbacks and device-scoped bus
+  events. Reset keeps the same durable store and connection. Shutdown stops
+  admission before the conductor stops, then closes the store; late callbacks
+  and reads tolerate closure. Unfinished work is recovered as uncertain on
+  restart and is never replayed. This source wiring does not enable the phone's
+  separate task gate or supply OS Product's task templates, and no deployment
+  or restart is implied.
 - **Conversation hand-off (source, tests only):**
   `workspace_tasks.connect(conductor, tasks)`. A confirmed task becomes the
   owner's own request in the conversation, marked as confirmed on the
