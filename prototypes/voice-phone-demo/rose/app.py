@@ -829,12 +829,36 @@ class Server:
         self._floors = (0, 0)    # ids at the last reset: their late events are not shown
         self._ids_lock = threading.Lock()
         self._stopping = threading.Event()
+        self.workspace_tasks = None
+        if getattr(args, 'workspace_tasks', False):
+            from .remote import config_dir
+            from .workspace_tasks import WorkspaceTasks
+            self.workspace_tasks = WorkspaceTasks(config_dir() / 'workspace-tasks', None)
         from .workspace_model import WorkspaceModel
         self.workspace_model = WorkspaceModel.configured()
         self.bus.subscribe(self._watch)
         self.phone.listeners.append(self._on_phone)
 
     # ----------------------------------------------------------- lifecycle
+    def _start_conductor(self) -> None:
+        if self._stopping.is_set():
+            return
+        self.conductor.start()
+        tasks = self.workspace_tasks
+        if tasks is not None:
+            from .workspace_tasks import Unavailable, connect
+            with tasks.lock:
+                if tasks.stopping:
+                    return
+                connect(self.conductor, tasks)
+                start = tasks.start
+
+                def when_ready(*args):
+                    if not self.ready or self._stopping.is_set():
+                        raise Unavailable()
+                    return start(*args)
+                tasks.start = when_ready
+
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self.bus.loop = loop
         if getattr(self, 'workspace_model', None) is not None: self.workspace_model.preload()
@@ -852,12 +876,19 @@ class Server:
         if self._stopping.is_set():
             return
         self._stopping.set()
+        page_tasks = getattr(self, 'workspace_tasks', None)
+        if page_tasks is not None:
+            page_tasks.stop_accepting()
         if getattr(self, "workspace_model", None) is not None: self.workspace_model.close()
         for obj, method in ((self.listener, "stop"), (self.conductor, "stop"),
                             (self.keepalive, "stop"), (self.transport, "stop"), (self.runtime, "stop")):
             if obj is not None and hasattr(obj, method):
                 with contextlib.suppress(Exception):
                     getattr(obj, method)()
+        if page_tasks is not None:
+            if getattr(self.conductor, 'workspace_tasks', None) is page_tasks:
+                self.conductor.workspace_tasks = None
+            page_tasks.close()
         # Close Rose's workspace on the phone (RealPhone.close() waits on the link: on a worker
         # thread, bounded, so a slow or gone phone cannot hold up the exit). The fake phone has none.
         close = getattr(self.phone, "close", None)
@@ -962,7 +993,7 @@ class Server:
                 self._step("tasks", "Preparing the phone agent and thinker", self.tasks.prepare)
                 self.conductor = Conductor(rt, self.brain, self.listener, self.speaker, self.tasks,
                                            self.phone, self.bus)
-            self._step("conductor", "Preparing Rose's conversation", self.conductor.start)
+            self._step("conductor", "Preparing Rose's conversation", self._start_conductor)
             self.listener.start()
             self.mic.sink = self.listener.push
             if isinstance(self.transport, LocalTransport):
@@ -1502,6 +1533,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="local (default: $ROSE_BRAIN or brain.REPO), an MLX model for Rose's conversation, "
                         "or codex: GPT 6.1 Terra Fast via Sign in with ChatGPT")
     p.add_argument("--transcript-dir", help="durable private transcript directory (Codex mode)")
+    p.add_argument("--workspace-tasks", action="store_true",
+                   help="enable signed owner-confirmed workspace page tasks (requires live --brain codex)")
     p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
     p.add_argument("--pair-host", action="append", default=[], help="Tailscale MagicDNS/IPv4 host for the shared QR; repeatable")
     p.add_argument("--port", type=int, default=8091)
@@ -1530,6 +1563,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="MLX model for the phone agent and thinker (default $ROSE_TASK_BRAIN, else --brain)")
     p.add_argument("--log-level", default="warning")
     args = p.parse_args(argv)
+    if args.workspace_tasks and (args.brain != 'codex' or args.ui_only):
+        p.error('--workspace-tasks requires live --brain codex')
     if args.cloud_audio and args.brain != 'codex':
         p.error('--cloud-audio requires --brain codex')
     if args.vision_control and (args.brain != 'codex' or args.phone != 'real'):

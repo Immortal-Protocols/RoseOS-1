@@ -725,5 +725,188 @@ class Route(unittest.TestCase):
         self.assertEqual(self.start.calls, [])
 
 
+class ServerLifecycle(unittest.TestCase):
+    """Normal Server wiring, with a simulated Codex transport and no model, listener or phone startup."""
+    def setUp(self):
+        import os
+        from unittest.mock import patch
+        from rose.app import Server, parse_args
+        self.Server, self.parse_args = Server, parse_args
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.enterContext(patch.dict(os.environ, {'ROSE_CONFIG_DIR': str(self.root / 'config')}))
+        self.enterContext(patch('rose.workspace_model.WorkspaceModel.configured', return_value=None))
+
+    def make_server(self, enabled=True):
+        args = ['--brain', 'codex', '--transcript-dir', str(self.root / 'transcripts')]
+        if enabled:
+            args += ['--workspace-tasks']
+        s = self.Server(self.parse_args(args))
+        self.addCleanup(s.transcripts.close)
+        self.addCleanup(s.shutdown)
+        return s
+
+    def client(self, s):
+        (self.root / 'remote').mkdir(mode=0o700, exist_ok=True)
+        self.remote = Remote(directory=self.root / 'remote', name='test', hosts=lambda: [])
+        self.device, self.other = Device(), Device()
+        for device in (self.device, self.other):
+            self.remote.devices.enroll(device.spki, 'test phone', 'fixture', '100.64.0.2')
+        return TestClient(build_remote_app(s, self.remote))
+
+    def request(self, client, method, path='/workspace/v1/tasks', body=None, device=None):
+        device = device or self.device
+        return client.request(method, path, json=body,
+                              headers=device.headers(method, path, self.remote.identity.pin))
+
+    def bind(self, s):
+        from rose.codex_conductor import CodexConductor
+        from rose.tests.test_codex import FakeCodex
+        s.conductor = s.tasks = CodexConductor(s.phone, s.bus, None, s.transcripts,
+                                              identity=s.identity, client_factory=FakeCodex)
+        s._start_conductor()
+        return s.conductor
+
+    def finish(self, engine):
+        from rose.tests.test_codex import wait
+        conversation = engine.sessions['conversation']
+        self.assertTrue(wait(lambda: conversation.turn is not None and conversation.busy))
+        engine._event({'event': 'done', 'session': 'conversation',
+                       'turn': {'id': conversation.turn, 'status': 'completed'}})
+
+    def test_opt_in_defaults_and_supported_mode(self):
+        import contextlib
+        import io
+        self.assertFalse(self.parse_args([]).workspace_tasks)
+        for args in (['--workspace-tasks'], ['--workspace-tasks', '--brain', 'codex', '--ui-only']):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.parse_args(args)
+        s = self.make_server(enabled=False)
+        self.assertIsNone(s.workspace_tasks)
+        self.assertFalse((self.root / 'config/workspace-tasks').exists())
+        client = self.client(s)
+        self.assertEqual(self.request(client, 'POST', body=GOOD).status_code, 404)
+
+    def test_normal_server_mounts_then_binds_only_when_ready_and_keeps_binding_after_reset(self):
+        from rose.tests.test_codex import wait
+        s = self.make_server()
+        client = self.client(s)  # route construction precedes model/conductor startup
+        self.assertEqual(client.post('/workspace/v1/tasks', json=GOOD).status_code, 401)
+        self.assertEqual(self.request(client, 'POST', body={**GOOD, 'confirmed': False}).status_code, 400)
+        self.assertEqual(self.request(client, 'POST', body=GOOD).status_code, 503)
+        self.assertEqual(s.workspace_tasks.recent(), [])
+        # Run the production loader with its model/audio dependencies replaced.
+        # This catches forgetting the bootstrap hook, not just a broken helper.
+        from unittest.mock import Mock, patch
+        from rose.codex_conductor import CodexConductor
+        from rose.tests.test_codex import FakeCodex
+        engine = CodexConductor(s.phone, s.bus, None, s.transcripts,
+                                identity=s.identity, client_factory=FakeCodex)
+        listener = Mock()
+        listener.start.side_effect = lambda: self.assertEqual(
+            self.request(client, 'POST', body=GOOD).status_code, 503)
+        s.args.keepalive = False
+        with patch('rose.runtime.Runtime'), patch('rose.listener.Listener', return_value=listener), \
+                patch('rose.speaker.Speaker', return_value=Mock(voice='zoey')), \
+                patch('rose.life_world.WorldStore'), patch('rose.life_world.WorldLife', return_value=None), \
+                patch('rose.codex_conductor.CodexConductor', return_value=engine), \
+                patch.object(s, '_make_transport', return_value=SimpleNamespace()), patch.object(s, '_load_voice'):
+            s._load()
+        self.assertTrue(s.ready)
+        self.assertIs(engine.workspace_tasks, s.workspace_tasks)
+        accepted = self.request(client, 'POST', body=GOOD).json()
+        self.assertEqual(accepted['status'], 'accepted')
+        self.assertTrue(wait(lambda: any(op == 'submit' for op, _, _ in engine.client.calls)))
+        repeated = self.request(client, 'POST', body=GOOD).json()
+        self.assertEqual((repeated['status'], repeated['taskId']), ('duplicate', accepted['taskId']))
+        submitted = [args['text'] for op, _, args in engine.client.calls if op == 'submit']
+        self.assertEqual(len(submitted), 1)
+        self.assertIn(GOOD['goal'], submitted[0])
+        self.finish(engine)
+        path = '/workspace/v1/tasks/' + accepted['taskId']
+        self.assertEqual(self.request(client, 'GET', path).json()['state'], 'done')
+        self.assertEqual(self.request(client, 'GET', path, device=self.other).status_code, 404)
+        s.reset(phone=False)
+        self.assertIs(engine.workspace_tasks, s.workspace_tasks)
+        self.assertEqual(self.request(client, 'POST', body={**GOOD, 'requestId': 'r2'}).json()['status'], 'accepted')
+
+    def test_real_server_events_and_reconnect_snapshot_are_device_scoped(self):
+        import asyncio
+        s = self.make_server()
+        original = s.serve_events
+        async def events(ws):
+            s.bus.loop = asyncio.get_running_loop()  # normally set by Server.start; no runtime is started here
+            await original(ws)
+        s.serve_events = events
+        client = self.client(s)
+        engine = self.bind(s)
+        s.ready = True
+        mine = self.request(client, 'POST', body=GOOD).json()['taskId']
+        self.finish(engine)
+        theirs = self.request(client, 'POST', body={**GOOD, 'requestId': 'other'}, device=self.other).json()['taskId']
+        self.finish(engine)
+        with client.websocket_connect('/ws/events', headers=self.device.headers(
+                'GET', '/ws/events', self.remote.identity.pin)) as ws:
+            page = []
+            while True:
+                frame = ws.receive_json()
+                if frame['kind'] == 'workspace_task':
+                    page.append(frame)
+                if frame['kind'] == 'replay_done':
+                    break
+            # The store's device-scoped reconnect snapshot is sent after replay_done.
+            snapshot = ws.receive_json()
+            self.assertEqual(snapshot['kind'], 'workspace_task')
+            page.append(snapshot)
+            self.assertEqual({f['task']['taskId'] for f in page}, {mine})
+            self.assertTrue(all('device' not in f and 'rev' not in f for f in page))
+            self.assertNotEqual(theirs, mine)
+            ws.close()
+        self.assertTrue(any(m.get('kind') == 'workspace_task' and m.get('device') == self.device.id
+                            for m in s.bus.history))
+
+    def test_shutdown_drains_final_events_and_tolerates_late_callbacks(self):
+        s = self.make_server()
+        tasks = s.workspace_tasks
+        tasks.start = Starter()
+        task_id = tasks.submit('phone', GOOD)['taskId']
+        states = []
+        def stop():
+            self.assertTrue(tasks.stopping)
+            self.assertFalse(tasks.closed)
+            self.assertEqual(tasks.submit('phone', {**GOOD, 'requestId': 'late'})['status'], 'unavailable')
+            tasks.turn_ended(task_id, 'interrupted')
+            states.append(tasks.get(task_id)['state'])
+        s.conductor = SimpleNamespace(stop=stop, workspace_tasks=tasks, start=lambda: self.fail('late startup'))
+        s.shutdown()
+        self.assertEqual(states, ['cancelled'])
+        self.assertTrue(tasks.closed)
+        self.assertIsNone(s.conductor.workspace_tasks)
+        s._start_conductor()
+        s.shutdown()
+        tasks.close()
+        tasks.attach(task_id, 3)
+        tasks.phone_task(3, 'done')
+        tasks.turn_ended(task_id, 'completed')
+        tasks.call_started(task_id)
+        tasks.call_ended(task_id)
+        self.assertEqual(tasks.submit('phone', GOOD)['status'], 'unavailable')
+        self.assertIsNone(tasks.get(task_id))
+        self.assertIsNone(tasks.by_request('phone', GOOD['requestId']))
+        self.assertEqual(tasks.snapshot('phone')[0], [])
+
+    def test_store_survives_restart_without_replaying_unfinished_work(self):
+        s = self.make_server()
+        s.workspace_tasks.start = Starter()
+        task_id = s.workspace_tasks.submit('phone', GOOD)['taskId']
+        s.shutdown()
+        replacement = self.make_server()
+        self.assertEqual(replacement.workspace_tasks.get(task_id, 'phone')['state'], 'uncertain')
+        reply = replacement.workspace_tasks.submit('phone', GOOD)
+        self.assertEqual((reply['status'], reply['taskId']), ('duplicate', task_id))
+        self.assertIsNone(replacement.conductor)
+
+
 if __name__ == '__main__':
     unittest.main()
