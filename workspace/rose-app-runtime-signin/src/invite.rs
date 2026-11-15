@@ -17,7 +17,7 @@ use rusqlite::{Connection, OpenFlags};
 use crate::start::{AUTH_STORE, Config, Restore, restore_state};
 
 /// Why no invite was issued. It names the problem, never the account or a token. The words are what the generated
-/// server's `invite` command prints (App Core maps each to an exit code).
+/// server's `invite` command prints (Home's generated main.rs maps each to an exit code).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InviteError {
     /// The account is not a valid rose-signin name (empty, over 128 bytes, or with `:` or a control character).
