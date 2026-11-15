@@ -306,7 +306,8 @@ class Pieces(unittest.TestCase):
             self.assertIsNone(migrations.NAME.fullmatch(name))
         self.assertTrue(appprofile.MIGRATION.fullmatch('0001_init.sql') and migrations.NAME.fullmatch('0001_init.sql'))
         for pattern in (appprofile.CRATE, crates.CRATE):
-            self.assertIsNone(pattern.fullmatch('serde@1.\u0660.219'))
+            for version in ('1\u0660.0.219', '1.1\u0660.219', '1.0.2\u0661'):  # after an ASCII lead digit
+                self.assertIsNone(pattern.fullmatch(f'serde@{version}'), version)
             self.assertTrue(pattern.fullmatch('serde@1.0.219'))
 
     def test_a_contract_file_too_large_says_so(self):
