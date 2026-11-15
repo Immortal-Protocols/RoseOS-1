@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Build-host policy and pin checks only; Linux execution probes remain explicit opt-in.
+PYTHONPATH="$ROOT/prototypes/voice-phone-demo" python3 -m unittest rose.tests.test_app_host_provider
 # Nov 10 1F/1G: bounded private life and real background-task lifecycle.
 bash scripts/test-background-life.sh
 # Shared Codex voice adapter: synthetic account/model/turn replies, no provider access.
