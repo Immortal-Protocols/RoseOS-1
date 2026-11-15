@@ -1163,8 +1163,232 @@ test, and no model was called.
    is a failure of this case, never a pass. A build that compiles and signs
    is not this evidence. This case is a test-plan step only: it has not been
    run.
-6. **Level 2 (Chariot owner, OS Core).** There is no Chariot code in this
-   repository. Hosting, sleep/wake, storage and deploy tools belong to the
-   Chariot owner. The one-time code + PIN/passphrase protocol belongs to OS
-   Core, including whether the PIN verifies server-side or unlocks a device
-   credential.
+6. **Level 2 (App Core co-generation; Chariot owner; OS Core).** App Core owns
+   client/server co-generation and sign-in integration (§7). Each part is
+   blocked on its owner, as follows:
+   - **Chariot owner (the Codex Chariot engineering worker, via Chief).**
+     Hosting: the server boundary (§7.6), ingress, sleep/wake, the sealing
+     key's home (D9), backups, and the deploy tools.
+   - **OS Core.** `rose-signin-v1` and the RoseOS native factors.
+   - **Local Server Worker.** On the builder host: the Rust toolchain and the
+     curated crate set, and build isolation for Rust (blocker 3).
+
+## 7. Level 2: client/server co-generation (source; enabled nowhere)
+
+A Level 2 app is a generated Android client and a generated server, built and
+versioned together. Users sign in with `rose-signin-v1`
+(docs/ROSE-SIGNIN-V1.md): an authenticator one-time code plus a passphrase.
+
+Owners:
+- **App Core:** co-generation, the server profile and sign-in integration.
+- **OS Core:** `rose-signin-v1` and the RoseOS native factors.
+- **Chariot owner:** hosting (§7.6).
+- **Home/App:** the builder's phone UI.
+
+Nothing here is built into a job, hosted, deployed or run on a phone. Only
+§7.2's checks exist in source.
+
+### 7.1 Facts the design rests on
+
+- **Chariot today.** The public Chariot CLI is `chariots-sh/chariot-cli` at
+  `6c7b6e6`.
+  - **No ingress.** Agent pods accept no network ingress. Requests arrive only
+    as Chariot messages authenticated by the fleet's token-seed or the owner's
+    login, and neither can be put in an APK.
+  - **One page.** Each agent has one public HTML page, which can't be revoked
+    or read while the agent sleeps, and nothing else is served.
+
+  So no phone-facing endpoint exists yet. The Chariot owner is working on
+  VM/endpoint hosting, and has proposed the boundary in §7.6.
+- **rose-signin at `ee1e554f` (#819).** The generated server uses this
+  revision. OS Core owns its storage, so App Core writes no sign-in SQL and no
+  sealer. The server uses:
+  - **Store:** the reference SQLite store
+    (`store::sqlite::SqliteStore::new(conn)`, feature `sqlite`). It applies
+    its own `auth_*` migrations, and each `Authenticator` call is already one
+    transaction.
+  - **Sealer:** the context-bound `secret::AeadSealer`, holding versioned
+    keys that the host supplies.
+  - **Readiness:** `Authenticator::ready()`, which gates startup and
+    readiness.
+  - **Restore:** `Authenticator::restore_after_backup(now)`, run once after
+    any database restore.
+
+  Two more points apply:
+  - `Unavailable` maps to `503 auth_unavailable`.
+  - `validate` returns any live session's principal without checking the app,
+    so the server runtime must require `principal.app` to equal the app's own
+    id. App Core has asked OS Core for an app-checked `validate_for`, which
+    would be an additive change.
+- **Decided by OS Core (Nathan's direction).** The passphrase is checked on
+  the server, has at least 8 characters, and may be digits only.
+  - **One-time codes:** SHA-1, 6 digits, 30 s steps, one step of skew.
+  - **Failures:** decaying backoff with no lockout.
+  - **Sessions:** 30 days absolute, 7 days idle.
+  - **Admission:** creator invite by default, open sign-up when the app
+    declares it. Invites come from the library.
+  - **Recovery:** a recovery code plus one remaining factor, with no creator
+    reset. It comes from a later library PR, so generated apps leave recovery
+    unbuilt until then.
+- **The client core.** `RoseSigninCore.java` is copied byte for byte at
+  sha256 `6209a9cd…587f` (`ee1e554f`). OS Core will tell App Core when it
+  changes.
+
+### 7.2 Profile declaration and checks (`app_builder/appprofile.py`; source, called nowhere)
+
+A project is `app-v1` (Level 1) unless it writes `rose-app.json` at its
+root. Without that file, every Level 1 check is unchanged, and a `server/`
+folder is still refused.
+
+```json
+{"schemaVersion": 1, "profile": "client-server-v1",
+ "server": {"crates": ["serde@1.0.219"], "shared": false, "admission": "invite"}}
+```
+
+- The file is strict UTF-8 JSON, at most 16 KB, with no repeated or unknown
+  keys.
+- `crates`: up to 32 exact `name@version` entries, with no ranges and no
+  repeated name. They are resolved only from a crate set the builder host
+  provides, as JAR libraries are (§2.1).
+- `shared`: allows a database shared by all users of the app, alongside each
+  user's own.
+- `admission`: `invite` or `open`.
+
+The tree adds `contract/` (the API both halves share) and `server/`:
+- `server/src/**.rs`, with `server/src/handlers/mod.rs` required;
+- `server/assets/**` (data files);
+- `server/migrations/account/NNNN_name.sql`, and `migrations/shared/` only
+  when `shared` is true.
+
+The builder writes the rest itself: the server's Cargo files, its entry point,
+the code generated from the contract, and the client's `<package>.rose`
+package (sign-in and the API client).
+
+Every refusal is identity, integrity or isolation, never a rule on what an
+app may do. Each has a stable `reason`:
+
+| Refused | `reason` | Category |
+|---|---|---|
+| A bad declaration | `profile_invalid` | compile |
+| No declaration after a client-server version was delivered (its users' data lives on the server) | `profile_dropped` | compile |
+| `server/Cargo.toml`, `Cargo.lock`, `build.rs`, `.cargo/` or `rust-toolchain*` | `server_build_file` | dependency |
+| Anything else outside the layout above | `layout_invalid` | compile |
+| A file in `src/<package>/rose/`, or any Java `package <package>.rose…` | `reserved_path` | compile |
+| A manifest without `android.permission.INTERNET` | `missing_internet` | compile |
+| Server Rust that reads the builder's machine while compiling, or brings in native code | `forbidden_construct` | compile |
+| Server Rust that isn't UTF-8 or doesn't lex | `source_unreadable` | compile |
+
+The Level 1 checks on links, modes, sizes, git names and forbidden suffixes
+(`.c`, `.so`, `.sh`, `.py`, …) also cover `server/` and `contract/`.
+
+The Rust scan lexes the source as rustc does, so comments, strings, raw
+strings, character literals and lifetimes are not code. It refuses:
+- **File and environment reads at compile time:** `include!`, `include_str!`,
+  `include_bytes!`, `env!`, `option_env!`, a renamed `env`, and `#[path]`,
+  including inside `cfg_attr`. The names are refused wherever they appear, so
+  an item named `include` is refused too. Data files go in `server/assets/`.
+- **Native code:** `asm!`, `global_asm!`, `naked_asm!` and `#[link(..)]`.
+
+`std::env::var`, `std::fs`, `std::net`, `unsafe` and `extern "C"` are
+allowed. The scan is a second line of defence: macros from declared crates
+and build-time code are not covered. The boundary is build isolation
+(blocker 3).
+
+### 7.3 Server profile (planned; next slices)
+
+- **Runtime.** A small runtime crate (App Core) runs the generated handlers,
+  serving `rose-signin-v1`'s routes (`/signin/v1/*`) and the contract's routes.
+  - **App check.** Every account route requires a bearer session whose
+    `principal.app` is this app.
+  - **One database per user.** Each user's data is in its own SQLite file,
+    keyed by a hash of (app, account), so the API path can't reach another
+    account.
+  - **Migrations** go forward only. A database from a newer schema is
+    refused, never downgraded.
+- **Honest limit.** Generated Rust is native code in that process, and the
+  app's author is trusted like any server operator. Scoping protects users
+  from the app's mistakes, not from its author.
+- **Readiness.** The server reports ready only when the sealer is ready, the
+  migrations are done and any restore has run. Without a key it refuses to
+  start, and never invents one.
+- **Logs** never contain bodies, tokens, passphrases, codes or keys.
+
+### 7.4 Client sign-in (planned)
+
+- The client includes `RoseSigninCore.java` at the pin above.
+- It shows the `otpauth://` URI as a QR and as copyable text, and also opens
+  it with `ACTION_VIEW`. OS Core will build a RoseOS system authenticator for
+  that scheme, and on stock Android any authenticator app claims it, so the
+  flows are the same.
+- The user types the code and the passphrase. Only the bearer token is kept,
+  in no-backup storage.
+
+### 7.5 Builder (planned)
+
+- **Both halves.** The builder builds both halves offline, from the snapshot
+  only:
+  - the client as in Level 1;
+  - the server with `cargo --offline --frozen` against the host's crate set,
+    under build isolation.
+- **Honest failures.** A missing toolchain, crate set or isolation is a
+  `toolchain` or `dependency` failure, never a skipped half.
+- **One version.** A version pairs the client APK and the server ELF, each by
+  sha256, from one source revision, recorded in one ledger transaction.
+- **Migrations** are checked offline against every delivered version. They
+  are append-only and byte-identical, and they are applied to a fresh and to
+  an upgraded database.
+
+### 7.6 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
+
+App Core accepts this boundary. The server is one Rust ELF plus a manifest,
+with nothing Chariot-specific inside the app. The fake host in tests checks
+the same manifest.
+
+Proposed manifest:
+- `schemaVersion: 1`, `projectId`, `versionCode`;
+- `elf: {sha256, size, target}`;
+- `listen`: the host passes `PORT`;
+- `health: "/health"`;
+- `dataDir`: the host passes `DATA_DIR`, the only writable path, holding
+  `TMPDIR`;
+- `signin: {revision: "ee1e554f"}`;
+- `schema` versions.
+
+Open items for the Chariot owner (App Core's proposal in brackets):
+1. ELF target and libc [static `*-linux-musl`, with SQLite compiled in].
+2. Further manifest fields [resources, shutdown grace].
+3. Health [`200` only when ready, else `503`; liveness kept separate if
+   Chariot wants it].
+4. The client base URL [one stable HTTPS URL per project, allocated before
+   the first build and never changed; written into the APK as configuration,
+   never a secret].
+5. Sleep [wait within a stated bound, or `503` with `Retry-After`].
+6. Sealing key (D9) [a file passed at start, outside the ELF, the manifest,
+   `DATA_DIR` and backups, holding a current version and versioned keys; no
+   key means not ready].
+7. Client address for rate limits [one header only the proxy sets].
+8. Restore signal [a flag or marker that makes the server run
+   `restore_after_backup` before serving].
+9. Rollback [keep the previous ELF; report the running sha256].
+10. Process and logs [SIGTERM within a grace period; no secrets in logs].
+
+Older APKs on phones keep working against a newer server version. That is
+the generated server's job, through a versioned API and the stable base URL.
+
+### 7.7 Slices
+
+Each slice is source only, offline, and tested before merging. Slices 2–5
+need no hosting and no further OS Core change.
+1. **The profile declaration and checks (§7.2).** Done:
+   `rose/tests/test_app_profile.py`.
+2. The shared API contract validator and its compatibility rules.
+3. Offline migration checks.
+4. Ledger pairing of client and server artifacts.
+5. The injected crate source and server build plumbing, with a fake `cargo`,
+   then a real build of a dependency-free fixture.
+6. The manifest and ELF checks.
+7. The runtime crate on rose-signin `ee1e554f`, with its own CI.
+8. Codegen and the client sign-in overlay.
+9. The library wire summary and its fixture for Home/App.
+10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
+    until §7.6 is answered.
