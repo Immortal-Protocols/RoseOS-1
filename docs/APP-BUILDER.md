@@ -2553,8 +2553,28 @@ the server does.
   - `deploy` is `{sha256, args: [], port: 8080, health_path: "/health",
     data_schema}`. `args` is always empty, because the generated server
     serves only with no arguments. `data_schema` is
-    `1 + account × 10000 + shared` over the manifest's highest migration
-    numbers: one integer per schema, at least 1.
+    `1 + auth × 100000000 + account × 10000 + shared`, as agreed with
+    Chariot (#2566):
+    - `account` and `shared` are the manifest's highest migration numbers,
+      each 0–9999 (`shared` is 0 with no shared database).
+    - `auth` is rose-signin's own store schema (`SCHEMA_VERSION`, `auth_*`
+      migrations in `auth.sqlite3`) at the manifest's pinned sign-in
+      revision. It is 2 for `23062a04`, the only revision a manifest admits.
+      `server_delivery.AUTH_SCHEMA` maps the revision to it, and a test holds
+      that map to `workspace/rose-signin/src/store/sqlite.rs`, which the
+      server is built against. So a sign-in store change can't ship under an
+      unchanged tag. A revision not in the map is refused.
+    - It is one integer for the schema of all three databases, and at least
+      `100000001` because `auth` ≥ 1. The producer keeps it at or below
+      2³¹ − 1 until Chariot confirms a wider integer.
+  - **Earlier tags.** Before #2566 the plan sent `1 + account × 10000 +
+    shared`, which is at most `100000000`, so no new tag equals an earlier
+    one. Every manifest ever recorded names `23062a04` (auth 2), so an
+    earlier tag `T` describes exactly the same data as the new tag
+    `T + 200000000`. A host whose active deployment recorded an earlier
+    tag would otherwise get a 409 on its next same-schema deploy. Whether
+    any such deployment exists is in Chariot's records, not App Core's.
+    The plan tool records nothing.
   - **Refused (exit 3):** a version with no server, or with no manifest (built
     for another target); a server over 64 MiB; no native host recorded; or a
     stored binary that is missing or changed. The other statuses follow
@@ -2575,6 +2595,14 @@ the server does.
     never creates. Its data is `auth.sqlite3`, `accounts/*.sqlite3` and
     `shared.sqlite3` under `DATA_DIR`. So a deploy today replaces the code with
     no snapshot of that data, and a rollback restores no database (item 9).
+  - **Start-up (agreed, #2566).** Chariot allows 120 s from start for
+    `/health` to answer 200, then reports the deployment unavailable. It
+    makes no automatic rollback and no automatic restore. The server binds
+    its listener only after every migration, so until then a health check
+    gets connection refused, and the time grows with the number of
+    accounts.
+  - **Health fields (agreed, #2566):** the snake_case `status`, `app_id`,
+    `revision_sha256` and `deployment_sha256`.
   - **Schema changes.** Chariot v1 refuses (409) a deploy whose
     `data_schema` differs from the active one. So a version that adds a
     migration can't be deployed over an older one until §7.7 item 4

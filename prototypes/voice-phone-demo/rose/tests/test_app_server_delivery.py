@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from rose.app_builder import ledger as L, server_delivery as D, server_manifest as SM
@@ -78,7 +79,7 @@ class Plan(Base):
         self.assertEqual(Path(p['artifact']['path']).read_bytes(),
                          (self.root / 'artifacts' / f'{server["sha256"]}.server').read_bytes())
         self.assertEqual(p['deploy'], {'sha256': server['sha256'], 'args': [], 'port': 8080, 'health_path': '/health',
-                                       'data_schema': 1 + 1 * 10000})
+                                       'data_schema': 1 + 2 * 100000000 + 1 * 10000})
         self.assertTrue(chariot_accepts(p['deploy']))
         self.assertEqual(p['manifestSha256'], hashlib.sha256(self.l.server_manifest(self.project, 1)).hexdigest())
 
@@ -136,12 +137,41 @@ class Plan(Base):
 
     def test_data_schema_is_one_integer_per_schema(self):
         seen = {}
-        for account, shared in itertools.product((0, 1, 2, 9998, 9999), (None, 0, 1, 9999)):
+        old_max = 1 + 9999 * 10000 + 9999  # the earlier encoding's largest tag
+        for auth, account, shared in itertools.product((1, 2, 3, 20), (0, 1, 2, 9998, 9999), (None, 0, 1, 9999)):
             schema = {'account': account} | ({} if shared is None else {'shared': shared})
-            value = D.data_schema(schema)
-            self.assertGreaterEqual(value, 1)
-            key = (account, shared or 0)  # an empty shared database is the same schema as none
+            with mock.patch.dict(D.AUTH_SCHEMA, {'rev': auth}):
+                value = D.data_schema(schema, 'rev')
+            self.assertEqual(value, 1 + auth * 100000000 + account * 10000 + (shared or 0))  # Chariot #2566
+            self.assertGreater(value, old_max)  # never equal to a tag of the earlier encoding
+            self.assertLessEqual(value, 2**31 - 1)
+            key = (auth, account, shared or 0)  # an empty shared database is the same schema as none
             self.assertEqual(seen.setdefault(value, key), key)
+        for auth, account in ((0, 1), (-1, 1), (21, 9999), (22, 0)):  # no auth store, or above 2**31 - 1
+            with mock.patch.dict(D.AUTH_SCHEMA, {'rev': auth}), self.assertRaises(D.Refused):
+                D.data_schema({'account': account}, 'rev')
+        with self.assertRaisesRegex(D.Refused, 'sign-in store schema'):
+            D.data_schema({'account': 1}, 'ffffffff')
+        with self.assertRaises(D.Refused):
+            D.data_schema({'account': 10000}, SM.SIGNIN_REVISION)
+
+    def test_the_auth_schema_is_rose_signins_at_the_pinned_revision(self):
+        """The server builds against workspace/rose-signin, and the manifest names SIGNIN_REVISION: the table must
+        give that store's SCHEMA_VERSION, so a sign-in store change cannot ship under an unchanged tag."""
+        src = (ROOT.parents[1] / 'workspace/rose-signin/src/store/sqlite.rs').read_text()
+        found = re.findall(r'^pub const SCHEMA_VERSION: i64 = (\d+);$', src, re.M)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(set(D.AUTH_SCHEMA), {SM.SIGNIN_REVISION})
+        self.assertEqual(D.AUTH_SCHEMA[SM.SIGNIN_REVISION], int(found[0]))
+
+    def test_an_earlier_tag_maps_to_exactly_one_new_tag(self):
+        """Every manifest ever recorded names SIGNIN_REVISION (decode admits no other), so a host's earlier tag
+        1 + account*10000 + shared is the same data as 1 + AUTH*100000000 + account*10000 + shared."""
+        auth = D.AUTH_SCHEMA[SM.SIGNIN_REVISION]
+        for account, shared in ((0, 0), (1, 0), (2, 3), (9999, 9999)):
+            old = 1 + account * 10000 + shared
+            self.assertEqual(D.data_schema({'account': account, 'shared': shared}, SM.SIGNIN_REVISION),
+                             old + auth * 100000000)
 
 
 class Cli(Base):
