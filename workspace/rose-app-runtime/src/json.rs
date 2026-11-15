@@ -4,6 +4,7 @@
 //! [`MAX_DEPTH`] deep, with every number finite. Integers that fit an `i64` stay integers. Output escapes every
 //! control character and keeps object keys in the order given.
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 pub const MAX_DEPTH: usize = 64;
@@ -89,11 +90,13 @@ impl Parser<'_> {
         }
     }
 
+    /// One value inside `depth` containers; a container opened here is the `depth + 1`th.
     fn value(&mut self, depth: usize) -> Result<Value, Invalid> {
-        if depth > MAX_DEPTH {
+        let c = self.s.get(self.i).copied().ok_or(Invalid)?;
+        if matches!(c, b'[' | b'{') && depth >= MAX_DEPTH {
             return Err(Invalid);
         }
-        match self.s.get(self.i).copied().ok_or(Invalid)? {
+        match c {
             b'n' => self.eat(b"null").map(|_| Value::Null),
             b't' => self.eat(b"true").map(|_| Value::Bool(true)),
             b'f' => self.eat(b"false").map(|_| Value::Bool(false)),
@@ -123,6 +126,7 @@ impl Parser<'_> {
             b'{' => {
                 self.i += 1;
                 let mut members: Vec<(String, Value)> = Vec::new();
+                let mut seen: HashSet<String> = HashSet::new(); // linear in the members, however many
                 self.ws();
                 if self.s.get(self.i) == Some(&b'}') {
                     self.i += 1;
@@ -134,7 +138,7 @@ impl Parser<'_> {
                         return Err(Invalid);
                     }
                     let key = self.string()?;
-                    if members.iter().any(|(k, _)| *k == key) {
+                    if !seen.insert(key.clone()) {
                         return Err(Invalid);
                     }
                     self.ws();
@@ -366,6 +370,10 @@ mod tests {
             parse(b"9223372036854775808").unwrap(),
             Value::Float(9223372036854775808.0)
         );
+        assert_eq!(parse(b"9223372036854775807").unwrap(), Value::Int(i64::MAX));
+        assert_eq!(parse(b"-9223372036854775808").unwrap(), Value::Int(i64::MIN));
+        assert_eq!(parse(b"1700000000123").unwrap(), Value::Int(1_700_000_000_123));
+        assert_eq!(parse(br#""\/\b\f""#).unwrap(), Value::str("/\u{8}\u{c}"));
     }
 
     #[test]
@@ -406,8 +414,20 @@ mod tests {
         for raw in cases {
             assert_eq!(parse(raw), Err(Invalid), "{:?}", String::from_utf8_lossy(raw));
         }
+        // Exactly MAX_DEPTH containers, of either kind, and no more.
         let ok = "[".repeat(MAX_DEPTH) + &"]".repeat(MAX_DEPTH);
         assert!(parse(ok.as_bytes()).is_ok());
+        let over = "[".repeat(MAX_DEPTH + 1) + &"]".repeat(MAX_DEPTH + 1);
+        assert_eq!(parse(over.as_bytes()), Err(Invalid));
+        let objects = |n: usize| "{\"a\":".repeat(n - 1) + "{}" + &"}".repeat(n - 1);
+        assert!(parse(objects(MAX_DEPTH).as_bytes()).is_ok());
+        assert_eq!(parse(objects(MAX_DEPTH + 1).as_bytes()), Err(Invalid));
+        // Far past it, within a body's size: refused, never a stack overflow.
+        let deep = "{\"\":".repeat(200_000) + "1" + &"}".repeat(200_000);
+        assert_eq!(parse(deep.as_bytes()), Err(Invalid));
+        for raw in [&br#""\u+041""#[..], b"\x0c1", b"1\x0b", b"\x0b1"] {
+            assert_eq!(parse(raw), Err(Invalid), "{:?}", String::from_utf8_lossy(raw));
+        }
     }
 
     #[test]
@@ -419,7 +439,24 @@ mod tests {
         assert_eq!(to_string(&Value::Float(f64::NAN)), None);
         assert_eq!(to_string(&Value::Arr(vec![Value::Float(f64::INFINITY)])), None);
         assert_eq!(to_string(&Value::Float(1.0)).unwrap(), "1.0");
+        assert_eq!(to_string(&Value::str("\u{2029}")).unwrap(), r#""\u2029""#);
         assert_eq!(to_string(&Value::obj([("k", Value::Int(1))])).unwrap(), r#"{"k":1}"#);
+    }
+
+    #[test]
+    fn many_keys_cost_linear_time() {
+        // About a megabyte of distinct keys: the repeated-key check must not compare each with all before it.
+        let body = "{".to_string() + &(0..100_000).map(|i| format!("\"{i}\":0")).collect::<Vec<_>>().join(",") + "}";
+        let started = std::time::Instant::now();
+        assert!(parse(body.as_bytes()).is_ok());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let repeated =
+            "{".to_string() + &(0..50_000).map(|i| format!("\"{i}\":0")).collect::<Vec<_>>().join(",") + ",\"7\":1}";
+        assert_eq!(parse(repeated.as_bytes()), Err(Invalid));
     }
 
     #[test]

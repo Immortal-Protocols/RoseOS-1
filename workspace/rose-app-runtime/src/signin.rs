@@ -19,10 +19,16 @@ use crate::http::Response;
 use crate::json::{self, Value};
 
 /// Who a valid session belongs to.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Principal {
     pub app: String,
     pub account: String,
+}
+
+impl std::fmt::Debug for Principal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Principal({}, <account>)", self.app)
+    }
 }
 
 /// What enrollment (and authenticator recovery) hands the client once.
@@ -208,11 +214,11 @@ impl Fields {
             _ => None,
         }
     }
-    fn required(&self, key: &str) -> Option<&str> {
-        self.0.get(key).and_then(Value::as_str)
+    fn required(&self, key: &str) -> Option<String> {
+        self.0.get(key).and_then(Value::as_str).map(str::to_string)
     }
-    fn optional(&self, key: &str) -> Result<Option<&str>, json::Invalid> {
-        self.0.optional_str(key)
+    fn optional(&self, key: &str) -> Option<Option<String>> {
+        self.0.optional_str(key).ok().map(|v| v.map(str::to_string))
     }
 }
 
@@ -226,16 +232,21 @@ pub fn bearer(authorization: Option<&str>) -> Option<&str> {
     token.bytes().all(|b| b.is_ascii_alphanumeric()).then_some(token)
 }
 
-/// The session's principal for an account route, or the response that refuses it. The principal must be this
-/// app's: rose-signin's `validate_for` already says so, and this is checked again here.
-pub fn principal(auth: &mut dyn Auth, app: &str, authorization: Option<&str>, now: u64) -> Result<Principal, Response> {
-    let Some(token) = bearer(authorization) else {
-        return Err(error(401, "session_invalid"));
-    };
+/// The session's principal for a token, or the response that refuses it. The principal must be this app's:
+/// rose-signin's `validate_for` already says so, and this is checked again here.
+pub fn principal_for(auth: &mut dyn Auth, app: &str, token: &str, now: u64) -> Result<Principal, Response> {
     match auth.validate(token, now) {
         Ok(Some(p)) if p.app == app => Ok(p),
         Ok(_) => Err(error(401, "session_invalid")),
         Err(Unavailable) => Err(error(503, "auth_unavailable")),
+    }
+}
+
+/// `principal_for` from an `Authorization` header.
+pub fn principal(auth: &mut dyn Auth, app: &str, authorization: Option<&str>, now: u64) -> Result<Principal, Response> {
+    match bearer(authorization) {
+        Some(token) => principal_for(auth, app, token, now),
+        None => Err(error(401, "session_invalid")),
     }
 }
 
@@ -244,121 +255,192 @@ pub fn is_signin_path(path: &str) -> bool {
     path == "/signin/v1" || path.starts_with("/signin/v1/")
 }
 
-/// Serves one sign-in request. `client` is what rate limits count by.
-#[allow(clippy::too_many_arguments)]
-pub fn handle(
-    auth: &mut dyn Auth,
-    app: &str,
-    admission: Admission,
-    method: &str,
-    path: &str,
-    body: &[u8],
-    authorization: Option<&str>,
-    client: &str,
-    now: u64,
-) -> Response {
-    let known = [
-        "/signin/v1/enroll",
-        "/signin/v1/enroll/confirm",
-        "/signin/v1/session",
-        "/signin/v1/sessions",
-        "/signin/v1/recover/authenticator",
-        "/signin/v1/recover/passphrase",
-    ];
-    if !known.contains(&path) {
-        return error(404, "not_found");
+/// One sign-in request, read and checked before the authenticator is touched (so parsing a body never holds
+/// it). Its `Debug` names only the call.
+pub enum Call {
+    Enroll {
+        account: String,
+        passphrase: String,
+        invite: Option<String>,
+        handle: Option<String>,
+    },
+    Confirm {
+        account: String,
+        handle: String,
+        code: String,
+    },
+    SignIn {
+        account: String,
+        code: String,
+        passphrase: String,
+    },
+    SignOut {
+        token: String,
+    },
+    SignOutEverywhere {
+        token: String,
+    },
+    RecoverAuthenticator {
+        account: String,
+        recovery_code: String,
+        passphrase: String,
+    },
+    RecoverPassphrase {
+        account: String,
+        recovery_code: String,
+        code: String,
+        new_passphrase: String,
+    },
+}
+
+impl std::fmt::Debug for Call {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Call::Enroll { .. } => "Call::Enroll",
+            Call::Confirm { .. } => "Call::Confirm",
+            Call::SignIn { .. } => "Call::SignIn",
+            Call::SignOut { .. } => "Call::SignOut",
+            Call::SignOutEverywhere { .. } => "Call::SignOutEverywhere",
+            Call::RecoverAuthenticator { .. } => "Call::RecoverAuthenticator",
+            Call::RecoverPassphrase { .. } => "Call::RecoverPassphrase",
+        })
     }
-    match (method, path) {
-        ("DELETE", "/signin/v1/session") => {
-            let Some(token) = bearer(authorization) else {
-                return error(401, "session_invalid");
-            };
-            // Sign-out answers the same whether or not the token was live, so it reveals nothing.
-            match auth.revoke(token) {
-                Ok(()) => Response::empty(204),
-                Err(Unavailable) => error(503, "auth_unavailable"),
-            }
+}
+
+const ROUTES: [(&str, &str); 7] = [
+    ("POST", "/signin/v1/enroll"),
+    ("POST", "/signin/v1/enroll/confirm"),
+    ("POST", "/signin/v1/session"),
+    ("DELETE", "/signin/v1/session"),
+    ("DELETE", "/signin/v1/sessions"),
+    ("POST", "/signin/v1/recover/authenticator"),
+    ("POST", "/signin/v1/recover/passphrase"),
+];
+
+/// Reads a sign-in request: the route by method and path first (`404`, `405`), then its token or body (`401`,
+/// `400`). Nothing here touches the authenticator.
+pub fn parse(method: &str, path: &str, body: &[u8], authorization: Option<&str>) -> Result<Call, Response> {
+    if !ROUTES.iter().any(|(_, p)| *p == path) {
+        return Err(error(404, "not_found"));
+    }
+    if !ROUTES.contains(&(method, path)) {
+        return Err(error(405, "method_not_allowed"));
+    }
+    if method == "DELETE" {
+        if !body.is_empty() {
+            return Err(error(400, "bad_request"));
         }
-        ("DELETE", "/signin/v1/sessions") => match principal(auth, app, authorization, now) {
+        let token = bearer(authorization)
+            .ok_or_else(|| error(401, "session_invalid"))?
+            .to_string();
+        return Ok(if path == "/signin/v1/session" {
+            Call::SignOut { token }
+        } else {
+            Call::SignOutEverywhere { token }
+        });
+    }
+    let bad = || error(400, "bad_request");
+    let f = Fields::parse(body).ok_or_else(bad)?;
+    let call = match path {
+        "/signin/v1/enroll" => Call::Enroll {
+            account: f.required("account").ok_or_else(bad)?,
+            passphrase: f.required("passphrase").ok_or_else(bad)?,
+            invite: f.optional("invite").ok_or_else(bad)?,
+            handle: f.optional("handle").ok_or_else(bad)?,
+        },
+        "/signin/v1/enroll/confirm" => Call::Confirm {
+            account: f.required("account").ok_or_else(bad)?,
+            handle: f.required("handle").ok_or_else(bad)?,
+            code: f.required("code").ok_or_else(bad)?,
+        },
+        "/signin/v1/session" => Call::SignIn {
+            account: f.required("account").ok_or_else(bad)?,
+            code: f.required("code").ok_or_else(bad)?,
+            passphrase: f.required("passphrase").ok_or_else(bad)?,
+        },
+        "/signin/v1/recover/authenticator" => Call::RecoverAuthenticator {
+            account: f.required("account").ok_or_else(bad)?,
+            recovery_code: f.required("recovery_code").ok_or_else(bad)?,
+            passphrase: f.required("passphrase").ok_or_else(bad)?,
+        },
+        _ => Call::RecoverPassphrase {
+            account: f.required("account").ok_or_else(bad)?,
+            recovery_code: f.required("recovery_code").ok_or_else(bad)?,
+            code: f.required("code").ok_or_else(bad)?,
+            new_passphrase: f.required("new_passphrase").ok_or_else(bad)?,
+        },
+    };
+    Ok(call)
+}
+
+/// Runs a parsed sign-in call. `client` is what rate limits count by.
+pub fn run(auth: &mut dyn Auth, app: &str, admission: Admission, call: Call, client: &str, now: u64) -> Response {
+    let open = admission == Admission::Open;
+    match call {
+        Call::Enroll {
+            account,
+            passphrase,
+            invite,
+            handle,
+        } => match auth.begin_enrollment(&account, &passphrase, invite.as_deref(), open, handle.as_deref(), now) {
+            Ok(e) => enrollment(e),
+            Err(e) => enroll_error(e),
+        },
+        Call::Confirm { account, handle, code } => match auth.confirm_enrollment(&account, &handle, &code, now) {
+            Ok(()) => Response::empty(204),
+            Err(e) => enroll_error(e),
+        },
+        Call::SignIn {
+            account,
+            code,
+            passphrase,
+        } => match auth.sign_in(&account, &code, &passphrase, client, now) {
+            SignIn::Ok {
+                token,
+                principal,
+                new_recovery_codes,
+            } => {
+                let mut members = vec![
+                    ("token".to_string(), Value::str(token)),
+                    ("account".to_string(), Value::str(principal.account)),
+                ];
+                if !new_recovery_codes.is_empty() {
+                    members.push(("recovery_codes".to_string(), codes(&new_recovery_codes)));
+                }
+                ok(Value::Obj(members))
+            }
+            SignIn::Failed => error(401, "sign_in_failed"),
+            SignIn::Limited { retry_after } => limited(retry_after),
+            SignIn::Unavailable => error(503, "auth_unavailable"),
+        },
+        // Sign-out answers the same whether or not the token was live, so it reveals nothing.
+        Call::SignOut { token } => match auth.revoke(&token) {
+            Ok(()) => Response::empty(204),
+            Err(Unavailable) => error(503, "auth_unavailable"),
+        },
+        Call::SignOutEverywhere { token } => match principal_for(auth, app, &token, now) {
             Ok(p) => match auth.revoke_all(&p) {
                 Ok(()) => Response::empty(204),
                 Err(Unavailable) => error(503, "auth_unavailable"),
             },
             Err(r) => r,
         },
-        ("POST", _) => {
-            let Some(f) = Fields::parse(body) else {
-                return error(400, "bad_request");
-            };
-            post(auth, admission, path, &f, client, now).unwrap_or_else(|| error(400, "bad_request"))
-        }
-        _ => error(405, "method_not_allowed"),
+        Call::RecoverAuthenticator {
+            account,
+            recovery_code,
+            passphrase,
+        } => match auth.recover_authenticator(&account, &recovery_code, &passphrase, client, now) {
+            Ok(e) => enrollment(e),
+            Err(e) => recover_error(e),
+        },
+        Call::RecoverPassphrase {
+            account,
+            recovery_code,
+            code,
+            new_passphrase,
+        } => match auth.recover_passphrase(&account, &recovery_code, &code, &new_passphrase, client, now) {
+            Ok(c) => ok(Value::obj([("recovery_codes", codes(&c))])),
+            Err(e) => recover_error(e),
+        },
     }
-}
-
-fn post(auth: &mut dyn Auth, admission: Admission, path: &str, f: &Fields, client: &str, now: u64) -> Option<Response> {
-    Some(match path {
-        "/signin/v1/enroll" => {
-            let (account, passphrase) = (f.required("account")?, f.required("passphrase")?);
-            let invite = f.optional("invite").ok()?;
-            let handle = f.optional("handle").ok()?;
-            match auth.begin_enrollment(account, passphrase, invite, admission == Admission::Open, handle, now) {
-                Ok(e) => enrollment(e),
-                Err(e) => enroll_error(e),
-            }
-        }
-        "/signin/v1/enroll/confirm" => {
-            let (account, handle, code) = (f.required("account")?, f.required("handle")?, f.required("code")?);
-            match auth.confirm_enrollment(account, handle, code, now) {
-                Ok(()) => Response::empty(204),
-                Err(e) => enroll_error(e),
-            }
-        }
-        "/signin/v1/session" => {
-            let (account, code, passphrase) = (f.required("account")?, f.required("code")?, f.required("passphrase")?);
-            match auth.sign_in(account, code, passphrase, client, now) {
-                SignIn::Ok {
-                    token,
-                    principal,
-                    new_recovery_codes,
-                } => {
-                    let mut members = vec![
-                        ("token".to_string(), Value::str(token)),
-                        ("account".to_string(), Value::str(principal.account)),
-                    ];
-                    if !new_recovery_codes.is_empty() {
-                        members.push(("recovery_codes".to_string(), codes(&new_recovery_codes)));
-                    }
-                    ok(Value::Obj(members))
-                }
-                SignIn::Failed => error(401, "sign_in_failed"),
-                SignIn::Limited { retry_after } => limited(retry_after),
-                SignIn::Unavailable => error(503, "auth_unavailable"),
-            }
-        }
-        "/signin/v1/recover/authenticator" => {
-            let (account, code, passphrase) = (
-                f.required("account")?,
-                f.required("recovery_code")?,
-                f.required("passphrase")?,
-            );
-            match auth.recover_authenticator(account, code, passphrase, client, now) {
-                Ok(e) => enrollment(e),
-                Err(e) => recover_error(e),
-            }
-        }
-        "/signin/v1/recover/passphrase" => {
-            let (account, recovery, code, new) = (
-                f.required("account")?,
-                f.required("recovery_code")?,
-                f.required("code")?,
-                f.required("new_passphrase")?,
-            );
-            match auth.recover_passphrase(account, recovery, code, new, client, now) {
-                Ok(c) => ok(Value::obj([("recovery_codes", codes(&c))])),
-                Err(e) => recover_error(e),
-            }
-        }
-        _ => error(405, "method_not_allowed"), // /signin/v1/sessions takes only DELETE
-    })
 }

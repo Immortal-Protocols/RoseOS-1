@@ -1544,10 +1544,25 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   - a repeated or malformed `Content-Length`;
   - folded or malformed headers and bare line feeds.
 
-  Every response closes the connection and carries
-  `Cache-Control: no-store`. Connections are capped (64) and time out (10 s).
-- **JSON.** Strict: one value, no repeated key, at most 64 deep, finite
-  numbers. Integers that fit an `i64` stay integers.
+  Every response carries `Cache-Control: no-store` and then closes the
+  connection. Closing stops writing first, then reads and drops what the
+  client still sends (up to 64 KB or 1 s), so a refusal arrives whole rather
+  than as a reset.
+- **Connections.** At most 64 at once; more are answered `503 busy`.
+  - **Deadlines.** A request must arrive within 10 s of the connection, and
+    its response must leave within 10 s. Each is one deadline for the whole,
+    not a timeout per read, so a client trickling a byte at a time can't
+    hold a slot.
+  - **Panics.** A panic anywhere in answering a request (a handler, the
+    authenticator, the log sink) answers `500 internal`, and the slot is
+    given back however the thread ends.
+  - **Accept failures.** Failing to accept a connection (out of file
+    descriptors, say) backs off briefly and goes on; it never stops the
+    server.
+- **JSON.** Strict: one value, no repeated key, at most 64 nested
+  containers, finite numbers. Integers that fit an `i64` stay integers. The
+  repeated-key check is linear in the number of members, so a 1 MB body
+  can't cost quadratic time.
 - **Sign-in routes** map `docs/ROSE-SIGNIN-V1.md` onto an injected `Auth`,
   rose-signin's `Authenticator` fixed to this app (its `validate` is
   `validate_for`). The documented error words and statuses are kept. Where
@@ -1567,15 +1582,21 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
 
   Sign-out answers `204` whether or not the token was live, so it reveals
   nothing. Admission (`invite` or `open`) is the app's declaration, never the
-  request's.
+  request's. A sign-in request is read and checked (route, method, token,
+  body) before the authenticator is taken. One authenticator serves the
+  process, so its calls (passphrase hashing included) take turns.
 - **App routes.** The contract's exact method and path under `/app/`.
   - An account route runs only with a live session of this app. The
     runtime checks `principal.app` again after `validate_for`, and the
     handler gets the principal.
   - A route with a request type takes `application/json`, and any other
     route takes no body.
-  - A handler returns a value (`200`) or a 4xx word. A panic, a 5xx, a
-    malformed word or a non-finite number is `500 internal`.
+  - A handler returns a value (`200`) or a 4xx word. A panic, a status
+    outside 4xx, a malformed word or a non-finite number is
+    `500 internal`.
+  - A handler reaches the adapter's databases through `ctx.data`
+    (`Server::with_data`), which it downcasts. This keeps the core free of a
+    database dependency.
 - **Readiness.** `/health` carries exactly `app_id`, `revision_sha256` and
   `deployment_sha256` (§7.7), all supplied at start-up and none made up.
   It answers `200` only when the authenticator, the migrations and any
@@ -1583,8 +1604,9 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
   `503 not_ready` until then.
 - **Logs** hold the method, the route's template (never the path the client
   sent), the status and the time taken. They hold no body, header, token,
-  passphrase, code, key, account name or client address. Types that carry
-  secrets print as `<redacted>`.
+  passphrase, code, key, account name or client address. The `Debug` output
+  of requests, responses, principals, sign-in calls and their results shows
+  no header value, body, account, token or code.
 - **Client address.** Rate limits count by the peer address until §7.7
   item 6 says which proxy header carries the client. Behind one proxy every
   client shares that address. This is a known limit, not a decision.

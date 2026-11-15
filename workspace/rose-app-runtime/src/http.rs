@@ -22,7 +22,9 @@ pub const LIMITS: Limits = Limits {
     max_body: 1024 * 1024,
 };
 
-#[derive(Debug, PartialEq, Eq)]
+/// A request. Its `Debug` shows the method, the target and the header names only: a header value or the body can
+/// hold a token, a passphrase or a code.
+#[derive(PartialEq, Eq)]
 pub struct Request {
     pub method: String,
     /// The request target as sent: origin form, starting with `/`.
@@ -30,6 +32,19 @@ pub struct Request {
     /// Header names in lower case, in the order sent.
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(n, _)| n.as_str()).collect();
+        write!(
+            f,
+            "Request({} {} headers={names:?} body={} bytes)",
+            self.method,
+            self.target,
+            self.body.len()
+        )
+    }
 }
 
 impl Request {
@@ -196,13 +211,26 @@ pub fn read_request<R: BufRead>(r: &mut R, limits: Limits) -> Result<Request, Pa
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A response. Its `Debug` shows the status and header names only: a body can hold an issued token or codes.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Response {
     pub status: u16,
     /// Extra headers (Content-Length, Content-Type, Cache-Control and Connection are written by `write`).
     pub headers: Vec<(&'static str, String)>,
     /// A JSON body, or empty.
     pub body: Vec<u8>,
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(n, _)| *n).collect();
+        write!(
+            f,
+            "Response({} headers={names:?} body={} bytes)",
+            self.status,
+            self.body.len()
+        )
+    }
 }
 
 impl Response {
@@ -304,6 +332,18 @@ mod tests {
             b"POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\nab",
             b"GET /x HTTP/1.1\r\n",
             b"GET /\xff HTTP/1.1\r\n\r\n",
+            // Each check on its own, with an input only it refuses.
+            b"GET /a\tb HTTP/1.1\r\n\r\n",
+            b"GET /a\x7fb HTTP/1.1\r\n\r\n",
+            b"GET /\xc3\xa9 HTTP/1.1\r\n\r\n",
+            b"GET /x HTTP/1.1\r\nX: a\rContent-Length: 5\r\n\r\n",
+            b"GET /x HTTP/1.1\r\nX: a\x7fb\r\n\r\n",
+            b"GET /x HTTP/1.1\r\n: x\r\n\r\n",
+            b"GET /x HTTP/1.2\r\n\r\n",
+            b"GET /x HTTP/1.1 junk\r\n\r\n",
+            b" /x HTTP/1.1\r\n\r\n",
+            b"GET /x HTTP/1.1\r\nHost: x",
+            b"POST /x HTTP/1.1\r\nContent-Length: \r\n\r\n",
         ];
         for raw in cases {
             assert_eq!(parse(raw), Err(ParseError::Bad), "{:?}", String::from_utf8_lossy(raw));
@@ -317,10 +357,27 @@ mod tests {
             parse(b"POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"),
             Err(ParseError::Unsupported)
         );
+        for coding in ["chunked", "Chunked", "gzip, chunked", "identity", ""] {
+            let raw = format!("POST /x HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: {coding}\r\n\r\nx");
+            assert_eq!(parse(raw.as_bytes()), Err(ParseError::Unsupported), "{coding}");
+        }
         assert_eq!(
-            parse(b"POST /x HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\nx"),
-            Err(ParseError::Unsupported)
+            parse(b"POST /x HTTP/1.1\r\nContent-Length:\t2\t\r\n\r\nab")
+                .unwrap()
+                .body,
+            b"ab"
         );
+        let statuses = [
+            (ParseError::Closed, None),
+            (ParseError::Io, None),
+            (ParseError::Bad, Some(400)),
+            (ParseError::HeadTooLarge, Some(431)),
+            (ParseError::BodyTooLarge, Some(413)),
+            (ParseError::Unsupported, Some(501)),
+        ];
+        for (e, status) in statuses {
+            assert_eq!(e.status(), status);
+        }
         let big = format!("POST /x HTTP/1.1\r\nContent-Length: {}\r\n\r\n", LIMITS.max_body + 1);
         assert_eq!(parse(big.as_bytes()), Err(ParseError::BodyTooLarge));
         let long = format!("GET /x HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(LIMITS.max_head));
@@ -334,6 +391,20 @@ mod tests {
             parse(b"POST /x HTTP/1.1\r\nContent-Length: 99999999999999999999\r\n\r\n"),
             Err(ParseError::BodyTooLarge)
         );
+    }
+
+    #[test]
+    fn debug_never_shows_header_values_or_bodies() {
+        let r = parse(b"POST /x HTTP/1.1\r\nAuthorization: Bearer SECRETTOKEN\r\nContent-Length: 9\r\n\r\nhunter222")
+            .unwrap();
+        let shown = format!("{r:?}");
+        assert!(
+            !shown.contains("SECRETTOKEN") && !shown.contains("hunter") && shown.contains("authorization"),
+            "{shown}"
+        );
+        let mut out = Response::json(200, br#"{"token":"SECRETTOKEN"}"#.to_vec());
+        out.headers.push(("Retry-After", "SECRETTOKEN".into()));
+        assert!(!format!("{out:?}").contains("SECRETTOKEN"));
     }
 
     #[test]
@@ -353,8 +424,12 @@ mod tests {
             "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\
              Cache-Control: no-store\r\nConnection: close\r\nRetry-After: 30\r\n\r\n{}"
         );
-        let mut bad = Response::empty(200);
-        bad.headers.push(("X", "a\r\nInjected: 1".into()));
-        assert!(write_response(&mut Vec::new(), &bad).is_err());
+        for value in ["a\r\nInjected: 1", "a\nInjected: 1", "a\rInjected: 1", "a\x7f"] {
+            let mut bad = Response::empty(200);
+            bad.headers.push(("X", value.into()));
+            let mut out = Vec::new();
+            assert!(write_response(&mut out, &bad).is_err(), "{value:?}");
+            assert!(out.is_empty(), "nothing is written for a refused header");
+        }
     }
 }

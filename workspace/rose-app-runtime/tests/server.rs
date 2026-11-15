@@ -24,6 +24,10 @@ struct Script {
     enroll: Option<Result<Enrollment, EnrollError>>,
     sign_in: Option<SignIn>,
     recover: Option<RecoverError>,
+    confirm: Option<EnrollError>,
+    /// The account name the authenticator signs in as (it may differ from what was typed).
+    account_as: Option<String>,
+    revoke_all_fails: bool,
 }
 
 struct Fake(Arc<Mutex<Script>>);
@@ -61,22 +65,29 @@ impl Auth for Fake {
             .unwrap()
             .calls
             .push(format!("confirm {account} {handle} {code} {now}"));
-        Ok(())
+        match self.0.lock().unwrap().confirm.clone() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
     fn sign_in(&mut self, account: &str, code: &str, passphrase: &str, client: &str, now: u64) -> SignIn {
         let mut s = self.0.lock().unwrap();
         s.calls
             .push(format!("sign_in {account} {code} {passphrase} {client} {now}"));
+        let account = s.account_as.clone().unwrap_or_else(|| account.to_string());
         s.sign_in.clone().unwrap_or(SignIn::Ok {
             token: TOKEN.into(),
             principal: Principal {
                 app: APP.into(),
-                account: account.into(),
+                account,
             },
             new_recovery_codes: vec![],
         })
     }
     fn validate(&mut self, token: &str, now: u64) -> Result<Option<Principal>, Unavailable> {
+        if token == "BOOM" {
+            panic!("an adapter bug"); // before the script lock, so it stays usable
+        }
         let mut s = self.0.lock().unwrap();
         s.calls.push(format!("validate {token} {now}"));
         if s.unavailable {
@@ -96,7 +107,11 @@ impl Auth for Fake {
         })
     }
     fn revoke(&mut self, token: &str) -> Result<(), Unavailable> {
-        self.0.lock().unwrap().calls.push(format!("revoke {token}"));
+        let mut s = self.0.lock().unwrap();
+        s.calls.push(format!("revoke {token}"));
+        if s.unavailable {
+            return Err(Unavailable);
+        }
         Ok(())
     }
     fn revoke_all(&mut self, principal: &Principal) -> Result<(), Unavailable> {
@@ -105,6 +120,9 @@ impl Auth for Fake {
             .unwrap()
             .calls
             .push(format!("revoke_all {}", principal.account));
+        if self.0.lock().unwrap().revoke_all_fails {
+            return Err(Unavailable);
+        }
         Ok(())
     }
     fn recover_authenticator(
@@ -144,6 +162,36 @@ impl Auth for Fake {
     }
 }
 
+fn data(ctx: &Ctx, _: Option<&Value>) -> Reply {
+    match ctx.data.downcast_ref::<&'static str>() {
+        Some(d) => Reply::Ok(Value::str(*d)),
+        None => Reply::Refused(404, "no_data"),
+    }
+}
+fn refused_with(status: u16, word: &'static str) -> Reply {
+    Reply::Refused(status, word)
+}
+fn r101(_: &Ctx, _: Option<&Value>) -> Reply {
+    refused_with(101, "x")
+}
+fn r200(_: &Ctx, _: Option<&Value>) -> Reply {
+    refused_with(200, "x")
+}
+fn r302(_: &Ctx, _: Option<&Value>) -> Reply {
+    refused_with(302, "x")
+}
+fn r399(_: &Ctx, _: Option<&Value>) -> Reply {
+    refused_with(399, "x")
+}
+fn r_empty(_: &Ctx, _: Option<&Value>) -> Reply {
+    refused_with(400, "")
+}
+fn r_upper(_: &Ctx, _: Option<&Value>) -> Reply {
+    refused_with(400, "Taken")
+}
+fn r_quote(_: &Ctx, _: Option<&Value>) -> Reply {
+    refused_with(400, "a\"b")
+}
 fn whoami(ctx: &Ctx, _body: Option<&Value>) -> Reply {
     Reply::Ok(Value::obj([(
         "account",
@@ -192,6 +240,14 @@ fn routes() -> Vec<Route> {
         r("POST", "/app/bad-word", RouteAuth::Public, false, bad_word as _),
         r("POST", "/app/boom", RouteAuth::Public, false, boom as _),
         r("POST", "/app/nan", RouteAuth::Public, false, nan as _),
+        r("GET", "/app/data", RouteAuth::Public, false, data as _),
+        r("POST", "/app/r101", RouteAuth::Public, false, r101 as _),
+        r("POST", "/app/r200", RouteAuth::Public, false, r200 as _),
+        r("POST", "/app/r302", RouteAuth::Public, false, r302 as _),
+        r("POST", "/app/r399", RouteAuth::Public, false, r399 as _),
+        r("POST", "/app/r-empty", RouteAuth::Public, false, r_empty as _),
+        r("POST", "/app/r-upper", RouteAuth::Public, false, r_upper as _),
+        r("POST", "/app/r-quote", RouteAuth::Public, false, r_quote as _),
     ]
 }
 
@@ -770,4 +826,362 @@ fn a_request_struct_is_what_the_server_reads() {
     };
     let (r, route) = h.server.respond(&req, "c");
     assert_eq!((r.status, route), (200, "/app/me"));
+}
+
+fn calls(h: &Harness) -> Vec<String> {
+    h.script.lock().unwrap().calls.clone()
+}
+
+#[test]
+fn the_bearer_token_is_read_strictly_before_anything_is_asked() {
+    let h = harness(Admission::Invite);
+    let long = "A".repeat(257);
+    for header in [
+        format!("Authorization: Basic {TOKEN}"),
+        format!("Authorization: Token {TOKEN}"),
+        format!("Authorization: Bearer {TOKEN}-"),
+        format!("Authorization: Bearer  {TOKEN}"),
+        format!("Authorization: Bearer {long}"),
+    ] {
+        let (status, _, body) = send(&h, &format!("GET /app/me HTTP/1.1\r\n{header}\r\n\r\n"));
+        assert_eq!(
+            (status, error_word(&body).as_str()),
+            (401, "session_invalid"),
+            "{header}"
+        );
+    }
+    assert!(calls(&h).is_empty(), "{:?}", calls(&h));
+    // The scheme's case does not matter; a valid token passes with the clock's time, never another.
+    let (status, _, _) = send(
+        &h,
+        &format!("GET /app/me HTTP/1.1\r\nAuthorization: bearer {TOKEN}\r\n\r\n"),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(calls(&h), vec![format!("validate {TOKEN} 1700000000")]);
+}
+
+#[test]
+fn handler_refusals_outside_4xx_or_with_bad_words_are_internal() {
+    let h = harness(Admission::Invite);
+    for path in [
+        "/app/r101",
+        "/app/r200",
+        "/app/r302",
+        "/app/r399",
+        "/app/r-empty",
+        "/app/r-upper",
+        "/app/r-quote",
+    ] {
+        let (status, _, body) = send(&h, &format!("POST {path} HTTP/1.1\r\n\r\n"));
+        assert_eq!((status, error_word(&body).as_str()), (500, "internal"), "{path}");
+    }
+}
+
+#[test]
+fn methods_and_paths_match_exactly() {
+    let h = harness(Admission::Invite);
+    for (raw, status) in [
+        ("HEAD /app/hello HTTP/1.1\r\n\r\n".to_string(), 405),
+        ("HEAD /health HTTP/1.1\r\n\r\n".to_string(), 405),
+        (get("/app/me/", Some(TOKEN)), 404),
+        (get("/APP/me", Some(TOKEN)), 404),
+        (get("/app/%6de", Some(TOKEN)), 404),
+        (get("/app//me", Some(TOKEN)), 404),
+    ] {
+        let (got, _, _) = send(&h, &raw);
+        assert_eq!(got, status, "{raw:?}");
+    }
+    assert!(!calls(&h).iter().any(|c| c.starts_with("validate")));
+    let fake = || Box::new(Fake(Arc::new(Mutex::new(Script::default())))) as Box<dyn Auth>;
+    let head = Route {
+        method: "HEAD",
+        path: "/app/a",
+        auth: RouteAuth::Public,
+        body: false,
+        handler: hello as _,
+    };
+    assert!(Server::new(APP, Admission::Invite, vec![head], identity(), fake()).is_err());
+}
+
+#[test]
+fn every_signin_route_and_failure() {
+    // Only DELETE on the session routes; the method is checked before any body is read.
+    let h = harness(Admission::Invite);
+    for body in ["", "{}"] {
+        let (status, _, out) = send(&h, &post("/signin/v1/sessions", Some(TOKEN), body));
+        assert_eq!(
+            (status, error_word(&out).as_str()),
+            (405, "method_not_allowed"),
+            "{body:?}"
+        );
+    }
+    let (status, _, _) = send(&h, "DELETE /signin/v1/session HTTP/1.1\r\n\r\n");
+    assert_eq!(status, 401);
+    let (status, _, _) = send(&h, "DELETE /signin/v1/sessions HTTP/1.1\r\n\r\n");
+    assert_eq!(status, 401);
+    let with_body =
+        format!("DELETE /signin/v1/session HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: 2\r\n\r\n{{}}");
+    let (status, _, _) = send(&h, &with_body);
+    assert_eq!(status, 400);
+    assert!(calls(&h).is_empty());
+    // Sign-out when the authenticator is unavailable says so, both ways.
+    h.script.lock().unwrap().unavailable = true;
+    let (status, _, out) = send(
+        &h,
+        &format!("DELETE /signin/v1/session HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"),
+    );
+    assert_eq!((status, error_word(&out).as_str()), (503, "auth_unavailable"));
+    let (status, _, _) = send(
+        &h,
+        &format!("DELETE /signin/v1/sessions HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"),
+    );
+    assert_eq!(status, 503);
+    let h = harness(Admission::Invite);
+    h.script.lock().unwrap().revoke_all_fails = true;
+    let (status, _, _) = send(
+        &h,
+        &format!("DELETE /signin/v1/sessions HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"),
+    );
+    assert_eq!(status, 503);
+    // Confirmation's failures.
+    for (e, status, word) in [
+        (EnrollError::NotConfirmed, 401, "not_confirmed"),
+        (EnrollError::Limited { retry_after: 30 }, 429, "try_later"),
+        (EnrollError::Unavailable, 503, "auth_unavailable"),
+    ] {
+        let h = harness(Admission::Invite);
+        h.script.lock().unwrap().confirm = Some(e.clone());
+        let (got, head, out) = send(
+            &h,
+            &post(
+                "/signin/v1/enroll/confirm",
+                None,
+                r#"{"account":"a","handle":"H","code":"1"}"#,
+            ),
+        );
+        assert_eq!((got, error_word(&out).as_str()), (status, word), "{e:?}");
+        if status == 429 {
+            assert!(head.contains("Retry-After: 30"));
+        }
+    }
+    // Enrollment: no invite under invite admission is passed as none (the authenticator refuses it), and a
+    // restart's handle is passed through; a handle that is not a string is a bad request.
+    let h = harness(Admission::Invite);
+    send(
+        &h,
+        &post(
+            "/signin/v1/enroll",
+            None,
+            r#"{"account":"ada","passphrase":"12345678"}"#,
+        ),
+    );
+    send(
+        &h,
+        &post(
+            "/signin/v1/enroll",
+            None,
+            r#"{"account":"ada","passphrase":"12345678","handle":"H"}"#,
+        ),
+    );
+    let (status, _, _) = send(
+        &h,
+        &post(
+            "/signin/v1/enroll",
+            None,
+            r#"{"account":"ada","passphrase":"p","handle":5}"#,
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        calls(&h),
+        vec![
+            "enroll ada 12345678 None false None 1700000000".to_string(),
+            "enroll ada 12345678 None false Some(\"H\") 1700000000".to_string(),
+        ]
+    );
+    // Recovery's too-long passphrase, on both routes.
+    let h = harness(Admission::Invite);
+    h.script.lock().unwrap().recover = Some(RecoverError::Knowledge(Rejected::TooLong));
+    for (path, body) in [
+        (
+            "/signin/v1/recover/authenticator",
+            r#"{"account":"a","recovery_code":"r","passphrase":"p"}"#,
+        ),
+        (
+            "/signin/v1/recover/passphrase",
+            r#"{"account":"a","recovery_code":"r","code":"1","new_passphrase":"p"}"#,
+        ),
+    ] {
+        let (got, _, out) = send(&h, &post(path, None, body));
+        assert_eq!((got, error_word(&out).as_str()), (400, "passphrase_too_long"), "{path}");
+    }
+    // The account in a sign-in answer is the authenticator's, not what was typed.
+    let h = harness(Admission::Invite);
+    h.script.lock().unwrap().account_as = Some("Ada".into());
+    let (_, _, out) = send(
+        &h,
+        &post(
+            "/signin/v1/session",
+            None,
+            r#"{"account":"ada","code":"1","passphrase":"p"}"#,
+        ),
+    );
+    assert_eq!(out, r#"{"token":"GOODTOKEN","account":"Ada"}"#);
+}
+
+#[test]
+fn handlers_reach_the_servers_data() {
+    let h = harness(Admission::Invite);
+    let (_, _, out) = send(&h, &get("/app/data", None));
+    assert_eq!(error_word(&out), "no_data");
+    let h = Harness {
+        server: h.server.with_data(Box::new("the adapter's databases")),
+        ..h
+    };
+    let (status, _, out) = send(&h, &get("/app/data", None));
+    assert_eq!((status, out.as_str()), (200, r#""the adapter's databases""#));
+}
+
+#[test]
+fn logs_name_the_route_template_whatever_the_outcome() {
+    let h = harness(Admission::Invite);
+    send(&h, &get("/app/me", None));
+    send(&h, "POST /app/boom HTTP/1.1\r\n\r\n");
+    let lines: Vec<_> = h
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|l| (l.method, l.route, l.status))
+        .collect();
+    assert_eq!(lines, vec![("GET", "/app/me", 401), ("POST", "/app/boom", 500)]);
+}
+
+fn listen(server: Server) -> (Arc<Server>, std::net::SocketAddr) {
+    let server = Arc::new(server);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let serving = Arc::clone(&server);
+    std::thread::spawn(move || serving.serve(listener));
+    (server, addr)
+}
+
+fn exchange(addr: std::net::SocketAddr, raw: &[u8]) -> String {
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.write_all(raw).unwrap();
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).unwrap();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn wait_until(what: impl Fn() -> bool) -> bool {
+    let by = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < by {
+        if what() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+#[test]
+fn a_slow_client_is_cut_off_at_the_deadline_not_per_read() {
+    let mut h = harness(Admission::Invite);
+    h.server.max_connections = 1;
+    h.server.timeout = std::time::Duration::from_millis(300);
+    let (server, addr) = listen(h.server);
+    let mut slow = TcpStream::connect(addr).unwrap();
+    slow.write_all(b"GET /app/hello HTTP/1.1\r\nX: ").unwrap();
+    let started = std::time::Instant::now();
+    // One byte every 100 ms keeps each read under the timeout; the deadline still ends it.
+    let trickle = std::thread::spawn(move || {
+        for _ in 0..30 {
+            if slow.write_all(b"a").is_err() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    });
+    assert!(wait_until(|| server.open_connections() == 1));
+    assert!(
+        wait_until(|| server.open_connections() == 0),
+        "the slow connection still holds its slot"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    let out = exchange(addr, get("/app/hello", None).as_bytes());
+    assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+    let _ = trickle.join();
+}
+
+#[test]
+fn a_panic_anywhere_answers_500_and_frees_its_slot() {
+    let mut h = harness(Admission::Invite);
+    h.server.max_connections = 1;
+    let (server, addr) = listen(h.server);
+    for _ in 0..3 {
+        let out = exchange(addr, get("/app/me", Some("BOOM")).as_bytes());
+        assert!(out.starts_with("HTTP/1.1 500") && out.contains("internal"), "{out}");
+    }
+    assert!(wait_until(|| server.open_connections() == 0));
+    let out = exchange(addr, get("/app/hello", None).as_bytes());
+    assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+    // A log sink that panics is contained too.
+    let h = harness(Admission::Invite);
+    let server = h.server.with_log(Box::new(|_: &LogLine| panic!("log sink bug")));
+    let mut server = server;
+    server.max_connections = 1;
+    let (server, addr) = listen(server);
+    for _ in 0..3 {
+        assert!(exchange(addr, get("/app/hello", None).as_bytes()).starts_with("HTTP/1.1 200"));
+    }
+    assert!(wait_until(|| server.open_connections() == 0));
+}
+
+#[test]
+fn refusals_reach_the_client_even_with_bytes_still_unread() {
+    let h = harness(Admission::Invite);
+    let (_, addr) = listen(h.server);
+    // A body far over the limit, partly sent: the 413 arrives whole, not as a reset.
+    let mut raw = format!(
+        "POST /app/echo HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        2_000_000
+    )
+    .into_bytes();
+    raw.extend(std::iter::repeat_n(b'x', 200_000));
+    let out = exchange(addr, &raw);
+    assert!(out.starts_with("HTTP/1.1 413"), "{out}");
+    // A valid request followed by more bytes: its answer arrives whole.
+    let mut raw = get("/app/hello", None).into_bytes();
+    raw.extend(std::iter::repeat_n(b'y', 50_000));
+    let out = exchange(addr, &raw);
+    assert!(out.starts_with("HTTP/1.1 200") && out.ends_with("}"), "{out}");
+    // Over-limit heads answer 431.
+    let raw = format!("GET /app/hello HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(20_000));
+    assert!(exchange(addr, raw.as_bytes()).starts_with("HTTP/1.1 431"));
+}
+
+#[test]
+fn failing_to_accept_never_stops_the_server() {
+    // A non-blocking listener answers every accept with WouldBlock until a client comes: each is an error the
+    // loop must survive.
+    let h = harness(Admission::Invite);
+    let server = Arc::new(h.server);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let serving = Arc::clone(&server);
+    std::thread::spawn(move || serving.serve(listener));
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    s.write_all(get("/app/hello", None).as_bytes()).unwrap();
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out);
+    assert!(out.starts_with("HTTP/1.1 200"), "{out}");
 }

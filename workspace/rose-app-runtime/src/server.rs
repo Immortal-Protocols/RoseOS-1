@@ -12,8 +12,9 @@
 //! - **Logs** name the method, the route's template (never the path a client sent), the status and the time taken.
 //!   No body, header, token, passphrase, code, key, account name or client address reaches a log line.
 
-use std::io::{BufReader, Read, Write};
-use std::net::TcpListener;
+use std::any::Any;
+use std::io::{self as stdio, BufReader, Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,10 +39,12 @@ pub enum Reply {
     Refused(u16, &'static str),
 }
 
-/// What a handler is given: the signed-in principal on an account route, and the time.
+/// What a handler is given: the signed-in principal on an account route, the time, and the server's data (what
+/// the adapter gave `Server::with_data`: per-account and shared databases; the handler downcasts it).
 pub struct Ctx<'a> {
     pub principal: Option<&'a Principal>,
     pub now: u64,
+    pub data: &'a (dyn Any + Send + Sync),
 }
 
 pub type Handler = fn(&Ctx, Option<&Value>) -> Reply;
@@ -99,6 +102,7 @@ pub struct Server {
     auth: Mutex<Box<dyn Auth>>,
     log: Box<Log>,
     clock: Box<Clock>,
+    data: Box<dyn Any + Send + Sync>,
     open: AtomicUsize,
 }
 
@@ -155,6 +159,7 @@ impl Server {
             auth: Mutex::new(auth),
             log: Box::new(stderr_log),
             clock: Box::new(unix_now),
+            data: Box::new(()),
             open: AtomicUsize::new(0),
         })
     }
@@ -167,6 +172,17 @@ impl Server {
     pub fn with_clock(mut self, clock: Box<Clock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// What handlers reach as `ctx.data` (the adapter's databases).
+    pub fn with_data(mut self, data: Box<dyn Any + Send + Sync>) -> Self {
+        self.data = data;
+        self
+    }
+
+    /// Connections being served now.
+    pub fn open_connections(&self) -> usize {
+        self.open.load(Ordering::SeqCst)
     }
 
     fn auth(&self) -> std::sync::MutexGuard<'_, Box<dyn Auth>> {
@@ -207,18 +223,11 @@ impl Server {
         }
         let now = (self.clock)();
         if signin::is_signin_path(path) {
-            let mut auth = self.auth();
-            let r = signin::handle(
-                &mut **auth,
-                &self.app,
-                self.admission,
-                &req.method,
-                path,
-                &req.body,
-                req.header("authorization"),
-                client,
-                now,
-            );
+            // Read and check the request first: the authenticator is held only for the call itself.
+            let r = match signin::parse(&req.method, path, &req.body, req.header("authorization")) {
+                Ok(call) => signin::run(&mut **self.auth(), &self.app, self.admission, call, client, now),
+                Err(r) => r,
+            };
             return (r, "/signin/v1");
         }
         let Some(route) = self.routes.iter().find(|r| r.path == path && r.method == req.method) else {
@@ -265,6 +274,7 @@ impl Server {
         let ctx = Ctx {
             principal: principal.as_ref(),
             now,
+            data: &*self.data,
         };
         let reply = panic::catch_unwind(AssertUnwindSafe(|| (route.handler)(&ctx, body.as_ref())));
         let response = match reply {
@@ -284,15 +294,16 @@ impl Server {
         (response, route.path)
     }
 
-    /// Serves one connection: one request, one response, then close.
+    /// Serves one connection: one request, one response, then close. A panic anywhere in answering it (an
+    /// authenticator or a log sink, as well as a handler) answers `500 internal` and is contained here.
     pub fn serve_stream<S: Read + Write>(&self, stream: S, client: &str) {
         let started = Instant::now();
         let mut reader = BufReader::new(stream);
         let (response, method, route) = match http::read_request(&mut reader, self.limits) {
-            Ok(req) => {
-                let (r, route) = self.respond(&req, client);
-                (r, method_label(&req.method), route)
-            }
+            Ok(req) => match panic::catch_unwind(AssertUnwindSafe(|| self.respond(&req, client))) {
+                Ok((r, route)) => (r, method_label(&req.method), route),
+                Err(_) => (signin::error(500, "internal"), method_label(&req.method), "-"),
+            },
             Err(e) => match e.status() {
                 Some(status) => (signin::error(status, "bad_request"), "OTHER", "-"),
                 None => return,
@@ -300,41 +311,123 @@ impl Server {
         };
         let mut stream = reader.into_inner();
         let _ = http::write_response(&mut stream, &response);
-        (self.log)(&LogLine {
+        let line = LogLine {
             method,
             route,
             status: response.status,
             micros: started.elapsed().as_micros(),
-        });
+        };
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| (self.log)(&line)));
     }
 
-    /// Accepts connections until the listener fails, each on its own thread, at most `max_connections` at once.
-    /// Rate limits count by the peer's address (§7.7 item 6: which proxy header carries the client is open).
-    pub fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
-        for stream in listener.incoming() {
-            let stream = match stream {
-                Ok(s) => s,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
+    /// Accepts connections, each on its own thread, at most `max_connections` at once. A request must arrive
+    /// within `timeout` of the connection, and its response leave within `timeout` (a deadline for the whole of
+    /// each, not each read). Failing to accept one connection (out of descriptors, say) waits briefly and goes on;
+    /// it never stops the server. Rate limits count by the peer's address (§7.7 item 6 is open).
+    pub fn serve(self: Arc<Self>, listener: TcpListener) -> stdio::Result<()> {
+        let mut backoff = Duration::from_millis(10);
+        loop {
+            let stream = match listener.accept() {
+                Ok((s, _)) => {
+                    backoff = Duration::from_millis(10);
+                    s
+                }
+                Err(e) if e.kind() == stdio::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    std::thread::sleep(backoff);
+                    backoff = (backoff * 2).min(Duration::from_secs(1));
+                    continue;
+                }
             };
-            let _ = stream.set_read_timeout(Some(self.timeout));
-            let _ = stream.set_write_timeout(Some(self.timeout));
             if self.open.fetch_add(1, Ordering::SeqCst) >= self.max_connections {
                 self.open.fetch_sub(1, Ordering::SeqCst);
-                let mut s = stream;
+                let mut s = Timed::new(&stream, Duration::from_millis(200));
                 let _ = http::write_response(&mut s, &signin::error(503, "busy"));
+                close(&stream, Duration::from_millis(50));
                 continue;
             }
-            let server = Arc::clone(&self);
+            let slot = Slot(Arc::clone(&self));
             let spawned = std::thread::Builder::new().spawn(move || {
+                let server = &slot.0;
                 let client = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
-                server.serve_stream(&stream, &client);
-                server.open.fetch_sub(1, Ordering::SeqCst);
+                server.serve_stream(Timed::new(&stream, server.timeout), &client);
+                close(&stream, Duration::from_secs(1));
             });
-            if spawned.is_err() {
-                self.open.fetch_sub(1, Ordering::SeqCst);
-            }
+            drop(spawned); // a thread that could not start drops its closure, and with it the slot
         }
-        Ok(())
+    }
+}
+
+/// A connection slot, given back when the connection's thread ends, however it ends.
+struct Slot(Arc<Server>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.open.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A socket with a deadline for all its reads together, and one for all its writes (from the first write).
+struct Timed<'a> {
+    stream: &'a TcpStream,
+    span: Duration,
+    read_by: Instant,
+    write_by: Option<Instant>,
+}
+
+impl<'a> Timed<'a> {
+    fn new(stream: &'a TcpStream, span: Duration) -> Self {
+        Timed {
+            stream,
+            span,
+            read_by: Instant::now() + span,
+            write_by: None,
+        }
+    }
+}
+
+fn left(by: Instant) -> stdio::Result<Duration> {
+    let left = by.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        Err(stdio::Error::new(stdio::ErrorKind::TimedOut, "deadline"))
+    } else {
+        Ok(left)
+    }
+}
+
+impl Read for Timed<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> stdio::Result<usize> {
+        self.stream.set_read_timeout(Some(left(self.read_by)?))?;
+        (&*self.stream).read(buf)
+    }
+}
+
+impl Write for Timed<'_> {
+    fn write(&mut self, buf: &[u8]) -> stdio::Result<usize> {
+        let by = *self.write_by.get_or_insert_with(|| Instant::now() + self.span);
+        self.stream.set_write_timeout(Some(left(by)?))?;
+        (&*self.stream).write(buf)
+    }
+    fn flush(&mut self) -> stdio::Result<()> {
+        (&*self.stream).flush()
+    }
+}
+
+/// Ends the connection so the response is not lost to a reset: no more writes, then what the client still sends
+/// (an unread body, extra bytes) is read and dropped, up to 64 KB or `wait`.
+fn close(stream: &TcpStream, wait: Duration) {
+    let _ = stream.shutdown(Shutdown::Write);
+    let by = Instant::now() + wait;
+    let mut buf = [0u8; 4096];
+    let mut drained = 0usize;
+    while drained < 64 * 1024 {
+        let Ok(left) = left(by) else { break };
+        if stream.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
+        match (&*stream).read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => drained += n,
+        }
     }
 }
