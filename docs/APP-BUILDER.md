@@ -1514,7 +1514,7 @@ naming what breaks. Raising `api` allows it, and marks the version as
 needing older clients to update, through the library's minClientVersionCode
 (slice 9). `api` can never go down (`api_lowered`).
 
-### 7.4 Server profile (planned; next slices)
+### 7.4 Server profile (`workspace/rose-app-runtime`: the core in source, the rose-signin adapter next)
 
 - **Runtime.** A small runtime crate (App Core) runs the generated handlers,
   serving `rose-signin-v1`'s routes (`/signin/v1/*`) and the contract's routes.
@@ -1529,9 +1529,74 @@ needing older clients to update, through the library's minClientVersionCode
   app's author is trusted like any server operator. Scoping protects users
   from the app's mistakes, not from its author.
 - **Readiness.** The server reports ready only when the sealer is ready, the
-  migrations are done and any restore has run. Without a key it refuses to
-  start, and never invents one.
+  migrations are done and any restore has run. Without a key it is not
+  ready, and it never invents one (§7.7, item 3).
 - **Logs** never contain bodies, tokens, passphrases, codes or keys.
+
+**The core** (`workspace/rose-app-runtime`; source, built on by nothing yet)
+is standard library only, with no dependencies. It builds and tests offline
+anywhere, and its own CI runs it with the runner image's toolchain, fetching
+nothing (`.github/workflows/rose-app-runtime.yml`).
+- **HTTP.** One bounded HTTP/1.1 request per connection: 16 KB of head, 64
+  headers and a 1 MB body. It refuses:
+  - `Transfer-Encoding` (so no chunked body, and no way to disagree with a
+    proxy about where a request ends);
+  - a repeated or malformed `Content-Length`;
+  - folded or malformed headers and bare line feeds.
+
+  Every response closes the connection and carries
+  `Cache-Control: no-store`. Connections are capped (64) and time out (10 s).
+- **JSON.** Strict: one value, no repeated key, at most 64 deep, finite
+  numbers. Integers that fit an `i64` stay integers.
+- **Sign-in routes** map `docs/ROSE-SIGNIN-V1.md` onto an injected `Auth`,
+  rose-signin's `Authenticator` fixed to this app (its `validate` is
+  `validate_for`). The documented error words and statuses are kept. Where
+  the document names no status or body, App Core chose these, and the
+  generated client reads them:
+  - enrollment and authenticator recovery answer
+    `{otpauth_uri, handle, recovery_codes}`;
+  - sign-in answers `{token, account}`, plus `recovery_codes` after a
+    restore issued new ones;
+  - passphrase recovery answers `{recovery_codes}`;
+  - confirmation and both sign-outs answer `204`;
+  - statuses: `400` for `passphrase_too_short`, `passphrase_too_long`,
+    `invalid_name` and `bad_request`; `403` for `not_admitted`; `409` for
+    `enrollment_pending` and `already_enrolled`; `401` for `not_confirmed`,
+    `sign_in_failed`, `recovery_failed` and `session_invalid`; `429` for
+    `try_later`, with `Retry-After`; `503` for `auth_unavailable`.
+
+  Sign-out answers `204` whether or not the token was live, so it reveals
+  nothing. Admission (`invite` or `open`) is the app's declaration, never the
+  request's.
+- **App routes.** The contract's exact method and path under `/app/`.
+  - An account route runs only with a live session of this app. The
+    runtime checks `principal.app` again after `validate_for`, and the
+    handler gets the principal.
+  - A route with a request type takes `application/json`, and any other
+    route takes no body.
+  - A handler returns a value (`200`) or a 4xx word. A panic, a 5xx, a
+    malformed word or a non-finite number is `500 internal`.
+- **Readiness.** `/health` carries exactly `app_id`, `revision_sha256` and
+  `deployment_sha256` (§7.7), all supplied at start-up and none made up.
+  It answers `200` only when the authenticator, the migrations and any
+  restore are all ready, and `503` until then. Every other route answers
+  `503 not_ready` until then.
+- **Logs** hold the method, the route's template (never the path the client
+  sent), the status and the time taken. They hold no body, header, token,
+  passphrase, code, key, account name or client address. Types that carry
+  secrets print as `<redacted>`.
+- **Client address.** Rate limits count by the peer address until §7.7
+  item 6 says which proxy header carries the client. Behind one proxy every
+  client shares that address. This is a known limit, not a decision.
+
+**Next (slice 7b): the adapter.** It binds `Auth` to rose-signin `23062a04`
+(`SqliteStore`, `AeadSealer`, `validate_for`/`revoke_for`), opens each
+user's own SQLite file and applies the migrations. It computes
+`revision_sha256` from the binary itself, and fills `app_id` and
+`deployment_sha256` from what the host passes. It uses only rose-signin's
+own locked dependencies, so it adds no crate. The key's delivery (D9) and
+the restore marker (item 5) stay open, so the adapter loads no key and runs
+no restore until those are agreed.
 
 ### 7.5 Client sign-in (planned)
 
@@ -1879,7 +1944,11 @@ need no hosting and no further OS Core change.
    machine's own toolchain: a static-pie one passes, and a dynamically
    linked one is refused. The rest are made byte by byte. Every server
    build runs the check.
-7. The runtime crate on rose-signin `23062a04`, with its own CI.
+7. **The runtime (§7.4).**
+   - **7a, the standard-library core:** done
+     (`workspace/rose-app-runtime`, with its own offline CI).
+   - **7b, the adapter onto rose-signin `23062a04`** and per-user SQLite:
+     next. It builds only where rose-signin's locked crates are available.
 8. Codegen and the client sign-in overlay.
 9. The library wire summary and its fixture for Home/App.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
