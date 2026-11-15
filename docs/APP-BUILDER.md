@@ -1473,30 +1473,55 @@ the same manifest.
 Proposed manifest:
 - `schemaVersion: 1`, `projectId`, `versionCode`;
 - `elf: {sha256, size, target}`;
-- `listen`: the host passes `PORT`;
+- `listen`: the host passes `PORT`, default `8080`;
 - `health: "/health"`;
 - `dataDir`: the host passes `DATA_DIR`, the only writable path, holding
   `TMPDIR`;
 - `signin: {revision: "23062a04"}`;
 - `schema` versions.
 
-Open items for the Chariot owner (App Core's proposal in brackets):
-1. ELF target and libc [static `*-linux-musl`, with SQLite compiled in].
-2. Further manifest fields [resources, shutdown grace].
-3. Health [`200` only when ready, else `503`; liveness kept separate if
-   Chariot wants it].
-4. The client base URL [one stable HTTPS URL per project, allocated before
-   the first build and never changed; written into the APK as configuration,
-   never a secret].
-5. Sleep [wait within a stated bound, or `503` with `Retry-After`].
-6. Sealing key (D9) [a file passed at start, outside the ELF, the manifest,
-   `DATA_DIR` and backups, holding a current version and versioned keys; no
-   key means not ready].
-7. Client address for rate limits [one header only the proxy sets].
-8. Restore signal [a flag or marker that makes the server run
-   `restore_after_backup` before serving].
-9. Rollback [keep the previous ELF; report the running sha256].
-10. Process and logs [SIGTERM within a grace period; no secrets in logs].
+**Agreed with the Chariot owner (relayed by Chief, 2026-11-15):**
+- **Binary:** a static x86-64 musl ELF, taking `PORT` and `DATA_DIR`, behind
+  a stable HTTPS endpoint. A stopped or unhealthy server answers `503` with
+  `Retry-After`.
+- **Readiness** is served on the app's own listener (default `8080`), with
+  no separate liveness check. `/health` returns `200` only once the sealer is
+  ready, migrations are done and any restore has run, and `503` until then.
+  It carries the same identity fields either way, and no secrets, request
+  data or account information:
+  - `appId`: the Chariot host's UUID. It is not the builder's `projectId`.
+    The builder's ledger keeps an explicit mapping from `projectId` to the
+    hosted app id and the hosted APK app id, written only from owner tooling
+    or publisher results, never guessed.
+  - `revisionSha256`: measured by the server itself, by hashing its own ELF
+    at start.
+  - `deploymentSha256`: the authoritative value is the
+    `CHARIOT_DEPLOYMENT_SHA256` the host passes, which the server echoes. Any
+    hash the server computes itself over its args, port and schema is
+    reported separately and never replaces it.
+- **Publication** uses Chariot's existing creator auth, by sha256, never the
+  phone or the APK. The publication adapter isn't finished, and there is no
+  live URL or credential.
+
+Still open for the Chariot owner (App Core's proposal in brackets):
+1. Further manifest fields [resources, shutdown grace].
+2. The name of the variable that carries the host's app id to the server
+   [for example `CHARIOT_APP_ID`].
+3. Sealing key (D9). Chariot prefers a pinned Secret Manager descriptor
+   [Chariot resolves it at start into a read-only key file outside the ELF,
+   `DATA_DIR` and backups; the server never holds the descriptor's
+   credentials; no key means not ready].
+4. Schema-changing deploys, which return a conflict today [the manifest
+   states `schema: {from, to}`; the owner confirms; Chariot snapshots
+   `DATA_DIR` first; the server migrates forward only and is ready only
+   afterwards; rollback restores the snapshot and the previous ELF].
+5. Restore. The marker is reserved and there is no executor yet [the
+   server runs `restore_after_backup` once, then removes the marker before
+   it reports ready; App Core makes no restore claim until Chariot has a
+   restore executor].
+6. Client address for rate limits [one header only the proxy sets].
+7. Rollback [keep the previous ELF; report the running sha256].
+8. Process and logs [SIGTERM within a grace period; no secrets in logs].
 
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
