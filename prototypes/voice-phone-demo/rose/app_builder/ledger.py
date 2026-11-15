@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -44,6 +45,20 @@ CREATE TABLE IF NOT EXISTS version_dependencies (
 CREATE TABLE IF NOT EXISTS version_api_reports (
   project_id TEXT NOT NULL, version_code INTEGER NOT NULL, report TEXT NOT NULL,
   PRIMARY KEY (project_id, version_code));
+-- Level 2 (docs/APP-BUILDER.md §7): a project's profile is bound by its first client-server delivery and never
+-- dropped; each such version pairs its APK with one server ELF and records its migration lock.
+CREATE TABLE IF NOT EXISTS project_profiles (
+  project_id TEXT PRIMARY KEY REFERENCES projects(project_id), profile TEXT NOT NULL, version_code INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS version_servers (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL,
+  target TEXT NOT NULL, PRIMARY KEY (project_id, version_code));
+CREATE TABLE IF NOT EXISTS version_migrations (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, scope TEXT NOT NULL, number INTEGER NOT NULL,
+  name TEXT NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY (project_id, version_code, scope, number));
+-- Level 3 (§3.3 share): the hosted app id for a project, recorded only from owner tooling or the publisher.
+CREATE TABLE IF NOT EXISTS project_hosting (
+  project_id TEXT PRIMARY KEY REFERENCES projects(project_id), hosted_app_id TEXT NOT NULL UNIQUE,
+  recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -57,6 +72,31 @@ def _text(value: str) -> str:
 
 class LedgerError(ValueError):
     """A request the ledger refuses; nothing changed."""
+
+
+CLIENT_SERVER = 'client-server-v1'
+HEX64 = re.compile(r'[0-9a-f]{64}')
+UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+SCOPES = ('account', 'shared')
+MIGRATION_NAME = re.compile(r'[a-z0-9_]{1,40}')
+
+
+def _server(server) -> tuple:
+    if not isinstance(server, dict) or set(server) != {'sha256', 'size', 'target'} \
+            or not isinstance(server['sha256'], str) or not HEX64.fullmatch(server['sha256']) \
+            or type(server['size']) is not int or server['size'] < 1 \
+            or not isinstance(server['target'], str) or not 1 <= len(server['target']) <= 64:
+        raise LedgerError('a client-server version needs its server as {sha256, size, target}')
+    return server['sha256'], server['size'], server['target']
+
+
+def _migration(lock) -> tuple:
+    if not isinstance(lock, dict) or set(lock) != {'scope', 'number', 'name', 'sha256'} \
+            or lock['scope'] not in SCOPES or type(lock['number']) is not int or not 1 <= lock['number'] <= 9999 \
+            or not isinstance(lock['name'], str) or not MIGRATION_NAME.fullmatch(lock['name']) \
+            or not isinstance(lock['sha256'], str) or not HEX64.fullmatch(lock['sha256']):
+        raise LedgerError('a migration lock entry is {scope, number, name, sha256}')
+    return lock['scope'], lock['number'], lock['name'], lock['sha256']
 
 
 def _id() -> str:
@@ -262,12 +302,35 @@ class Ledger:
                 raise LedgerError('the signer changed')
 
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
-                dependencies=(), api_report: dict | None = None):
-        """Record the delivered version and, in the same transaction, the libraries it was built with (its lock)."""
+                dependencies=(), api_report: dict | None = None, profile: str | None = None, server=None,
+                migrations=()):
+        """Record the delivered version and, in the same transaction, the libraries it was built with (its lock).
+        A client-server version (profile CLIENT_SERVER) also records its server ELF and its migration lock, and binds
+        the project's profile; once bound, a version without its server is refused. Nothing is half recorded."""
+        if profile not in (None, CLIENT_SERVER):
+            raise LedgerError('unknown profile')
+        if profile == CLIENT_SERVER:
+            server_row = _server(server)
+            migration_rows = [_migration(m) for m in migrations]
+            if len({(r[0], r[1]) for r in migration_rows}) != len(migration_rows):
+                raise LedgerError('a migration is listed twice')
+        elif server is not None or migrations:
+            raise LedgerError('only a client-server version has a server and migrations')
         with self.lock:
             job = self.job(job_id)
             if job['state'] not in ACTIVE or self.cancel_requested(job_id):
                 return False
+            if profile is None and self._profile(job['projectId']) == CLIENT_SERVER:
+                raise LedgerError('this project has a server; a version without it is refused')
+            if profile == CLIENT_SERVER:  # the lock, kept by the ledger itself and not only by its callers
+                locked = {(r[0], r[1]): (r[2], r[3]) for r in self.db.execute(
+                    'SELECT DISTINCT scope, number, name, sha256 FROM version_migrations WHERE project_id=?',
+                    (job['projectId'],))}
+                mine = {(r[0], r[1]): (r[2], r[3]) for r in migration_rows}
+                for key, delivered in locked.items():
+                    if mine.get(key) != delivered:
+                        raise LedgerError(f'migration {key[0]}/{key[1]:04d} was delivered and must stay exactly as '
+                                          'it was')
             newest = self.db.execute('SELECT MAX(version_code) FROM versions WHERE project_id=?',
                                      (job['projectId'],)).fetchone()[0] or 0
             if job['versionCode'] is None or job['versionCode'] <= newest:
@@ -283,6 +346,14 @@ class Ledger:
                 if api_report is not None:  # advisory, kept with the version it describes
                     self.db.execute('INSERT INTO version_api_reports VALUES (?,?,?)',
                                     (job['projectId'], job['versionCode'], json.dumps(api_report, sort_keys=True)))
+                if profile == CLIENT_SERVER:
+                    self.db.execute('INSERT OR IGNORE INTO project_profiles VALUES (?,?,?)',
+                                    (job['projectId'], CLIENT_SERVER, job['versionCode']))
+                    self.db.execute('INSERT INTO version_servers VALUES (?,?,?,?,?)',
+                                    (job['projectId'], job['versionCode'], *server_row))
+                    for row in migration_rows:
+                        self.db.execute('INSERT INTO version_migrations VALUES (?,?,?,?,?,?)',
+                                        (job['projectId'], job['versionCode'], *row))
                 self.db.execute("UPDATE jobs SET state='ready', stage='ready', message='Ready to install.', "
                                 "updated=? WHERE job_id=?", (self.clock(), job_id))
                 self.db.execute('COMMIT')
@@ -330,6 +401,56 @@ class Ledger:
             row = self.db.execute('SELECT report FROM version_api_reports WHERE project_id=? AND version_code=?',
                                   (project, version_code)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def profile(self, project: str) -> str:
+        """The project's bound profile: CLIENT_SERVER once a client-server version was delivered, else app-v1."""
+        with self.lock:
+            return self._profile(project)
+
+    def _profile(self, project: str) -> str:
+        row = self.db.execute('SELECT profile FROM project_profiles WHERE project_id=?', (project,)).fetchone()
+        return row[0] if row else 'app-v1'
+
+    def server(self, project: str, version_code: int) -> dict | None:
+        """The server ELF a delivered client-server version pairs with its APK."""
+        with self.lock:
+            row = self.db.execute('SELECT sha256, size, target FROM version_servers WHERE project_id=? AND '
+                                  'version_code=?', (project, version_code)).fetchone()
+        return {'sha256': row[0], 'size': row[1], 'target': row[2]} if row else None
+
+    def migration_lock(self, project: str) -> list[dict]:
+        """Every migration any delivered version ran, once each (rose.app_builder.migrations.check holds every later
+        revision to these). Two versions disagreeing about one would be a ledger fault, refused here."""
+        with self.lock:
+            rows = self.db.execute('SELECT DISTINCT scope, number, name, sha256 FROM version_migrations WHERE '
+                                   'project_id=? ORDER BY scope, number', (project,)).fetchall()
+        if len({(r[0], r[1]) for r in rows}) != len(rows):
+            raise LedgerError('delivered versions disagree about a migration')
+        return [{'scope': r[0], 'number': r[1], 'name': r[2], 'sha256': r[3]} for r in rows]
+
+    def hosted_app(self, project: str) -> str | None:
+        """The hosted app id owner tooling or the publisher recorded for the project (never derived from it)."""
+        with self.lock:
+            row = self.db.execute('SELECT hosted_app_id FROM project_hosting WHERE project_id=?', (project,)).fetchone()
+        return row[0] if row else None
+
+    def record_hosted_app(self, project: str, hosted_app_id: str) -> None:
+        """Record the mapping once: the same id again is a no-op; another id, or an id another project has, is
+        refused (a mapping that moved would send one app's phones another app's links)."""
+        if not isinstance(hosted_app_id, str) or not UUID.fullmatch(hosted_app_id):
+            raise LedgerError('a hosted app id is a lower-case UUID')
+        with self.lock:
+            if self._project(project) is None:
+                raise LedgerError('unknown project')
+            current = self.hosted_app(project)
+            if current == hosted_app_id:
+                return
+            if current is not None:
+                raise LedgerError('this project already has a hosted app id')
+            try:
+                self.db.execute('INSERT INTO project_hosting VALUES (?,?,?)', (project, hosted_app_id, self.clock()))
+            except sqlite3.IntegrityError:
+                raise LedgerError('that hosted app id belongs to another project') from None
 
     def library_lock(self, project: str) -> dict:
         """coordinate -> sha256 for every library any delivered version of the project used (the newest digest if
