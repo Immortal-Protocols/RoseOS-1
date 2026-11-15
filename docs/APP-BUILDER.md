@@ -612,6 +612,53 @@ can send meets the rules above. A client can test its parsing against the
 same file. This is the server and wire side only (App Core). The phone's
 parsing and display are Home/App's, and are not implemented here.
 
+**`share`** (schemaVersion 1; `app_builder/share.py`; source, not yet
+served) tells the phone whether a version has a public download page it may
+share.
+- **Who talks to hosting.** The phone never contacts hosting and holds no
+  Chariot credential. The builder's server reads the hosting metadata,
+  `GET /apps/<hostedAppId>/releases/<versionCode>/metadata`, which is public,
+  from the Chariot owner.
+- **The hosted app id.** It comes from an explicit per-project mapping that
+  owner tooling or the publisher records. It is never derived from
+  `projectId`.
+- **Links** are passed through exactly as hosting returned them: `release` as
+  `versionUrl`, and `latest` (a `307` to the newest release) as `latestUrl`.
+  The raw `download` link is never shared.
+
+| Hosting's answer | `share` |
+|---|---|
+| no hosted app id recorded for the project (no lookup made) | `{schemaVersion: 1, status: "unpublished"}` |
+| `200` whose `app_id`, `package_name`, `version_code`, `signer_sha256`, `sha256` and `size_bytes` all equal the builder's record, with plain absolute https `release` and `latest` links | `{schemaVersion: 1, status: "published", versionUrl, latestUrl}` |
+| `200` that differs from the record in any of those fields | `unavailable`: "the hosted copy doesn't match this version" |
+| `200` the server can't read (links missing or not plain https, wrong types) | `unavailable`: "the app's download host answered something this server can't read" |
+| `404` | `unpublished` |
+| `503` | `unavailable`: "the app's download storage is unavailable right now" |
+| any other status, or no answer | `unavailable`: "the app's download host could not be reached" |
+
+- **Caching.** A `200` stands for its `max-age`, at most 600 s, because
+  hosting can't revoke a release yet. `404` and `503` are never kept. After a
+  `503` the server waits its `Retry-After` (at most 1 hour) before asking that
+  host again.
+- **Links.** The server's link rule is the phone's `ShareState.link`: https,
+  a host, no credentials, fragment, spaces or non-ASCII, and at most 2048
+  characters.
+- **Fixture.** `rose/tests/fixtures/share-summary-v1.json` lists each
+  recorded version, hosting's answer and the `share` served, plus
+  `clientUnreadable` values a phone must not read as links.
+  - **Verbatim answers:** they come from the Chariot owner's own fixture,
+    `Immortal-Protocols/ProtocolsBackend`
+    `chariot/test/fixtures/apk_http/metadata-responses.json` on
+    `codex/project1-apk-hosting-contract` at `31de2ac1`. It is copied byte
+    for byte to `rose/tests/fixtures/chariot/`, and a test pins its git blob
+    `3222e6c5`.
+  - **Derived cases:** cases marked DERIVED change one thing in that answer.
+    Its URLs are synthetic, and none is live.
+- **Not yet done.** The library doesn't serve `share` yet. That needs the
+  hosted-app mapping in the ledger and a metadata reader on the builder host,
+  and nothing is published. Until then phones read the absent field as
+  "Not shared yet".
+
 ### 3.4 Baseline
 
 minSdk 26, targetSdk 35, framework APIs, plus declared pure-Java JAR libraries
