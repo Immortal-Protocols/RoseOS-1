@@ -41,6 +41,8 @@ from .toolchain import StepFailed, run
 TARGET = 'x86_64-unknown-linux-musl'  # §7.7: a static x86-64 musl ELF
 PACKAGE = 'rose-app-server'
 RUNTIME = 'rose-app-runtime'  # the builder's own rose/meta.rs names it; a host injects it as a path crate
+ADAPTER = 'rose-app-runtime-signin'  # the generated rose/main.rs starts the server through it (codegen)
+BUILDER_CRATES = (RUNTIME, ADAPTER)  # what the builder's own generated code names, so a host must inject
 EDITION = '2021'
 ENTRY = 'rose/main.rs'
 GENERATED = re.compile(r'rose/(?:[a-z][a-z0-9_]{0,63}/){0,4}[a-z][a-z0-9_]{0,63}\.rs')
@@ -201,7 +203,15 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         _write(path, text)
     path_crates = {k: Path(os.path.realpath(v)) for k, v in (path_crates or {}).items()}
     dependent = {k: Path(os.path.realpath(v)) for k, v in (dependent_path_crates or {}).items()}
-    _check_path_crates({**path_crates, **dependent})
+    builder_crates = {**path_crates, **dependent}
+    mapped = ('/rose-build', *(f'/rose-crates/{n}' for n in builder_crates))  # what the binary names them by
+    for name, folder in builder_crates.items():  # so a scan for a crate's folder never meets its remapped name
+        if any(str(folder) in m for m in mapped):
+            raise BuildFailed('toolchain', 'rust_toolchain_unavailable', f'The builder\'s crate {name} is in a '
+                              'folder the build\'s own names for crates would contain.')
+    if _check_path_crates(builder_crates) and source is None:
+        raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'The builder\'s own crates use crates.io crates, '
+                          'and this builder has no crate set, so the server was not built.')
     _write(server / 'Cargo.toml', cargo_toml(declared, path_crates))
     if previous_lock is not None:
         _write(server / 'Cargo.lock', previous_lock)
@@ -267,8 +277,10 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         st = None
     if st is None or not stat.S_ISREG(st.st_mode):
         raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'Cargo finished without the server binary.')
-    builder_paths = (work, Path(cache), *((vendor,) if vendor is not None else ()), *own)
-    if _holds_any(elf, [str(p).encode() for p in builder_paths]):
+    if own and _holds_any(elf, [str(p).encode() for p in own]):
+        raise BuildFailed('toolchain', 'build_path_embedded', 'The server binary holds the folder of one of the '
+                          'builder\'s own crates, so it was not used.')
+    if _holds_any(elf, [str(p).encode() for p in (work, Path(cache), *((vendor,) if vendor is not None else ()))]):
         raise BuildFailed('dependency', 'build_path_embedded', 'The server binary holds a path from the builder\'s '
                           'machine (a crate\'s macro or build script put it there), so it was not used.')
     try:
@@ -300,25 +312,35 @@ def _holds_any(path: Path, needles: list[bytes]) -> bool:
 def _check_path_crates(crates: dict[str, Path]):
     """Every builder crate is there, and every path its own Cargo.toml depends on is another of them, at the same
     canonical folder: one package each (the adapter's `../rose-app-runtime` is the runtime the server uses), all
-    read-only to the build. A crate depending on a folder outside them is the host's set-up, refused here."""
+    read-only to the build. A crate depending on a folder outside them, by a symlink, or a folder holding another
+    package is the host's set-up, refused here. True when any of them uses a crates.io crate (the adapter does)."""
     folders = {folder: name for name, folder in crates.items()}
+    registry = False
     for name, folder in crates.items():
         try:
             manifest = tomllib.loads((folder / 'Cargo.toml').read_text(encoding='utf-8'))
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
             raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
                               f'The builder\'s crate {name} is missing or unreadable.') from None
+        package = manifest.get('package')
+        if not isinstance(package, dict) or package.get('name') != name:
+            raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
+                              f'The builder\'s crate {name} is a folder holding another package.')
         tables = [manifest.get('dependencies'), manifest.get('build-dependencies')]
         tables += [t.get(k) for t in (manifest.get('target') or {}).values() if isinstance(t, dict)
                    for k in ('dependencies', 'build-dependencies')]
         for table in tables:
             for dep, spec in (table or {}).items():
                 if isinstance(spec, dict) and 'path' in spec:
+                    # Cargo (and so rustc, and the remap) see the path as written; it must be the real folder.
                     target = Path(os.path.realpath(folder / str(spec['path'])))
-                    if folders.get(target) is None:
+                    if folders.get(target) is None or Path(os.path.normpath(folder / str(spec['path']))) != target:
                         raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
                                           f'The builder\'s crate {name} depends on {dep} at a folder the build '
                                           'was not given as one of its crates.')
+                else:
+                    registry = True  # a crates.io crate: from the host's crate set, like the app's own
+    return registry
 
 
 def _refused(refused: crate_set.Refused) -> BuildFailed:

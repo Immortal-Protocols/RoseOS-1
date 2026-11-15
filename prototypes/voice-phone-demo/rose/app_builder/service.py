@@ -224,9 +224,9 @@ class Builder:
           ``client_files(contract, package) -> {path: text}`` (under ``src/<package>/rose/``);
         - ``server_isolation`` (rose.app_builder.server_build.Isolation), ``rust_tools`` (``RustTools``) and
           ``crate_source`` (rose.app_builder.crates.CrateSource; only an app that declares crates needs one);
-        - ``server_crates``: the builder's own crates the server depends on (name -> folder: the runtime, which the
-          builder's own ``rose/meta.rs`` names, and its adapter), and ``server_crate_deps`` the path crates those
-          depend on (rose-signin)."""
+        - ``server_crates``: the builder's own crates the server depends on (name -> folder: the runtime and its
+          adapter, both named by the builder's own generated code, so both required), and ``server_crate_deps``
+          the path crates those depend on (rose-signin)."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         if tools.cache is None:  # the Java system image, made once per toolchain, in this builder's own storage
@@ -453,9 +453,9 @@ class Builder:
         if self.codegen is None:
             raise toolchain.StepFailed('toolchain', 'This builder has no code generator for a client-server app '
                                        'yet, so its server and API client were not built.')
-        if server_build.RUNTIME not in self.server_crates:
-            raise toolchain.StepFailed('toolchain', 'This builder has no server runtime crate set up, so the app\'s '
-                                       'server was not built.')
+        if missing := [name for name in server_build.BUILDER_CRATES if name not in self.server_crates]:
+            raise toolchain.StepFailed('toolchain', f'This builder has no {" or ".join(missing)} crate set up, so the '
+                                       'app\'s server was not built.')
         try:
             server_files = dict(self.codegen.server_files(api))
             client_files = dict(self.codegen.client_files(api, package))
@@ -475,10 +475,15 @@ class Builder:
         # The client's tree: the writer's checked app without the server's parts, plus the builder's own files.
         client = work / 'client'
         shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot))
-        for path, text in client_files.items():
-            target = client / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding='utf-8')
+        try:
+            for path, text in client_files.items():
+                target = client / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, 'x', encoding='utf-8') as stream:  # two of its files at one path is its fault too
+                    stream.write(text)
+        except (OSError, ValueError, UnicodeError):
+            raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote files that could not '
+                                       'be written.') from None
         built = server_build.build(
             snapshot, work / 'server', profile.server.crates, self.crate_source, self.rust_tools,
             self.server_isolation, cancelled, cache=self.root / 'crates', generated=server_files,

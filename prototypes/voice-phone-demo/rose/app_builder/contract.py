@@ -208,6 +208,8 @@ def load(snapshot: Path) -> Contract:
         if path.stat().st_size > MAX_FILE:
             raise _invalid(f'it is larger than {MAX_FILE // 1024} KB')
         data = json.loads(path.read_bytes().decode('utf-8'), object_pairs_hook=_no_duplicates)
+    except ContractRefused:
+        raise  # its own refusal (not a plain file, too large), which is a ValueError too
     except (UnicodeDecodeError, ValueError, RecursionError):
         raise _invalid('it must be UTF-8 JSON with no repeated keys') from None
     except OSError:

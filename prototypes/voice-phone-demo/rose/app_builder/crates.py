@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-CRATE = re.compile(r'([A-Za-z][A-Za-z0-9_-]{0,63})@(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'
+CRATE = re.compile(r'([A-Za-z][A-Za-z0-9_-]{0,63})@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
                    r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?')
 SHA256 = re.compile(r'[0-9a-f]{64}')
 REGISTRY = 'registry+https://github.com/rust-lang/crates.io-index'  # what cargo records for a replaced crates.io

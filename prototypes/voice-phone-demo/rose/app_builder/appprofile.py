@@ -31,9 +31,9 @@ SERVER_TOP = frozenset({FILE, 'contract', 'server'})
 MAX_FILE = 16 * 1024
 MAX_CRATES = 32
 ADMISSIONS = ('invite', 'open')  # rose-signin-v1 D7: creator invites by default, open sign-up when declared
-CRATE = re.compile(r'([a-z][a-z0-9_-]{0,63})@(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'
+CRATE = re.compile(r'([a-z][a-z0-9_-]{0,63})@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
                    r'(?:-[0-9A-Za-z.-]{1,40})?(?:\+[0-9A-Za-z.-]{1,40})?')
-MIGRATION = re.compile(r'\d{4}_[a-z0-9_]{1,40}\.sql')
+MIGRATION = re.compile(r'[0-9]{4}_[a-z0-9_]{1,40}\.sql')
 SERVER_DIRS = ('src', 'assets', 'migrations')
 # What a writer used to Cargo would put in server/; the builder writes these itself (from rose-app.json).
 BUILD_NAMES = ('cargo.toml', 'cargo.lock', 'build.rs', '.cargo')

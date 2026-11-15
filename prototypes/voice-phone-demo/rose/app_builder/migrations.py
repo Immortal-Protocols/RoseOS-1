@@ -27,7 +27,7 @@ from pathlib import Path
 from .appprofile import ProfileRefused
 
 SCOPES = ('account', 'shared')
-NAME = re.compile(r'(\d{4})_([a-z0-9_]{1,40})\.sql')
+NAME = re.compile(r'([0-9]{4})_([a-z0-9_]{1,40})\.sql')
 MAX_FILE = 256 * 1024
 MAX_MIGRATIONS = 1000
 MAX_STEPS = 50_000_000  # SQLite VM steps for one whole check: a runaway query is refused, never waited on

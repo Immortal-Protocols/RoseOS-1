@@ -16,13 +16,15 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from rose.app_builder import contract as C, ledger as L, server_build, service, template, toolchain
+from rose.app_builder import (appprofile, contract as C, crates, ledger as L, migrations, server_build, service,
+                              template, toolchain)
 from rose.app_builder.migrations import Migration
 from rose.app_builder.service import Builder
 from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
 
 REPO = Path(__file__).resolve().parents[4]
 RUNTIME = REPO / 'workspace/rose-app-runtime'
+BUILDER_CRATES = {'rose-app-runtime': RUNTIME, 'rose-app-runtime-signin': RUNTIME}  # none get as far as cargo
 HAS_CARGO = shutil.which('cargo') is not None and shutil.which('rustc') is not None
 
 CONTRACT = {'schemaVersion': 1, 'api': 1,
@@ -92,6 +94,14 @@ class Passthrough(server_build.Isolation):
         return argv, env
 
 
+def also(generate, path, text):
+    """generate, then one more file."""
+    def more(source, kind, request, cancelled):
+        generate(source, kind, request, cancelled)
+        (source / path).write_text(text, encoding='utf-8')
+    return more
+
+
 def package_folder(source: Path) -> Path:
     return next(source.glob('src/**/MainActivity.java')).parent
 
@@ -132,7 +142,7 @@ class HonestFailures(Base):
         self.assertIn(words, job['failure']['summary'])
 
     def builder(self, generate, **kw):
-        kw.setdefault('server_crates', {'rose-app-runtime': RUNTIME})
+        kw.setdefault('server_crates', BUILDER_CRATES)
         return super().builder(generate, **kw)
 
     def fresh(self, generate, **kw):
@@ -152,6 +162,8 @@ class HonestFailures(Base):
             (client_server_app(profile={'schemaVersion': 1, 'profile': 'client-server-v9'}), 'compile', 'profile'),
             (client_server_app(handlers='pub fn f() { let _ = include_str!("/etc/passwd"); }\n'), 'compile',
              'include_str'),
+            (also(client_server_app(), 'server/migrations/account/\u0660\u0660\u0660\u0662_more.sql', 'SELECT 1;\n'),
+             'compile', '_more.sql'),  # digits are ASCII digits, not any Unicode digit
         ]
         for generate, category, words in cases:
             with self.subTest(words=words):
@@ -173,19 +185,27 @@ class HonestFailures(Base):
                                (client({'{pkg}rose//Api.java': good}), 'outside'),
                                (client({'{pkg}rose/': good}), 'outside'),
                                (client({'{pkg}rose/Api.java': b'bytes'}), 'outside'),
-                               (Codegen(client=lambda pkg: {1: good}), 'outside')):
-            with self.subTest(words=words):
+                               (Codegen(client=lambda pkg: {1: good}), 'outside'),
+                               (client({'{pkg}rose/Api.java': good, '{pkg}rose/Api.java/Inner.java': good}),
+                                'could not be written'),
+                               (client({'{pkg}rose/A\x00.java': good}), 'could not be written'),
+                               (client({'{pkg}rose/Api.java': 'package x;\ud800\n'}), 'could not be written'),
+                               (client({'{pkg}rose/' + 'A' * 300 + '.java': good}), 'could not be written')):
+            files = sorted(map(repr, codegen.client_files(None, 'p.q'))) if codegen.client or codegen.outside else []
+            with self.subTest(words=words, files=files, broken=codegen.broken, writes=codegen.writes):
                 b = self.fresh(client_server_app(), codegen=codegen)
                 _, job = self.run_job(b)
                 self.assertFailed(job, 'toolchain', words)
 
     def test_without_the_runtime_crate_the_server_is_not_built(self):
-        # The builder's own rose/meta.rs names the runtime: without it the server's code is not the writer's fault.
-        for crates in ({}, {'rose-app-other': RUNTIME}):
+        # The builder's own generated code names the runtime and the adapter: without either, not the writer's fault.
+        for crates, missing in (({}, 'rose-app-runtime or rose-app-runtime-signin'),
+                                ({'rose-app-other': RUNTIME}, 'rose-app-runtime or rose-app-runtime-signin'),
+                                ({'rose-app-runtime': RUNTIME}, 'no rose-app-runtime-signin crate')):
             with self.subTest(crates=crates):
                 b = self.fresh(client_server_app(), codegen=Codegen(), server_crates=crates)
                 _, job = self.run_job(b)
-                self.assertFailed(job, 'toolchain', 'runtime crate')
+                self.assertFailed(job, 'toolchain', missing)
 
     def test_a_file_where_the_builders_folder_goes_is_the_writers(self):
         def writer(up):
@@ -207,7 +227,8 @@ class HonestFailures(Base):
                 self.assertFailed(job, 'compile', 'is not a folder')
 
     def test_a_contract_too_large_to_keep_is_refused_before_anything_is_built(self):
-        with mock.patch.object(service, 'MAX_CONTRACT', 200):
+        # Between the file's size (251 bytes) and its normalised form's (353): the limit is on what the ledger keeps.
+        with mock.patch.object(service, 'MAX_CONTRACT', 300):
             b = self.builder(client_server_app(), codegen=Codegen())
             _, job = self.run_job(b)
         self.assertFailed(job, 'compile', 'too large')
@@ -219,14 +240,15 @@ class HonestFailures(Base):
             c = json.loads(json.dumps(CONTRACT))
             c['types']['Note']['fields'] = fields
             return c
-        v1 = contract({'id': 'int', 'tag': {'type': 'string', 'optional': True}})
-        v2 = contract({'id': 'int'})
-        v3 = contract({'id': 'int', 'tag': {'type': 'int', 'optional': True}})  # fine after v2, breaks v1's phones
-        texts = [C.canonical_bytes(C.parse(c).data).decode() for c in (v1, v2)]
-        b = self.builder(client_server_app(contract=v3), codegen=Codegen())
-        b.ledger.contracts = lambda project: list(texts)
-        _, job = self.run_job(b)
-        self.assertFailed(job, 'compile', 'string to int')
+        tag = lambda t: {'id': 'int', 'tag': {'type': t, 'optional': True}}
+        for history in ((contract(tag('string')), contract({'id': 'int'})),  # v3 is fine after v2, breaks v1's phones
+                        (contract({'id': 'int'}), contract(tag('string')))):  # ... breaks only v2's
+            with self.subTest(history=[sorted(h['types']['Note']['fields']) for h in history]):
+                texts = [C.canonical_bytes(C.parse(c).data).decode() for c in history]
+                b = self.fresh(client_server_app(contract=contract(tag('int'))), codegen=Codegen())
+                b.ledger.contracts = lambda project: list(texts)
+                _, job = self.run_job(b)
+                self.assertFailed(job, 'compile', 'string to int')
 
         # A delivered client-server app cannot become a plain one.
         def plain(source, kind, request, cancelled):
@@ -258,7 +280,7 @@ class HonestFailures(Base):
             _, job = self.run_job(b)
         self.assertFailed(job, 'toolchain', 'stopped here by the test')
         self.assertEqual((seen['previous_lock'], seen['locked']), ('# delivered lock\n', {'serde@1.0.0': 'a' * 64}))
-        self.assertEqual(seen['path_crates'], {'rose-app-runtime': RUNTIME})
+        self.assertEqual(seen['path_crates'], BUILDER_CRATES)
 
 
 class Pieces(unittest.TestCase):
@@ -277,6 +299,23 @@ class Pieces(unittest.TestCase):
         self.assertIn('pub const ACCOUNT: &[&str] = &[\n];', shared)
         with self.assertRaises(ValueError):  # a gap would shift every later version
             server_build.migrations_rs({'account': [m('account', 1), m('account', 3)]}, False)
+
+    def test_names_take_ascii_digits_only(self):
+        for name in ('\u0660\u0660\u0660\u0661_init.sql', '\uff10\uff10\uff10\uff11_init.sql'):
+            self.assertIsNone(appprofile.MIGRATION.fullmatch(name))
+            self.assertIsNone(migrations.NAME.fullmatch(name))
+        self.assertTrue(appprofile.MIGRATION.fullmatch('0001_init.sql') and migrations.NAME.fullmatch('0001_init.sql'))
+        for pattern in (appprofile.CRATE, crates.CRATE):
+            self.assertIsNone(pattern.fullmatch('serde@1.\u0660.219'))
+            self.assertTrue(pattern.fullmatch('serde@1.0.219'))
+
+    def test_a_contract_file_too_large_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'contract').mkdir()
+            (Path(tmp) / 'contract/api.json').write_text(' ' * (C.MAX_FILE + 1) + '{}')
+            with self.assertRaises(C.ContractRefused) as caught:
+                C.load(Path(tmp))
+            self.assertIn('larger than', str(caught.exception))
 
     def test_meta_names_the_app_for_sign_in(self):
         text = server_build.meta_rs('app.rose.gen.p1', 'Notes: "mine"\x07', 'open')
@@ -334,9 +373,19 @@ class Pieces(unittest.TestCase):
                                                        'rose-signin = { path = "../rose-signin", features = ["sqlite"] }\n')
             signin = crate('rose-signin', 'sha2 = "0.10"\n')
             other = crate('elsewhere-runtime')
-            server_build._check_path_crates({'rose-app-runtime': runtime, 'rose-app-runtime-signin': adapter,
-                                             'rose-signin': signin})
-            for crates in ({'rose-app-runtime': other, 'rose-app-runtime-signin': adapter, 'rose-signin': signin},
+            # rose-signin uses a crates.io crate, so the set is needed; the runtime alone does not.
+            self.assertTrue(server_build._check_path_crates({'rose-app-runtime': runtime,
+                                                             'rose-app-runtime-signin': adapter,
+                                                             'rose-signin': signin}))
+            self.assertFalse(server_build._check_path_crates({'rose-app-runtime': runtime}))
+            misnamed = crate('misnamed')
+            (root / 'store').mkdir()
+            moved = root / 'store/rose-signin'
+            signin.rename(moved)
+            signin.symlink_to(moved, target_is_directory=True)  # ../rose-signin is a link: cargo sees the link
+            for crates in ({'rose-app-runtime': runtime, 'rose-app-runtime-signin': adapter, 'rose-signin': moved},
+                           {'rose-app-runtime': misnamed},
+                           {'rose-app-runtime': other, 'rose-app-runtime-signin': adapter, 'rose-signin': signin},
                            {'rose-app-runtime': runtime, 'rose-app-runtime-signin': adapter},
                            {'rose-app-runtime': root / 'missing'}):
                 with self.subTest(crates=sorted(crates)):
@@ -376,16 +425,29 @@ class Pieces(unittest.TestCase):
                              ['AndroidManifest.xml', 'res/raw/contract', 'src/app/contract/Terms.java',
                               'src/app/server/Helper.java'])
 
-    def test_a_missing_builder_crate_is_the_builders(self):
+    def test_a_builder_crate_set_up_wrong_is_the_builders(self):
         with tempfile.TemporaryDirectory() as tmp:
             snap = Path(tmp) / 'snap'
             (snap / 'server/src').mkdir(parents=True)
-            tools = mock.Mock(available=lambda: None)
-            with self.assertRaises(server_build.BuildFailed) as caught:
-                server_build.build(snap, Path(tmp) / 'work', [], None, tools, Passthrough(), cache=Path(tmp) / 'c',
-                                   generated={'rose/main.rs': 'fn main() {}\n'},
-                                   path_crates={'rose-app-runtime': Path(tmp) / 'nowhere'})
-            self.assertEqual(caught.exception.category, 'toolchain')
+            uses_registry = Path(tmp) / 'rose-app-runtime'
+            (uses_registry / 'src').mkdir(parents=True)
+            (uses_registry / 'Cargo.toml').write_text('[package]\nname = "rose-app-runtime"\nversion = "0.1.0"\n\n'
+                                                      '[dependencies]\nsha2 = "0.10"\n')
+            real = os.path.realpath
+            at_root = lambda p: '/rose-app-runtime' if str(p).endswith('at-root') else real(p)
+            for n, (crates, words, patch) in enumerate((
+                    ({'rose-app-runtime': Path(tmp) / 'nowhere'}, 'missing', None),
+                    ({'rose-app-runtime': uses_registry}, 'no crate set', None),  # the adapter's crates need one
+                    ({'rose-app-runtime': Path(tmp) / 'at-root'}, 'own names for crates', at_root))):
+                with self.subTest(words=words):
+                    tools = mock.Mock(available=lambda: None)
+                    with mock.patch.object(server_build.os.path, 'realpath', patch or real), \
+                            self.assertRaises(server_build.BuildFailed) as caught:
+                        server_build.build(snap, Path(tmp) / f'work{n}', [], None, tools, Passthrough(),
+                                           cache=Path(tmp) / 'c', generated={'rose/main.rs': 'fn main() {}\n'},
+                                           path_crates=crates)
+                    self.assertEqual(caught.exception.category, 'toolchain')
+                    self.assertIn(words, str(caught.exception))
 
 
 class LedgerContracts(unittest.TestCase):
@@ -430,9 +492,10 @@ class EndToEnd(Base):
         target = next(line.split(': ', 1)[1] for line in host.splitlines() if line.startswith('host: '))
         return server_build.RustTools(Path(sysroot.stdout.strip()), target=target, timeout_s=600)
 
-    def crates(self):
+    def crates(self, embed=False):
         """The runtime by a symlink (what is mounted and remapped is its real folder), plus two test-only builder
-        crates standing in for the adapter and the crate it depends on, each with a panic location in the binary."""
+        crates standing in for the adapter and the crate it depends on, each with a panic location in the binary
+        (and, with ``embed``, one naming its own folder, which no remap covers)."""
         here = self.root.parent / 'crates'
         here.mkdir()
         (here / 'runtime').symlink_to(RUNTIME, target_is_directory=True)
@@ -443,15 +506,18 @@ class EndToEnd(Base):
                                                     f'edition = "2021"\n\n[dependencies]\n{deps}')
             (here / name / 'src/lib.rs').write_text(body)
             return here / name
-        signin = crate('test-signin', '', '#[inline(never)]\npub fn boom(x: bool) { if x { panic!("boom") } }\n')
-        adapter = crate('test-adapter', 'test-signin = { path = "../test-signin" }\n',
-                        '#[inline(never)]\npub fn touch(x: bool) { if x { panic!("touch") } test_signin::boom(x) }\n')
-        return {'rose-app-runtime': here / 'runtime', 'test-adapter': adapter}, {'test-signin': signin}
+        here_dir = 'pub fn here() -> &\'static str { env!("CARGO_MANIFEST_DIR") }\n' if embed else ''
+        signin = crate('test-signin', '', '#[inline(never)]\npub fn boom(x: bool) { if x { panic!("boom") } }\n'
+                       + here_dir)
+        adapter = crate('rose-app-runtime-signin', 'test-signin = { path = "../test-signin" }\n',
+                        '#[inline(never)]\npub fn touch(x: bool) { if x { panic!("touch") } test_signin::boom(x) }\n'
+                        + ('pub fn here() -> &\'static str { test_signin::here() }\n' if embed else ''))
+        return {'rose-app-runtime': here / 'runtime', 'rose-app-runtime-signin': adapter}, {'test-signin': signin}
 
     def test_a_client_server_app_is_built_and_delivered_as_one_version(self):
         crates, deps = self.crates()
         isolation = Passthrough()
-        main = '    test_adapter::touch(std::env::args().count() > 99);\n'
+        main = '    rose_app_runtime_signin::touch(std::env::args().count() > 99);\n'
         b = self.builder(client_server_app(), codegen=Codegen(main_extra=main),
                          server_isolation=isolation, rust_tools=self.tools(), server_crates=crates,
                          server_crate_deps=deps)
@@ -465,8 +531,15 @@ class EndToEnd(Base):
         for folder in folders:
             self.assertNotIn(folder.encode(), elf)
             self.assertNotIn(folder, job['logTail'] or '')
-        for name in ('rose-app-runtime', 'test-adapter', 'test-signin'):
+        for name in ('rose-app-runtime', 'rose-app-runtime-signin', 'test-signin'):
             self.assertIn(f'/rose-crates/{name}/'.encode(), elf)
+        # The APK holds the builder's generated client files, the sign-in core in its own package.
+        package = b.projects()[0]['packageName'].replace('.', '/')
+        apk = next(p for p in (self.root / 'artifacts').glob('*.apk'))
+        with zipfile.ZipFile(apk) as z:
+            dex = b''.join(z.read(n) for n in z.namelist() if n.startswith('classes') and n.endswith('.dex'))
+        self.assertIn(f'L{package}/rose/Api;'.encode(), dex)
+        self.assertIn(b'Ldev/pixel/rosesignin/Core;', dex)
         self.assertEqual(b.ledger.profile(project), L.CLIENT_SERVER)
         server = b.ledger.server(project, 1)
         self.assertEqual(server['size'], (self.root / 'artifacts' / f'{server["sha256"]}.server').stat().st_size)
@@ -482,6 +555,16 @@ class EndToEnd(Base):
         self.assertEqual((job['state'], job['failure']['category']), ('failed', 'compile'), job)
         self.assertIn('api', job['failure']['summary'])
         self.assertEqual(len(b.ledger.versions(project)), 1)
+
+    def test_a_builder_crate_that_names_its_own_folder_is_not_delivered(self):
+        crates, deps = self.crates(embed=True)
+        main = '    println!("{}", rose_app_runtime_signin::here());\n'
+        b = self.builder(client_server_app(), codegen=Codegen(main_extra=main), server_isolation=Passthrough(),
+                         rust_tools=self.tools(), server_crates=crates, server_crate_deps=deps)
+        out, job = self.run_job(b)
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'toolchain'), job)
+        self.assertIn('builder\'s own crates', job['failure']['summary'])
+        self.assertEqual(b.ledger.versions(out['projectId']), [])
 
 
 

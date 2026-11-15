@@ -1823,12 +1823,18 @@ runs these steps before signing:
    The version is delivered with its server, migration lock, crates,
    `Cargo.lock` and contract, all in one transaction.
 
-With no `codegen`, no runtime crate (`server_crates` without
-`rose-app-runtime`), no isolation or no toolchain, a client-server job
+With no `codegen`, no runtime or adapter crate (`server_crates` without
+`rose-app-runtime` or `rose-app-runtime-signin`, which the builder's own
+generated code names), no isolation or no toolchain, a client-server job
 fails as the builder's (`toolchain`) before anything is half built or
-delivered. A crate set is needed only by an app that declares crates;
-without one, such an app fails as `dependency`. A plain app's job is
-unchanged.
+delivered. So does a builder crate set up wrong: missing, a folder holding
+another package, a path dependency reached through a symlink or outside the
+given crates, a folder the binary's remapped crate names would contain, or a
+binary that names a builder crate's folder. A crate set is needed by an app
+that declares crates (without one it fails as `dependency`) and by builder
+crates that use crates.io crates, as the adapter does (without one, as
+`toolchain`). A generator's client file that cannot be written is the
+builder's too. A plain app's job is unchanged.
 
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:
