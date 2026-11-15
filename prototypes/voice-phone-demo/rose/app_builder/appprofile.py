@@ -19,6 +19,7 @@ import json
 import os
 import re
 import stat
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -224,6 +225,7 @@ NATIVE_MACROS = ('asm', 'global_asm', 'naked_asm', 'llvm_asm')
 FILE_ATTRIBUTES = ('debugger_visualizer',)  # embeds a file from the builder's machine in the binary
 RUST_SPACE = '\t\n\x0b\x0c\r \x85\u200e\u200f\u2028\u2029'
 PUNCT = set('!#$%&()*+,-./:;<=>?@[]^{|}~')
+OTHER_ID_CONTINUE = '\u00b7\u0387\u1369\u136a\u136b\u136c\u136d\u136e\u136f\u1370\u1371\u19da'
 
 
 def _literal_prefix(text: str, i: int) -> bool:
@@ -236,13 +238,17 @@ def _literal_prefix(text: str, i: int) -> bool:
 def _tokens(text: str) -> list[tuple[str, str, int]]:
     """(kind, value, line) for code tokens: ident, punct, literal (strings, chars, numbers) and lifetime. Raises
     SyntaxError for an unterminated comment or literal."""
+    if text.startswith('\ufeff'):  # rustc skips a leading byte order mark
+        text = text[1:]
     out, i, n, line = [], 0, len(text), 1
 
-    def ident_start(c):
-        return c == '_' or c.isalpha()
+    def ident_start(c):  # XID_Start, roughly; a character rustc would refuse fails to compile anyway
+        return c == '_' or c.isalpha() or unicodedata.category(c) == 'Nl'
 
-    def ident_end(j):
-        while j < n and (text[j] == '_' or text[j].isalnum()):
+    def ident_end(j):  # XID_Continue: letters, digits, combining marks, connectors, Other_ID_Continue
+        while j < n and (text[j] == '_' or text[j].isalnum()
+                         or unicodedata.category(text[j]) in ('Mn', 'Mc', 'Nd', 'Pc', 'Nl')
+                         or text[j] in OTHER_ID_CONTINUE):
             j += 1
         return j
 
@@ -362,6 +368,7 @@ def rust_refusals(text: str) -> list[str]:
     """What in this Rust source would read the builder's machine while compiling, or bring in native code; each
     as owner-safe text naming the line. Empty when there is nothing."""
     toks = _tokens(text)
+    pairs = _pairs(toks)
     hits = []
 
     def at(k, kind, value):
@@ -370,7 +377,25 @@ def rust_refusals(text: str) -> list[str]:
     def invoked(k):  # toks[k] is called as a macro: `name!` but not `name != x`
         return at(k + 1, 'punct', '!') and not at(k + 2, 'punct', '=')
 
+    # Metavariables a macro captured inside an attribute (`#[$m:meta]`): an invocation writes those attributes
+    # out as `#[..]` itself, where this scan reads them, so passing them on as `#[$m]` hides nothing.
+    captured = {toks[k + 2][1] for k in range(len(toks) - 4) if at(k, 'punct', '[') and at(k + 1, 'punct', '$')
+                and toks[k + 2][0] == 'ident' and at(k + 3, 'punct', ':') and at(k + 4, 'ident', 'meta')
+                and k > 0 and at(k - 1, 'punct', '#')}
+    depth, use_depth = 0, None  # brace depth; the depth of the `use` item being read, if any
     for k, (kind, value, line) in enumerate(toks):
+        if kind == 'punct' and value in '{}':
+            depth += 1 if value == '{' else -1
+            if use_depth is not None and depth < use_depth:
+                use_depth = None
+        elif kind == 'punct' and value == ';' and use_depth is not None and depth == use_depth:
+            use_depth = None
+        elif kind == 'ident' and value == 'use' and use_depth is None:
+            use_depth = depth
+        elif use_depth is not None and kind == 'ident' and value == 'env' and at(k + 1, 'ident', 'as'):
+            # Any `env as ..` in an import: std's env (directly, through `self::`, or a crate alias) or the app's
+            # own module; the scan cannot tell which, and a module needs no alias (`env::{self as x}` is fine).
+            hits.append(f'renaming env in an import would hide the env! macro (line {line})')
         if kind == 'ident':
             if value in HOST_READS:
                 hits.append(f'{HOST_READS[value]} reads a file or setting on the builder\'s machine while '
@@ -389,89 +414,57 @@ def rust_refusals(text: str) -> list[str]:
         if kind == 'punct' and value == '#':
             j = k + 1 + at(k + 1, 'punct', '!')
             if at(j, 'punct', '['):
-                _attribute(toks, j + 1, _closing(toks, j), hits)
-        elif kind == 'ident' and value == 'use':
-            _renamed_env(toks, k, hits)
+                _attribute(toks, j + 1, pairs[j], hits, pairs, captured)
     return hits
 
 
-def _renamed_env(toks, start: int, hits: list):
-    """In the `use` item at toks[start], an import of std's or core's env under another name (`env as e`,
-    `env::{self as e}`) would let env! be called without its name. The app's own `env` modules, and casts, are
-    not imports from std or core, and stay allowed."""
-    end = start
-    while end < len(toks) and toks[end] != ('punct', ';', toks[end][2]):
-        end += 1
-    stack, path = [], []
-    k = start + 1
-    while k < end:
-        kind, value, line = toks[k]
-        if kind == 'punct' and value == '{':
-            stack.append(list(path))
-        elif kind == 'punct' and value == '}':
-            path = stack.pop() if stack else []
-        elif kind == 'punct' and value == ',':
-            path = list(stack[-1]) if stack else []
-        elif kind == 'ident' and value not in ('as', 'self'):
-            path.append(value)
-        if kind == 'ident' and value == 'env' and path[:-1] in (['std'], ['core']):
-            following = toks[k + 1] if k + 1 < end else None
-            renamed = following is not None and following[1] == 'as'
-            if following is not None and following[1] == '::' and k + 2 < end and toks[k + 2][1] == '{':
-                close = _closing(toks, k + 2)
-                renamed = any(toks[j][1] == 'self' and j + 1 < close and toks[j + 1][1] == 'as'
-                              for j in range(k + 3, min(close, end)))
-            if renamed:
-                hits.append(f'renaming {path[0]}::env would hide the env! macro (line {line})')
-        if kind == 'ident' and value == 'as' and k + 1 < end:
-            k += 1  # the new name is not a path segment
-        k += 1
+def _pairs(toks) -> dict[int, int]:
+    """Each opening bracket's index -> its closing bracket's index, in one pass (unclosed ones close at the end)."""
+    pairs, stack = {}, []
+    for k, (kind, value, _) in enumerate(toks):
+        if kind == 'punct' and value in '([{':
+            stack.append(k)
+        elif kind == 'punct' and value in ')]}' and stack:
+            pairs[stack.pop()] = k
+    for k in stack:
+        pairs[k] = len(toks)
+    return pairs
 
 
-def _closing(toks, j: int) -> int:
-    """The index of the bracket that closes the one at toks[j] (or the end)."""
-    depth = 0
-    for k in range(j, len(toks)):
-        if toks[k][0] == 'punct' and toks[k][1] in '([{':
-            depth += 1
-        elif toks[k][0] == 'punct' and toks[k][1] in ')]}':
-            depth -= 1
-            if depth == 0:
-                return k
-    return len(toks)
-
-
-def _attribute(toks, start: int, end: int, hits: list):
-    """One attribute's tokens in [start, end): `path = ..` and `link(..)` are refused, also inside cfg_attr."""
-    if start >= end:
-        return
-    if toks[start][0] == 'punct' and toks[start][1] == '$':
-        hits.append(f'an attribute built by a macro (line {toks[start][2]}) could be #[path] or #[link]; write '
-                    'the attribute itself')
-        return
-    if toks[start][0] != 'ident':
-        return
-    name, line = toks[start][1], toks[start][2]
-    if name in FILE_ATTRIBUTES:
-        hits.append(f'#[{name}] embeds a file from the builder\'s machine in the server (line {line})')
-        return
-    following = toks[start + 1][1] if start + 1 < end and toks[start + 1][0] == 'punct' else None
-    if name == 'path' and following == '=':
-        hits.append(f'#[path] can compile a file from anywhere on the builder\'s machine (line {line}); keep '
-                    'modules under server/src/')
-    elif name == 'link' and following == '(':
-        hits.append(f'#[link] links native code (line {line}); generated servers are Rust only')
-    elif name == 'cfg_attr' and following == '(':
-        close = _closing(toks, start + 1)
-        parts, depth, part = [], 0, start + 2  # cfg_attr(predicate, attr, attr, ...)
-        for k in range(start + 2, close):
-            if toks[k][0] == 'punct' and toks[k][1] in '([{':
-                depth += 1
-            elif toks[k][0] == 'punct' and toks[k][1] in ')]}':
-                depth -= 1
-            elif depth == 0 and toks[k][0] == 'punct' and toks[k][1] == ',':
-                parts.append((part, k))
-                part = k + 1
-        parts.append((part, close))
-        for a, b in parts[1:]:
-            _attribute(toks, a, b, hits)
+def _attribute(toks, start: int, end: int, hits: list, pairs: dict, captured=frozenset()):
+    """One attribute's tokens in [start, end): `path = ..`, `link(..)`, file-embedding attributes and attributes
+    built from a macro argument are refused, also inside cfg_attr (walked with a stack, so depth cannot crash it)."""
+    work = [(start, end)]
+    while work:
+        start, end = work.pop()
+        if start >= end:
+            continue
+        if toks[start][0] == 'punct' and toks[start][1] == '$':
+            name = toks[start + 1][1] if start + 1 < end and toks[start + 1][0] == 'ident' else None
+            if name not in captured:  # a `#[$m:meta]` matcher puts its own name in `captured`
+                hits.append(f'an attribute built by a macro (line {toks[start][2]}) could be #[path] or #[link]; '
+                            'write the attribute itself')
+            continue
+        if toks[start][0] != 'ident':
+            continue
+        name, line = toks[start][1], toks[start][2]
+        following = toks[start + 1][1] if start + 1 < end and toks[start + 1][0] == 'punct' else None
+        if name in FILE_ATTRIBUTES:
+            hits.append(f'#[{name}] embeds a file from the builder\'s machine in the server (line {line})')
+        elif name == 'path' and following == '=':
+            hits.append(f'#[path] can compile a file from anywhere on the builder\'s machine (line {line}); keep '
+                        'modules under server/src/')
+        elif name == 'link' and following == '(':
+            hits.append(f'#[link] links native code (line {line}); generated servers are Rust only')
+        elif name == 'cfg_attr' and following == '(':
+            close = min(pairs.get(start + 1, end), end)
+            parts, part, k = [], start + 2, start + 2  # cfg_attr(predicate, attr, attr, ...)
+            while k < close:  # top-level commas only: a nested group is jumped over, so each token is seen once
+                if toks[k][0] == 'punct' and toks[k][1] in '([{':
+                    k = pairs.get(k, close)
+                elif toks[k][0] == 'punct' and toks[k][1] == ',':
+                    parts.append((part, k))
+                    part = k + 1
+                k += 1
+            parts.append((part, close))
+            work.extend(parts[1:])

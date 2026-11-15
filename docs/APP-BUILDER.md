@@ -1292,14 +1292,23 @@ The Level 1 checks on links, modes, sizes, git names and forbidden suffixes
 app without `rose-app.json` keeps the Level 1 refusals exactly as before.
 
 The Rust scan lexes the source as rustc does, so comments, strings, raw
-strings, character literals and lifetimes are not code. It uses rustc's
-whitespace set, including U+200E and U+200F. Any other character no Rust token
-starts with is `source_unreadable`. It refuses:
+strings, character literals and lifetimes are not code. It reads source the
+way rustc does:
+- rustc's whitespace set, including U+200E and U+200F;
+- Unicode identifiers, including combining marks;
+- a leading byte order mark, which is skipped.
+
+Any other character no Rust token starts with is `source_unreadable`. Its cost
+is linear in the file's size, however deeply attributes nest. It refuses:
 - **File and environment reads at compile time:**
   - `include!`, `include_str!`, `include_bytes!` and `option_env!`, by name
     wherever they appear, so an item named `include` is refused too;
   - `env!` as a call (`env != x` is a comparison and is allowed);
-  - importing `std::env` or `core::env` under another name;
+  - renaming `env` in any import (`env as e`). This covers std's `env`
+    reached directly, through `self::` or through a crate alias. The scan
+    can't tell std's `env` from the app's own module, so that is refused too;
+    a module needs no alias. `env::{self as e}` imports only the module and
+    is allowed;
   - `#[path]` and `#[debugger_visualizer]`, also inside `cfg_attr`.
 
   Data files go in `server/assets/`.
@@ -1309,7 +1318,9 @@ starts with is `source_unreadable`. It refuses:
 - **Macros that hide either:**
   - a `macro_rules!` body that calls a macro named by its argument (`$x!(..)`,
     not `$crate::..`);
-  - an attribute built from a macro argument (`#[$a]`).
+  - an attribute built from a macro argument (`#[$a]`). The exception is an
+    attribute the macro captured as `#[$a:meta]`, which the invocation wrote
+    out where the scan reads it.
 
 Allowed: `std::env::var`, the app's own `env` module, `env as u32`,
 `std::fs`, `std::net`, `unsafe`, `extern "C"` and `#[link_section]`.
@@ -1414,6 +1425,14 @@ need no hosting and no further OS Core change.
    - invisible separators;
    - macro-built attributes;
    - `#[debugger_visualizer]`.
+
+   A second pass found three more, now also refused or fixed:
+   - `env` renamed through `self::` or a crate alias;
+   - a recursion crash on deeply nested attributes;
+   - quadratic cost.
+
+   It also fixed false refusals of Unicode identifiers, a byte order mark,
+   `env::{self as x}` and `$(#[$m:meta])*`.
 2. The shared API contract validator and its compatibility rules.
 3. Offline migration checks.
 4. Ledger pairing of client and server artifacts.

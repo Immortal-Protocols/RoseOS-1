@@ -211,7 +211,7 @@ class RustScan(unittest.TestCase):
     REFUSED = [
         'include_str!("/etc/passwd")', 'std::include_bytes!("x")', '::core::include!("x")', 'r#include_str!("x")',
         'env!("HOME")', 'option_env!("X")', 'core::env!("X")', 'use std::include_str as s;',
-        'use std::env as e;', 'use std::{include_bytes};', 'use std::env::{self as e};',
+        'use std::env as e;', 'use std::{include_bytes};',
         'fn include() {}',  # disclosed: the name itself is refused
         '#[path = "/etc/x.rs"] mod m;', '#[cfg_attr(unix, path = "x.rs")] mod m;',
         '#[cfg_attr(a, cfg_attr(b, path = "x.rs"))] mod m;', '#[link(name = "z")] extern "C" {}',
@@ -230,6 +230,14 @@ class RustScan(unittest.TestCase):
         '#![debugger_visualizer(gdb_script_file = "/etc/passwd")]',
         '#![cfg_attr(unix, debugger_visualizer(natvis_file = "x.natvis"))]',
         'fn f(asm: u8) {}',  # disclosed: the native macro names are refused by name, like include
+        # second review: env reached through self:: or a crate alias, then renamed
+        'use std::env;\nuse self::env as e;\npub const K: &str = e!("HOME");',
+        'extern crate std as x;\nuse x::env as e;\npub const K: &str = e!("HOME");',
+        'mod env { pub fn x() {} } use self::env as settings;',  # disclosed: any renamed env in an import
+        '#[' + 'cfg_attr(all(), ' * 2000 + 'path = "x"' + ')' * 2000 + ']\nmod m;',
+        # an attribute macro passes on is fine, but another macro's built one is still refused
+        'macro_rules! keep { ($(#[$m:meta])* fn $n:ident) => { $(#[$m])* fn $n() {} } }\n'
+        'macro_rules! p { ($a:meta) => { #[$a] mod m; } } p!(path = "/etc/x.rs");',
     ]
     ALLOWED = [
         'std::env::var("X")', 'use std::env;', 'let a = env::args();', 'use std::env::{var, args};',
@@ -242,12 +250,19 @@ class RustScan(unittest.TestCase):
         'let e = my.env; let s = std::fs::read("data");',
         # found by review: comparisons, casts and the app's own env module are not env! or a rename
         'fn f(cfg: &Cfg) -> bool { cfg.env != Env::Prod }', 'fn f(env: &str) -> bool { env != "prod" }',
-        'fn f(env: u8) -> u32 { env as u32 }', 'mod env { pub fn x() {} } use self::env as settings;',
-        'use crate::env::{self as settings};', 'macro_rules! m { ($x:expr) => { $crate::f($x) } }',
+        'fn f(env: u8) -> u32 { env as u32 }',
+        'use crate::env::{self as settings};', 'use std::env::{self as stdenv};',  # a module, not the macro 'macro_rules! m { ($x:expr) => { $crate::f($x) } }',
         "let c = '\\u{1F600}'; let d = '\\x7f'; let e = b'\\\\'; let s = r###\"a\"## b\"###;",
         'let t = tuple.0.1; let n = 1e10 + 0b1010 as f64 + 1_000u64 as f64 + 1.0f32 as f64;',
         "async fn f() -> Result<(), E> { g().await?; Ok(()) }", '#[link_section = ".x"] static S: u8 = 0;',
         'fn main()\u200e{}',
+        # second review: Rust identifiers, a byte order mark, attributes a macro passes through
+        'pub fn f() -> u8 { let नमस्ते = 1; नमस्ते }', 'let cafe\u0301 = 1;', 'let l\u00b7l = 1;',
+        'let \u216b = 1;', '\ufeffpub fn f() {}',
+        'macro_rules! unit { ($(#[$m:meta])* struct $n:ident;) => { $(#[$m])* pub struct $n; } }\n'
+        'unit! { /// A unit.\n #[derive(Debug)] struct A; }',
+        '#[' + 'cfg_attr(all(), ' * 2000 + 'allow(dead_code)' + ')' * 2000 + ']\npub fn f() {}',
+        '#[cfg_attr(any(unix, path = "x"), allow(dead_code))] fn f() {}',  # a cfg key named path, not #[path]
     ]
 
     def test_host_reads_and_native_code_are_refused(self):
@@ -259,6 +274,14 @@ class RustScan(unittest.TestCase):
         for text in self.ALLOWED:
             with self.subTest(text):
                 self.assertEqual(P.rust_refusals(text), [], text)
+
+    def test_large_inputs_stay_fast(self):
+        import time
+        for text in ('macro_rules! m { ($($t:tt)*) => {} }\nm! { ' + 'use ' * 50000 + '}\n',
+                     '#[' + 'cfg_attr(all(), ' * 50000 + 'allow(dead_code)' + ')' * 50000 + ']\nfn f() {}'):
+            start = time.monotonic()
+            P.rust_refusals(text)
+            self.assertLess(time.monotonic() - start, 10)  # linear: well under a second here
 
     def test_hits_name_their_line(self):
         [hit] = P.rust_refusals('fn a() {}\n/* a\nb */\nconst S: &str = "x\ny";\nfn b() { env!("X"); }')
