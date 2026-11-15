@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-CRATE = re.compile(r'([a-z][a-z0-9_-]{0,63})@(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'
+CRATE = re.compile(r'([A-Za-z][A-Za-z0-9_-]{0,63})@(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'
                    r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?')
 SHA256 = re.compile(r'[0-9a-f]{64}')
 REGISTRY = 'registry+https://github.com/rust-lang/crates.io-index'  # what cargo records for a replaced crates.io
@@ -182,6 +182,8 @@ def vendor(source: CrateSource, cache: Path) -> Path:
         if _valid_vendor(final, digest):  # another build finished it while this one waited
             return final
         _discard(final)  # a folder without its marker is a build that never finished
+        for left in cache.glob(f'.staging-{digest}-*'):  # only the lock holder writes one: these were abandoned
+            _discard(left)
         staging = cache / f'.staging-{digest}-{secrets.token_hex(8)}'
         staging.mkdir(mode=0o700)
         try:

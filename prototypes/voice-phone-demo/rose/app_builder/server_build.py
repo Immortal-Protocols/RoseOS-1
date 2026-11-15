@@ -151,16 +151,17 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
     if ENTRY not in generated or any(not isinstance(k, str) or not GENERATED.fullmatch(k) for k in generated):
         raise ValueError('generated files are rose/*.rs and include rose/main.rs')
     declared = list(declared)
+    # Canonical paths throughout: what cargo and a crate's macros see (getcwd) is what is remapped and scanned for.
+    work, cache = Path(os.path.realpath(work)), Path(os.path.realpath(cache))
+    for folder in (work / 'server').parents:
+        if any(os.path.lexists(folder / '.cargo' / name) for name in ('config', 'config.toml')):
+            raise BuildFailed('toolchain', 'build_isolation_unavailable', 'The server was not built: a cargo '
+                              'configuration in a folder above the job would apply to it.')
     try:
         by_key = crate_set.check_declared(declared, source)
         vendor = crate_set.vendor(source, cache) if source is not None else None
     except crate_set.Refused as refused:
         raise _refused(refused) from None
-    work = Path(work)
-    for folder in (work / 'server').resolve().parents:
-        if any(os.path.lexists(folder / '.cargo' / name) for name in ('config', 'config.toml')):
-            raise BuildFailed('toolchain', 'build_isolation_unavailable', 'The server was not built: a cargo '
-                              'configuration in a folder above the job would apply to it.')
     server, home, cargo_home, target_dir, tmp = (work / n for n in ('server', 'home', 'cargo-home', 'target', 'tmp'))
     for folder in (server, home, cargo_home, target_dir, tmp):
         folder.mkdir(mode=0o700, parents=True)
@@ -240,6 +241,9 @@ def _refused(refused: crate_set.Refused) -> BuildFailed:
 _CRATE_NAME = r'`([A-Za-z0-9_-]{1,64})`'
 _TOOLCHAIN = re.compile(r"can't find crate for `(?:std|core)`|linker `[^`]*` not found|linking with `[^`]*` failed|"
                         r'may not be installed')
+_MISSING_STD = re.compile(r"can't find crate for `(?:std|core|alloc)`")
+# What a linker says about the code it links (the package's own fault), as opposed to a linker or C library missing.
+_CODE_LINK = re.compile(r'undefined symbol|undefined reference|multiple definition|duplicate symbol|relocation')
 
 
 def _messages(log: str) -> tuple[list[str], list[dict]]:
@@ -255,7 +259,9 @@ def _messages(log: str) -> tuple[list[str], list[dict]]:
                 body = message.get('message')
                 if message['reason'] == 'compiler-message' and isinstance(body, dict) \
                         and str(body.get('level', '')).startswith('error') and isinstance(body.get('message'), str):
+                    code = body.get('code')
                     errors.append({'package': str(message.get('package_id', '')), 'message': body['message'],
+                                   'code': str(code.get('code', '')) if isinstance(code, dict) else '',
                                    'spanless': not body.get('spans'), 'notes': ' '.join(
                                        str(c.get('message', '')) for c in body.get('children') or []
                                        if isinstance(c, dict)),
@@ -283,7 +289,15 @@ def classify(log: str) -> BuildFailed:
     shown = '\n'.join(text + [e['rendered'] for e in errors])[-4000:]
     cargo_text = '\n'.join(text)
     for error in errors:
-        if error['spanless'] and _TOOLCHAIN.search(error['message'] + ' ' + error['notes']):
+        # Only rustc's own words count, never text the writer can put in a message or a note (a string, a
+        # compile_error!, a diagnostic attribute): a standard library missing (E0463, whatever its span), a linker
+        # missing, or linking failing for a reason that is not the code's (undefined or duplicate symbols are).
+        missing_std = error['code'] == 'E0463' and _MISSING_STD.fullmatch(error['message'])
+        no_linker = error['spanless'] and re.fullmatch(r'linker `[^`]*` not found', error['message'])
+        link_failed = error['spanless'] and re.fullmatch(r'linking with `[^`]*` failed: .*|linking with `[^`]*` failed',
+                                                          error['message'], re.S) \
+            and not _CODE_LINK.search(error['message'] + ' ' + error['notes'])
+        if missing_std or no_linker or link_failed:
             return BuildFailed('toolchain', 'rust_toolchain_unavailable',
                                'The builder\'s Rust toolchain could not build for its target.', log=shown)
     for error in errors:

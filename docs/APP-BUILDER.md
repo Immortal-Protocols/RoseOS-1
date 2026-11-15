@@ -1625,8 +1625,16 @@ needing older clients to update, through the library's minClientVersionCode
 
   Rustc's diagnostics are read from cargo's JSON messages and counted by the
   package they belong to, never by their words. So text in the writer's own
-  code, such as a string or a `compile_error!`, can't make its failure look
-  like the toolchain's or a crate's.
+  code, such as a string, a `compile_error!` or a diagnostic note, can't
+  make its failure look like the toolchain's or a crate's.
+  - **The toolchain's fault:** only rustc's own errors for a missing standard
+    library (`E0463`) or a missing linker, or linking that failed for some
+    other reason than the code.
+  - **The writer's fault:** linking their own code wrong, such as an
+    undefined or duplicate symbol.
+
+  All paths are made canonical first, so a job folder reached through a
+  link is still remapped and scanned for.
 
   The toolchain is a Rust toolchain's own folder, never rustup's proxies.
   The product target is `x86_64-unknown-linux-musl` (§7.7).
@@ -1740,14 +1748,16 @@ Proposed manifest:
   no separate liveness check. `/health` returns `200` only once the sealer is
   ready, migrations are done and any restore has run, and `503` until then.
   It carries the same identity fields either way, and no secrets, request
-  data or account information:
-  - `appId`: the Chariot host's UUID. It is not the builder's `projectId`.
+  data or account information. The wire keys are the host's own, in
+  snake_case (Chariot owner, relayed by Chief). The generated server will
+  write them as they are, with no adapter in between:
+  - `app_id`: the Chariot host's UUID. It is not the builder's `projectId`.
     The builder's ledger keeps an explicit mapping from `projectId` to the
     hosted app id and the hosted APK app id, written only from owner tooling
     or publisher results, never guessed.
-  - `revisionSha256`: measured by the server itself, by hashing its own ELF
+  - `revision_sha256`: measured by the server itself, by hashing its own ELF
     at start.
-  - `deploymentSha256`: the authoritative value is the
+  - `deployment_sha256`: the authoritative value is the
     `CHARIOT_DEPLOYMENT_SHA256` the host passes, which the server echoes. Any
     hash the server computes itself over its args, port and schema is
     reported separately and never replaces it.
@@ -1759,10 +1769,16 @@ Still open for the Chariot owner (App Core's proposal in brackets):
 1. Further manifest fields [resources, shutdown grace].
 2. The name of the variable that carries the host's app id to the server
    [for example `CHARIOT_APP_ID`].
-3. Sealing key (D9). Chariot prefers a pinned Secret Manager descriptor
-   [Chariot resolves it at start into a read-only key file outside the ELF,
+3. Sealing key (D9). A pinned Secret Manager descriptor is a
+   recommendation only. Delivering the key to the server (for example as a
+   key file the host resolves) has no agreed consumer contract and no
+   implementation on either side. Until it does, no server can be ready,
+   and nothing here is deployable. [App Core's proposal: Chariot resolves
+   the descriptor at start into a read-only key file outside the ELF,
    `DATA_DIR` and backups; the server never holds the descriptor's
-   credentials; no key means not ready].
+   credentials; no key means not ready. The server hands the keys to
+   rose-signin's `AeadSealer`, which already takes host-supplied keys, so
+   no OS Core change is needed.]
 4. Schema-changing deploys, which return a conflict today [the manifest
    states `schema: {from, to}`; the owner confirms; Chariot snapshots
    `DATA_DIR` first; the server migrates forward only and is ready only

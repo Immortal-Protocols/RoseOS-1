@@ -119,7 +119,7 @@ class CrateSet(Tmp):
         self.assertEqual(C.RecordedCrates(self.tmp / 'missing').crates(), [])  # no set yet: nothing in it
         # A set that cannot be read is broken, never quietly smaller.
         digest = hashlib.sha256(good).hexdigest()
-        for bad in ({'aa@^1': '0' * 64}, {'Bad@1.0.0': '0' * 64}, {'bb@1.0.0': 'not-a-digest'}, {'cc@1.0.0': 7},
+        for bad in ({'aa@^1': '0' * 64}, {'1bad@1.0.0': '0' * 64}, {'bb@1.0.0': 'not-a-digest'}, {'cc@1.0.0': 7},
                     {'dd@1.0.0-' + 'a' * 60: '0' * 64}, {'e' * 65 + '@1.0.0': '0' * 64}):
             with self.subTest(bad=bad):
                 (self.tmp / 's/index.json').write_text(json.dumps({'schemaVersion': 1,
@@ -274,6 +274,27 @@ class Vendor(Tmp):
             f'c{i}-1.0.0' for i in range(40)))
         self.assertEqual([p.name for p in (self.tmp / 'cache').iterdir() if p.name.startswith('.staging')], [])
         self.assertEqual(C.vendor(s, self.tmp / 'cache'), results[0])
+
+    def test_a_staging_folder_left_by_a_killed_build_is_collected(self):
+        crates = {'aa@1.0.0': crate_bytes('aa', '1.0.0')}
+        first = self.vendor(crates)
+        digest = first.name[len('vendor-'):]
+        C._discard(first)
+        left = self.tmp / 'cache' / f'.staging-{digest}-deadbeefdeadbeef'
+        (left / 'aa-1.0.0').mkdir(parents=True)
+        (left / 'aa-1.0.0/big').write_bytes(b'x' * 1000)
+        other = self.tmp / 'cache' / '.staging-otherset-1'  # another set's is not this build's to collect
+        other.mkdir()
+        self.assertEqual(C.vendor(C.RecordedCrates(self.tmp / 's'), self.tmp / 'cache'), first)
+        self.assertFalse(left.exists())
+        self.assertTrue(other.exists())
+
+    def test_crates_io_names_with_upper_case_are_part_of_a_set(self):
+        vendor = self.vendor({'Inflector@0.11.4': crate_bytes('Inflector', '0.11.4'),
+                              'aa@1.0.0': crate_bytes('aa', '1.0.0')})
+        self.assertTrue((vendor / 'Inflector-0.11.4/.cargo-checksum.json').is_file())
+        self.assertEqual(list(C.check_declared(['aa@1.0.0'], C.RecordedCrates(self.tmp / 's'))),
+                         ['Inflector@0.11.4', 'aa@1.0.0'])
 
     def test_bounds(self):
         bomb = crate_bytes('aa', '1.0.0', extra=[entry('aa-1.0.0/zeros', data=b'\0' * (3 * 1024 * 1024))])
@@ -530,9 +551,10 @@ class FakeCargo(Tmp):
         self.assertEqual([c['argv'][2] for c in self.calls()], ['metadata'])  # never built
 
     def test_cargo_failures_map_to_categories(self):
-        def rustc(package, message, spans=True, notes=()):
+        def rustc(package, message, spans=True, notes=(), code=None):
             return json.dumps({'reason': 'compiler-message', 'package_id': package, 'message': {
                 'level': 'error', 'message': message, 'spans': [{'file_name': 'x.rs'}] if spans else [],
+                'code': {'code': code} if code else None,
                 'children': [{'message': n} for n in notes], 'rendered': f'error: {message}\n --> @WORK@/x.rs'}})
         own = 'path+file://@WORK@/server#rose-app-server@0.0.0'
         dep = 'registry+https://github.com/rust-lang/crates.io-index#serde@1.0.219'
@@ -545,9 +567,31 @@ class FakeCargo(Tmp):
             ('build', 'error: checksum for `aa v1.0.0` changed between lock files', 'dependency', 'crate_changed', ''),
             ('build', 'error: the listed checksum of `@WORK@/x/src/lib.rs` has changed:', 'dependency',
              'crate_changed', ''),
-            ('build', rustc(own, "can't find crate for `std`", spans=False, notes=[
+            ('build', rustc(own, "can't find crate for `std`", spans=False, code='E0463', notes=[
                 'the `x86_64-unknown-linux-musl` target may not be installed']) + '\n' + done,
              'toolchain', 'rust_toolchain_unavailable', ''),
+            # rustc gives a missing std a span at the top of the file; it is still the toolchain's, in any package.
+            ('build', rustc(dep, "can't find crate for `std`", code='E0463') + '\n' + done, 'toolchain',
+             'rust_toolchain_unavailable', ''),
+            ('build', rustc(own, 'linking with `cc` failed: exit status: 1', spans=False,
+                            notes=['ld: cannot find crt1.o: No such file or directory']) + '\n' + done,
+             'toolchain', 'rust_toolchain_unavailable', ''),
+            # Linking the writer's own code wrong is the writer's, whatever the symbol is called.
+            ('build', rustc(own, 'linking with `cc` failed: exit status: 1', spans=False,
+                            notes=['rust-lld: error: undefined symbol: cannot find crt1.o']) + '\n' + done,
+             'compile', 'server_compile', ''),
+            ('build', rustc(own, 'linking with `cc` failed: exit status: 1', spans=False,
+                            notes=['multiple definition of `main`']) + '\n' + done, 'compile', 'server_compile', ''),
+            # A note the writer wrote (a diagnostic attribute) or a crate the writer named std-like is the writer's.
+            ('build', rustc(own, 'the trait bound is not satisfied', code='E0277',
+                            notes=['the `x86_64-unknown-linux-musl` target may not be installed']) + '\n' + done,
+             'compile', 'server_compile', ''),
+            ('build', rustc(own, "can't find crate for `std_extra`", code='E0463') + '\n' + done, 'compile',
+             'server_compile', ''),
+            ('build', rustc(own, 'the trait bound is not satisfied', code='E0277',
+                            notes=["can't find crate for `std`"]) + '\n' + done, 'compile', 'server_compile', ''),
+            ('build', rustc(own, "can't find crate for `std` (the writer's compile_error!)") + '\n' + done,
+             'compile', 'server_compile', ''),
             ('build', rustc(own, 'linker `cc` not found', spans=False) + '\n' + done, 'toolchain',
              'rust_toolchain_unavailable', ''),
             ('build', rustc(own, 'mismatched types') + '\n' + done, 'compile', 'server_compile', ''),
@@ -652,7 +696,7 @@ class FakeCargo(Tmp):
 
     def test_cargo_toml_rejects_anything_but_exact_versions(self):
         self.assertIn('serde = "=1.0.219"\n', S.cargo_toml(['serde@1.0.219']))
-        for bad in ('serde@^1', 'serde = "*"\nx@1.0.0', 'Serde@1.0.0'):
+        for bad in ('serde@^1', 'serde = "*"\nx@1.0.0', 'se rde@1.0.0', '1serde@1.0.0'):
             with self.subTest(bad=bad):
                 with self.assertRaises(S.BuildFailed):
                     S.cargo_toml([bad])
@@ -750,6 +794,35 @@ class RealCargo(Tmp):
                 self.assertEqual((caught.exception.category, caught.exception.reason), ('dependency', 'crate_compile'))
                 self.assertIn(crate, caught.exception.summary)
 
+    def test_the_writers_link_error_is_the_writers(self):
+        snap = snapshot(self.tmp / 'snap', handlers='extern "C" { fn rose_missing_symbol(); }\n'
+                        'pub fn hello() -> &\'static str { unsafe { rose_missing_symbol(); } "hi" }\n')
+        with self.assertRaises(S.BuildFailed) as caught:
+            self.build(snap)
+        self.assertEqual((caught.exception.category, caught.exception.reason), ('compile', 'server_compile'))
+        self.assertIn('rose_missing_symbol', caught.exception.log)
+
+    def test_a_target_without_its_standard_library_is_the_toolchains(self):
+        toolchain = self.tmp / 'toolchain'
+        (toolchain / 'bin').mkdir(parents=True)
+        for tool in ('cargo', 'rustc'):
+            (toolchain / 'bin' / tool).symlink_to(self.tools.toolchain / 'bin' / tool)
+        missing = 'x86_64-unknown-linux-musl' if self.tools.target != 'x86_64-unknown-linux-musl' else 'i686-unknown-linux-gnu'
+        if (self.tools.toolchain / 'lib/rustlib' / missing / 'lib').exists():
+            self.skipTest(f'this toolchain has {missing}')  # nothing to show: the target is installed
+        (toolchain / 'lib/rustlib' / missing / 'lib').mkdir(parents=True)  # present, and empty
+        tools = S.RustTools(toolchain, target=missing, timeout_s=300)
+        self.assertIsNone(tools.available())
+        source = store(self.tmp / 'set', {'aa@1.0.0': crate_bytes('aa', '1.0.0')})
+        for declared, src in (([], None), (['aa@1.0.0'], source)):
+            with self.subTest(declared=declared):
+                self.n += 1
+                with self.assertRaises(S.BuildFailed) as caught:
+                    S.build(snapshot(self.tmp / f'snap{self.n}'), self.tmp / f'work{self.n}', declared, src, tools,
+                            Passthrough(), cache=self.tmp / 'cache', generated={S.ENTRY: MAIN})
+                self.assertEqual((caught.exception.category, caught.exception.reason),
+                                 ('toolchain', 'rust_toolchain_unavailable'))
+
     def test_a_cargo_config_above_the_job_never_applies(self):
         outer = self.tmp / 'home'
         (outer / '.cargo').mkdir(parents=True)
@@ -765,10 +838,18 @@ class RealCargo(Tmp):
                                     'proc-macro = true\n',
             lib='use proc_macro::TokenStream;\n#[proc_macro]\npub fn here(_: TokenStream) -> TokenStream {\n'
                 '    format!("{:?}", std::env::current_dir().unwrap().display().to_string()).parse().unwrap()\n}\n')})
-        with self.assertRaises(S.BuildFailed) as caught:
-            self.build(snapshot(self.tmp / 'snap'), ['pm@1.0.0'], source,
-                       main='fn main() { println!("{}", pm::here!()); }\n')
-        self.assertEqual((caught.exception.category, caught.exception.reason), ('dependency', 'build_path_embedded'))
+        real = self.tmp / 'real'
+        real.mkdir()
+        (self.tmp / 'link').symlink_to(real)
+        # However the job folder is named: plainly, through a link, or with `..` in it.
+        for work in (self.tmp / 'plain', self.tmp / 'link/viaLink', real / '../dotdot'):
+            with self.subTest(work=work):
+                with self.assertRaises(S.BuildFailed) as caught:
+                    S.build(snapshot(self.tmp / f'snap-{work.name}'), work, ['pm@1.0.0'], source, self.tools,
+                            Passthrough(), cache=self.tmp / 'link/cache',
+                            generated={S.ENTRY: 'fn main() { println!("{}", pm::here!()); }\n'})
+                self.assertEqual((caught.exception.category, caught.exception.reason),
+                                 ('dependency', 'build_path_embedded'))
 
 
 if __name__ == '__main__':
