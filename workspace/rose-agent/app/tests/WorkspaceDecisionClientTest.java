@@ -46,7 +46,7 @@ public final class WorkspaceDecisionClientTest {
  }
 
  public static void main(String[] args){
-  gate();body();replies();phoneStaysTheGate();route();cancellation();
+  gate();body();replies();phoneStaysTheGate();route();abort();stop();status();cancellation();
   System.out.println("WorkspaceDecisionClientTest: "+checks+" checks passed (fake transport; nothing sent, no model)");
  }
 
@@ -146,5 +146,57 @@ public final class WorkspaceDecisionClientTest {
   t.requested("c","button",0);t.routed("c","elsewhere");
   String json=t.json();
   expect(json.contains("\"requestId\":\"a\",\"trigger\":\"button\",\"route\":\"server\"")&&json.contains("\"route\":\"phone\"")&&json.contains("\"requestId\":\"c\",\"trigger\":\"button\",\"route\":null"),"route recorded strictly: "+json);
+ }
+ /** WorkspaceAbort: one-way, closes what is attached, and anything attached after it fired. */
+ static void abort(){
+  final int[] closed={0};java.io.Closeable c=()->closed[0]++;
+  WorkspaceAbort a=new WorkspaceAbort();
+  expect(a.attach(c)&&closed[0]==0&&!a.fired(),"attached while running");
+  a.fire();
+  expect(closed[0]==1&&a.fired(),"fire closes the attached socket");
+  a.fire();expect(closed[0]==1,"firing again closes nothing more");
+  expect(!a.attach(c)&&closed[0]==2,"a socket attached after fire is closed at once");
+  WorkspaceAbort b=new WorkspaceAbort();b.attach(c);b.detach(c);b.fire();
+  expect(closed[0]==2,"a finished request's socket is not closed by a later fire");
+ }
+
+ /** A superseded request in flight is stopped at once, and its answer is uncertain and discarded; nothing retries. */
+ static void stop(){
+  WorkspaceSnapshot s=phone();String req=WorkspaceSnapshot.request("r9","button",null,s,WorkspaceEngine.DEADLINE_MS,Collections.<String>emptyList());
+  final int[] posts={0};
+  WorkspaceTaskClient.Transport hanging=new WorkspaceTaskClient.Transport(){
+   public WorkspaceTaskClient.Response post(String path,Map<String,String> h,byte[] body){throw new AssertionError("the abortable post is used");}
+   public WorkspaceTaskClient.Response post(String path,Map<String,String> h,byte[] body,WorkspaceAbort abort)throws Exception{
+    posts[0]++;
+    final java.util.concurrent.CountDownLatch closed=new java.util.concurrent.CountDownLatch(1);
+    if(!abort.attach(closed::countDown))throw new java.io.IOException("stopped");
+    if(!closed.await(5,java.util.concurrent.TimeUnit.SECONDS))return new WorkspaceTaskClient.Response(200,serverResult("r9",s.snapshotVersion,WorkspaceSnapshot.appId(CLOCK)));
+    throw new java.net.SocketException("Socket closed");   // what a blocked read throws when its socket is closed
+   }
+  };
+  final WorkspaceAbort abort=new WorkspaceAbort();
+  new Thread(()->{try{Thread.sleep(100);}catch(InterruptedException ignored){}abort.fire();}).start();
+  long t0=System.nanoTime();
+  WorkspaceDecisionClient.Outcome o=new WorkspaceDecisionClient(new WorkspaceTaskClient.Gate(true),hanging,SIGNER).decide("r9",req,rose.models.composer.LocalInference.Cancellation.NEVER,abort);
+  long ms=(System.nanoTime()-t0)/1_000_000;
+  expect(o.kind==WorkspaceDecisionClient.Kind.UNCERTAIN&&"cancelled".equals(o.reason)&&posts[0]==1,"stopped in flight: uncertain (cancelled), one attempt: "+o.kind+" "+o.reason);
+  expect(ms<2000,"and at once, not after the read timeout: "+ms+" ms");
+  expect(WorkspaceDecisionClient.result("r9",o).contains("\"failure\":\"model_unavailable\""),"its answer is never drawn");
+  // Stopped before it is sent: nothing goes out.
+  WorkspaceAbort early=new WorkspaceAbort();early.fire();posts[0]=0;
+  WorkspaceDecisionClient.Outcome n=new WorkspaceDecisionClient(new WorkspaceTaskClient.Gate(true),hanging,SIGNER).decide("r9",req,rose.models.composer.LocalInference.Cancellation.NEVER,early);
+  expect(n.kind==WorkspaceDecisionClient.Kind.NOT_SENT&&posts[0]==0,"stopped before sending: nothing is sent");
+  // Not stopped: the same transport's answer is read as before.
+  WorkspaceDecisionClient.Outcome ok=new WorkspaceDecisionClient(new WorkspaceTaskClient.Gate(true),new Fake().then(200,serverResult("r9",s.snapshotVersion,WorkspaceSnapshot.appId(CLOCK))),SIGNER).decide("r9",req,rose.models.composer.LocalInference.Cancellation.NEVER,new WorkspaceAbort());
+  expect(ok.kind==WorkspaceDecisionClient.Kind.DECIDED,"an abort that never fires changes nothing (a transport without the abortable post falls back)");
+ }
+
+ /** The status line names who is composing: Rose (the server's model) or the phone's starter. */
+ static void status(){
+  WorkspaceState st=new WorkspaceState();WorkspaceComposer c=new WorkspaceComposer(st);
+  c.begin(null,false);
+  expect(WorkspaceComposer.COMPOSING_PHONE.equals(c.status()),"no route set: the phone's starter arranges");
+  c.routed(true);expect("Composing with Rose…".equals(c.status()),"server route: Composing with Rose…");
+  c.routed(false);expect("Arranging on this phone…".equals(c.status()),"route off: Arranging on this phone…");
  }
 }

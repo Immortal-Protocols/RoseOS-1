@@ -84,7 +84,7 @@ public final class WorkspaceReplayTest {
   WorkspaceState st=new WorkspaceState();WorkspaceComposer c=new WorkspaceComposer(st);
   WorkspaceSnapshot s=phone(ALL,new HashSet<String>());
   int g=c.begin("dinner",false);
-  expect("Composing with Rose…".equals(c.status())&&c.busy(),"loading status, controls disabled in place");
+  expect(WorkspaceComposer.COMPOSING_PHONE.equals(c.status())&&c.busy(),"loading status, controls disabled in place");
   WorkspaceComposer.Outcome o=run(c,g,s,a->layout("Cooking tonight",grid("Kitchen apps",a,"Clock","Notes","Music"),row("Quick actions",a,"Start a timer","Play liked songs"),grid("Browse",a,"Firefox","Calendar")));
   expect(o==WorkspaceComposer.Outcome.COMMITTED&&titles(st).equals("Kitchen apps|Quick actions|Browse|"),"cooking composed: "+titles(st));
   expect("“dinner”".equals(c.status()),"the status line echoes the request in quotes");
