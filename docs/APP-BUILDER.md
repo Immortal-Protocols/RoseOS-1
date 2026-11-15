@@ -665,9 +665,13 @@ share.
     `3222e6c5`.
   - **Derived cases:** cases marked DERIVED change one thing in that answer.
     Its URLs are synthetic, and none is live.
-- **Not yet done.** The library doesn't serve `share` yet. That needs the
-  hosted-app mapping in the ledger and a metadata reader on the builder host,
-  and nothing is published. Until then phones read the absent field as
+- **The hosted app mapping** is in the ledger
+  (`record_hosted_app(project, uuid)`). It is recorded once, from owner
+  tooling or the publisher. The same id again changes nothing. Another id,
+  or an id another project holds, is refused, because a moved mapping would
+  send one app's phones another app's links.
+- **Not yet done.** The library doesn't serve `share` yet. That needs a
+  metadata reader on the builder host, and nothing is published. Until then phones read the absent field as
   "Not shared yet".
 
 ### 3.4 Baseline
@@ -1543,8 +1547,17 @@ needing older clients to update, through the library's minClientVersionCode
     under build isolation.
 - **Honest failures.** A missing toolchain, crate set or isolation is a
   `toolchain` or `dependency` failure, never a skipped half.
-- **One version.** A version pairs the client APK and the server ELF, each by
-  sha256, from one source revision, recorded in one ledger transaction.
+- **One version** (the ledger; source, not yet called by the builder):
+  - **Pairing.** A client-server version records its APK and its server ELF
+    (`{sha256, size, target}`) and its migration lock, in the same
+    transaction as the version row. A failure anywhere rolls all of it back,
+    and the job doesn't become ready.
+  - **Binding.** The first client-server delivery binds the project's
+    profile. A later version without its server is refused.
+  - **Lock.** `migration_lock(project)` is every migration any delivered
+    version ran, which `migrations.check` holds later revisions to.
+  - **Level 1.** Its versions and their library entries are unchanged, and
+    an older ledger file opens with the new tables added.
 - **Migrations** (`app_builder/migrations.py`; source, called nowhere) are
   checked offline before anything is built:
   - **Layout.** Each scope, `account` (every user's own database) and
@@ -1676,7 +1689,9 @@ need no hosting and no further OS Core change.
    `rose/tests/test_app_contract.py`.
 3. **Offline migration checks (§7.6).** Done:
    `rose/tests/test_app_migrations.py`.
-4. Ledger pairing of client and server artifacts.
+4. **Ledger pairing of client and server artifacts, the migration lock, and
+   the hosted app mapping (§7.6, §3.3).** Done:
+   `rose/tests/test_app_ledger_level2.py`.
 5. The injected crate source and server build plumbing, with a fake `cargo`,
    then a real build of a dependency-free fixture.
 6. The manifest and ELF checks.
