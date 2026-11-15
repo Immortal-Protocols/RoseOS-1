@@ -26,6 +26,14 @@ in `scripts/test-local.sh`):
   phone. No status, zero count or `highestLevel` at or below the phone's SDK is worded as a pass. Incomplete,
   unavailable, truncated and unlisted results are stated plainly. It never blocks or changes a build or an install.
   `tests/ApiReportTest.java` checks it against App Core's shared fixture file.
+- `ServerSummary`: a client-server version's server summary (`docs/APP-BUILDER.md` §3.3, `versions[].server`, slice 9).
+  - **Reading.** It's read by §3.3's client rule: anything malformed or unknown is unavailable, and it never fails
+    the version or the library. A plain version has no `server` field and shows nothing.
+  - **Showing.** It shows the contract API the version's server speaks, and which app versions before it would need
+    to update to use that server. It adds a line when the copy on the phone is older than that.
+  - **Limits.** It never says the server runs or can be reached (no server is hosted yet), never treats unavailable
+    as an error, and never blocks or changes an install. It says nothing about versions newer than the one shown.
+  - **Tests.** `tests/ServerSummaryTest.java` checks it against App Core's shared fixture file.
 - `BuildJob`: build stages, named failure categories, and retry advice only when the server says a retry can help.
   Progress never moves backwards.
 - `InstallPlan`: install, update or open only with the same package, the same signer and a higher version. A changed

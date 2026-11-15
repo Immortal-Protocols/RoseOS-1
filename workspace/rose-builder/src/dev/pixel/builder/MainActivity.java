@@ -263,12 +263,18 @@ public final class MainActivity extends Activity {
    }
   }
   InstallPlan.Installed installed = Installer.installed(this, p.packageName);
+  java.util.Map<Long, String> names = new java.util.HashMap<>();
+  for (BuilderApi.Version v : p.versions) names.put(v.versionCode, v.versionName);
+  Long installedCode = installed == null ? null : installed.versionCode;
   for (int i = p.versions.size() - 1; i >= 0; i--) {
    BuilderApi.Version v = p.versions.get(i);
    InstallPlan offer = InstallPlan.offer(new InstallPlan.Apk(p.packageName, p.signerSha256, v.apkSha256, v.versionCode), installed);
    if (v.notes != null) body("Version " + v.versionName + ": " + ShareMessage.clean(v.notes, ""));
    // The advisory API check: information only. It never decides what is offered below.
    for (String line : ApiReport.lines(v.apiReport, android.os.Build.VERSION.SDK_INT)) small(line);
+   // Slice 9: which app versions this version's server serves. Information only: it never decides what is offered
+   // below, and it never says the server runs.
+   for (String line : ServerSummary.lines(v.server, v.versionCode, names, installedCode)) small(line);
    // Level 3: this exact version's immutable link, or why it can't be shared.
    if (v.share.published()) button("Share version " + v.versionName, x -> shareLink(p, v, v.share.versionUrl, false));
    else small(ShareState.line(v.share));

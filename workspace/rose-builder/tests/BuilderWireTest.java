@@ -68,6 +68,21 @@ public final class BuilderWireTest {
         expect(sv.get(1).share.published() && "https://x.invalid/v2".equals(sv.get(1).share.versionUrl), "a recorded share is read");
         expect(rv.get(2).apiReport.status == ApiReport.Status.COMPLETE && rv.get(2).apiReport.notGuardedHere == 2 && rv.get(2).apiReport.highestLevel == 33L, "a good summary is read");
 
+        // server (§3.3, slice 9): absent for a plain version; a bad summary is unavailable on its own and never fails the library.
+        expect(rv.get(0).server.status == ServerSummary.Status.ABSENT, "no server field: absent");
+        String withServer = "{\"schemaVersion\":1,\"projects\":[{\"projectId\":\"p4\",\"packageName\":\"app.rose.gen.pp4\",\"activeJob\":null,\"versions\":["
+            + "{\"versionCode\":1,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10}},"
+            + "{\"versionCode\":2,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"server\":{\"schemaVersion\":1,\"status\":\"ok\",\"api\":1,\"minClientVersionCode\":2}},"
+            + "{\"versionCode\":3,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"server\":{\"schemaVersion\":1,\"status\":\"ok\",\"api\":1,\"minClientVersionCode\":9}},"
+            + "{\"versionCode\":4,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"server\":\"ok\"},"
+            + "{\"versionCode\":5,\"apk\":{\"sha256\":\"" + SHA + "\",\"size\":10},\"server\":{\"schemaVersion\":1,\"status\":\"unavailable\"}}]}]}";
+        List<BuilderApi.Version> cv = BuilderWire.library(withServer).get(0).project.versions;
+        expect(cv.size() == 5, "the library still loads with bad server summaries");
+        expect(cv.get(0).server.status == ServerSummary.Status.ABSENT, "a plain version: absent");
+        expect(cv.get(1).server.status == ServerSummary.Status.OK && cv.get(1).server.api == 1 && cv.get(1).server.minClientVersionCode == 2, "a good summary is read");
+        expect(cv.get(2).server.unreadable && cv.get(3).server.unreadable, "a minimum above the version itself, or not an object: unavailable");
+        expect(cv.get(4).server.status == ServerSummary.Status.UNAVAILABLE && !cv.get(4).server.unreadable, "a served unavailable");
+
         // Job (§3.2), with a failure.
         BuildJob j = BuilderWire.job("{\"schemaVersion\":1,\"jobId\":\"j3\",\"projectId\":\"p1\",\"attempt\":2,\"state\":\"failed\",\"stage\":\"compile\",\"message\":\"m\",\"logTail\":\"...\","
             + "\"startedAt\":1794608705.5,\"updatedAt\":1794608710.0,\"failure\":{\"category\":\"dependency\",\"summary\":\"Kotlin\",\"retryable\":false}}");

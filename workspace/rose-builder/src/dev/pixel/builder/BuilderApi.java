@@ -18,15 +18,22 @@ interface BuilderApi {
   final ApiReport apiReport;
   /** Level 3: the public links the builder recorded for this version; never null (absent reads as unpublished). */
   final ShareState share;
+  /** Slice 9: a client-server version's server summary; never null (absent for a plain version), never a gate. */
+  final ServerSummary server;
   Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes) {
    this(versionCode, versionName, createdAt, jobId, sourceRevision, apkSha256, apkSize, notes, ApiReport.none(), ShareState.unpublished());
   }
   Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes,
     ApiReport apiReport, ShareState share) {
+   this(versionCode, versionName, createdAt, jobId, sourceRevision, apkSha256, apkSize, notes, apiReport, share, ServerSummary.absent());
+  }
+  Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes,
+    ApiReport apiReport, ShareState share, ServerSummary server) {
    this.versionCode = versionCode; this.versionName = versionName; this.createdAt = createdAt; this.jobId = jobId;
    this.sourceRevision = sourceRevision; this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
    this.apiReport = apiReport == null ? ApiReport.none() : apiReport;
    this.share = share == null ? ShareState.unpublished() : share;
+   this.server = server == null ? ServerSummary.absent() : server;
   }
  }
  /** §3.3 project, re-read from the library on every refresh (signerSha256 is null until the first signed build and
