@@ -1,0 +1,187 @@
+//! [`AppData`]: the app's own data, one SQLite file per account plus the declared shared database (§7.4).
+//!
+//! Layout under `DATA_DIR` (the only writable path, §7.7):
+//! - `auth.sqlite3`: rose-signin's store (its own `auth_*` migrations; not opened here);
+//! - `accounts/<sha256 hex>.sqlite3`: one file per account, named by SHA-256 over a fixed label, the app and the
+//!   account, so no path a request can name reaches another account's file, and a name never appears on disk;
+//! - `shared.sqlite3`: only when the app declares shared data.
+//!
+//! Migrations are the builder-embedded lists (`server/migrations/account/NNNN_*.sql` and `shared/`, already
+//! checked offline by §7.6), applied forward only, each in the same transaction as the version it records
+//! (`PRAGMA user_version`). A database whose version is above the list (written by a newer build) is refused and
+//! never downgraded or touched.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use rose_app_runtime::signin::Principal;
+use rusqlite::Connection;
+use sha2::{Digest, Sha256};
+
+/// The builder-embedded migrations, in order: index `i` takes a database from version `i` to `i + 1`.
+#[derive(Clone, Copy, Debug)]
+pub struct Migrations {
+    pub account: &'static [&'static str],
+    /// Present only when the app declares shared data.
+    pub shared: Option<&'static [&'static str]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DataError {
+    /// The database records `found` migrations but this build knows `known`: a newer build wrote it.
+    NewerSchema { found: i64, known: usize },
+    /// The principal is another app's.
+    NotThisApp,
+    /// The app declared no shared data.
+    NoShared,
+    /// SQLite or the file system failed; the message names no account.
+    Storage(String),
+}
+
+impl std::fmt::Display for DataError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataError::NewerSchema { found, known } => {
+                write!(
+                    f,
+                    "database schema {found} is newer than this build's {known} migrations"
+                )
+            }
+            DataError::NotThisApp => f.write_str("the principal belongs to another app"),
+            DataError::NoShared => f.write_str("the app declares no shared data"),
+            DataError::Storage(m) => write!(f, "storage: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for DataError {}
+
+fn storage(e: impl std::fmt::Display) -> DataError {
+    DataError::Storage(e.to_string())
+}
+
+/// How long a busy database is retried before the request fails.
+const BUSY: Duration = Duration::from_secs(5);
+
+/// The file name (without extension) of `account`'s database in `app`.
+pub fn account_key(app: &str, account: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(b"rose-app-data/v1\0");
+    h.update((app.len() as u64).to_be_bytes());
+    h.update(app.as_bytes());
+    h.update((account.len() as u64).to_be_bytes());
+    h.update(account.as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Applies `list` forward from the database's recorded version, in one immediate transaction.
+pub fn migrate(conn: &Connection, list: &[&str]) -> Result<(), DataError> {
+    conn.busy_timeout(BUSY).map_err(storage)?;
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(storage)?;
+    let result = (|| {
+        let found: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(storage)?;
+        if found < 0 || found as u64 > list.len() as u64 {
+            return Err(DataError::NewerSchema {
+                found,
+                known: list.len(),
+            });
+        }
+        for (i, sql) in list.iter().enumerate().skip(found as usize) {
+            conn.execute_batch(sql).map_err(storage)?;
+            conn.execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+                .map_err(storage)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(storage),
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(err)
+        }
+    }
+}
+
+fn open(path: &Path, list: &[&str]) -> Result<Connection, DataError> {
+    let conn = Connection::open(path).map_err(storage)?;
+    conn.execute_batch("PRAGMA foreign_keys = ON").map_err(storage)?;
+    migrate(&conn, list)?;
+    Ok(conn)
+}
+
+/// The app's data. Shared across request threads (`Send + Sync`): it holds paths and the static migration lists,
+/// and opens a connection per call.
+#[derive(Clone, Debug)]
+pub struct AppData {
+    dir: PathBuf,
+    app: String,
+    migrations: Migrations,
+}
+
+impl AppData {
+    /// The data under `dir` for `app`; creates `dir/accounts`, readable by this user only.
+    pub fn new(dir: &Path, app: &str, migrations: Migrations) -> Result<AppData, DataError> {
+        let accounts = dir.join("accounts");
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&accounts).map_err(storage)?;
+        Ok(AppData {
+            dir: dir.to_path_buf(),
+            app: app.to_string(),
+            migrations,
+        })
+    }
+
+    pub fn app(&self) -> &str {
+        &self.app
+    }
+
+    /// Where `account`'s database lives.
+    pub fn account_path(&self, account: &str) -> PathBuf {
+        self.dir
+            .join("accounts")
+            .join(format!("{}.sqlite3", account_key(&self.app, account)))
+    }
+
+    /// The signed-in principal's own database, created and migrated on first use. Only this app's principal.
+    pub fn account(&self, principal: &Principal) -> Result<Connection, DataError> {
+        if principal.app != self.app {
+            return Err(DataError::NotThisApp);
+        }
+        open(&self.account_path(&principal.account), self.migrations.account)
+    }
+
+    /// The shared database, when the app declares one.
+    pub fn shared(&self) -> Result<Connection, DataError> {
+        let list = self.migrations.shared.ok_or(DataError::NoShared)?;
+        open(&self.dir.join("shared.sqlite3"), list)
+    }
+
+    /// Start-up: migrates the shared database and every existing account database, so the server is ready only
+    /// once all of its data is at this build's schema. Returns how many account files were checked.
+    pub fn migrate_all(&self) -> Result<usize, DataError> {
+        if self.migrations.shared.is_some() {
+            self.shared()?;
+        }
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(self.dir.join("accounts")).map_err(storage)? {
+            let path = entry.map_err(storage)?.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let Some(stem) = name.strip_suffix(".sqlite3") else {
+                continue; // SQLite's own -wal, -shm and -journal files, and anything else, are not databases here
+            };
+            if stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        for path in &paths {
+            open(path, self.migrations.account)?;
+        }
+        Ok(paths.len())
+    }
+}
