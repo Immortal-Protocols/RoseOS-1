@@ -76,9 +76,17 @@ class RoseAuthenticatorPackageTest(unittest.TestCase):
         self.assertIn('A link cannot replace it.', activity)
         self.assertNotIn('Replace', activity)
         # The sender is named; the confirm button ignores obscured touches and starts disabled.
-        self.assertIn('getReferrer()', activity)
+        # The sender is the one Android vouches for (getReferrer() is whatever the caller says), shown in the title.
+        self.assertIn('getLaunchedFromPackage()', activity)
+        self.assertNotIn('getReferrer', activity)
+        self.assertIn('Vault.displayable(e.issuer)', activity, 'link-supplied names cannot fake dialog lines')
         self.assertIn('setFilterTouchesWhenObscured(true)', activity)
-        self.assertIn('b.setEnabled(false);', activity)
+        # The delay is re-armed whenever the activity is shown again, and stopped while it is covered.
+        self.assertIn('tick.removeCallbacks(enable);', activity)
+        self.assertIn('arm();\n    }\n\n    @Override protected void onPause()', activity)
+        # A link to a resumed activity is asked about at once; a Recents relaunch does not replay its link.
+        self.assertIn('if (resumed) ask();', activity)
+        self.assertIn('FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY', activity)
         # A pending link survives recreation, and the launch link is taken once.
         self.assertIn('out.putString(STATE_PENDING, pending);', activity)
         self.assertIn('if (!launchHandled)', activity)

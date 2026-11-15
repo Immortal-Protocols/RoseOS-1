@@ -93,6 +93,22 @@ public final class VaultTest {
             }
             check(refused, "refuses " + bad.replace("\n", "|"));
         }
+        // Names a link supplies must be safe to show and to store: no control, bidi or separator characters, no lone
+        // surrogate (it would turn into '?' in the UTF-8 file and so become a second account), and not too long.
+        check(Vault.displayable("Example") && Vault.displayable("alice@example.com") && Vault.displayable("Ünïcode 名前 😀"),
+                "ordinary names are shown");
+        for (String bad : new String[] {"", "alice\n\nSent by Google", "a\rb", "a\u0000", "a\u202Eb", "a\u2028b",
+                "a\u2029b", "A\uD800", "\uDC00x", "x".repeat(Vault.MAX_NAME + 1)}) {
+            check(!Vault.displayable(bad), "refuses name " + bad.replace("\n", "|"));
+        }
+        boolean addRefused;
+        try {
+            new Vault().add(sealer, RoseSigninCore.parseOtpAuth(uri.replace("ana%40", "ana%0A%0ASent%20by%20Google%40")));
+            addRefused = false;
+        } catch (IllegalArgumentException expected) {
+            addRefused = true;
+        }
+        check(addRefused, "the vault itself refuses a name with a newline");
         // Only the v1 profile enrolls (the shared core's rule).
         check(RoseSigninCore.parseOtpAuth(uri.replace("SHA1", "SHA256")) == null, "another algorithm is refused");
         System.out.println("VaultTest: " + (checks - failures) + "/" + checks + " checks passed");

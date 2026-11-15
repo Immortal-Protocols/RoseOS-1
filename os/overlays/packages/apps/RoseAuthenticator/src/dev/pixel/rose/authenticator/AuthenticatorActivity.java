@@ -61,6 +61,12 @@ public final class AuthenticatorActivity extends Activity {
     private String sender;
     private boolean launchHandled;
     private AlertDialog dialog;
+    private boolean resumed;
+    /** Confirm buttons under the tapjacking delay; re-armed each time the activity is shown again. */
+    private final List<Button> guarded = new ArrayList<>();
+    private final Runnable enable = () -> {
+        for (Button b : guarded) b.setEnabled(true);
+    };
 
     private static final class Row {
         final Vault.Entry entry;
@@ -98,19 +104,27 @@ public final class AuthenticatorActivity extends Activity {
         }
         if (!launchHandled) {
             launchHandled = true;
-            take(getIntent());
+            // Reopened from Recents, a task's root intent is the link it was started with, answered long ago.
+            Intent launch = getIntent();
+            if (launch != null && (launch.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) {
+                if (take(launch)) sender = getLaunchedFromPackage();
+            }
         }
     }
 
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        if (take(intent) && dialog != null) {
-            // The newer link is asked about in onResume, which always follows; the older one is dropped.
+        if (!take(intent)) return;
+        // Android names only the app that first launched this activity, so a later link's sender is unknown.
+        sender = null;
+        if (dialog != null) {
             AlertDialog old = dialog;
             dialog = null;
             old.dismiss();
         }
+        // A resumed activity (split screen, freeform) gets new intents without onResume, so ask here as well.
+        if (resumed) ask();
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -124,11 +138,17 @@ public final class AuthenticatorActivity extends Activity {
         super.onResume();
         reload();
         tick.post(refresh);
+        resumed = true;
         if (pending != null && dialog == null) ask();
+        arm();
     }
 
     @Override protected void onPause() {
+        resumed = false;
         tick.removeCallbacks(refresh);
+        // Covered by another activity: the delay starts again when this one is shown.
+        tick.removeCallbacks(enable);
+        for (Button b : guarded) b.setEnabled(false);
         super.onPause();
     }
 
@@ -143,8 +163,6 @@ public final class AuthenticatorActivity extends Activity {
         Uri data = intent.getData();
         if (data == null) return false;
         pending = data.toString();
-        Uri from = getReferrer();
-        sender = from == null ? null : from.getHost();
         return true;
     }
 
@@ -155,6 +173,11 @@ public final class AuthenticatorActivity extends Activity {
         if (e == null) {
             pending = null;
             toast("This link is not a supported authenticator link.");
+            return;
+        }
+        if (!Vault.displayable(e.issuer) || !Vault.displayable(e.account)) {
+            pending = null;
+            toast("This link's account name cannot be shown safely, so it was not added.");
             return;
         }
         Vault.Entry existing = vault.find(e.issuer, e.account);
@@ -178,8 +201,9 @@ public final class AuthenticatorActivity extends Activity {
         }
         final AlertDialog[] self = new AlertDialog[1];
         dialog = self[0] = new AlertDialog.Builder(this)
-                .setTitle("Add this account?")
-                .setMessage(e.issuer + "\n" + e.account + "\n\nSent by " + (sender == null ? "an unknown app" : sender))
+                // The sender is in the title, apart from the names the link supplies.
+                .setTitle(sender == null ? "Add an account from an unidentified app?" : "Add an account from " + sender + "?")
+                .setMessage(e.issuer + "\n" + e.account)
                 .setPositiveButton("Add", (d, w) -> {
                     pending = null;
                     try {
@@ -195,20 +219,29 @@ public final class AuthenticatorActivity extends Activity {
                 })
                 .setNegativeButton("Cancel", (d, w) -> pending = null)
                 .setOnCancelListener(d -> pending = null)
-                .setOnDismissListener(d -> {
-                    if (dialog == self[0]) dialog = null;
-                })
                 .create();
         dialog.show();
-        guard(dialog.getButton(AlertDialog.BUTTON_POSITIVE));
+        final Button add = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+        dialog.setOnDismissListener(d -> {
+            if (dialog == self[0]) dialog = null;
+            guarded.remove(add);
+        });
+        guard(add);
     }
 
     /** Tapjacking: ignore touches while another window covers the button, and enable it only after a delay. */
     private void guard(Button b) {
         if (b == null) return;
         b.setFilterTouchesWhenObscured(true);
-        b.setEnabled(false);
-        tick.postDelayed(() -> b.setEnabled(true), CONFIRM_DELAY_MS);
+        guarded.add(b);
+        arm();
+    }
+
+    /** Disables every guarded button and enables them again after the delay, if this activity is still shown. */
+    private void arm() {
+        tick.removeCallbacks(enable);
+        for (Button b : guarded) b.setEnabled(false);
+        if (resumed && !guarded.isEmpty()) tick.postDelayed(enable, CONFIRM_DELAY_MS);
     }
 
     private boolean sameSecret(Vault.Entry existing, RoseSigninCore.Enrollment e) throws Exception {
@@ -320,7 +353,9 @@ public final class AuthenticatorActivity extends Activity {
                 .setNegativeButton("Cancel", null)
                 .create();
         d.show();
-        guard(d.getButton(AlertDialog.BUTTON_POSITIVE));
+        final Button remove = d.getButton(AlertDialog.BUTTON_POSITIVE);
+        d.setOnDismissListener(x -> guarded.remove(remove));
+        guard(remove);
     }
 
     /** The vault on disk. An unreadable file is kept aside (never overwritten) and an empty vault is used. */

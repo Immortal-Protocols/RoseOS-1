@@ -51,6 +51,28 @@ public final class Vault {
                 .put(label).putInt(i.length).put(i).putInt(a.length).put(a).array();
     }
 
+    /** Longest issuer or account name kept, in UTF-16 units. */
+    static final int MAX_NAME = 128;
+
+    /**
+     * Whether a link-supplied issuer or account name can be shown and stored as is: 1 to {@link #MAX_NAME} units of
+     * well-formed UTF-16 with no control, format (bidi), line or paragraph separator characters. Anything else could
+     * fake lines in a confirm dialog or change identity through the UTF-8 round trip of the vault file.
+     */
+    public static boolean displayable(String s) {
+        if (s == null || s.isEmpty() || s.length() > MAX_NAME) return false;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            int type = Character.getType(cp);
+            if (Character.isISOControl(cp) || type == Character.FORMAT || type == Character.SURROGATE
+                    || type == Character.LINE_SEPARATOR || type == Character.PARAGRAPH_SEPARATOR) {
+                return false;
+            }
+            i += Character.charCount(cp);
+        }
+        return true;
+    }
+
     public List<Entry> entries() {
         return Collections.unmodifiableList(entries);
     }
@@ -62,6 +84,9 @@ public final class Vault {
 
     /** Adds an enrollment, replacing an existing entry for the same issuer and account. */
     public Entry add(Sealer sealer, RoseSigninCore.Enrollment enrollment) throws Exception {
+        if (!displayable(enrollment.issuer) || !displayable(enrollment.account)) {
+            throw new IllegalArgumentException("issuer or account cannot be shown safely");
+        }
         byte[] secret = enrollment.secret();
         try {
             Entry e = new Entry(enrollment.issuer, enrollment.account,
