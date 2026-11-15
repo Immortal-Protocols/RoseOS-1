@@ -1633,23 +1633,88 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
 - **Dependencies.** The lock is rose-signin's 52 crates plus the two path crates, and a test checks this. Its CI (`.github/workflows/rose-app-runtime-signin.yml`) follows rose-signin's route.
 - **Build note.** The bundled SQLite C source needs a musl C compiler on the builder.
 
-### 7.5 Client sign-in (planned)
+### 7.5 Client sign-in and generated code (slice 8)
 
-- The client includes `RoseSigninCore.java` at the pin above.
-- It shows the `otpauth://` URI as a QR and as copyable text, and also opens
-  it with `ACTION_VIEW`. OS Core will build a RoseOS system authenticator for
-  that scheme, and on stock Android any authenticator app claims it, so the
-  flows are the same.
-- The user types the code and the passphrase. Only the bearer token is kept,
-  in no-backup storage.
+`rose/app_builder/codegen.py` turns a contract (§7.3) into source on both
+sides. The same contract always gives the same bytes, whatever the order of its
+keys.
+
+**Server: `server_files(contract)`.** This returns `rose/api.rs`,
+`rose/routes.rs` and `rose/wire.rs`, all matching `server_build.GENERATED`.
+- `api.rs` has:
+  - one struct per contract type, with `from_value` and `to_value` over the
+    runtime's `json::Value`;
+  - the `Handlers` trait, one function per route, taking `&Ctx` and the typed
+    request and returning the typed response or a `Refusal`;
+  - `Refusal`, a 4xx status and an error word. The word must be lower-case
+    letters and underscores; the runtime answers any other word with a 500.
+- Contract types named `Self`, `Handlers` or `Refusal` become `Self_`,
+  `Handlers_` and `Refusal_`.
+- `routes.rs` has `routes::<H>()`, the runtime's `Vec<Route>`. A route takes a
+  body exactly when it has a request type, and public routes are
+  `RouteAuth::Public`. A missing or malformed request body is refused with
+  `400 bad_request` before the handler runs. That is the word the runtime uses
+  for malformed JSON and on the sign-in routes.
+- `wire.rs` checks the §7.4 wire shapes. Unknown fields are ignored. An absent
+  optional is left out, and null reads as absent. `max` on a string counts
+  characters, not UTF-8 bytes.
+- **Bytes** travel as standard base64 with padding, both ways. Reading is
+  strict: a character outside the alphabet, missing or extra padding, unused
+  bits that are set, or any whitespace is `400 bad_request`. `max` on `bytes`
+  counts decoded bytes.
+- **The writer's code** is `server/src/handlers/mod.rs` (appprofile
+  `HANDLERS`). It defines `pub struct App;` and
+  `impl crate::api::Handlers for App`. The builder copies it to
+  `<server>/src/handlers/mod.rs`.
+- `rose/main.rs` is **not generated yet**: the startup wiring waits on OS
+  Core's startup API, agreed through Chief. It will declare
+  `mod api; mod routes; mod wire;` and
+  `#[path = "../src/handlers/mod.rs"] mod handlers;`, and serve
+  `routes::routes::<handlers::App>()`. The runtime crate comes in as a
+  builder-owned path crate. The generated code only uses `rose_app_runtime`,
+  and codegen writes no Cargo files.
+
+**Client: `client_files(contract, package)`.** Everything goes under the
+reserved `src/<package>/rose/`:
+- `RoseJson`: a strict JSON reader and writer. It refuses repeated keys,
+  trailing data, lone surrogates and nesting deeper than 64.
+- `RoseTypes`: one class per contract type, the same shapes as the server.
+- `RoseApi`: `Client(transport, tokens)` with one method per route.
+  `HttpsTransport(baseUrl)` takes the base URL from the caller, and the builder
+  never writes one in. It accepts `https` only, with no user info, query or
+  fragment, and does not follow redirects. Errors come back as
+  `RoseApi.Error(status, word, retryAfterSeconds)`. A 401 `session_invalid`
+  forgets the token.
+- `RoseSignin`: enroll, confirm, sign in, recover authenticator, recover
+  passphrase and sign out, over the `/signin/v1/*` routes.
+- `RoseSession`: keeps only the bearer token, in `getNoBackupFilesDir()`.
+- `RoseSigninCore.java`, copied byte for byte at the pin above. The builder
+  refuses to run if the file's SHA-256 has changed.
+
+**The sign-in flow.**
+- The `otpauth://` URI is checked with `RoseSigninCore.parseOtpAuth`. It is
+  shown as copyable text and opened with `ACTION_VIEW`. OS Core will build a
+  RoseOS system authenticator for that scheme, and on stock Android any
+  authenticator app claims it, so the flows are the same.
+- **QR rendering is not generated yet.**
+- The user types the code and the passphrase.
 - **Naming the app (#824).** OS Core's RoseOS authenticator
   (`dev.pixel.rose.authenticator`) names the sending app only when Android
-  vouches for it (API 34+). So the client starts the `ACTION_VIEW` with
-  `ActivityOptions.makeBasic().setShareIdentityEnabled(true)`. Without that,
-  the dialog says "an unidentified app" and still works.
+  vouches for it (API 34+). So on API 34+ the client starts the `ACTION_VIEW`
+  with `ActivityOptions.makeBasic().setShareIdentityEnabled(true)`. Without
+  that, the dialog says "an unidentified app" and still works.
 - **Names.** Issuer and account names must have no control, bidi or
   line-separator characters, and at most 128 UTF-16 units. rose-signin's name
   rules already require this.
+
+**Tests (`rose/tests/test_app_codegen.py`).**
+- The Rust side builds against `workspace/rose-app-runtime` with no warnings,
+  with the writer's `App` laid out as above.
+- The Java side compiles with `--release 17 -Xlint:all -Werror` and runs on the
+  JVM. The Android parts compile against android-35.
+- A Java request goes through the generated Rust and back.
+- With `ROSE_REQUIRE_CARGO` and `ROSE_REQUIRE_APP_BUILD`, a missing tool or
+  runtime crate fails instead of skipping.
 
 ### 7.6 Builder (planned)
 
