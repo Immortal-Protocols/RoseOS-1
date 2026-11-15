@@ -1,0 +1,17 @@
+[package]
+name = "rose-app-runtime-signin"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "The rose-signin adapter for the Rose app runtime (docs/APP-BUILDER.md §7.4, slice 7b): rose-signin's Authenticator over its SQLite store and AeadSealer, one SQLite file per account, forward-only migrations and the host identity. Only rose-signin's own locked dependencies."
+
+[dependencies]
+rose-app-runtime = { path = "../rose-app-runtime" }
+rose-signin = { path = "../rose-signin", features = ["sqlite"] }
+# Both are already in rose-signin's lock (the bundled SQLite store and SHA-256); the adapter adds no crate.
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+
+[lib]
+path = "src/lib.rs"
