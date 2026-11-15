@@ -809,6 +809,10 @@ def build_remote_app(server: Any, remote: Remote, voice: bool = True) -> FastAPI
     if builder is not None:  # only on a host whose owner enabled the app builder (docs/APP-BUILDER.md)
         from .app_builder.routes import add_routes
         add_routes(app, remote, builder, peer, refusal_headers, request_path)
+    workspace_model = getattr(server, "workspace_model", None)
+    if workspace_model is not None:
+        from .workspace_model_routes import add_routes as add_model_routes
+        add_model_routes(app, remote, workspace_model, peer, refusal_headers, request_path)
     workspace_tasks = getattr(server, "workspace_tasks", None)
     if workspace_tasks is not None:  # only on a host whose owner enabled page tasks (docs/APP-BUILDER.md §4.3)
         from .workspace_routes import add_routes as add_workspace_routes

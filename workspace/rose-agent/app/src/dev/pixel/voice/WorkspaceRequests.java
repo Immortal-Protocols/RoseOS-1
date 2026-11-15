@@ -56,7 +56,7 @@ final class WorkspaceRequests {
  }
 
  /**
-  * A conversational request (section 4.1). model says whether a real model is on the phone; onScreen whether
+  * A conversational request (section 4.1). model says whether the real model route is configured; onScreen whether
   * the page is showing now (only for undo, which answers at once). The reply is called exactly once: now for
   * an immediate answer, or from finished() for a composition.
   */

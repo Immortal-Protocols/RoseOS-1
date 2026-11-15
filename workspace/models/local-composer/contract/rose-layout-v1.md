@@ -1,4 +1,4 @@
-# rose-layout-v1: the phone-local composer contract
+# rose-layout-v1: workspace decision contract
 
 Status: **Models Core's contract (LOCAL-COMPOSER-001/002), answered by OS Product and App Core (below).** OS Product owns the component catalog,
 the context snapshot, the registry of real app/content/action IDs, the renderer, persistence, pin/undo and the
@@ -15,12 +15,13 @@ native integration.
 ## Boundary
 
 ```
-OS Product  ──snapshot + catalog──▶  composer (on the phone, offline)  ──validated layout | typed failure──▶  OS Product renderer
+OS Product  ──snapshot + catalog──▶  composer (local to Rose server)  ──validated layout | typed failure──▶  OS Product renderer
 App Core    ──request (trigger, prompt)──▶  composer
 ```
 
-- Button ("Arrange for me" / best guess) and direct text run on the phone with no server. The server never
-  generates a layout. A conversational request may *deliver* a request to the phone; the phone composes it.
+- Nathan's 2026-11-14 correction places the decision model locally in Rose server. Button, direct text and
+  conversational requests use the phone's current snapshot via signed `POST /workspace/v1/compose` on the
+  existing paired TLS listener. The response is this unchanged result format. The phone validates and renders it.
 - The model returns data, never code: a layout that references only IDs present in this request's snapshot, in
   components that exist in this catalog version. It cannot create IDs, intents, URLs or capabilities.
 - Voice transcription (local or server) is a separate decision and is not part of this contract: a transcript

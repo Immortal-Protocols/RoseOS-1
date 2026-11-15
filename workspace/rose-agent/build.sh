@@ -4,7 +4,8 @@ set -euo pipefail
 APP="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP/../.." && pwd)"
 SDK="${ANDROID_SDK_ROOT:-$ROOT/.tools/android-sdk}"
-BT="$SDK/build-tools/android-15"
+BT="${ANDROID_BUILD_TOOLS_DIR:-$SDK/build-tools/android-15}"
+ANDROID_JAR="${ANDROID_PLATFORM_JAR:-$SDK/platforms/android-35/android.jar}"
 JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 # ZXing core decodes the pairing QR code (LocalRosePairActivity); fetched by scripts/setup-zxing.sh.
 ZXING="$ROOT/.tools/zxing/core-3.5.4.jar"
@@ -15,7 +16,7 @@ fi
 if command -v sha256sum >/dev/null; then ZXING_ACTUAL="$(sha256sum "$ZXING")"; else ZXING_ACTUAL="$(shasum -a 256 "$ZXING")"; fi
 [[ "${ZXING_ACTUAL%% *}" == "$ZXING_SHA256" ]] || {
   printf 'ZXing jar checksum mismatch: %s\nDelete it and run bash scripts/setup-zxing.sh.\n' "$ZXING" >&2; exit 1; }
-for file in "$BT/aapt" "$BT/d8" "$SDK/platforms/android-35/android.jar" \
+for file in "$BT/aapt" "$BT/d8" "$ANDROID_JAR" \
   "$APP/app/assets/connection.json" \
   "$ROOT/workspace/pixel-clipboard/clipboard-connection.json" \
   "$APP/app/res/raw/mac_screen_cert.pem" "$APP/app/res/xml/mac_screen_network.xml" \
@@ -42,7 +43,9 @@ cp "$APP/clock-worker/src/ClockControlRoutine.java" "$STAGE/src/dev/pixel/voice/
 # Its scripted test double is not packaged; there is no model runtime or weights in this build.
 mkdir -p "$STAGE/src/rose/models/composer"
 cp "$ROOT/workspace/models/local-composer/java/src/rose/models/composer/"*.java "$STAGE/src/rose/models/composer/"
-rm -f "$STAGE/src/rose/models/composer/ScriptedInference.java"
+rm -f "$STAGE/src/rose/models/composer/ScriptedInference.java" \
+ "$STAGE/src/rose/models/composer/LlamaInference.java" "$STAGE/src/rose/models/composer/PlacementPlan.java" \
+ "$STAGE/src/rose/models/composer/ComposerWorker.java"
 cp "$APP/messages-worker/messages-tool.js" "$APP/media-worker/media-tool.js" "$APP/clock-worker/clock-tool.js" "$STAGE/assets/"
 cp "$ROOT/workspace/experiments/guardian-voice/client.js" "$STAGE/assets/guardian-voice.js"
 for name in luna-first output-boost voice-providers voice-commands; do
@@ -51,13 +54,13 @@ done
 "$APP/server/node_modules/.bin/esbuild" "$APP/server/eleven-entry.js" \
   --bundle --format=iife --platform=browser --minify --outfile="$STAGE/assets/eleven-client.js"
 "$BT/aapt" package -f -M "$STAGE/AndroidManifest.xml" -S "$STAGE/res" \
-  -A "$STAGE/assets" -I "$SDK/platforms/android-35/android.jar" -F "$OUT/resources.apk" -J "$OUT/generated"
+  -A "$STAGE/assets" -I "$ANDROID_JAR" -F "$OUT/resources.apk" -J "$OUT/generated"
 SOURCES=(); while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$STAGE/src" "$OUT/generated" -name '*.java' -type f | sort)
 "$JAVA" -m jdk.compiler/com.sun.tools.javac.Main -encoding UTF-8 -source 8 -target 8 \
-  -Xlint:-options -bootclasspath "$SDK/platforms/android-35/android.jar:$BT/core-lambda-stubs.jar" \
+  -Xlint:-options -bootclasspath "$ANDROID_JAR:$BT/core-lambda-stubs.jar" \
   -classpath "$ZXING" -d "$OUT/classes" "${SOURCES[@]}"
 CLASSES=(); while IFS= read -r f; do CLASSES+=("$f"); done < <(find "$OUT/classes" -name '*.class' -type f | sort)
-"$BT/d8" --min-api 29 --lib "$SDK/platforms/android-35/android.jar" --output "$OUT/dex" "${CLASSES[@]}" "$ZXING"
+"$BT/d8" --min-api 29 --lib "$ANDROID_JAR" --output "$OUT/dex" "${CLASSES[@]}" "$ZXING"
 cp "$OUT/resources.apk" "$OUT/unaligned.apk"
 (cd "$OUT/dex" && zip -q "$OUT/unaligned.apk" classes*.dex)
 "$BT/zipalign" -f 4 "$OUT/unaligned.apk" "$OUT/rose-agent-unsigned.apk"
@@ -68,4 +71,7 @@ unzip -t "$OUT/rose-agent-unsigned.apk" > "$OUT/zip-check.txt"
 git -C "$ROOT" rev-parse HEAD > "$OUT/source-revision.txt"
 git -C "$ROOT" status --porcelain > "$OUT/source-status.txt"
 "$JAVA" -version 2> "$OUT/java-version.txt"
+"$BT/aapt" version > "$OUT/aapt-version.txt"
+printf 'buildTools=%s\ncompilePlatform=%s\n' "$BT" "$ANDROID_JAR" > "$OUT/android-tools.txt"
+if command -v sha256sum >/dev/null; then sha256sum "$ANDROID_JAR" > "$OUT/android-platform-sha256.txt"; else shasum -a 256 "$ANDROID_JAR" > "$OUT/android-platform-sha256.txt"; fi
 printf 'Unsigned APK: %s\n' "$OUT/rose-agent-unsigned.apk"

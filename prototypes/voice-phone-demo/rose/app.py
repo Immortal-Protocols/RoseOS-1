@@ -829,6 +829,8 @@ class Server:
         self._floors = (0, 0)    # ids at the last reset: their late events are not shown
         self._ids_lock = threading.Lock()
         self._stopping = threading.Event()
+        from .workspace_model import WorkspaceModel
+        self.workspace_model = WorkspaceModel.configured()
         self.bus.subscribe(self._watch)
         self.phone.listeners.append(self._on_phone)
 
@@ -849,6 +851,7 @@ class Server:
         if self._stopping.is_set():
             return
         self._stopping.set()
+        if getattr(self, "workspace_model", None) is not None: self.workspace_model.close()
         for obj, method in ((self.listener, "stop"), (self.conductor, "stop"),
                             (self.keepalive, "stop"), (self.transport, "stop"), (self.runtime, "stop")):
             if obj is not None and hasattr(obj, method):
