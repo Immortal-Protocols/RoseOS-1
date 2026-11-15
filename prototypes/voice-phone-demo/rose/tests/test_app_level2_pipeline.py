@@ -18,10 +18,11 @@ from pathlib import Path
 from unittest import mock
 
 from rose.app_builder import (appprofile, codegen, contract as C, crates, ledger as L, migrations, server_build,
-                              service, template, toolchain)
+                              server_manifest, service, template, toolchain)
 from rose.app_builder.migrations import Migration
 from rose.app_builder.service import Builder
 from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
+from rose.tests.test_app_server_manifest import tiny_elf
 
 REPO = Path(__file__).resolve().parents[4]
 RUNTIME = REPO / 'workspace/rose-app-runtime'
@@ -762,6 +763,47 @@ class EndToEnd(Base):
         self.assertIn('builder\'s own crates', job['failure']['summary'])
         self.assertEqual(b.ledger.versions(out['projectId']), [])
 
+
+
+@unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK and a JDK')
+class FakeHost(Base):
+    """Slice 10's fake host: what a host is handed for a delivered version (the ELF by its digest and the
+    version's recorded manifest) passes the check the Chariot adapter will run (server_manifest.check). The server
+    build is stood in for by a byte-built static musl-target ELF; nothing is hosted or run."""
+
+    def deliver(self, target):
+        elf_bytes = tiny_elf()
+
+        def build(snapshot, work, *args, **kw):
+            Path(work).mkdir(parents=True, exist_ok=True)
+            elf = Path(work) / 'server'
+            elf.write_bytes(elf_bytes)
+            return server_build.ServerBuild(elf, hashlib.sha256(elf_bytes).hexdigest(), len(elf_bytes), target,
+                                            '# Cargo.lock\nversion = 4\n')
+        b = self.builder(client_server_app(), codegen=Codegen(), server_crates=BUILDER_CRATES)
+        with mock.patch.object(server_build, 'build', build):
+            out, job = self.run_job(b)
+        self.assertEqual(job['state'], 'ready', job)
+        return b, out['projectId']
+
+    def test_a_delivered_version_is_handed_over_as_its_elf_and_manifest(self):
+        b, project = self.deliver(server_manifest.TARGET)
+        data = b.ledger.server_manifest(project, 1)
+        m = server_manifest.decode(data)  # canonical bytes, exactly
+        self.assertEqual((m['project_id'], m['version_code'], m['elf']), (project, 1, b.ledger.server(project, 1)))
+        self.assertEqual(m['schema'], {'account': max(x['number'] for x in b.ledger.migration_lock(project))})
+        elf = self.root / 'artifacts' / f'{m["elf"]["sha256"]}.server'
+        self.assertEqual(server_manifest.check(m, elf, project_id=project, version_code=1), m)
+        with self.assertRaises(server_manifest.Refused):  # the host holds it to its own project and version
+            server_manifest.check(m, elf, project_id=project, version_code=2)
+        elf.write_bytes(elf.read_bytes() + b'x')
+        with self.assertRaises(server_manifest.Refused):  # and to the binary it names
+            server_manifest.check(m, elf, project_id=project, version_code=1)
+
+    def test_a_server_for_another_target_has_no_manifest(self):
+        b, project = self.deliver('x86_64-unknown-linux-gnu')  # the machine's own target, as CI builds
+        self.assertIsNotNone(b.ledger.server(project, 1))
+        self.assertIsNone(b.ledger.server_manifest(project, 1))
 
 
 @unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK and a JDK')

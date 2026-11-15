@@ -1,4 +1,5 @@
-"""The server half's binary check and manifest (docs/APP-BUILDER.md §7.7). Source only; nothing calls this yet.
+"""The server half's binary check and manifest (docs/APP-BUILDER.md §7.7). Source only: every server build runs
+``check_elf``, and each delivered version whose server is for the host's target records its ``manifest``.
 
 A client-server version's server is one ELF plus a manifest, with nothing host-specific inside the app.
 
