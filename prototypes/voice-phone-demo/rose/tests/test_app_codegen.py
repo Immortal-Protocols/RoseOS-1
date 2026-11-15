@@ -39,6 +39,8 @@ CONTRACT = {
         'NoteList': {'fields': {'notes': {'type': 'list', 'of': 'Note'}}},
         'Self': {'fields': {'self': 'bool', 'class': {'type': 'int', 'optional': True}}},
         'RoseTypes': {'fields': {}},
+        # Names beside the types in the generated Rust api module: escaped, or spelled out in full.
+        'Refusal': {'fields': {'status': 'int'}}, 'Handlers': {'fields': {}}, 'Ctx': {'fields': {}},
     },
     'routes': {
         'listNotes': {'method': 'GET', 'path': '/app/notes', 'response': 'NoteList'},
@@ -77,7 +79,7 @@ class Server(unittest.TestCase):
         self.files = G.server_files(self.contract)
 
     def test_files_are_the_builders_generated_modules(self):
-        self.assertEqual(sorted(self.files), ['rose/api.rs', 'rose/handlers.rs', 'rose/routes.rs', 'rose/wire.rs'])
+        self.assertEqual(sorted(self.files), ['rose/api.rs', 'rose/routes.rs', 'rose/wire.rs'])
         self.assertTrue(all(S.GENERATED.fullmatch(k) for k in self.files))
         # The crate root binds OS Core's authenticator and the host's identity: not generated until that is agreed.
         self.assertNotIn(S.ENTRY, self.files)
@@ -88,13 +90,16 @@ class Server(unittest.TestCase):
         self.assertIn(self.contract.sha256, self.files['rose/api.rs'])
 
     def test_names_are_escaped(self):
-        api, handlers = self.files['rose/api.rs'], self.files['rose/handlers.rs']
+        api = handlers = self.files['rose/api.rs']
         self.assertIn('pub struct Self_ {', api)
         self.assertIn('pub self_: bool,', api)
         self.assertIn('pub r#type: ::std::option::Option<::std::string::String>,', api)
         self.assertIn('pub parent: ::std::option::Option<::std::boxed::Box<crate::api::Note>>,', api)
-        self.assertIn('fn to_string(ctx: &Ctx)', handlers)
-        self.assertIn('fn self_(ctx: &Ctx, request: crate::api::Self_)', handlers)
+        self.assertIn('fn to_string(ctx: &::rose_app_runtime::server::Ctx)', handlers)
+        self.assertIn('fn self_(ctx: &::rose_app_runtime::server::Ctx, request: crate::api::Self_)', handlers)
+        self.assertIn('pub struct Refusal_ {', api)
+        self.assertIn('pub struct Handlers_ {', api)
+        self.assertIn('pub struct Ctx {', api)
 
     def test_compiles_and_behaves_against_the_runtime(self):
         require('ROSE_REQUIRE_CARGO', 'cargo')
@@ -106,7 +111,7 @@ class Server(unittest.TestCase):
             crate = Path(tmp)
             write_tree(crate, self.files)
             write_tree(crate, {'Cargo.toml': RUST_CARGO.replace('@RUNTIME@', json.dumps(str(RUNTIME))),
-                               'rose/main.rs': RUST_HARNESS})
+                               'rose/main.rs': RUST_HARNESS, 'src/handlers/mod.rs': RUST_WRITER})
             env = {**os.environ, 'CARGO_TARGET_DIR': str(crate / 'target'), 'CARGO_NET_OFFLINE': 'true'}
             built = subprocess.run(['cargo', 'build', '--offline', '--quiet'], cwd=crate, env=env,
                                    capture_output=True, text=True, timeout=600)
@@ -196,7 +201,7 @@ class Parity(unittest.TestCase):
             crate, java = root / 'server', root / 'client'
             write_tree(crate, G.server_files(contract))
             write_tree(crate, {'Cargo.toml': RUST_CARGO.replace('@RUNTIME@', json.dumps(str(RUNTIME))),
-                               'rose/main.rs': RUST_HARNESS})
+                               'rose/main.rs': RUST_HARNESS, 'src/handlers/mod.rs': RUST_WRITER})
             env = {**os.environ, 'CARGO_TARGET_DIR': str(crate / 'target'), 'CARGO_NET_OFFLINE': 'true'}
             built = subprocess.run(['cargo', 'build', '--offline', '--quiet'], cwd=crate, env=env,
                                    capture_output=True, text=True, timeout=600)
@@ -235,38 +240,47 @@ rose-app-runtime = { path = @RUNTIME@ }
 [workspace]
 '''
 
-RUST_HARNESS = textwrap.dedent('''\
-    mod api;
-    mod handlers;
-    mod routes;
-    mod wire;
+RUST_WRITER = textwrap.dedent('''\
+    // The writer\'s code, as App Core\'s convention places it (server/src/handlers/mod.rs).
+    use crate::api::Refusal;
+    use rose_app_runtime::server::Ctx;
 
-    use rose_app_runtime::json::{self, Value};
-    use rose_app_runtime::server::{Ctx, Reply, RouteAuth};
+    pub struct App;
 
-    struct App;
-
-    impl handlers::Handlers for App {
-        fn add_note(_ctx: &Ctx, r: api::Note) -> Result<api::Note, handlers::Refusal> {
+    impl crate::api::Handlers for App {
+        fn add_note(_ctx: &Ctx, r: crate::api::Note) -> Result<crate::api::Note, Refusal> {
             if r.id < 0 {
-                Err(handlers::Refusal::new(409, "negative"))
+                Err(Refusal::new(409, "negative"))
             } else {
                 Ok(r)
             }
         }
-        fn list_notes(_ctx: &Ctx) -> Result<api::NoteList, handlers::Refusal> {
-            Ok(api::NoteList { notes: vec![] })
+        fn list_notes(_ctx: &Ctx) -> Result<crate::api::NoteList, Refusal> {
+            Ok(crate::api::NoteList { notes: vec![] })
         }
-        fn about(_ctx: &Ctx) -> Result<api::RoseTypes, handlers::Refusal> {
-            Ok(api::RoseTypes {})
+        fn about(_ctx: &Ctx) -> Result<crate::api::RoseTypes, Refusal> {
+            Ok(crate::api::RoseTypes {})
         }
-        fn self_(_ctx: &Ctx, r: api::Self_) -> Result<api::Self_, handlers::Refusal> {
+        fn self_(_ctx: &Ctx, r: crate::api::Self_) -> Result<crate::api::Self_, Refusal> {
             Ok(r)
         }
-        fn to_string(_ctx: &Ctx) -> Result<api::RoseTypes, handlers::Refusal> {
-            Ok(api::RoseTypes {})
+        fn to_string(_ctx: &Ctx) -> Result<crate::api::RoseTypes, Refusal> {
+            Ok(crate::api::RoseTypes {})
         }
     }
+
+''')
+
+RUST_HARNESS = textwrap.dedent('''\
+    mod api;
+    #[path = "../src/handlers/mod.rs"]
+    mod handlers;
+    mod routes;
+    mod wire;
+
+    use handlers::App;
+    use rose_app_runtime::json::{self, Value};
+    use rose_app_runtime::server::{Ctx, Reply, RouteAuth};
 
     fn call(method: &str, path: &str, body: &str) -> Reply {
         let routes = routes::routes::<App>();
@@ -300,6 +314,7 @@ RUST_HARNESS = textwrap.dedent('''\
             r#"{"id":1,"text":"x","score":1,"tags":["a","b","c","d"],"meta":{}}"#,
             r#"{"id":1,"text":"x","score":1,"tags":[],"meta":{},"blob":"MDEyMzQ1Njc4"}"#,
             r#"{"id":1,"text":"x","score":1,"tags":[],"meta":{},"blob":"aGk"}"#,
+            r#"{"id":1,"text":"x","score":1,"tags":[],"meta":{},"blob":"aG k="}"#,
             r#"{"id":1.5,"text":"x","score":1,"tags":[],"meta":{}}"#,
             r#"{"id":"1","text":"x","score":1,"tags":[],"meta":{}}"#,
             r#"{"text":"x","score":1,"tags":[],"meta":{}}"#,
@@ -311,7 +326,7 @@ RUST_HARNESS = textwrap.dedent('''\
             "",
         ];
         for body in refused {
-            assert_eq!(call("POST", "/app/notes", body), Reply::Refused(400, "invalid_request"), "{}", body);
+            assert_eq!(call("POST", "/app/notes", body), Reply::Refused(400, "bad_request"), "{}", body);
         }
         let negative = r#"{"id":-1,"text":"x","score":1,"tags":[],"meta":{}}"#;
         assert_eq!(call("POST", "/app/notes", negative), Reply::Refused(409, "negative"));
@@ -323,7 +338,7 @@ RUST_HARNESS = textwrap.dedent('''\
             assert_eq!(wire::base64_decode(text).as_deref(), Some(bytes), "{}", text);
             assert_eq!(wire::base64_encode(bytes), text);
         }
-        for text in ["Zg=", "Zg==Zg==", "Zh==", "Z===", "Zm9v!", "Zm9-"] {
+        for text in ["Zg=", "Zg==Zg==", "Zh==", "Z===", "Zm9v!", "Zm9-", "Zm9 v", "Zm9v\\n", " Zm9v", "Zm9v\\t"] {
             assert_eq!(wire::base64_decode(text), None, "{}", text);
         }
         println!("server checks passed");

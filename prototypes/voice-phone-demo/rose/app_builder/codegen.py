@@ -8,13 +8,15 @@ URL from the caller, and the server's start-up (rose/main.rs) binds the host's i
 which is not generated here yet (see ``server_files``).
 
 **Server** (``server_files``): files under ``rose/`` for rose.app_builder.server_build (keys match its ``GENERATED``):
-- ``rose/api.rs``: one struct per contract type, converting from and to the runtime's ``json::Value``;
-- ``rose/handlers.rs``: the ``Handlers`` trait the writer implements, one associated function per route, and
-  ``Refusal`` (a 4xx status and an error word);
+- ``rose/api.rs``: one struct per contract type, converting from and to the runtime's ``json::Value``; the
+  ``Handlers`` trait the writer implements, one associated function per route; and ``Refusal`` (a 4xx status and an
+  error word of lower-case letters and underscores);
 - ``rose/routes.rs``: ``routes::<H: Handlers>()``, the ``Vec<Route>`` the runtime's ``Server::new`` takes;
 - ``rose/wire.rs``: the JSON helpers they share.
 
-The crate root (rose/main.rs) must declare ``mod api; mod handlers; mod routes; mod wire;``.
+The crate root (rose/main.rs) declares ``mod api; mod routes; mod wire;`` and the writer's code,
+``#[path = "../src/handlers/mod.rs"] mod handlers;``, which defines ``pub struct App;`` and
+``impl crate::api::Handlers for App`` (the convention is App Core's: rose.app_builder.appprofile ``HANDLERS``).
 
 **Client** (``client_files``): files under the reserved ``src/<package>/rose/`` (rose.app_builder.appprofile):
 - ``RoseApi.java``: one class per contract type, a ``Client`` with one method per route over an injectable
@@ -27,7 +29,7 @@ The crate root (rose/main.rs) must declare ``mod api; mod handlers; mod routes; 
 
 Wire rules, the same on both sides (§7.3): an ``optional`` field may be absent or null; fields neither side knows are
 ignored; ``max`` bounds a string's characters, bytes' length and a list's or map's entries in requests only (the
-server refuses more, with ``400 invalid_request``); ``bytes`` travel as standard, padded base64 text; ``float``
+server refuses more, with ``400 bad_request``); ``bytes`` travel as standard, padded base64 text, strict on read; ``float``
 accepts a JSON integer; ``int`` is a 64-bit integer.
 """
 from __future__ import annotations
@@ -41,7 +43,7 @@ from .contract import Contract
 SIGNIN_CORE = Path(__file__).resolve().parents[4] / 'workspace/rose-signin/java/src/dev/pixel/rosesignin/RoseSigninCore.java'
 SIGNIN_CORE_SHA256 = '6209a9cdab7b82e1cc942b634c011d28cff51b5592174cf0ec76e9edb6ac587f'
 PACKAGE = re.compile(r'[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+')
-INVALID = 'invalid_request'
+INVALID = 'bad_request'  # the runtime's word for a malformed request, on every route
 
 # ---- names ----------------------------------------------------------------------------------------------------------
 
@@ -70,8 +72,11 @@ def rust_ident(name: str) -> str:
     return 'r#' + name if name in RUST_KEYWORDS else name
 
 
+RUST_RESERVED_TYPES = ('Self', 'Handlers', 'Refusal')  # Self is Rust's; the others live beside the types in api.rs
+
+
 def rust_type_name(name: str) -> str:
-    return 'Self_' if name == 'Self' else name
+    return name + '_' if name in RUST_RESERVED_TYPES else name
 
 
 def java_ident(name: str) -> str:
@@ -345,12 +350,11 @@ def server_files(contract: Contract) -> dict[str, str]:
     not included yet: its start-up API is still being agreed (docs/APP-BUILDER.md §7.5)."""
     data = contract.data
     head = HEADER.format(sha=contract.sha256)
-    api = head + '//! The contract\'s types (docs/APP-BUILDER.md §7.3).\n#![allow(dead_code, clippy::all)]\n\n' + \
-        '\n'.join(_rust_struct(n, t['fields']) for n, t in sorted(data['types'].items()))
-
-    trait = [head, '//! What the writer implements: one function per route (docs/APP-BUILDER.md §7.3).',
-             '#![allow(dead_code)]', '', f'use {RT}::server::Ctx;', '',
-             '/// A refusal a handler returns: a 4xx status and a lower-case error word (`{"error": word}`).',
+    types = '\n'.join(_rust_struct(n, t['fields']) for n, t in sorted(data['types'].items()))
+    trait = [head + '//! The contract\'s types, and what the writer implements: one function per route '
+             '(docs/APP-BUILDER.md §7.3).', '#![allow(dead_code, clippy::all)]', '',
+             '/// A refusal a handler returns: a 4xx status and an error word (`{"error": word}`) of lower-case letters',
+             '/// and underscores; the runtime answers any other word with a 500.',
              '#[derive(Clone, Copy, Debug, PartialEq, Eq)]',
              'pub struct Refusal {', '    pub status: u16,', "    pub word: &'static str,", '}', '',
              'impl Refusal {', "    pub const fn new(status: u16, word: &'static str) -> Refusal {",
@@ -359,12 +363,12 @@ def server_files(contract: Contract) -> dict[str, str]:
              'pub trait Handlers {']
     routes = [head, '//! The contract\'s routes as the runtime serves them (docs/APP-BUILDER.md §7.4).',
               '#![allow(dead_code)]', '', f'use {RT}::json::Value;',
-              f'use {RT}::server::{{Ctx, Reply, Route, RouteAuth}};', '', 'use crate::handlers::Handlers;', '']
+              f'use {RT}::server::{{Ctx, Reply, Route, RouteAuth}};', '', 'use crate::api::Handlers;', '']
     table = ['/// Every route, for `Server::new`.', 'pub fn routes<H: Handlers>() -> Vec<Route> {', '    vec![']
     for name, route in sorted(data['routes'].items()):
         fn = rust_ident(snake(name))
         req, resp = _route_types(route)
-        params = f'ctx: &Ctx, request: {req}' if req else 'ctx: &Ctx'
+        params = f'ctx: &{RT}::server::Ctx' + (f', request: {req}' if req else '')
         trait.append(f'    /// {route["method"]} {route["path"]} ({route["auth"]})')
         trait.append(f'    fn {fn}({params}) -> ::std::result::Result<{resp}, Refusal>;')
         wrapper = f'route_{snake(name)}'
@@ -383,7 +387,7 @@ def server_files(contract: Contract) -> dict[str, str]:
                      f'body: {"true" if req else "false"}, handler: {wrapper}::<H> }},')
     trait += ['}', '']
     table += ['    ]', '}', '']
-    return {'rose/api.rs': api, 'rose/handlers.rs': '\n'.join(trait), 'rose/routes.rs': '\n'.join(routes + table),
+    return {'rose/api.rs': '\n'.join(trait) + '\n' + types, 'rose/routes.rs': '\n'.join(routes + table),
             'rose/wire.rs': head + WIRE_RS}
 
 

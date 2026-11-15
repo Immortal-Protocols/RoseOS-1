@@ -1540,22 +1540,39 @@ sides. The same contract always gives the same bytes, whatever the order of its
 keys.
 
 **Server: `server_files(contract)`.** This returns `rose/api.rs`,
-`rose/handlers.rs`, `rose/routes.rs` and `rose/wire.rs`, all matching
-`server_build.GENERATED`.
-- `api.rs` has one struct per contract type, with `from_value` and `to_value`
-  over the runtime's `json::Value`.
-- `handlers.rs` has the `Handlers` trait (one function per route, taking `&Ctx`
-  and the typed request, returning the typed response or a `Refusal`). The
-  app's own code implements it.
-- `routes.rs` has `routes::<H>()`, the runtime's `Vec<Route>`. A missing or
-  malformed request body is refused `400 invalid_request` before the handler
-  runs.
-- `wire.rs` checks the §7.4 wire shapes. `max` counts characters for strings
-  and bytes for `bytes`, which travel as strict padded base64. Unknown fields
-  are ignored. An absent optional is left out, and null reads as absent.
+`rose/routes.rs` and `rose/wire.rs`, all matching `server_build.GENERATED`.
+- `api.rs` has:
+  - one struct per contract type, with `from_value` and `to_value` over the
+    runtime's `json::Value`;
+  - the `Handlers` trait, one function per route, taking `&Ctx` and the typed
+    request and returning the typed response or a `Refusal`;
+  - `Refusal`, a 4xx status and an error word. The word must be lower-case
+    letters and underscores; the runtime answers any other word with a 500.
+- Contract types named `Self`, `Handlers` or `Refusal` become `Self_`,
+  `Handlers_` and `Refusal_`.
+- `routes.rs` has `routes::<H>()`, the runtime's `Vec<Route>`. A route takes a
+  body exactly when it has a request type, and public routes are
+  `RouteAuth::Public`. A missing or malformed request body is refused with
+  `400 bad_request` before the handler runs. That is the word the runtime uses
+  for malformed JSON and on the sign-in routes.
+- `wire.rs` checks the §7.4 wire shapes. Unknown fields are ignored. An absent
+  optional is left out, and null reads as absent. `max` on a string counts
+  characters, not UTF-8 bytes.
+- **Bytes** travel as standard base64 with padding, both ways. Reading is
+  strict: a character outside the alphabet, missing or extra padding, unused
+  bits that are set, or any whitespace is `400 bad_request`. `max` on `bytes`
+  counts decoded bytes.
+- **The writer's code** is `server/src/handlers/mod.rs` (appprofile
+  `HANDLERS`). It defines `pub struct App;` and
+  `impl crate::api::Handlers for App`. The builder copies it to
+  `<server>/src/handlers/mod.rs`.
 - `rose/main.rs` is **not generated yet**: the startup wiring waits on OS
-  Core's startup API, agreed through Chief. The crate root declares
-  `mod api; mod handlers; mod routes; mod wire;`.
+  Core's startup API, agreed through Chief. It will declare
+  `mod api; mod routes; mod wire;` and
+  `#[path = "../src/handlers/mod.rs"] mod handlers;`, and serve
+  `routes::routes::<handlers::App>()`. The runtime crate comes in as a
+  builder-owned path crate. The generated code only uses `rose_app_runtime`,
+  and codegen writes no Cargo files.
 
 **Client: `client_files(contract, package)`.** Everything goes under the
 reserved `src/<package>/rose/`:
@@ -1591,7 +1608,8 @@ reserved `src/<package>/rose/`:
   rules already require this.
 
 **Tests (`rose/tests/test_app_codegen.py`).**
-- The Rust side builds against `workspace/rose-app-runtime` with no warnings.
+- The Rust side builds against `workspace/rose-app-runtime` with no warnings,
+  with the writer's `App` laid out as above.
 - The Java side compiles with `--release 17 -Xlint:all -Werror` and runs on the
   JVM. The Android parts compile against android-35.
 - A Java request goes through the generated Rust and back.
