@@ -132,9 +132,20 @@ class Call(unittest.TestCase):
         self.assertEqual((r['ok'], r['outcome'], r['revision']), (True, 'prepared', 9))
         self.assertIn('swipes', r['message'])
 
-    def test_not_offered_to_the_conversation_yet(self):
+    def test_offered_to_the_conversation_and_gated_on_every_call(self):
+        # Offered since Rose Agent serves the contract (#787, #820); each call still asks capabilities first, so a
+        # phone without it gets an honest unavailable (test_codex.ConversationCompose covers the wiring).
         from rose import codex_conductor
-        self.assertNotIn('compose_workspace', {t['name'] for t in codex_conductor.CONVERSATION_TOOLS})
+        self.assertIn('compose_workspace', {t['name'] for t in codex_conductor.CONVERSATION_TOOLS})
+        self.assertEqual(composer.PROVIDER, 'dev.pixel.voice')
+
+    def test_request_ids_from_call_ids(self):
+        a, b = composer.request_id_for('call_1'), composer.request_id_for('call_2')
+        self.assertEqual(a, composer.request_id_for('call_1'))  # the same call is the same request
+        self.assertNotEqual(a, b)
+        long_id = composer.request_id_for('x' * 10000)
+        self.assertLessEqual(len(long_id), composer.MAX_REQUEST_ID)
+        composer.params(long_id, {'kind': 'arrange'})  # accepted by the request rules
 
 
 if __name__ == '__main__':

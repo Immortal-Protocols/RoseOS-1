@@ -754,9 +754,18 @@ Purpose: route the owner's explicit conversational requests for the
 one-page-left-of-Home workspace to the workspace composer, and route
 agent tasks the owner explicitly selects there through the existing server. The
 server runs the local decision model; the phone supplies the snapshot and renders its result. Native UI belongs
-to OS Product under Nathan's approved prototype. Until a phone composer provider
-reports this contract, the conversation tool is not offered, so Rose never
-claims a page change she cannot make.
+to OS Product under Nathan's approved prototype.
+
+The conversation offers `compose_workspace`, now that Rose Agent
+(`dev.pixel.voice`) serves the contract (#787, #820).
+- **Every call checks first.** Each call asks the provider's `capabilities`
+  for this contract and kind before sending anything. With no provider, an
+  older one or a kind it doesn't list, the outcome is `unavailable`, and
+  nothing is sent. Rose never claims a page change she can't make.
+- **Request ids.** A call's `requestId` is derived from its tool call id, so
+  a repeat of the same call composes nothing new.
+- **One limit.** If a call is answered as cancelled but the phone had already
+  composed, a fresh call from the model is a new request.
 
 ### 4.1 Server → phone (`app_command` over the existing phone link)
 

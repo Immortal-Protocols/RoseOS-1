@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from . import customization, voice_identity
+from . import composer, customization, voice_identity
 from . import life as rosie_life
 from .life_world import Conflict as LifeConflict
 from .codex_client import CodexClient
@@ -74,6 +74,11 @@ CONVERSATION_TOOLS += voice_identity.TOOLS
 CONVERSATION_POLICY += voice_identity.POLICY_LINE + '\n'
 CONVERSATION_TOOLS += rosie_life.TOOLS
 CONVERSATION_POLICY += rosie_life.POLICY + '\n'
+# Project 2 (docs/APP-BUILDER.md §4): the owner's explicit requests for the workspace page. Every call asks the phone's
+# provider for the contract first (composer.call), so with no provider, or an older one, the answer is an honest
+# unavailable and nothing is sent; it never claims a page change the phone did not report.
+CONVERSATION_TOOLS += [composer.TOOL]
+CONVERSATION_POLICY += composer.POLICY_LINE + '\n'
 
 
 @dataclass
@@ -795,7 +800,7 @@ class CodexConductor:
                             if name not in ('complete_task','life_memory'):
                                 step = self.life.executor.before_action(s, name, args)
                         result, image = (self._app_tool(s, name, args) if s.task
-                                         else self._conversation_tool(name, args, page))
+                                         else self._conversation_tool(name, args, page, p['callId']))
                         if step is not None:
                             if not result.get('ok') and result.get('action_status') in (
                                     'locked','user_stopped','target_not_allowed','rejected','secure_window'):
@@ -930,7 +935,9 @@ class CodexConductor:
         while len(table) > limit:
             table.pop(next(iter(table)))
 
-    def _conversation_tool(self, name, a, page=None):
+    def _conversation_tool(self, name, a, page=None, call_id=None):
+        if name == composer.TOOL['name']:
+            return composer.call(self.phone, composer.PROVIDER, composer.request_id_for(call_id), a), None
         if name == 'rosie_life':
             return (self.life.call(a) if self.life is not None else
                     {'ok': False, 'reason': 'life_not_configured'}), None
