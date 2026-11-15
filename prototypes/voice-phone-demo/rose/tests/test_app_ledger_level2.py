@@ -57,6 +57,19 @@ class Pairing(Base):
                           self.l.migration_lock(self.project), self.l.profile(self.project)), ([], None, [], 'app-v1'))
         self.assertNotEqual(self.l.job(job)['state'], 'ready')
 
+    def test_a_delivered_migration_cannot_change_or_go(self):
+        self.deliver(1, profile=L.CLIENT_SERVER, server=SERVER, migrations=[M1, M2])
+        for migrations in ([{**M1, 'sha256': '3' * 64}, M2], [{**M1, 'name': 'other'}, M2], [M1], []):
+            with self.subTest(migrations=migrations):
+                with self.assertRaises(L.LedgerError):
+                    self.deliver(2, profile=L.CLIENT_SERVER, server=SERVER, migrations=migrations)
+                self.first = False
+        self.assertEqual([v['versionCode'] for v in self.l.versions(self.project)], [1])
+        self.assertEqual(self.l.migration_lock(self.project), [M1, M2])  # still readable, unchanged
+        M3 = {'scope': 'shared', 'number': 1, 'name': 'tags', 'sha256': '4' * 64}
+        self.assertTrue(self.deliver(2, profile=L.CLIENT_SERVER, server=SERVER, migrations=[M1, M2, M3]))
+        self.assertEqual(self.l.migration_lock(self.project), [M1, M2, M3])
+
     def test_a_bound_server_cannot_be_dropped(self):
         self.deliver(1, profile=L.CLIENT_SERVER, server=SERVER, migrations=[M1])
         with self.assertRaises(L.LedgerError):

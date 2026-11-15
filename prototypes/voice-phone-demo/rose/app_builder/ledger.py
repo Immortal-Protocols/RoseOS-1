@@ -322,6 +322,15 @@ class Ledger:
                 return False
             if profile is None and self._profile(job['projectId']) == CLIENT_SERVER:
                 raise LedgerError('this project has a server; a version without it is refused')
+            if profile == CLIENT_SERVER:  # the lock, kept by the ledger itself and not only by its callers
+                locked = {(r[0], r[1]): (r[2], r[3]) for r in self.db.execute(
+                    'SELECT DISTINCT scope, number, name, sha256 FROM version_migrations WHERE project_id=?',
+                    (job['projectId'],))}
+                mine = {(r[0], r[1]): (r[2], r[3]) for r in migration_rows}
+                for key, delivered in locked.items():
+                    if mine.get(key) != delivered:
+                        raise LedgerError(f'migration {key[0]}/{key[1]:04d} was delivered and must stay exactly as '
+                                          'it was')
             newest = self.db.execute('SELECT MAX(version_code) FROM versions WHERE project_id=?',
                                      (job['projectId'],)).fetchone()[0] or 0
             if job['versionCode'] is None or job['versionCode'] <= newest:

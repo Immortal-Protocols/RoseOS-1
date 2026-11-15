@@ -666,8 +666,9 @@ share.
   - **Derived cases:** cases marked DERIVED change one thing in that answer.
     Its URLs are synthetic, and none is live.
 - **The hosted app mapping** is in the ledger
-  (`record_hosted_app(project, uuid)`). It is recorded once, from owner
-  tooling or the publisher. The same id again changes nothing. Another id,
+  (`record_hosted_app(project, uuid)`). It is to be recorded once, from
+  owner tooling or the publisher. Nothing calls it yet, because that
+  tooling and Chariot's publication adapter don't exist. The same id again changes nothing. Another id,
   or an id another project holds, is refused, because a moved mapping would
   send one app's phones another app's links.
 - **Not yet done.** The library doesn't serve `share` yet. That needs a
@@ -1555,7 +1556,10 @@ needing older clients to update, through the library's minClientVersionCode
   - **Binding.** The first client-server delivery binds the project's
     profile. A later version without its server is refused.
   - **Lock.** `migration_lock(project)` is every migration any delivered
-    version ran, which `migrations.check` holds later revisions to.
+    version ran, which `migrations.check` holds later revisions to. The
+    ledger enforces it too: a client-server version whose migrations leave
+    out or differ from a delivered one is refused, so the lock can't
+    become contradictory.
   - **Level 1.** Its versions and their library entries are unchanged, and
     an older ledger file opens with the new tables added.
 - **Migrations** (`app_builder/migrations.py`; source, called nowhere) are
