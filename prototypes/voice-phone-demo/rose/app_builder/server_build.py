@@ -30,6 +30,7 @@ import json
 import os
 import re
 import stat
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,6 +40,9 @@ from .toolchain import StepFailed, run
 
 TARGET = 'x86_64-unknown-linux-musl'  # §7.7: a static x86-64 musl ELF
 PACKAGE = 'rose-app-server'
+RUNTIME = 'rose-app-runtime'  # the builder's own rose/meta.rs names it; a host injects it as a path crate
+ADAPTER = 'rose-app-runtime-signin'  # the generated rose/main.rs starts the server through it (codegen)
+BUILDER_CRATES = (RUNTIME, ADAPTER)  # what the builder's own generated code names, so a host must inject
 EDITION = '2021'
 ENTRY = 'rose/main.rs'
 GENERATED = re.compile(r'rose/(?:[a-z][a-z0-9_]{0,63}/){0,4}[a-z][a-z0-9_]{0,63}\.rs')
@@ -121,9 +125,13 @@ class ServerBuild:
         return {'sha256': self.sha256, 'size': self.size, 'target': self.target}
 
 
-def cargo_toml(declared) -> str:
+PATH_CRATE = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+
+
+def cargo_toml(declared, path_crates: dict | None = None) -> str:
     """The server's Cargo.toml: one binary at the builder's entry point, exact versions of the declared crates,
-    no build script and no target found by Cargo's own conventions (the writer's files are modules, nothing else)."""
+    the builder's own path crates (the runtime, its adapter), no build script and no target found by Cargo's own
+    conventions (the writer's files are modules, nothing else)."""
     lines = ['[package]', f'name = "{PACKAGE}"', 'version = "0.0.0"', f'edition = "{EDITION}"', 'publish = false',
              'build = false', 'autolib = false', 'autobins = false', 'autoexamples = false', 'autotests = false',
              'autobenches = false', '', '[[bin]]', f'name = "{PACKAGE}"', f'path = "{ENTRY}"', '', '[dependencies]']
@@ -132,6 +140,10 @@ def cargo_toml(declared) -> str:
             raise BuildFailed('compile', 'profile_invalid', f'{key!r} is not an exact crate version.')
         name, version = key.split('@', 1)
         lines.append(f'{name} = "={version}"')
+    for name, path in sorted((path_crates or {}).items()):
+        if not PATH_CRATE.fullmatch(name) or name == PACKAGE:
+            raise ValueError(f'{name!r} is not a builder path crate name')
+        lines.append(f'{name} = {{ path = {_toml_string(Path(path))} }}')
     lines += ['', '[profile.release]', 'codegen-units = 1', 'incremental = false', 'debug = false',
               'strip = "debuginfo"', '', '[workspace]', '']
     return '\n'.join(lines)
@@ -152,10 +164,15 @@ def cargo_config(vendor: Path | None) -> str:
 
 def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | None, tools: RustTools | None,
           isolation: Isolation | None, cancelled=lambda: False, *, cache: Path, generated: dict[str, str],
-          previous_lock: str | None = None, locked: dict[str, str] | None = None) -> ServerBuild:
+          previous_lock: str | None = None, locked: dict[str, str] | None = None,
+          path_crates: dict[str, Path] | None = None, dependent_path_crates: dict[str, Path] | None = None) \
+        -> ServerBuild:
     """Build ``snapshot``'s server into ``work`` (a fresh job folder). ``generated`` holds the builder's own files
     (``rose/main.rs``, the entry point, and anything it uses); ``previous_lock`` is the last delivered version's
-    Cargo.lock and ``locked`` the crates delivered versions used (rose.app_builder.ledger)."""
+    Cargo.lock and ``locked`` the crates delivered versions used (rose.app_builder.ledger). ``path_crates`` are the
+    builder's own crates the server depends on (name -> folder: the runtime, its adapter), and
+    ``dependent_path_crates`` the path crates those depend on (rose-signin): all are read-only to the build, remapped
+    out of the binary, and the only packages besides the server allowed without a source."""
     if isolation is None:
         raise BuildFailed('toolchain', 'build_isolation_unavailable',
                           'The server was not built: this builder has no build isolation set up.')
@@ -184,19 +201,33 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         path = server / name
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         _write(path, text)
-    _write(server / 'Cargo.toml', cargo_toml(declared))
+    path_crates = {k: Path(os.path.realpath(v)) for k, v in (path_crates or {}).items()}
+    dependent = {k: Path(os.path.realpath(v)) for k, v in (dependent_path_crates or {}).items()}
+    builder_crates = {**path_crates, **dependent}
+    mapped = ('/rose-build', *(f'/rose-crates/{n}' for n in builder_crates))  # what the binary names them by
+    for name, folder in builder_crates.items():  # so a scan for a crate's folder never meets its remapped name
+        if any(str(folder) in m for m in mapped):
+            raise BuildFailed('toolchain', 'rust_toolchain_unavailable', f'The builder\'s crate {name} is in a '
+                              'folder the build\'s own names for crates would contain.')
+    if _check_path_crates(builder_crates) and source is None:
+        raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'The builder\'s own crates use crates.io crates, '
+                          'and this builder has no crate set, so the server was not built.')
+    _write(server / 'Cargo.toml', cargo_toml(declared, path_crates))
     if previous_lock is not None:
         _write(server / 'Cargo.lock', previous_lock)
     _write(cargo_home / 'config.toml', cargo_config(vendor))
     # Static, as §7.7 agreed (the musl target's default; said once so every target the builder runs is the same).
     remap = ['-Ctarget-feature=+crt-static', f'--remap-path-prefix={work}=/rose-build']
+    for name, folder in sorted({**path_crates, **dependent}.items()):
+        remap.append(f'--remap-path-prefix={folder}=/rose-crates/{name}')
     if vendor is not None:
         remap.append(f'--remap-path-prefix={vendor}=/rose-crates')
     env = {'PATH': tools.path(), 'HOME': str(home), 'CARGO_HOME': str(cargo_home), 'CARGO_TARGET_DIR': str(target_dir),
            'TMPDIR': str(tmp), 'LANG': 'C.UTF-8', 'RUSTC': str(tools.rustc), 'CARGO_NET_OFFLINE': 'true',
            'CARGO_INCREMENTAL': '0', 'CARGO_TERM_COLOR': 'never', 'CARGO_ENCODED_RUSTFLAGS': '\x1f'.join(remap)}
-    readonly = (Path(tools.toolchain),) + ((vendor,) if vendor is not None else ())
-    redact = (work, Path(tools.toolchain)) + ((vendor,) if vendor is not None else ())
+    own = tuple(sorted(set({**path_crates, **dependent}.values())))
+    readonly = (Path(tools.toolchain),) + ((vendor,) if vendor is not None else ()) + own
+    redact = (work, Path(tools.toolchain)) + ((vendor,) if vendor is not None else ()) + own
     manifest = str(server / 'Cargo.toml')
 
     def cargo(*args):
@@ -233,7 +264,8 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'Cargo did not write the server\'s lock.') \
             from None
     try:
-        used = crate_set.check_lock(lock_text, by_key, locked, root=PACKAGE, declared=declared)
+        used = crate_set.check_lock(lock_text, by_key, locked, root=PACKAGE, declared=declared,
+                                    path_crates=frozenset(path_crates) | frozenset(dependent))
     except crate_set.Refused as refused:
         raise _refused(refused) from None
     cargo('build', '--offline', '--frozen', '--release', '--target', tools.target, '--message-format', 'json',
@@ -245,6 +277,9 @@ def build(snapshot: Path, work: Path, declared, source: crate_set.CrateSource | 
         st = None
     if st is None or not stat.S_ISREG(st.st_mode):
         raise BuildFailed('toolchain', 'rust_toolchain_unavailable', 'Cargo finished without the server binary.')
+    if own and _holds_any(elf, [str(p).encode() for p in own]):
+        raise BuildFailed('toolchain', 'build_path_embedded', 'The server binary holds the folder of one of the '
+                          'builder\'s own crates, so it was not used.')
     if _holds_any(elf, [str(p).encode() for p in (work, Path(cache), *((vendor,) if vendor is not None else ()))]):
         raise BuildFailed('dependency', 'build_path_embedded', 'The server binary holds a path from the builder\'s '
                           'machine (a crate\'s macro or build script put it there), so it was not used.')
@@ -272,6 +307,40 @@ def _holds_any(path: Path, needles: list[bytes]) -> bool:
                 return True
             tail = data[-keep:] if keep else b''
     return False
+
+
+def _check_path_crates(crates: dict[str, Path]):
+    """Every builder crate is there, and every path its own Cargo.toml depends on is another of them, at the same
+    canonical folder: one package each (the adapter's `../rose-app-runtime` is the runtime the server uses), all
+    read-only to the build. A crate depending on a folder outside them, by a symlink, or a folder holding another
+    package is the host's set-up, refused here. True when any of them uses a crates.io crate (the adapter does)."""
+    folders = {folder: name for name, folder in crates.items()}
+    registry = False
+    for name, folder in crates.items():
+        try:
+            manifest = tomllib.loads((folder / 'Cargo.toml').read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
+                              f'The builder\'s crate {name} is missing or unreadable.') from None
+        package = manifest.get('package')
+        if not isinstance(package, dict) or package.get('name') != name:
+            raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
+                              f'The builder\'s crate {name} is a folder holding another package.')
+        tables = [manifest.get('dependencies'), manifest.get('build-dependencies')]
+        tables += [t.get(k) for t in (manifest.get('target') or {}).values() if isinstance(t, dict)
+                   for k in ('dependencies', 'build-dependencies')]
+        for table in tables:
+            for dep, spec in (table or {}).items():
+                if isinstance(spec, dict) and 'path' in spec:
+                    # Cargo (and so rustc, and the remap) see the path as written; it must be the real folder.
+                    target = Path(os.path.realpath(folder / str(spec['path'])))
+                    if folders.get(target) is None or Path(os.path.normpath(folder / str(spec['path']))) != target:
+                        raise BuildFailed('toolchain', 'rust_toolchain_unavailable',
+                                          f'The builder\'s crate {name} depends on {dep} at a folder the build '
+                                          'was not given as one of its crates.')
+                else:
+                    registry = True  # a crates.io crate: from the host's crate set, like the app's own
+    return registry
 
 
 def _refused(refused: crate_set.Refused) -> BuildFailed:
@@ -406,3 +475,55 @@ def _write(path: Path, text: str):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as stream:
         stream.write(text)
+
+
+_ESCAPES = {'\\': '\\\\', '"': '\\"', '\n': '\\n', '\r': '\\r', '\t': '\\t'}
+
+
+def _str(text: str) -> str:
+    """A Rust string literal holding exactly ``text``, on one line. Not a raw string: rustc turns a raw string's CRLF
+    into LF and refuses a bare CR, so SQL holding either would not be the SQL that was checked and locked."""
+    return '"' + ''.join(_ESCAPES.get(c) or (c if c.isprintable() else f'\\u{{{ord(c):x}}}') for c in text) + '"'
+
+
+def migrations_rs(current: dict, shared: bool) -> str:
+    """``rose/migrations.rs``: the server's migrations embedded by the builder (§7.6) in the adapter's shape
+    (rose-app-runtime-signin ``Migrations``): ``ACCOUNT: &[&str]`` and ``SHARED: Option<&[&str]>``, where the
+    statement at index ``i`` takes a database from version ``i`` to ``i + 1``. Numbers run 1, 2, ... with no gap
+    (rose.app_builder.migrations.read refuses one), so position is number. ``SHARED`` is ``None`` unless the app
+    declares shared data. Built from the checked files, never from the writer's Rust, which may not read files."""
+    out = ['//! The server\'s migrations, embedded by the builder. Generated; not the app\'s code.', '']
+    for scope, const in (('account', 'ACCOUNT'), ('shared', 'SHARED')):
+        listed = sorted(current.get(scope, []), key=lambda m: m.number)
+        if [m.number for m in listed] != list(range(1, len(listed) + 1)):
+            raise ValueError(f'{scope} migrations must be numbered 1..n')
+        rows = ''.join(f'    // {m.number:04d}_{m.name}.sql\n    {_str(m.sql)},\n' for m in listed)
+        if const == 'SHARED':
+            value = f'Some(&[\n{rows}])' if shared else 'None'
+            out.append(f'pub const SHARED: Option<&[&str]> = {value};')
+        else:
+            out.append(f'pub const ACCOUNT: &[&str] = &[\n{rows}];')
+        out.append('')
+    return '\n'.join(out)
+
+
+def _issuer(name: str) -> str:
+    """What authenticator apps show beside the code: the app's name, as rose-signin's names allow (no ':' or
+    control character, at most 128 bytes), or "Rose app" when nothing is left."""
+    clean = ''.join(c for c in name if c != ':' and c.isprintable()).strip()
+    while len(clean.encode('utf-8')) > 128:
+        clean = clean[:-1]
+    return clean or 'Rose app'
+
+
+def meta_rs(app: str, issuer: str, admission: str) -> str:
+    """``rose/meta.rs``: what the server's start-up needs from the builder: ``APP`` (rose-signin's app name: the
+    app's package, stable and unique to the project), ``ISSUER`` (the name an authenticator shows) and
+    ``ADMISSION`` (the app's declaration in rose-app.json, never a request's)."""
+    if admission not in ('invite', 'open'):
+        raise ValueError('admission is invite or open')
+    variant = 'Invite' if admission == 'invite' else 'Open'
+    return ('//! The server\'s identity for sign-in, written by the builder. Generated; not the app\'s code.\n\n'
+            f'pub const APP: &str = {_str(app)};\n'
+            f'pub const ISSUER: &str = {_str(_issuer(issuer))};\n'
+            f'pub const ADMISSION: rose_app_runtime::signin::Admission = rose_app_runtime::signin::Admission::{variant};\n')

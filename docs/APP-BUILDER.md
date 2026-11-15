@@ -1772,7 +1772,69 @@ reserved `src/<package>/rose/`:
     relative `CHARIOT_RESTORE_STATE_PATH`. No server is started, and no
     restore marker is created.
 
-### 7.6 Builder (planned)
+### 7.6 Builder (wired in the job; each host-side part injected)
+
+**The job** (`service.Builder`; source, run by nothing on a host yet). Every
+project's snapshot is checked by `appprofile.check`, which is
+`template.check` for a plain app. For a `client-server-v1` app, the job also
+runs these steps before signing:
+1. **Contract.** `contract/api.json` is checked against every delivered
+   version's contract, which the ledger now records with each
+   client-server version. Its normalised form must fit what the ledger
+   keeps (512 KiB); a larger one is the writer's (`compile`), refused
+   before anything is built.
+2. **Migrations.** They are checked against the delivered lock and in the
+   sandbox, then embedded in two builder-owned files, which a generator
+   may not write:
+   - `rose/migrations.rs`, in the adapter's shape: `ACCOUNT: &[&str]` and
+     `SHARED: Option<&[&str]>` (`None` unless the app declares shared
+     data). The statement at index `i` takes a database from version `i`
+     to `i + 1`. Numbers run 1, 2, … with no gap, so position is the
+     number. Each statement is an escaped string literal, never a raw
+     string, so the embedded SQL is byte for byte what was checked and
+     locked (rustc rewrites a raw string's CRLF and refuses a bare CR).
+   - `rose/meta.rs`:
+     - `APP`: rose-signin's app name, which is the app's package (stable
+       and unique to the project);
+     - `ISSUER`: the project's name, as an authenticator shows it, with no
+       `:` or control character, at most 128 bytes, and `Rose app` when
+       nothing is left;
+     - `ADMISSION`: `rose_app_runtime::signin::Admission`, from
+       `rose-app.json`.
+3. **Generated code.** The injected `codegen` writes the server's `rose/*.rs`
+   files and the client's files under `src/<package>/rose/`. A generator
+   that fails, or writes outside that folder (a `..`, `.` or empty path
+   part included), is the builder's failure (`toolchain`). The writer may
+   not use that folder, or put a file where one of its parent folders
+   goes (`compile`, `reserved_path`).
+4. **APK.** It is built from the client's tree: the writer's checked app
+   without `rose-app.json`, `contract/` or `server/`, plus the builder's
+   files.
+   - Builder-written Java may keep its own package. The sign-in core is the
+     case: byte-identical, package `dev.pixel.rosesignin`.
+   - That exemption covers only those files and their packages. The
+     writer's Java and classes still have to be in the app's package.
+5. **Server.** It is built by `server_build` with the injected isolation,
+   Rust toolchain and crate set. The builder's own crates, the runtime
+   and its adapter, are read-only path dependencies, remapped out of the
+   binary; a binary that still holds one of their folders is refused like
+   any other builder path.
+6. **Delivery.** The ELF is stored by its digest (`artifacts/<sha256>.server`).
+   The version is delivered with its server, migration lock, crates,
+   `Cargo.lock` and contract, all in one transaction.
+
+With no `codegen`, no runtime or adapter crate (`server_crates` without
+`rose-app-runtime` or `rose-app-runtime-signin`, which the builder's own
+generated code names), no isolation or no toolchain, a client-server job
+fails as the builder's (`toolchain`) before anything is half built or
+delivered. So does a builder crate set up wrong: missing, a folder holding
+another package, a path dependency reached through a symlink or outside the
+given crates, a folder the binary's remapped crate names would contain, or a
+binary that names a builder crate's folder. A crate set is needed by an app
+that declares crates (without one it fails as `dependency`) and by builder
+crates that use crates.io crates, as the adapter does (without one, as
+`toolchain`). A generator's client file that cannot be written is the
+builder's too. A plain app's job is unchanged.
 
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:

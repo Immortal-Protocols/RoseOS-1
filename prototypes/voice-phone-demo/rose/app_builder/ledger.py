@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS version_crates (
   sha256 TEXT NOT NULL, PRIMARY KEY (project_id, version_code, name, version));
 CREATE TABLE IF NOT EXISTS version_cargo_locks (
   project_id TEXT NOT NULL, version_code INTEGER NOT NULL, lock TEXT NOT NULL, PRIMARY KEY (project_id, version_code));
+-- The API contract each client-server version was built from (canonical JSON): a revision is checked against all of
+-- them (rose.app_builder.contract.check_update).
+CREATE TABLE IF NOT EXISTS version_contracts (
+  project_id TEXT NOT NULL, version_code INTEGER NOT NULL, contract TEXT NOT NULL, PRIMARY KEY (project_id, version_code));
 -- Level 3 (§3.3 share): the hosted app id for a project, recorded only from owner tooling or the publisher.
 CREATE TABLE IF NOT EXISTS project_hosting (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), hosted_app_id TEXT NOT NULL UNIQUE,
@@ -89,6 +93,7 @@ MIGRATION_NAME = re.compile(r'[a-z0-9_]{1,40}')
 CRATE_NAME = re.compile(r'[A-Za-z0-9_-]{1,64}')
 CRATE_VERSION = re.compile(r'[0-9A-Za-z.+-]{1,64}')
 MAX_CARGO_LOCK = 1024 * 1024
+MAX_CONTRACT = 512 * 1024
 
 
 def _server(server) -> tuple:
@@ -321,7 +326,7 @@ class Ledger:
 
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
                 dependencies=(), api_report: dict | None = None, profile: str | None = None, server=None,
-                migrations=(), crates=(), cargo_lock: str | None = None):
+                migrations=(), crates=(), cargo_lock: str | None = None, contract: str | None = None):
         """Record the delivered version and, in the same transaction, the libraries it was built with (its lock).
         A client-server version (profile CLIENT_SERVER) also records its server ELF, its migration lock, the crates
         its server was built with and its Cargo.lock, and binds the project's profile; once bound, a version without
@@ -339,8 +344,11 @@ class Ledger:
             if not isinstance(cargo_lock, str) or not cargo_lock or len(cargo_lock.encode('utf-8', 'replace')) \
                     > MAX_CARGO_LOCK:
                 raise LedgerError('a client-server version needs its Cargo.lock')
-        elif server is not None or migrations or crates or cargo_lock is not None:
-            raise LedgerError('only a client-server version has a server, migrations and crates')
+            if contract is not None and (not isinstance(contract, str) or not contract
+                                         or len(contract.encode('utf-8', 'replace')) > MAX_CONTRACT):
+                raise LedgerError('a contract is its canonical JSON text')
+        elif server is not None or migrations or crates or cargo_lock is not None or contract is not None:
+            raise LedgerError('only a client-server version has a server, migrations, crates and a contract')
         with self.lock:
             job = self.job(job_id)
             if job['state'] not in ACTIVE or self.cancel_requested(job_id):
@@ -388,6 +396,9 @@ class Ledger:
                                         (job['projectId'], job['versionCode'], *row))
                     self.db.execute('INSERT INTO version_cargo_locks VALUES (?,?,?)',
                                     (job['projectId'], job['versionCode'], _text(cargo_lock)))
+                    if contract is not None:
+                        self.db.execute('INSERT INTO version_contracts VALUES (?,?,?)',
+                                        (job['projectId'], job['versionCode'], contract))
                 self.db.execute("UPDATE jobs SET state='ready', stage='ready', message='Ready to install.', "
                                 "updated=? WHERE job_id=?", (self.clock(), job_id))
                 self.db.execute('COMMIT')
@@ -472,6 +483,13 @@ class Ledger:
         rows = self.db.execute('SELECT DISTINCT name, version, sha256 FROM version_crates WHERE project_id=?',
                                (project,)).fetchall()
         return {f'{n}@{v}': h for n, v, h in rows}
+
+    def contracts(self, project: str) -> list[str]:
+        """The contracts of the project's delivered client-server versions, oldest first (canonical JSON text)."""
+        with self.lock:
+            rows = self.db.execute('SELECT contract FROM version_contracts WHERE project_id=? ORDER BY version_code',
+                                   (project,)).fetchall()
+        return [r[0] for r in rows]
 
     def cargo_lock(self, project: str) -> str | None:
         """The newest delivered client-server version's Cargo.lock, which the next server build starts from."""

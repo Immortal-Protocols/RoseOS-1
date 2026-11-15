@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -18,8 +19,8 @@ import threading
 import time
 from pathlib import Path
 
-from . import dependencies, template, toolchain
-from .ledger import Ledger, LedgerError
+from . import appprofile, contract, dependencies, migrations, server_build, template, toolchain
+from .ledger import CLIENT_SERVER, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
 MAX_TEXT = 4000
@@ -201,13 +202,31 @@ def _note(note, request: str) -> str:
     return request[:200]
 
 
+def client_tree_ignore(snapshot: Path):
+    """copytree's ignore for a client-server app's client tree: the server's parts at the top of the snapshot only
+    (a writer's own folder named server/ or contract/ further down is the app's)."""
+    top = Path(snapshot)
+    return lambda d, names: [n for n in names if Path(d) == top and n in appprofile.SERVER_TOP]
+
+
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
-                 resolver=None):
+                 resolver=None, *, codegen=None, server_isolation=None, rust_tools=None, crate_source=None,
+                 server_crates=None, server_crate_deps=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
-        lost. Without one, nothing is delivered."""
+        lost. Without one, nothing is delivered.
+
+        A client-server app (docs/APP-BUILDER.md §7) also needs, all injected by the host and each None by default,
+        when a job for one fails with an honest category instead of building half of it:
+        - ``codegen``: ``server_files(contract) -> {path: text}`` (``rose/*.rs``) and
+          ``client_files(contract, package) -> {path: text}`` (under ``src/<package>/rose/``);
+        - ``server_isolation`` (rose.app_builder.server_build.Isolation), ``rust_tools`` (``RustTools``) and
+          ``crate_source`` (rose.app_builder.crates.CrateSource; only an app that declares crates needs one);
+        - ``server_crates``: the builder's own crates the server depends on (name -> folder: the runtime and its
+          adapter, both named by the builder's own generated code, so both required), and ``server_crate_deps``
+          the path crates those depend on (rose-signin)."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         if tools.cache is None:  # the Java system image, made once per toolchain, in this builder's own storage
@@ -215,6 +234,9 @@ class Builder:
         self.tools, self.generate = tools, generate
         self.backup = backup
         self.resolver = resolver  # an offline dependencies.Resolver; None: an app that declares libraries fails
+        self.codegen, self.server_isolation, self.rust_tools = codegen, server_isolation, rust_tools
+        self.crate_source = crate_source
+        self.server_crates, self.server_crate_deps = dict(server_crates or {}), dict(server_crate_deps or {})
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -350,8 +372,8 @@ class Builder:
             snapshot = work.parent / f'snapshot-{job["attempt"]}'
             try:  # before git touches anything the generator wrote
                 _snapshot(source, snapshot)
-                template.check(snapshot, package)
-            except template.TemplateRefused as refused:
+                profile = appprofile.check(snapshot, package, bound=self.ledger.profile(project_id))
+            except template.TemplateRefused as refused:  # ProfileRefused too
                 raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
             _git(source, 'add', '-A', work_tree=snapshot)
             if _git(source, 'status', '--porcelain', work_tree=snapshot):
@@ -364,7 +386,14 @@ class Builder:
             if work.exists():
                 shutil.rmtree(work)
             libraries = self._libraries(snapshot, work, project_id, package)
-            unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
+            level2 = None
+            if profile.name == CLIENT_SERVER:
+                level2 = self._client_server(snapshot, work, project, profile, cancelled)
+                unsigned, log = toolchain.build(level2['client_source'], work, package, code, name, self.tools,
+                                                cancelled, libraries, builder_files=level2['builder_files'],
+                                                builder_packages=level2['packages'])
+            else:  # a plain app's build is called exactly as before Level 2
+                unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
             self._step(job, 'signing', 'signing', 'Signing the app.')
             keys = self.root / 'keys' / project_id
@@ -383,8 +412,14 @@ class Builder:
             if idsig.exists():
                 _place(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
             _place(signed, artifacts / f'{receipt["sha256"]}.apk')  # durable before the version row exists
+            server_records = {}
+            if level2 is not None:
+                built = level2['server']
+                _place(built.elf, artifacts / f'{built.sha256}.server')  # the ELF, by its digest (§7.7)
+                server_records = dict(profile=CLIENT_SERVER, server=built.record(), migrations=level2['locks'],
+                                      crates=built.crates, cargo_lock=built.cargo_lock, contract=level2['contract'])
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
-                                       _note(note, job['request']), libraries, _api_report(work)):
+                                       _note(note, job['request']), libraries, _api_report(work), **server_records):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
         except toolchain.StepFailed as failed:
             self._safe_reset(source, project_id)
@@ -396,6 +431,72 @@ class Builder:
         except Exception as error:  # never leave a job running; the summary carries no paths or tool output
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
+
+    def _client_server(self, snapshot: Path, work: Path, project: dict, profile, cancelled) -> dict:
+        """A client-server app's checks, generated code and server build (docs/APP-BUILDER.md §7): the contract
+        against every delivered version's, the migrations against the delivered lock and a sandbox, the server
+        built offline under isolation, and the client's tree with the builder's generated files added."""
+        project_id, package = project['projectId'], project['packageName']
+        try:
+            api = contract.load(snapshot)
+            canonical = contract.canonical_bytes(api.data)
+            if len(canonical) > MAX_CONTRACT:  # what the ledger keeps; the normalised form outgrows the file
+                raise contract.ContractRefused(f'contract/api.json is too large once normalised ({len(canonical)} '
+                                               f'bytes; at most {MAX_CONTRACT}).', 'contract_invalid')
+            delivered = [contract.parse(json.loads(text)) for text in self.ledger.contracts(project_id)]
+            contract.check_update(delivered, api)
+            current = migrations.read(snapshot)
+            locks = [m.lock() for scope in sorted(current) for m in current[scope]]
+            migrations.check(current, self.ledger.migration_lock(project_id))
+        except appprofile.ProfileRefused as refused:  # contract and migration refusals too
+            raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
+        if self.codegen is None:
+            raise toolchain.StepFailed('toolchain', 'This builder has no code generator for a client-server app '
+                                       'yet, so its server and API client were not built.')
+        if missing := [name for name in server_build.BUILDER_CRATES if name not in self.server_crates]:
+            raise toolchain.StepFailed('toolchain', f'This builder has no {" or ".join(missing)} crate set up, so the '
+                                       'app\'s server was not built.')
+        try:
+            server_files = dict(self.codegen.server_files(api))
+            client_files = dict(self.codegen.client_files(api, package))
+        except Exception:
+            raise toolchain.StepFailed('toolchain', 'The builder could not generate the app\'s server and API '
+                                       'client code.') from None
+        if any(k in server_files for k in ('rose/migrations.rs', 'rose/meta.rs')):
+            raise toolchain.StepFailed('toolchain', 'The builder\'s server code generator wrote a file the builder '
+                                       'writes itself.')
+        server_files['rose/migrations.rs'] = server_build.migrations_rs(current, profile.server.shared)
+        server_files['rose/meta.rs'] = server_build.meta_rs(package, project['name'], profile.server.admission)
+        prefix = f'src/{package.replace(".", "/")}/rose/'
+        if any(not isinstance(k, str) or not isinstance(v, str) or not k.startswith(prefix)
+               or any(part in ('', '.', '..') for part in k[len(prefix):].split('/')) for k, v in client_files.items()):
+            raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote outside its own '
+                                       'folder.')
+        # The client's tree: the writer's checked app without the server's parts, plus the builder's own files.
+        client = work / 'client'
+        shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot))
+        try:
+            for path, text in client_files.items():
+                target = client / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, 'x', encoding='utf-8') as stream:  # two of its files at one path is its fault too
+                    stream.write(text)
+        except (OSError, ValueError, UnicodeError):
+            raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote files that could not '
+                                       'be written.') from None
+        built = server_build.build(
+            snapshot, work / 'server', profile.server.crates, self.crate_source, self.rust_tools,
+            self.server_isolation, cancelled, cache=self.root / 'crates', generated=server_files,
+            previous_lock=self.ledger.cargo_lock(project_id), locked=self.ledger.crate_lock(project_id),
+            path_crates=self.server_crates, dependent_path_crates=self.server_crate_deps)
+        packages = set()
+        for path, text in client_files.items():
+            declared = re.match(r'\s*package\s+([A-Za-z_][\w.]*)\s*;', text) if path.endswith('.java') else None
+            if declared and declared.group(1) != package and not declared.group(1).startswith(package + '.'):
+                packages.add(declared.group(1))  # the sign-in core keeps its own package
+        return {'client_source': client, 'builder_files': frozenset(client_files), 'packages': frozenset(packages),
+                'server': built,
+                'locks': locks, 'contract': canonical.decode('utf-8')}
 
     def _libraries(self, snapshot: Path, work: Path, project_id: str, package: str) -> list:
         """The verified libraries the app declares (none when it declares none). A coordinate the last delivered
