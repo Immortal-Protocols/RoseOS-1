@@ -71,6 +71,9 @@ pub enum Restore {
 /// The marker's file name in `DATA_DIR` when `CHARIOT_RESTORE_STATE_PATH` is not set (Chariot's default).
 pub const RESTORE_MARKER: &str = ".chariot-restore.json";
 
+/// rose-signin's store in `DATA_DIR`.
+pub const AUTH_STORE: &str = "auth.sqlite3";
+
 /// Looks the marker up without following a link: only `NotFound` means no restore.
 pub fn restore_state(marker: &Path) -> Restore {
     match std::fs::symlink_metadata(marker) {
@@ -187,8 +190,8 @@ pub struct Started {
     pub restore: Restore,
 }
 
-pub(crate) fn auth_store(dir: &Path) -> Result<SqliteStore, StartError> {
-    let conn = Connection::open(dir.join("auth.sqlite3")).map_err(|e| StartError::Store(e.to_string()))?;
+fn auth_store(dir: &Path) -> Result<SqliteStore, StartError> {
+    let conn = Connection::open(dir.join(AUTH_STORE)).map_err(|e| StartError::Store(e.to_string()))?;
     SqliteStore::new(conn).map_err(|e| StartError::Store(e.0))
 }
 
