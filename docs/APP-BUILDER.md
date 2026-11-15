@@ -1903,6 +1903,22 @@ crates that use crates.io crates, as the adapter does (without one, as
 `toolchain`). A generator's client file that cannot be written is the
 builder's too. A plain app's job is unchanged.
 
+- **The writer's policy** (`workspace/rose-agent/server/app-build.mjs`, the
+  fixed `app_build` instructions, §4A) describes a client-server app in the
+  shapes the builder checks and generates, so a Codex writer can produce one
+  when the owner's app needs its own server:
+  - `rose-app.json`, the contract and the migrations, with the rules above;
+  - `server/src/handlers/mod.rs` against the generated `Handlers`, with
+    the adapter's `AppData` and `rusqlite`, `Refusal` and `crate::assets`;
+  - the Android side through the generated `RoseApi.serverUrl()`, `Client`,
+    `RoseSignin` and `RoseSession`, off the main thread, with
+    `android.permission.INTERNET`;
+  - on a revision, the delivered migrations kept and the contract
+    compatible unless `api` rises.
+
+  It offers the profile; it limits nothing about what the app does. The
+  same text goes to every job. A JS test (`app-build.test.mjs`) checks each
+  name it uses.
 - **Both halves.** The builder builds both halves offline, from the snapshot
   only:
   - the client as in Level 1;
