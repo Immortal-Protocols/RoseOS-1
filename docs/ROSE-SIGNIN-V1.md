@@ -103,7 +103,7 @@ The HTTP shape above is the contract. The library (`rose_signin::flow::Authentic
 
 **Stock Android.** Needs nothing beyond that. No RoseOS capability is assumed.
 
-**Handing the enrollment to an authenticator (D8).** The generated client starts `ACTION_VIEW` on the `otpauth://` URI. On stock Android any installed authenticator app claims it. RoseOS ships a system authenticator that registers for the `otpauth` scheme and holds secrets in Android Keystore. There is no dedicated RoseOS intent and no Credential Manager surface, so stock Android is equal by construction. When nothing handles the intent, the QR and copyable text remain. RoseOS screens use plain system UI.
+**Handing the enrollment to an authenticator (D8).** The generated client starts `ACTION_VIEW` on the `otpauth://` URI. On stock Android any installed authenticator app claims it. RoseOS ships a system authenticator (`os/overlays/packages/apps/RoseAuthenticator`, package `dev.pixel.rose.authenticator`) that registers for `otpauth://totp`, asks the user to confirm each new account (naming the sending app only when Android vouches for it; names with control or bidi characters are refused; app overlays are hidden, touches on a partly covered dialog are ignored with a note saying so (a picture-in-picture window is not hidden), and the button waits a second each time the dialog regains focus), never lets a link replace an existing account's secret, keeps every secret sealed by a non-exportable Android Keystore AES-256-GCM key usable only while the phone is unlocked (bound to issuer and account), shows codes in a `FLAG_SECURE` window and marks a copied code sensitive. Its only permission is `HIDE_OVERLAY_WINDOWS`, so it has no network, and nothing goes to backups. There is no dedicated RoseOS intent and no Credential Manager surface, so stock Android is equal by construction. When nothing handles the intent, the QR and copyable text remain. RoseOS screens use plain system UI.
 
 It uses the same protocol, so an account enrolled on either kind of phone signs in from the other.
 
@@ -179,7 +179,7 @@ Known limitation: a passphrase or authenticator changed after the backup reverts
 | Layer | State |
 |---|---|
 | Source + host tests | `workspace/rose-signin`: Rust library, `cargo test` with and without `--features sqlite` (shared vectors, flow, sealer, store conformance on memory and SQLite, two-connection concurrency, restore, invites and recovery); Java client core, `java/test.sh` (the same vectors). Workflow: `.github/workflows/rose-signin.yml`. The Java core also runs in `scripts/test-local.sh`. |
-| Build into RoseOS | The system authenticator is next OS Core work; building it into an image needs the authorized OS build route. |
+| Build into RoseOS | The system authenticator's source compiles against the Android platform jar (host test). It is not yet in the product: adding it to an image is a `build/make` product change through the authorized OS build route, coordinated with Release. |
 | Deployment | None. No Chariot endpoint exists for it, and the Rose server stays stopped. |
 | Phone proof | None. |
 
