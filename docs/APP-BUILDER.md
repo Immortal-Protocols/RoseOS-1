@@ -1200,8 +1200,8 @@ Nothing here is built into a job, hosted, deployed or run on a phone. Only
 
   So no phone-facing endpoint exists yet. The Chariot owner is working on
   VM/endpoint hosting, and has proposed the boundary in §7.6.
-- **rose-signin at `ee1e554f` (#819).** The generated server uses this
-  revision. OS Core owns its storage, so App Core writes no sign-in SQL and no
+- **rose-signin at `371f08b3` (#819 then #821).** The generated server uses
+  this revision, which completes the decided library. OS Core owns its storage, so App Core writes no sign-in SQL and no
   sealer. The server uses:
   - **Store:** the reference SQLite store
     (`store::sqlite::SqliteStore::new(conn)`, feature `sqlite`). It applies
@@ -1213,6 +1213,14 @@ Nothing here is built into a job, hosted, deployed or run on a phone. Only
     readiness.
   - **Restore:** `Authenticator::restore_after_backup(now)`, run once after
     any database restore.
+  - **Admission:** `begin_enrollment(.., Admission::Invite(token) |
+    Admission::Open, ..)`. Without a valid invite, every answer is
+    `not_admitted`, so accounts can't be enumerated.
+  - **Invites:** `create_invite(app, account, now)` makes a single-use token,
+    valid for 7 days and bound to that account. It is reachable only through
+    the creator's owner tooling, never a public route.
+  - **Recovery:** `recover_authenticator` and `recover_passphrase`, served at
+    `POST /signin/v1/recover/authenticator` and `/recover/passphrase`.
 
   Two more points apply:
   - `Unavailable` maps to `503 auth_unavailable`.
@@ -1226,13 +1234,12 @@ Nothing here is built into a job, hosted, deployed or run on a phone. Only
   - **Failures:** decaying backoff with no lockout.
   - **Sessions:** 30 days absolute, 7 days idle.
   - **Admission:** creator invite by default, open sign-up when the app
-    declares it. Invites come from the library.
+    declares it.
   - **Recovery:** a recovery code plus one remaining factor, with no creator
-    reset. It comes from a later library PR, so generated apps leave recovery
-    unbuilt until then.
+    reset.
 - **The client core.** `RoseSigninCore.java` is copied byte for byte at
-  sha256 `6209a9cd…587f` (`ee1e554f`). OS Core will tell App Core when it
-  changes.
+  sha256 `6209a9cd…587f`, unchanged from `ee1e554f` to `371f08b3`. OS Core
+  will tell App Core when it changes.
 
 ### 7.2 Profile declaration and checks (`app_builder/appprofile.py`; source, called nowhere)
 
@@ -1351,7 +1358,7 @@ Proposed manifest:
 - `health: "/health"`;
 - `dataDir`: the host passes `DATA_DIR`, the only writable path, holding
   `TMPDIR`;
-- `signin: {revision: "ee1e554f"}`;
+- `signin: {revision: "371f08b3"}`;
 - `schema` versions.
 
 Open items for the Chariot owner (App Core's proposal in brackets):
@@ -1387,7 +1394,7 @@ need no hosting and no further OS Core change.
 5. The injected crate source and server build plumbing, with a fake `cargo`,
    then a real build of a dependency-free fixture.
 6. The manifest and ELF checks.
-7. The runtime crate on rose-signin `ee1e554f`, with its own CI.
+7. The runtime crate on rose-signin `371f08b3`, with its own CI.
 8. Codegen and the client sign-in overlay.
 9. The library wire summary and its fixture for Home/App.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
