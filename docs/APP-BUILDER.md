@@ -116,7 +116,8 @@ directory beside it in `repo.git`), outside
 - **Service:** API v1 validation and the single worker, with git-recorded
   source revisions and a reset to the last delivered version after any failure.
 - **Generator** (`generator.py`, §4A): the Codex app writer, an `app_build`
-  session on the existing bridge per job. Constructed by no host.
+  session on the existing bridge per job. The standalone host constructs it
+  when a writer command is configured (§6); source tests use a fake transport.
 
 Proof levels:
 
@@ -1193,7 +1194,8 @@ Rose conversation server. It reads one strict JSON config file:
 ```
 {schemaVersion: 1, root, remoteDir, name, port, adminPort, hosts[], sdk,
  javaHome?, buildTimeoutS?, keyCreation? (default false),
- writer?: {argv[], timeoutS?}, backup?: {argv[], timeoutS?}, libraryStore?}
+ writer?: {argv[], timeoutS?}, backup?: {argv[], timeoutS?}, libraryStore?,
+ clientServer?: {rustToolchain, rustToolchainSha256, bubblewrap, crateStore, runtimeRoot}}
 ```
 
 - **Signed listener.** It serves `/pair`, `/hello` and the builder API v1
@@ -1223,7 +1225,45 @@ Rose conversation server. It reads one strict JSON config file:
   replaced record affects later builds, not previously generated clients.
   This adds no configuration field, record writer, owner route or provisioning
   call. Chariot's owner tooling still owns recording the binding in this ledger.
-  Other Level 2 build inputs remain unwired in the standalone host.
+- **Optional Level 2 composition.** Omitted or null `clientServer` preserves
+  Level 1 behavior. An object is explicit opt-in and must supply every field
+  above; booleans, incomplete objects and unknown fields are refused.
+  - `rustToolchain`: an existing canonical absolute toolchain directory;
+    `rustToolchainSha256`: the owner's independently supplied lowercase
+    whole-tree digest in the format documented in
+    [host isolation](APP-BUILDER-HOST-ISOLATION.md). The host constructs the
+    existing `PinnedRustTools`, verifies it without executing it, and keeps
+    the fixed `x86_64-unknown-linux-musl` target. `buildTimeoutS` applies to
+    Rust tool runs too. No release, actual toolchain or production pin is
+    selected or downloaded by this source.
+  - `bubblewrap`: an existing canonical absolute executable path. The host
+    supplies the existing `BubblewrapIsolation` provider, with no fallback.
+    Its required Linux x86-64 unprivileged namespaces/kernel policy are
+    checked when a job prepares its actual isolated command; construction
+    and file existence are not proof of Linux confinement. The owner must
+    supply the provider's supported non-setuid installation.
+  - `crateStore`: an existing canonical directory with a plain, readable
+    `RecordedCrates` index and available plain archive files (§7.6). An
+    empty index is valid; missing dependencies still fail the offline build.
+    The host does not download or populate crates. Archive contents/digests,
+    dependency resolution and version locks remain the existing per-job
+    server build's checks.
+  - `runtimeRoot`: an existing canonical directory holding the matching
+    trusted source trees `rose-app-runtime`, `rose-app-runtime-signin` and
+    `rose-signin`, each with `Cargo.toml` and `src/lib.rs`. The first two
+    become `server_crates`, the last `server_crate_deps`; the relative sibling
+    dependency layout stays intact. Cargo package names and dependency paths
+    are checked by the existing server build. The owner keeps these sources
+    immutable to jobs and matched to the host's codegen source revision.
+  - The host injects the existing codegen module and all these facilities
+    into `Builder`, and sets its configured `CodexGenerator(client_server=True)`.
+    No real writer is called at construction. With no writer configured,
+    the existing no-writer failure remains. Invalid configured paths,
+    toolchain pins or catalogs fail before writer/listener/ledger construction;
+    they never silently revert to Level 1.
+  Source composition adds no real configuration, Linux host, crate set,
+  approved toolchain/pin, binding, deployment or runtime activation. A full
+  pinned musl build and real Linux isolation remain unverified.
 - **Signing-key backup before first delivery.**
   - After a project's first signed build, and before its signer is bound or
     anything is delivered, `Builder(backup=…)` must return a receipt. The
@@ -1262,6 +1302,12 @@ Proof level: container tests only (`rose/tests/test_app_host.py`). They cover:
 - the host's own ledger endpoint reader, persistence through reconstruction,
   and synthetic missing/recorded/replaced endpoints in generated client files
   (other Level 2 inputs faked; compilation deliberately stopped);
+- optional Level 2 parsing and actual host composition
+  (`test_app_host_level2.py`): defaults preserved, synthetic supplied facilities,
+  configured writer capability through a fake transport, real generated API/
+  sign-in client files and all facilities reaching the server-build boundary;
+  invalid config refused before construction. Compilation is intercepted,
+  so this is neither a real musl build nor Linux confinement acceptance;
 - the wired host: pairing through the admin app, signed `/hello`, the
   websockets absent, unsigned requests refused, and a signed create;
 - no writer configured, and starting and stopping the worker;
@@ -2010,7 +2056,8 @@ builder's too. A plain app's job is unchanged.
   turn says the builder builds client-server apps: `CodexGenerator(
   client_server=True)`, which a host sets only once it injects the
   Builder's code generator, isolation, Rust toolchain and builder crates
-  (no host does yet). Otherwise the writer builds the app without a
+  (the standalone host does so only with explicit `clientServer`, §6).
+  Otherwise the writer builds the app without a
   server and says what would need one. It also tells the writer the server
   is not hosted (`RoseApi.serverUrl()` is null in every build), so its reply
   never claims the server runs or syncs, and that pending migrations share
@@ -2344,12 +2391,13 @@ the server does.
     - Each record is one write transaction (`BEGIN IMMEDIATE`), so the tool
       is safe while the builder runs. A build already running keeps the
       endpoint it read.
-  - **Not done:** nothing runs the writer yet. No caller has been agreed,
-    and the call that gives the endpoint is held. The standalone builder
-    host passes its ledger's endpoint reader as `server_url` (#861); with no
-    recorded binding it still yields `null`. That wiring enables no other
-    Level 2 build input and no hosting. Production DNS, TLS and ingress for
-    an endpoint are unverified.
+  - **Not done:** nothing runs the writer yet. Chariot owns its receipt
+    caller, and the call that gives the endpoint is held. The standalone
+    builder host passes its ledger's endpoint reader as `server_url` (#861);
+    with no recorded binding it still yields `null`. This does not enable
+    hosting. Other Level 2 inputs are composed only when explicit
+    `clientServer` configuration is supplied (§6). Production DNS, TLS and
+    ingress for an endpoint are unverified.
 
 - **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
   on every request, and guest ingress admits only the gateway (Chariot's

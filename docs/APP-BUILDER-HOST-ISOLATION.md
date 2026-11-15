@@ -4,8 +4,10 @@
 `BubblewrapIsolation` and `PinnedRustTools` for the Level 2 build boundary in
 [APP-BUILDER.md §7.6](APP-BUILDER.md#76-builder-planned). This new providers
 subpackage is distinct from `app_builder/host.py`, the standalone service.
-Nothing imports or activates these facilities by default. App Core owns their
-injection into the service and build orchestration. This source does not select,
+Nothing imports or activates these facilities by default. The standalone host's
+optional `clientServer` configuration now composes them with App Core's existing
+service injection seam (APP-BUILDER.md §6); App Core retains build orchestration.
+This source does not select,
 provision or authorize a builder, activate Rose, or populate tools/crates.
 
 ## Supported confinement
@@ -87,6 +89,9 @@ approved Rust release, installation or pin.
 `rose.tests.test_app_host_provider` uses synthetic trees and mocked host identity
 for its ordinary tests. These prove pin checks and command policy, **not Linux
 kernel confinement**. The selected offline suite and app CI run those tests.
+`test_app_host_level2.py` additionally checks host composition with synthetic
+owner facilities and a fake writer transport, intercepting compilation before
+any Rust or isolation command runs.
 
 The same test module has two explicit execution probes, selected only with
 `ROSE_TEST_LINUX_ISOLATION=1` on an already prepared Linux x86-64 unprivileged
@@ -99,7 +104,7 @@ supervisor has a hard deadline so broken cleanup cannot hang the test suite.
 
 Those execution probes have **not been run on the development Mac**. Neither
 ordinary argv tests nor App Core's native-host offline Cargo tests establish
-Linux isolation, a pinned musl build, service wiring, deployment or phone
+Linux isolation, a pinned musl build, deployment or phone
 acceptance. Host preparation and real Linux acceptance remain separate work.
 
 The namespace, mount and lifetime flags follow the
