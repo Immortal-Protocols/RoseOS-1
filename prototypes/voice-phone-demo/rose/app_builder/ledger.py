@@ -7,6 +7,7 @@ than being run again, because a half-finished build may already have produced si
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -159,6 +160,21 @@ class Ledger:
 
     def close(self):
         self.db.close()
+
+    @contextlib.contextmanager
+    def _immediate(self):
+        """One write transaction (BEGIN IMMEDIATE), committed on success, rolled back on any exception; nested
+        inside a running one, it joins it."""
+        if self.db.in_transaction:
+            yield
+            return
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            yield
+        except BaseException:
+            self.db.execute('ROLLBACK')
+            raise
+        self.db.execute('COMMIT')
 
     # Projects and jobs.
 
@@ -531,7 +547,7 @@ class Ledger:
         refused (a mapping that moved would send one app's phones another app's links)."""
         if not isinstance(hosted_app_id, str) or not UUID.fullmatch(hosted_app_id):
             raise LedgerError('a hosted app id is a lower-case UUID')
-        with self.lock:
+        with self.lock, self._immediate():  # read and write as one, against another process too (owner_records)
             if self._project(project) is None:
                 raise LedgerError('unknown project')
             current = self.hosted_app(project)
@@ -573,7 +589,7 @@ class Ledger:
         if endpoint.endswith('/') or re.match(r'https://[^/]*:443(?:/|$)', endpoint):
             raise LedgerError('a native host endpoint is written without a trailing / or the default port :443')
         record = {'hostId': host_id, 'endpoint': endpoint}
-        with self.lock:
+        with self.lock, self._immediate():  # read and write as one, against another process too (owner_records)
             if self._project(project) is None:
                 raise LedgerError('unknown project')
             current = self.native_host(project)
@@ -583,15 +599,13 @@ class Ledger:
                 raise LedgerError('the native host to replace is not the one recorded')
             if current is not None and replaces is None:
                 raise LedgerError('this project already has a native host; replacing it names the current one')
-            try:  # one statement each, under the ledger's lock
+            try:
                 if current is None:
                     self.db.execute('INSERT INTO project_native_hosts VALUES (?,?,?,?)',
                                     (project, host_id, endpoint, self.clock()))
                 else:
                     self.db.execute('UPDATE project_native_hosts SET host_id=?, endpoint=?, recorded=? WHERE '
-                                    'project_id=? AND host_id=? AND endpoint=?',
-                                    (host_id, endpoint, self.clock(), project, current['hostId'],
-                                     current['endpoint']))
+                                    'project_id=?', (host_id, endpoint, self.clock(), project))
             except sqlite3.IntegrityError:
                 raise LedgerError('that native host id or endpoint belongs to another project') from None
 

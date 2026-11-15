@@ -667,7 +667,8 @@ share.
     Its URLs are synthetic, and none is live.
 - **The hosted app mapping** is in the ledger
   (`record_hosted_app(project, uuid)`). It is to be recorded once, from
-  owner tooling or the publisher. Nothing calls it yet, because that
+  owner tooling or the publisher, through the owner records' writer
+  (`owner_records hosted-app`, §7.7). Nothing runs it yet, because that
   tooling and Chariot's publication adapter don't exist. The same id again changes nothing. Another id,
   or an id another project holds, is refused, because a moved mapping would
   send one app's phones another app's links.
@@ -2300,8 +2301,37 @@ the server does.
     - `native_host_endpoint(project)` is what a host passes as the Builder's
       `server_url`, and the build checks the value again. Versions already
       built keep the endpoint they baked until they are rebuilt.
-  - **Not done:** nothing writes the record yet, because the owner tooling
-    that would is Chariot's and the call that gives the endpoint is held.
+  - **The writer** (`app_builder/owner_records.py`; source, run by no one
+    yet) is the one source path for owner tooling. It records, or shows, a
+    project's records in a builder's ledger:
+
+    ```
+    python -m rose.app_builder.owner_records show --ledger DIR --project ID
+    python -m rose.app_builder.owner_records native-host --ledger DIR --project ID \
+        --host-id UUID --endpoint URL [--replaces-host-id UUID --replaces-endpoint URL]
+    python -m rose.app_builder.owner_records hosted-app --ledger DIR --project ID --hosted-app-id UUID
+    ```
+
+    **Caller contract, for Chariot's owner tooling:**
+    - Pass the values exactly as Chariot's own systems returned them. The
+      tool derives, guesses, fetches and provisions nothing, opens no
+      connection and reads no credential.
+    - `DIR` must already hold a builder ledger; none is created.
+    - A replaced host or a changed domain names the record it replaces
+      (`--replaces-*`, both together).
+    - Output is one line of JSON:
+      `{status, projectId, nativeHost, hostedAppId}` (`message` when not
+      `ok`). Exit status:
+      - 0: recorded, or already so;
+      - 2: usage;
+      - 3: refused by the ledger;
+      - 4: no such ledger or project;
+      - 5: busy, nothing recorded, try again.
+    - Each record is one write transaction (`BEGIN IMMEDIATE`), so the tool
+      is safe while the builder runs. A build already running keeps the
+      endpoint it read.
+  - **Not done:** nothing runs the writer yet. No caller has been agreed,
+    and the call that gives the endpoint is held.
     No host passes `server_url` (the builder host is the Local Server
     Worker's), so every build still carries `null`. Production DNS, TLS and
     ingress for an endpoint are unverified.
