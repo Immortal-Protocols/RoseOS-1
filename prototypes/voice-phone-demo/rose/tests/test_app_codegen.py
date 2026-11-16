@@ -11,6 +11,7 @@ The generated start-up (rose/main.rs) builds on OS Core's adapter (workspace/ros
 (rose-signin's lock, with rusqlite) come only by that crate's own route. Its build here runs only where they are
 already in the offline cache; otherwise it is skipped and says why, and nothing is downloaded.
 ROSE_REQUIRE_ADAPTER_BUILD makes their absence a failure."""
+import base64
 import copy
 import hashlib
 import json
@@ -98,7 +99,7 @@ class Server(unittest.TestCase):
     def test_main_takes_everything_from_the_host_and_the_build(self):
         main = self.files['rose/main.rs']
         for line in ('mod api;', 'mod assets;', '#[path = "../src/handlers/mod.rs"]\nmod handlers;', 'mod meta;', 'mod migrations;',
-                     'mod routes;', 'mod wire;', 'use rose_app_runtime_signin::{start, Config, Keys, Migrations};',
+                     'mod routes;', 'mod wire;', 'use rose_app_runtime_signin::{invite, start, Config, Keys, Migrations};',
                      'Migrations { account: migrations::ACCOUNT, shared: migrations::SHARED }',
                      'Config::from_env(meta::APP, meta::ISSUER, meta::ADMISSION, migrations)',
                      'let (keys, why) = Keys::from_env();', 'eprintln!("rose server: {why}");',
@@ -118,11 +119,29 @@ class Server(unittest.TestCase):
                          'restore_done', '.chariot-restore.json"'):
             self.assertNotIn(invented, main)
 
+    def test_main_invites_without_keys_or_a_port(self):
+        main = self.files['rose/main.rs']
+        # The dispatch: no arguments serve, `invite <account>` prints one invite, anything else is usage (exit 2).
+        for line in ('Some(Command::Serve) => run(),', 'Some(Command::Invite(account)) => invite_one(&account),',
+                     'eprintln!("rose server: {USAGE}");\n            std::process::exit(2);',
+                     '[verb, account] if verb == "invite" => account.to_str()',
+                     'let token = invite(&config, account, now).map_err(|e| e.to_string())?;',
+                     'writeln!(out, "{}", token.as_str())'):
+            self.assertIn(line, main)
+        body = main[main.index('fn invite_one('):main.index('fn run()')]
+        # No keyring, no port, no listener; the token goes to stdout once and nowhere else.
+        for absent in ('Keys', 'PORT', 'TcpListener', 'serve', 'eprintln', 'println', '{:?}', 'Debug'):
+            self.assertNotIn(absent, body)
+        self.assertEqual(body.count('token'), 2)  # bound once, printed once
+        self.assertEqual(main.count('Keys::from_env()'), 1)  # the serve path only
+        self.assertIn('let (keys, why) = Keys::from_env();', main[main.index('fn run()'):])
+
     def test_main_reads_its_port_and_variables_strictly(self):
         # main.rs's own parts that need only std, compiled and run alone (the adapter's build is the next test).
         require('ROSE_REQUIRE_CARGO', 'rustc')
         main = G.MAIN_RS
-        own = main[main.index('/// The variable the host passes the port in'):main.index('fn run()')]
+        own = 'use std::ffi::OsString;\n' + main[main.index('/// The variable the host passes the port in'):
+                                               main.index('/// The same configuration serving uses')]
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / 'startup.rs'
             source.write_text(own + STARTUP_CHECKS, encoding='utf-8')
@@ -189,6 +208,26 @@ class Server(unittest.TestCase):
                 want = lines[:-1] + [f'rose server: {lines[-1]}']
                 self.assertEqual((run.returncode, run.stderr.strip().splitlines()), (1, want), case)
             self.assertEqual(list(data.iterdir()), [])  # refused before the adapter opened anything
+            # invite: the usage rule, then the adapter's refusals, each before any store or keyring is touched. A
+            # fresh DATA_DIR has no sign-in store a server set up, so nothing is created and nothing is printed.
+            usage = 'rose server: usage: no arguments to serve, or invite <account>'
+            for argv in (['invite'], ['invite', 'a', 'b'], ['serve'], ['Invite', 'a'], ['--help']):
+                run = subprocess.run([binary, *argv], env=ready, capture_output=True, text=True, timeout=60)
+                self.assertEqual((run.returncode, run.stdout, run.stderr.strip()), (2, '', usage), argv)
+            marker = Path(tmp) / 'restore-marker'
+            marker.write_text('x')
+            for argv, case, word in (
+                    (['invite', 'alice'], host, 'DATA_DIR is not set'),
+                    (['invite', ''], ready, 'no invite: invalid_name'),
+                    (['invite', 'alice'], ready, 'no invite: not_found'),
+                    (['invite', 'alice'], {**ready, 'CHARIOT_SEALING_KEY_FILE': 'keys.json'}, 'no invite: not_found'),
+                    (['invite', 'two\nlines'], ready, 'no invite: invalid_name'),
+                    (['invite', 'alice'], {**ready, 'CHARIOT_RESTORE_STATE_PATH': str(marker)},
+                     'no invite: restore_pending')):
+                run = subprocess.run([binary, *argv], env=case, capture_output=True, text=True, timeout=60)
+                self.assertEqual((run.returncode, run.stdout, run.stderr.strip()), (1, '', f'rose server: {word}'),
+                                 (argv, case))
+            self.assertEqual(list(data.iterdir()), [])  # no store was created
 
     def test_same_contract_same_bytes(self):
         reordered = json.loads(json.dumps(CONTRACT), object_pairs_hook=lambda kv: dict(reversed(kv)))
@@ -237,8 +276,8 @@ class Client(unittest.TestCase):
 
     def test_files_are_in_the_reserved_folder(self):
         self.assertEqual(sorted(self.files), [self.base + n for n in (
-            'RoseApi.java', 'RoseJson.java', 'RoseSession.java', 'RoseSignin.java', 'RoseSigninCore.java',
-            'RoseTypes.java')])
+            'RoseApi.java', 'RoseJson.java', 'RoseQr.java', 'RoseSession.java', 'RoseSignin.java',
+            'RoseSigninCore.java', 'RoseTypes.java')])
         self.assertTrue(all(f'package {PACKAGE}.rose;' in v for k, v in self.files.items()
                             if not k.endswith('RoseSigninCore.java')))
 
@@ -287,6 +326,52 @@ class Client(unittest.TestCase):
         done = subprocess.run(cmd + sources, capture_output=True, text=True, timeout=300)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         return out
+
+    def test_the_qr_code_is_rose_qrs_module_for_module(self):
+        # rose.qr is the encoder Rose decodes with ZXing (rose/tests/test_qr.py); the generated port gives the same
+        # symbol for each of its samples, enrollment URIs among them, and refuses what does not fit version 20.
+        require('ROSE_REQUIRE_APP_BUILD', 'javac')
+        from rose import qr
+        from rose.tests import test_qr
+        texts = test_qr.samples() + [
+            'otpauth://totp/Notes:ada%40example.org?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Notes&algorithm=SHA1'
+            '&digits=6&period=30', 'otpauth://totp/' + 'x' * 400 + '?secret=' + 'A' * 32]
+        harness = r'''import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.Base64;
+
+public class QrCheck {
+    public static void main(String[] args) throws Exception {
+        StringBuilder out = new StringBuilder();
+        for (String line : Files.readAllLines(Paths.get(args[0]))) {
+            String text = new String(Base64.getDecoder().decode(line), StandardCharsets.UTF_8);
+            try {
+                boolean[][] m = %s.rose.RoseQr.matrix(text);
+                for (boolean[] row : m) { for (boolean v : row) out.append(v ? '1' : '0'); out.append(' '); }
+            } catch (IllegalArgumentException e) {
+                out.append("REFUSED");
+            }
+            out.append('\n');
+        }
+        System.out.print(out);
+    }
+}
+''' % PACKAGE
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.compile(Path(tmp), {'test/QrCheck.java': harness}, android=False)
+            inputs = Path(tmp) / 'texts'
+            inputs.write_text(''.join(base64.b64encode(t.encode('utf-8')).decode() + '\n'
+                                      for t in texts + ['y' * 667]))
+            run = subprocess.run(['java', '-cp', str(out), 'QrCheck', str(inputs)], capture_output=True, text=True,
+                                 timeout=300)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            got = run.stdout.split('\n')[:-1]
+        self.assertEqual(len(got), len(texts) + 1)
+        for text, line in zip(texts, got):
+            with self.subTest(text=text[:40]):
+                want = ' '.join(''.join('1' if v else '0' for v in row) for row in qr.matrix(text)) + ' '
+                self.assertEqual(line, want)
+        self.assertEqual(got[-1], 'REFUSED')  # 667 bytes: more than version 20 holds at level M
 
     def test_compiles_and_behaves_on_the_jvm(self):
         require('ROSE_REQUIRE_APP_BUILD', 'javac')
@@ -371,6 +456,21 @@ STARTUP_CHECKS = textwrap.dedent('''
             assert_eq!(port(Some(bad.into())), Err("PORT is not a port".to_string()), "{:?}", bad);
         }
         assert_eq!(var("ROSE_CODEGEN_CHECK_UNSET"), Ok(None));
+        let args = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(command(&args(&[])), Some(Command::Serve));
+        assert_eq!(command(&args(&["invite", "alice"])), Some(Command::Invite("alice".into())));
+        assert_eq!(command(&args(&["invite", " Alice Two "])), Some(Command::Invite(" Alice Two ".into())));
+        for bad in [&["invite"][..], &["invite", "a", "b"], &["serve"], &["Invite", "a"], &["--help"]] {
+            assert_eq!(command(&args(bad)), None, "{:?}", bad);
+        }
+        // An empty or odd account is passed on as typed; the adapter refuses it (invalid_name).
+        assert_eq!(command(&args(&["invite", ""])), Some(Command::Invite(String::new())));
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let not_text = vec![OsString::from("invite"), OsString::from_vec(vec![0x61, 0xff])];
+            assert_eq!(command(&not_text), None);
+        }
+        assert!(USAGE.starts_with("usage: ") && USAGE.contains("invite <account>"));
         println!("start-up checks passed");
     }
 ''')

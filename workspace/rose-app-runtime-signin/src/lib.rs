@@ -21,6 +21,7 @@
 pub mod auth;
 pub mod data;
 pub mod identity;
+pub mod invite;
 pub mod keys;
 pub mod start;
 
@@ -31,5 +32,6 @@ pub use rusqlite;
 
 pub use auth::SigninAuth;
 pub use data::{AppData, DataError, Migrations};
+pub use invite::{InviteError, InviteToken, invite};
 pub use keys::KeyError;
 pub use start::{Config, Keys, Restore, StartError, Started, start};

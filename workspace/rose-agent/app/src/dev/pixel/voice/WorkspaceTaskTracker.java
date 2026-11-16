@@ -107,6 +107,7 @@ final class WorkspaceTaskTracker {
    case "UNAVAILABLE":return "Couldn't start · try again";
    case "NOT_AUTHORIZED":return "Couldn't start · this phone isn't paired";
    case "NOT_SENT":return "Rose tasks aren't available on this phone yet";
+   case "NOT_OFFERED":return "Rose tasks aren't turned on for your Rose server";
    default:return "Not sure it started · check Rose's work";
   }
  }

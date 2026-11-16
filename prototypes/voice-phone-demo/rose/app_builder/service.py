@@ -19,7 +19,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import appprofile, contract, dependencies, migrations, server_build, template, toolchain
+from . import appprofile, contract, dependencies, migrations, server_build, server_manifest, template, toolchain
 from .ledger import CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -440,6 +440,9 @@ class Builder:
                 _place(built.elf, artifacts / f'{built.sha256}.server')  # the ELF, by its digest (§7.7)
                 server_records = dict(profile=CLIENT_SERVER, server=built.record(), migrations=level2['locks'],
                                       crates=built.crates, cargo_lock=built.cargo_lock, contract=level2['contract'])
+                if built.target == server_manifest.TARGET:  # §7.7: a manifest only for a server the host runs
+                    server_records['manifest'] = server_manifest.encode(server_manifest.manifest(
+                        project_id, code, built.record(), level2['locks'], shared=profile.server.shared))
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
                                        _note(note, job['request']), libraries, _api_report(work), **server_records):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')

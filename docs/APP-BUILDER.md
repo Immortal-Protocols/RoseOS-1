@@ -59,8 +59,8 @@ directory beside it in `repo.git`), outside
    commit, never from a failed attempt. If nothing has been delivered yet, it
    starts from the skeleton with the original description plus the change.
    So a failed first build is never a dead end.
-4. **Generate.** A per-job Codex thread with `sandbox: workspace-write`, cwd =
-   that project's source and no access to `ROSE_CONFIG_DIR`, writes code into a
+4. **Generate.** A per-job Codex thread under the `rose_app_build` permission
+   profile (§4A), cwd = that project's source, writes code into a
    fixed skeleton: Java 17 source level (§2.2), android.jar APIs plus
    declared pure-Java JAR libraries (§2.1), aapt v1 resources,
    min API 26 and target 35. It cannot change the package,
@@ -1095,7 +1095,7 @@ app-server client.
 
 - **Bridge purpose `app_build`.** No dynamic tools. `cwd` is the project's
   absolute `source` path. The thread is `ephemeral`, uses `approvalPolicy:
-  never` and `sandbox: workspace-write`, with network access off. Web search,
+  never` and the `rose_app_build` permission profile, with network off. Web search,
   apps, MCP servers, memories, hooks, plugins, multi-agent and image tools are
   disabled and re-verified after thread start, the same way the
   `public_research` purpose is today. Model and tier follow the producer's
@@ -1108,12 +1108,52 @@ app-server client.
 - **Turns and cancel.** One turn per job, bounded by the build timeout. Cancel
   and shutdown use the bridge's existing `interrupt` op. The builder then
   resets the source as it does today.
-- **Read isolation is not provided by Codex.** `workspace-write` limits where
-  Codex may write, not what it may read. Keeping the generator out of
-  `ROSE_CONFIG_DIR` (pairing keys, TLS, provider tokens, the project signing
-  keys) needs the generator to run as a separate OS user, or in a container
-  that only mounts the project source. That is blocker 3 below: it belongs to
-  the Server Worker, and nothing here claims it.
+- **Read isolation is a Codex permission profile.** The legacy
+  `workspace-write` sandbox limits writes, not reads. Codex 0.167.1's
+  experimental permission profiles (opted into by the `experimentalApi`
+  capability the bridge already sends) can also deny reads. The writer defines
+  and selects its own profile, `rose_app_build`, and nothing else:
+  - it extends `:workspace` (which keeps `.git`, `.agents`, `.codex` and
+    `.aws` read-only). It denies `:root`, `:tmpdir` and `:slash_tmp`, allows
+    `:minimal` (the runtime Codex needs) for reading, and allows
+    `:workspace_roots` `.`, which is the job's `source` cwd, for writing.
+    Network is off. So `ROSE_CONFIG_DIR` (pairing keys, TLS, provider tokens,
+    the project signing keys), home and every other project fall under the
+    `:root` deny;
+  - it is defined only by launch flags, `--strict-config -c
+    default_permissions="rose_app_build" -c permissions.rose_app_build={…}`.
+    No user or shared config file is written;
+  - there is no legacy fallback. Thread start carries `permissions` and no
+    `sandbox`, and each turn carries `permissions` and no `sandboxPolicy`;
+  - thread start names the one workspace root itself, as
+    `runtimeWorkspaceRoots: [source]`. The schema allows the field to be
+    omitted, `null` or `[]`, but does not define what those mean, so the
+    writer never relies on them.
+    The base options' `danger-full-access` is removed for this purpose, and a
+    test pins that.
+
+  Before the turn, the writer refuses (`app_build_isolation_unavailable`, then
+  surfaced as `research_isolation_unavailable`) unless all of these hold:
+  - the version is a released `codex-cli` 0.167.1 or later;
+  - the effective config has no `sandbox_mode` or `sandbox_workspace_write`
+    (either would make the legacy sandbox win), at the top level or in a
+    selected config profile (`profile` + `[profiles.<name>]`, e.g. in the
+    owner's `~/.codex/config.toml`). A selected profile must exist and must not
+    set those keys, `default_permissions` or `permissions`. A field that is
+    absent or `null` counts as unset;
+  - the config names `rose_app_build` as the default, and its definition is
+    exactly the one passed, so an entry merged in from another config layer
+    (an extra read path, network on) refuses;
+  - the thread start reports `activePermissionProfile.id = rose_app_build`,
+    with `extends` unset or `:workspace`, and every `runtimeWorkspaceRoots`
+    entry (the thread-scoped roots that `:workspace_roots` expands to) is
+    the job's `source`. An extra root would widen the writer's only writable
+    path;
+  - `permissionProfile/list` for the job's cwd lists it with
+    `allowed: true`.
+
+  A profile that is selected and allowed is not yet proved enforced. That is
+  why blocker 3 stays open until the live check below.
 - **Shared code.** `codex.mjs` also carries the research and character-life
   isolation checks. The `app_build` purpose sits beside them; their launch
   arguments, thread parameters and turns are unchanged, and a test pins that.
@@ -1121,11 +1161,9 @@ app-server client.
 **Implemented** (source only):
 
 - `workspace/rose-agent/server/app-build.mjs`: the fixed policy, the thread
-  config and the per-turn sandbox. The config is the research isolation with web
-  search off and the shell kept, plus `sandbox_workspace_write` network off and
-  no temporary directories. Every turn carries
-  `sandboxPolicy: {type: workspaceWrite, writableRoots: [], networkAccess:
-  false, excludeTmpdirEnvVar: true, excludeSlashTmp: true}`. The cwd must be an
+  config, the `rose_app_build` profile and its launch flags, and the profile,
+  version and listing checks. The config is the research isolation with web
+  search off and the shell kept; it sets no sandbox keys. The cwd must be an
   absolute `…/source` path.
 - The bridge `open` with `purpose: app_build`:
   - refuses any tool or other cwd;
@@ -1177,14 +1215,62 @@ Proof levels:
   bridge; Builder with the real bridge, compiled and signed with throwaway
   keys, including a writer that escapes the process group). The group stop is
   tested with a member that ignores SIGTERM, and with one that never goes away.
-- **Assumed, not verified:** the app-server field names `sandbox:
-  workspace-write`, the turn's `sandboxPolicy` and the
-  `sandbox_workspace_write.*` config keys come from the Codex app-server
-  contract. No Codex binary exists in this container. Whether a real
-  `codex-cli` 0.167.x honours them (writes outside the project and network
-  refused) needs a live check by the Server Worker before any enabling.
-- **Not done:** any real model turn, read isolation (blocker 3) and any host
-  wiring.
+- **Matched to the installed 0.167.1 experimental schema export** (excerpts
+  from Local Server, read from files with no runtime):
+  - `ThreadStartParams.permissions` and `TurnStartParams.permissions` are
+    `string | null` and exclude `sandbox` / `sandboxPolicy`. A turn's value
+    applies to that turn and later ones;
+  - `ThreadStartResponse.activePermissionProfile` is an optional
+    `{id, extends?} | null` (default `null`), and
+    `runtimeWorkspaceRoots` is an optional absolute-path list (default `[]`);
+  - `PermissionProfileListParams` takes an optional `cwd`, `cursor` and
+    `limit` (uint32). Its response has a required
+    `data: [{id, allowed, description?}]` and an optional, nullable
+    `nextCursor`;
+  - app-server parses each `-c key=value` as TOML and falls back to a raw
+    string on a parse failure; `--strict-config` rejects unknown fields.
+
+  The code follows these shapes, and a `null` anywhere refuses. The `-c`
+  profile value is valid TOML: a test parses it with `tomllib` back to
+  exactly the profile. If Codex ever took it as a raw string, the exact-match
+  check would refuse. The `[permissions.<id>]` keys and filesystem tokens
+  come from the published permissions page. No Codex binary exists in this
+  container.
+- **Known not to be guaranteed:** the installed 0.167.1 experimental
+  `ConfigReadResponse` schema leaves `config` open (`additionalProperties`).
+  It lists the legacy `sandbox_mode` and `sandbox_workspace_write`, and it has
+  no `permissions` or `default_permissions` property. So whether `config/read`
+  returns the profile at all, verbatim or normalized, is neither defined by
+  the schema nor observed (Local Server).
+
+  Every point above fails closed: a missing, renamed or normalized field
+  refuses every app build rather than weakening isolation. Nothing here claims
+  that the named profile equals what Codex enforces. Still needed, from one
+  real 0.167.1 app-server started with the writer's launch flags (only
+  `config/read`, `thread/start` and `permissionProfile/list`; no turn, writer
+  or model):
+  1. what `config/read` returns for `permissions` and `default_permissions`.
+     If Codex fills in defaults or resolves `extends`, the exact-match check
+     refuses and must be revised to the observed form, not loosened;
+  2. that the inline-table profile is accepted under `--strict-config` as a
+     profile, not as a raw string;
+  3. whether `config/read` resolves a selected `profile` into the top-level
+     keys, leaves it under `profiles`, or both. The check covers both forms;
+  4. what `runtimeWorkspaceRoots` the response reports when the request names
+     `[source]`. Both `[source]` and `[]` are accepted, and neither is wider.
+
+  A first bounded inspection (installed 0.167.1 under `codex sandbox` with a
+  fresh `CODEX_HOME`, `--strict-config`, network denied, `initialize` only)
+  exited before answering `initialize`, cause unverified. It reached no
+  `config/read`, profile listing or thread, so all four items stay
+  unobserved.
+- **Live check before any enabling (Server Worker / Local Server):** a
+  synthetic denial run under the profile, with no writer and no model. Reads
+  of `ROSE_CONFIG_DIR`, home, `/tmp` and a sibling project must be refused;
+  writes outside `source`, and any network, must fail; a write inside
+  `source` must succeed. Until then the profile is selected, not proved.
+- **Not done:** any real model turn, the live enforcement check of read
+  isolation (blocker 3) and any host wiring.
 
 ## 6. Standalone builder host (source only; not configured, deployed or enabled)
 
@@ -1342,17 +1428,20 @@ test, and no model was called.
    35.0.0 and JDK 21 with recorded hashes), or a separate builder is
    authorized. A separate builder is a provisioning decision; no new paid
    infrastructure is assumed.
-3. **Build isolation on that host (Server Worker).** Source now asks Codex for
-   `workspace-write` scoped to the project with network off (§4A). That part is
-   unverified against a real Codex binary. Read access to `ROSE_CONFIG_DIR`
-   (pairing, TLS, provider tokens, project keys) is not blocked by Codex at
-   all. The writer needs a separate OS user or a container that mounts only
-   the project source, launched through `CodexGenerator(command=...)`.
-   Enabling it is a security-relevant runtime change, applied only by the
-   Server Worker when authorized.
-4. **Runtime (Nathan).** The Rose server is stopped at Nathan's request. No
-   endpoint, build or install can be exercised until he asks the Server Worker
-   to restart it and a deployment is authorized.
+3. **Build isolation on that host (Server Worker).** Source now runs the
+   writer under the `rose_app_build` permission profile (§4A). It denies reads
+   outside the project source and the minimal runtime, allows writes only in
+   the source, turns network off and refuses to start unless that exact
+   profile is active and allowed. Enforcement is unverified against a real
+   Codex binary: the synthetic denial check in §4A must pass on the host
+   before enabling. If it fails, the writer stays off, with no broad-read
+   fallback. The alternative is a separate OS user or a container that mounts
+   only the project source, launched through `CodexGenerator(command=...)`.
+   Enabling is a security-relevant runtime change, applied only by the Server
+   Worker when authorized.
+4. **Runtime (Nathan).** Nathan has asked for the Rose server to run again and
+   for deployment (2026-11-15). The Server Worker and the Chariot operator
+   restart and deploy; the builder host runs separately (§6).
 5. **Device proof (device owner handback).** Install, revise and data-retaining
    update must be shown on a stock-Android phone and a RoseOS phone,
    separately. No harness exists for packages other than Rose Agent. One
@@ -1401,10 +1490,9 @@ Owners:
 - **Chariot owner:** hosting (§7.7).
 - **Home/App:** the builder's phone UI.
 
-Nothing here is built into a job, hosted, deployed or run on a phone. What
-exists in source is §7.2's checks, §7.3's contract, and §7.6's migration
-checks, ledger records, crate set and server build. None of it is called by
-the builder yet.
+The builder's job runs all of it (§7.6), and the standalone host injects
+its inputs (§6). What remains is operational: a real musl build on the
+builder host, a provisioned native host, and the deploy (§7.7).
 
 ### 7.1 Facts the design rests on
 
@@ -1757,6 +1845,13 @@ nothing (`.github/workflows/rose-app-runtime.yml`).
     - The loader zeroes its own buffers. It can't zero the JSON parser's internal copies, or rose-signin's `Secret`, which redacts `Debug` but isn't zeroed on drop.
     - Its path and contents are never logged. Any problem leaves the server without a key, and a reason word says why.
   - **Server.** `Started::server` attaches the data and marks the migrations done.
+- **The creator's invite** (D7). `rose_app_runtime_signin::invite(&config, account, now)` issues the token a default `invite` app needs to admit anyone.
+  - **The token.** It is the 52-character text the invitee enrolls with: single use, valid 7 days, admitting exactly that account. It comes back as `InviteToken`, whose `Debug` is `<redacted>` and which has no `Display`. Only `as_str()` gives the text.
+  - **The store.** It opens only a sign-in store that a server has already set up under `DATA_DIR`, at exactly this build's schema. It never creates, initialises or migrates one. A missing, empty or uninitialised file is `not_found`, and another schema version is `store_unavailable` (start the server first). It reads no keyring: `CHARIOT_SEALING_KEY_FILE` is never consulted, because an invite is only its hash and expiry. It waits for a busy store, so it runs safely beside a serving server.
+  - **Restore.** It refuses while a restore marker is present, by the start-up rule, so no token is issued into a store that is about to be replaced.
+  - **Refusals.** `InviteError` (`invalid_name`, `already_enrolled`, `not_found`, `restore_pending`, `store_unavailable`) names the problem, never the account or a token. Admission isn't consulted.
+  - **No route.** It is to be exposed only as the generated server's `invite <account>` command. That command belongs to Home, which owns the generated `main.rs` invite dispatch, its exit codes and its tests (S8). It is agreed but not in §7.5 yet. Until it lands, no generated server can issue an invite.
+  - **The token is a credential.** It never appears in an error, a log or `Debug`. The command's stdout must go only to the person who ran it, never into the service's log capture (§7.7 item 8). How the creator runs the command on the host, and how the token reaches the invitee, are outside the adapter.
 - **Restore marker** (Chariot `e592c4b1`). At start the adapter looks up `CHARIOT_RESTORE_STATE_PATH` once, without following a link. When the variable is unset, the path is `DATA_DIR/.chariot-restore.json`, and a value that is set must be absolute.
   - **Absent** (`NotIndicated`): no restore is indicated, and `restore_done` is set.
   - **Anything present** (`Indicated`): a file, directory or link, even a dangling one. The server stays `503`.
@@ -1874,6 +1969,21 @@ codegen never writes those.
     removes a restore (§7.7 item 5).
   - **Failures.** Any failure before serving prints `rose server: <reason>`
     and exits 1. The reason names the variable, never its value.
+  - **Invites.** `invite <account>` uses OS Core's `invite` (§7.4).
+    - It builds the same `Config` serving does, then asks the adapter for one
+      single-use invite (7 days, bound to the account).
+    - It prints the invite once, with a newline, on stdout and exits 0.
+    - It reads no keyring, binds no port and never runs a restore.
+    - The invite is a credential. Stdout goes only to the person who ran the
+      command, never into the service's log capture.
+    - A refusal prints `rose server: no invite: <word>` and exits 1. The
+      words are `invalid_name`, `already_enrolled`, `not_found` (no sign-in
+      store a server has set up; nothing is created), `restore_pending` and
+      `store_unavailable`. The word never contains the account or the
+      invite.
+    - Anything other than no arguments or exactly `invite <account>` prints
+      a usage line and exits 2. That includes a missing account, extra
+      arguments, another command or an account that isn't text.
   - **Crates.** The runtime and the adapter come in as builder-owned path
     crates. Codegen writes no Cargo files.
 
@@ -1896,7 +2006,11 @@ reserved `src/<package>/rose/`:
     401 `session_invalid` forgets the token.
 - `RoseSignin`: enroll, confirm, sign in, recover authenticator, recover
   passphrase and sign out, over the `/signin/v1/*` routes.
-- `RoseSession`: keeps only the bearer token, in `getNoBackupFilesDir()`.
+- `RoseSession`: of the session it keeps only the bearer token, in
+  `getNoBackupFilesDir()`. It also opens, copies or draws the enrollment URI;
+  `qr(uri, pixelsPerModule)` returns it as a QR code `Bitmap`.
+- `RoseQr`: the QR encoder `qr` draws with, a generated port of
+  `rose/qr.py` (byte mode, level M, versions 1 to 20).
 - `RoseSigninCore.java`, copied byte for byte at the pin above. The builder
   refuses to run if the file's SHA-256 has changed.
 
@@ -1905,7 +2019,9 @@ reserved `src/<package>/rose/`:
   shown as copyable text and opened with `ACTION_VIEW`. OS Core will build a
   RoseOS system authenticator for that scheme, and on stock Android any
   authenticator app claims it, so the flows are the same.
-- **QR rendering is not generated yet.**
+- **QR rendering** is generated: `RoseSession.qr(uri, pixelsPerModule)` draws
+  the enrollment URI as a QR code (`RoseQr.java`, a port of `rose/qr.py`,
+  which Rose decodes with ZXing; a test compares the two module for module).
 - The user types the code and the passphrase.
 - **Naming the app (#824).** OS Core's RoseOS authenticator
   (`dev.pixel.rose.authenticator`) names the sending app only when Android
@@ -1937,6 +2053,11 @@ reserved `src/<package>/rose/`:
     listens, including the keyring reason printed before a refusal and a
     relative `CHARIOT_RESTORE_STATE_PATH`. No server is started, and no
     restore marker is created.
+  - The argument rules are also compiled and run on their own.
+  - Where the adapter build runs, every usage case exits 2. The invite
+    refusals (`not_found` for a fresh `DATA_DIR`, `invalid_name` and
+    `restore_pending`) exit 1 with nothing on stdout, and no store is
+    created. No invite is issued in these tests.
 
 ### 7.6 Builder (wired in the job; each host-side part injected)
 
@@ -2058,9 +2179,10 @@ builder's too. A plain app's job is unchanged.
   Builder's code generator, isolation, Rust toolchain and builder crates
   (the standalone host does so only with explicit `clientServer`, §6).
   Otherwise the writer builds the app without a
-  server and says what would need one. It also tells the writer the server
-  is not hosted (`RoseApi.serverUrl()` is null in every build), so its reply
-  never claims the server runs or syncs, and that pending migrations share
+  server and says what would need one. It also tells the writer that
+  `RoseApi.serverUrl()` is null until the app's host is recorded, so the app
+  must work with null and its reply never claims the server runs or syncs,
+  and that pending migrations share
   one transaction with foreign keys off before every reference is checked
   (so `ON DELETE` does not fire in a migration, a rebuild is fine when the
   referenced rows stay, and a broken reference refuses the update at
@@ -2261,8 +2383,7 @@ App Core accepts this boundary. The server is one Rust ELF plus a manifest,
 with nothing Chariot-specific inside the app. The fake host in tests checks
 the same manifest.
 
-**The manifest** (`app_builder/server_manifest.py`; source, called
-nowhere). This is App Core's description of one version's server. It is not
+**The manifest** (`app_builder/server_manifest.py`; source). This is App Core's description of one version's server. It is not
 Chariot's own wire format, because further manifest fields are still open
 (item 1 below). Its keys follow the host's snake_case, as the readiness keys
 do:
@@ -2281,6 +2402,23 @@ canonical JSON, so one manifest has one digest. Decoding is strict: no
 repeated key, no float or NaN, at most 16 KB, and only the canonical bytes. `check` holds a manifest to exactly this schema, and, when
 given them, to its project, its version and its binary. That function is
 what the fake host checks now, and what the Chariot adapter will check later.
+
+**Recorded with each delivered version.** When a client-server version's
+server is built for the agreed target (`x86_64-unknown-linux-musl`), the
+job builds its manifest from the job's own facts and the ledger records the
+canonical bytes with the version, in the same transaction
+(`server_manifest(project, versionCode)`).
+- **Matching:** the ledger refuses a manifest that names another project,
+  version or server, so nothing is half recorded.
+- **Other targets:** a server built for any other target, such as a build
+  machine's own target in CI, has no manifest. It is still delivered, but
+  it is not one the host runs.
+- **What a host is handed:** the ELF (`artifacts/<sha256>.server`) and that
+  manifest. Slice 10's fake host test holds the two to `check`, as the
+  Chariot adapter will.
+- **Not Chariot's wire format:** the fields stay App Core's schema version 1.
+  Chariot's deploy takes its own body, which the deploy plan (below) maps from
+  this manifest.
 
 **The binary check** (`check_elf`, also run by every server build). It
 reads the ELF's own headers, every offset bounded by the file, and accepts
@@ -2399,6 +2537,128 @@ the server does.
     `clientServer` configuration is supplied (§6). Production DNS, TLS and
     ingress for an endpoint are unverified.
 
+- **The deploy plan (App Core's handoff to Chariot's deploy).** Chariot's
+  agreed owner calls (ProtocolsBackend #2564, `chariot/docs/native-app-hosts.md`)
+  deploy a native server in two steps. First
+  `PUT /v1/app-hosts/{host}/artifacts/{sha256}` with the raw static musl ELF
+  (at most 64 MiB). Then `POST /v1/app-hosts/{host}/deploy` with
+  `{sha256, args, port, health_path, data_schema}`. Chariot computes its own
+  `deployment_sha256` from those; App Core's manifest is not sent.
+  `python -m rose.app_builder.server_delivery plan --ledger DIR --project ID
+  [--version N]` reads the builder's records and prints that plan for one
+  delivered version, the newest by default:
+  - `hostId` and `endpoint` come from the native host record.
+  - `artifact` is `{path, sha256, size, target}`. The stored ELF is re-hashed,
+    and must still be the one the version recorded.
+  - `deploy` is `{sha256, args: [], port: 8080, health_path: "/health",
+    data_schema}`. `args` is always empty, because the generated server
+    serves only with no arguments. `data_schema` is
+    `1 + auth × 100000000 + account × 10000 + shared`, as agreed with
+    Chariot (#2566):
+    - `account` and `shared` are the manifest's highest migration numbers,
+      each 0–9999 (`shared` is 0 with no shared database).
+    - `auth` is rose-signin's own store schema (`SCHEMA_VERSION`, `auth_*`
+      migrations in `auth.sqlite3`) at the manifest's pinned sign-in
+      revision. It is 2 for `23062a04`, the only revision a manifest admits.
+      `server_delivery.AUTH_SCHEMA` maps the revision to it, and a test holds
+      that map to `workspace/rose-signin/src/store/sqlite.rs`, which the
+      server is built against. So a sign-in store change can't ship under an
+      unchanged tag. A revision not in the map is refused.
+    - It is one integer for the schema of all three databases, and at least
+      `100000001` because `auth` ≥ 1. The producer keeps it at or below
+      2³¹ − 1 until Chariot confirms a wider integer.
+  - **Earlier tags.** Before #2566 the plan sent `1 + account × 10000 +
+    shared`, which is at most `100000000`, so no new tag equals an earlier
+    one. Every manifest ever recorded names `23062a04` (auth 2), so an
+    earlier tag `T` describes exactly the same data as the new tag
+    `T + 200000000`. A host whose active deployment recorded an earlier
+    tag would otherwise get a 409 on its next same-schema deploy. Whether
+    any such deployment exists is in Chariot's records, not App Core's.
+    The plan tool records nothing.
+  - **Refused (exit 3):** a version with no server, or with no manifest (built
+    for another target); a server over 64 MiB; no native host recorded; or a
+    stored binary that is missing or changed. The other statuses follow
+    `owner_records`: `usage` 2, `not_found` 4 (no such ledger, project or
+    version), `error` 6.
+  - **It only reads.** It opens the ledger read-only (`Ledger.reader`,
+    SQLite `mode=ro`: no directory mode, pragma or schema is touched). It
+    uploads, deploys, records and contacts nothing, and holds no credential.
+    Chariot's owner tooling makes both calls with its own creator
+    authentication and its own Idempotency-Key, then reads `HostView`; a
+    running host is not a ready app.
+  - **Readiness needs the host's sealing key (D9).** The server reports
+    ready only with its keyring loaded, so a host with no sealing-key binding
+    stays at 503 and the deploy never becomes ready. That is the designed
+    fail-closed path, not a plan error.
+  - **No data snapshot yet.** Chariot v1's pre-deploy `.backup` covers only
+    `CHARIOT_SQLITE_PATH` (`DATA_DIR/app.sqlite`), which the generated server
+    never creates. Its data is `auth.sqlite3`, `accounts/*.sqlite3` and
+    `shared.sqlite3` under `DATA_DIR`. So a deploy today replaces the code with
+    no snapshot of that data, and a rollback restores no database (item 9).
+  - **Start-up (agreed, #2566).** Chariot allows 120 s from start for
+    `/health` to answer 200, then reports the deployment unavailable. It
+    makes no automatic rollback and no automatic restore. The server binds
+    its listener only after every migration, so until then a health check
+    gets connection refused, and the time grows with the number of
+    accounts.
+  - **Health fields (agreed, #2566):** the snake_case `status`, `app_id`,
+    `revision_sha256` and `deployment_sha256`.
+  - **Schema changes.** Chariot v1 refuses (409) a deploy whose
+    `data_schema` differs from the active one. So a version that adds a
+    migration can't be deployed over an older one until §7.7 item 4
+    (schema-changing deploys) is done.
+  - `rose/tests/test_app_server_delivery.py` checks each case, and that every
+    plan's `deploy` body is within Chariot's `DeployNative` bounds.
+- **Creator invites (agreed source contract; the guest channel is
+  unbound).** Chariot's source is ProtocolsBackend #2564 at `814fd66c`
+  (`chariot/docs/native-invites.md`, `hosting/native_invites.py`). It runs the
+  generated server's `invite <account>` command (Home, §7.5) on a native host
+  for the creator. The command calls OS Core's `invite` (§7.4).
+  - **Call.** `POST /v1/app-hosts/{host_id}/invites`, under Chariot's existing
+    owner authentication. It takes a nonzero UUID `Idempotency-Key` and
+    `{account, revision_sha256, deployment_sha256}`. `host_id` is the native
+    host record (above), never the hosted APK app id. The account is passed
+    exactly as given, 1 to 128 UTF-8 bytes, and OS Core's adapter judges it.
+  - **Execution.** Under the host's execution lease, Chariot refuses a pending
+    operation, a host that isn't running, or a revision or deployment other
+    than the request's. It never wakes, deploys or retries.
+    - It measures the recorded executable's SHA-256 and checks it against the
+      active revision before running anything. The command itself runs no
+      revision check.
+    - It runs `[executable, "invite", account]` with the service's own UID,
+      GID, working directory and exactly its environment: `DATA_DIR`,
+      `CHARIOT_APP_ID`, `CHARIOT_DEPLOYMENT_SHA256`, and
+      `CHARIOT_REVISION_SHA256` and `CHARIOT_RESTORE_STATE_PATH` with their
+      original values when present. Absent ones stay absent, and the restore
+      path is never rebuilt from `DATA_DIR`.
+    - stdin is null, with no TTY and no keyring. Output is captured privately,
+      never into the journal or any log.
+  - **Limits:** 30 s; stdout exactly the 53-byte token line
+    `^[A-Z2-7]{52}\n$` with empty stderr; stderr capped at 256 bytes.
+  - **Result:** `{outcome, reason, exit_code, replayed, token}`, sent
+    `no-store` with no `Retry-After`.
+    - `issued` (200): the token is in the first delivery only. A replay of the
+      same key gets `token: null`; a token can't be retrieved or reissued.
+    - `refused`: the adapter's words. `invalid_name` is 422;
+      `already_enrolled`, `not_found` and `restore_pending` are 409;
+      `store_unavailable` is 503. Chariot's own lease refusals
+      (`operation_pending`, `deployment_changed`, `host_unavailable`) are 409
+      or 503. The command's usage refusal is 502.
+    - `outcome_unknown` (503): any other exit or output, including
+      `the invite could not be written`, a timeout, a signal or an inconsistent
+      receipt. A token may exist, so nothing is reissued automatically; a new
+      invite needs a new explicit request.
+    - Chariot keeps a non-secret attempt record only: no account, token or
+      output.
+  - **Fixture.** Chariot's `chariot/test/fixtures/native_invites/results.json`
+    is copied byte for byte to
+    `rose/tests/fixtures/chariot/native-invites-results.json` (git blob
+    `925b85f8`). `rose/tests/test_app_native_invites.py` holds it to OS Core's
+    refusal words and the token's shape. Home's generated command is checked by
+    Home's own tests.
+  - **Not done.** The real inspector and runner (the authenticated guest
+    channel) are unbound, the router is unmounted, and no invite has been
+    created anywhere.
 - **Client address.** Chariot's gateway overwrites `X-Chariot-Client-Address`
   on every request, and guest ingress admits only the gateway (Chariot's
   boundary to enforce). A server given `Server::with_client_header` counts
@@ -2457,6 +2717,13 @@ Still open for the Chariot owner (App Core's proposal in brackets):
    generated `main.rs` calls `.with_client_header(..)` (§7.5).
 7. Rollback [keep the previous ELF; report the running sha256].
 8. Process and logs [SIGTERM within a grace period; no secrets in logs].
+9. Pre-deploy data snapshot [with the service stopped, back up every regular,
+   non-symlinked `*.sqlite3` under `DATA_DIR` (`auth.sqlite3`,
+   `shared.sqlite3`, `accounts/*.sqlite3`) with `sqlite3 -readonly .backup`
+   into `backups/pre-<deployment>/<relative path>`. Use the symlink refusal
+   Chariot already applies to `app.sqlite`, and refuse a symlinked
+   `accounts/`. Item 4's "snapshot `DATA_DIR` first" is the same need for
+   schema-changing deploys].
 
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
@@ -2517,6 +2784,10 @@ need no hosting and no further OS Core change.
    Home/App's.
 10. The hosting seam: a fake host, and a Chariot adapter that stays blocked
     until §7.7 is answered.
+    - **The delivered version's manifest and the fake host's check
+      (§7.7).** Done: `rose/tests/test_app_level2_pipeline.py` (`FakeHost`)
+      and `rose/tests/test_app_ledger_level2.py` (`Manifests`). The Chariot
+      adapter stays blocked on §7.7 item 1.
     - **The native host record (§7.7 client base URL).** Done:
       `rose/tests/test_app_ledger_level2.py` (`NativeHost`) and
       `rose/tests/test_app_level2_pipeline.py`, which builds with the

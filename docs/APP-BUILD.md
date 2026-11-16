@@ -6,6 +6,24 @@ repo-local npm cache, since the container's default home cache may not exist.
 `ANDROID_SDK_ROOT` may override the SDK root using the same archive layout.
 `JAVA_HOME` is optional; Java 21 must expose `jdk.compiler`.
 
+The SDK bootstrap selects the pinned Build Tools 35.0.0 archive for Linux or
+macOS; the shared API 35 r02 platform pin is unchanged. The Mac archive is
+`build-tools_r35_macosx.zip`, SHA-256
+`530cdbd1ec315e1477624d7ed2f0f2962108d69f36eddba5894cef9ea2cedb48`.
+Its 76,857,898 bytes and SHA-1 `93ab8ce91230e067b5add4bfa79919c52b27f072`
+were checked against Google's
+[official SDK repository metadata](https://dl.google.com/android/repository/repository2-3.xml)
+before recording the stronger SHA-256 pin. No SDK license acceptance file is
+created or changed by bootstrap. The Rose Builder client recipe works with
+macOS's supplied Bash 3.2 as well as Linux Bash; it does not need a new shell.
+An SDK root outside the checkout keeps local tool preparation separate from
+the working voice/Project 2 deployment.
+
+`bash scripts/bootstrap.sh --builder` prepares only the app builder's SDK/JDK
+prerequisites. It does not require the unrelated Rose Agent QR scanner or Node
+package install, and starts no service or writer and creates no identity or
+signing key. No-argument bootstrap retains its existing Rose Agent setup.
+
 ## Calculator baseline
 
 ```sh

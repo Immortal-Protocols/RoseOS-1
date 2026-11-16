@@ -331,6 +331,7 @@ mounted only when the server enables it, which nothing does yet. The phone treat
 | 400 `refused`, `reason` | bad body, an id that isn't `task:<id>`, label > 60, goal > 300, or no `confirmed: true` | "Couldn't start". Not retried. |
 | 503 `unavailable` | nothing started | "Couldn't start · try again". Safe to retry with the same `requestId`. |
 | 401 | signature failure | Same as the builder routes. Not retried. |
+| 404 | the route isn't mounted: the server was started without `--workspace-tasks`, so nothing started | "Rose tasks aren't turned on for your Rose server". Not retried. |
 
 
 **The phone's client is `WorkspaceTaskClient`, pure source.**
@@ -356,11 +357,21 @@ mounted only when the server enables it, which nothing does yet. The phone treat
 - **The card says "started", never "done".** `accepted` and `duplicate` read "Started · in Rose's work", and
   the task's own events say the rest.
 
-**On Android (source only, behind the same gate):**
-- **Gate and templates.** `WorkspaceTaskGate` is off unless the `tasks-route-enabled` preference is set, and
-  nothing in source sets it. Its `TEMPLATES` list is empty, so no task is invented. With no template there is
-  no Rose task in the snapshot, and the confirm sheet only says tasks are not available. Rose Agent's own app
-  entry is added to the snapshot only when there is a task to target it.
+**On Android:**
+- **Gate.** `WorkspaceTaskGate` is on by default. Setting the `tasks-route-enabled` preference to false opts
+  out, and a preference that cannot be read keeps tasks off.
+- **Templates.** `WorkspaceTaskTemplates` holds the approved HiFi's own tasks, phrased for a real phone:
+  - "Add missing items to grocery list";
+  - "Summarise prep notes";
+  - "Plan a quiet Saturday".
+
+  "Draft a reply to Jamie" is left out because it belongs to one notification. Each task is within App Core's
+  limits, and each goal tells Rose to ask before sending, sharing, booking or buying anything. The goal never
+  enters the snapshot. Rose Agent's own app entry is added to the snapshot only when there is a task to target.
+- **Nothing runs on its own.** Every task asks first on the confirm sheet, and only "Ask Rose" sends it.
+- **The server side is opt-in.** The Rose server serves `/workspace/v1/tasks` only when it was started with
+  `--workspace-tasks` (App Core, #834). Without that, the POST is a 404, which means nothing started. The card
+  then says "Rose tasks aren't turned on for your Rose server", with no retry and no Ask again.
 - **Confirm sheet.** It shows the task's label and its ask, with "Ask Rose" and "Not now". "Not now" starts
   nothing. A task already asked shows where it is instead of asking twice.
 - **Sending.** `WorkspaceHub.startTask` sends one request per tap, with a fresh `requestId` that every retry
