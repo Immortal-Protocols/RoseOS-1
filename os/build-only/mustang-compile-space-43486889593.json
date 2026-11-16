@@ -1,0 +1,38 @@
+{
+  "schema": "roseos.mustang-compile-space-evidence.v1",
+  "producer": {
+    "runId": "43486889593",
+    "runAttempt": "1",
+    "source": "8103ca2fbd29a1eaca9998be53219c0f42c93020",
+    "workflowConclusion": "failure after successful compile; preserved unchanged"
+  },
+  "artifact": {
+    "id": 14077115670,
+    "name": "mustang-dedicated-receipts-43486889593-1",
+    "sizeBytes": 25576,
+    "sha256": "58ac9c8dbf8b8c70ad79d2fe516078e1b9ed1bb3c31c8a09344fc77f437451d0"
+  },
+  "receipt": {
+    "file": "compile-completed.json",
+    "sha256": "a58c0b0179e3294961966c66fcc319146116f8283b486de45b761d61d379811f"
+  },
+  "observed": {
+    "at": "2026-11-13T20:55:56Z",
+    "ok": true,
+    "returncode": 0,
+    "measure": "filesystem-available-drop",
+    "peakSampledBytes": 120590569472,
+    "consumedBytes": 119395098624,
+    "startAvailableBytes": 1003621814272,
+    "lowestSampledAvailableBytes": 883031252992,
+    "sampleSeconds": 5,
+    "outDir": "out-mustang-cache"
+  },
+  "proposal": {
+    "compileAllowanceBytes": 214748364800,
+    "reserveBytes": 322122547200,
+    "previousCompileAllowanceBytes": 268435456000,
+    "kind": "Finite engineering allowance with headroom above one observed successful compile; no future peak guarantee"
+  },
+  "preservation": "Prior source, outputs, cache, allocations and clock journal remain untouched. All phase space checks and sampled stops remain enforced."
+}

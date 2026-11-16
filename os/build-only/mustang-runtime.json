@@ -38,5 +38,11 @@
   "basis": "Dedicated full-delivery bindings retain the separate numeric Mustang VM/3000GiB disk, protected group5 ephemeral JIT, jobs24, qualified native/hosted tools, original v1 signer, output capacity checks and owned four-hour STOP/cleanup. Current signed apps are Frankel2026111201, producer43216030196/sourceed67c9cf, voice374/calculator6/background43; immutable export43485652878 attempt1 artifact14067412309 is2917480 bytes, SHA256 f19da76f2ea7e6e9870c9cc73d4f064d78020fda85a9493dbb1f6e3243968e68. The downloaded12-file packet passed hashes and independent aapt/apksigner admission, toolsRechecked true, with zero declared app-source drift through4b04b6be. This is not an OTA extraction. The one-attempt voice370 exception is removed. Persistent ccache remains enabled; previous outputs and consumed clock journal remain intact. Nathan requested a new full OTA and daily automatic runs at06:00 America/Los_Angeles on2026-11-13. The ChatGPT automation invokes this existing manual-dispatch workflow, keeping the repository04:00 Frankel dispatcher and disabled Mustang lane unchanged to avoid duplicate scheduling. No new infrastructure, permissions, credentials, resource bounds or physical-device acceptance is implied.",
   "candidateContinuity": "os/build-only/mustang-candidate-continuity-20261107.json",
   "dataFilesystemTotalInodes": 196608000,
-  "dataDiskEvidence": "os/build-only/mustang-data-growth-20261111.json"
+  "dataDiskEvidence": "os/build-only/mustang-data-growth-20261111.json",
+  "frozenAppInputs": {
+    "workflowRunNumber": 54,
+    "record": "os/app-inputs/frankel-2026111201.json",
+    "recordSha256": "8139a4da9040330124e7c4e5f73eeaedac6d593557f60d85ee19bca9c2a5f9ab",
+    "basis": "Nathan requested one manual Mustang OTA and explicitly selected the verified voice374 bundle in this thread on2026-11-16. Voice374/calculator6/background43; later application-source changes are excluded for this attempt. Exact existing export and only workflow run54; no permanent freshness exception or new app signing. Full native build/sign/publication and all byte/signer/source/space/cleanup checks remain."
+  }
 }
