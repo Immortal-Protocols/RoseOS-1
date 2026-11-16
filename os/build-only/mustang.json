@@ -120,9 +120,9 @@
   "capacity": {
     "reserveBytes": 322122547200,
     "allowanceRequired": true,
-    "compileAllowanceBytes": 268435456000,
+    "compileAllowanceBytes": 214748364800,
     "compileAllowanceKind": "first-build-proposal",
-    "basis": "Existing 300GiB reserve and finite stage bounds are now enforced in preflight and sampled process/source-copy supervision. Cache growth counts in the same filesystem usage; this does not change target-file validation or build identities."
+    "basis": "Keep the existing 300GiB reserve, fresh source/output isolation and sampled whole-process-group stops. Tighten the compile write ceiling from250GiB to200GiB using the authenticated run43486889593 compile receipt: sampled peak120590569472 bytes (about112.3GiB), leaving about87.7GiB headroom. This is a finite allowance, not a guaranteed future peak or quota. Cache growth and other writers count in the same filesystem drop. Provenance: os/build-only/mustang-compile-space-43486889593.json. No deletion, reclaim, disk growth or resource-bound increase."
   },
   "preparation": {
     "stages": [
