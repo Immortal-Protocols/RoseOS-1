@@ -111,6 +111,7 @@ class Session:
     wake_id: str | None = None
     action_id: str | None = None
     blocked_reason: str | None = None
+    computer: bool = False
     workspace_task: str | None = None  # the page task this conversation turn serves (docs/APP-BUILDER.md §4.3)
     workspace_turn: tuple | None = None  # (turnId, page task) once that turn started: its tool calls report to it
 
@@ -126,11 +127,12 @@ class TaskAnnouncement:
 
 class CodexConductor:
     def __init__(self, phone, bus, speaker, transcripts, model='gpt-6.1-terra', client_factory=CodexClient,
-                 identity=None, life=None):
+                 identity=None, life=None, computer_link=None):
         self.phone, self.bus, self.speaker, self.store = phone, bus, speaker, transcripts
         # The owner's name and voice for the assistant; in memory unless the producer passes its saved one.
         self.identity = identity or voice_identity.VoiceIdentity()
         self.life = life
+        self.computer_link, self.computer_tools = computer_link, []
         self._activity_heartbeat_at = 0.0
         self.model = model
         self.conversation = transcripts.new(model)
@@ -170,7 +172,22 @@ class CodexConductor:
     def _policy(self):
         """The conversation instructions under the name the owner chose (a new thread picks up a rename)."""
         policy = voice_identity.conversation_policy(CONVERSATION_POLICY, self.identity.name)
+        if self.computer_tools:
+            from .computer_link import POLICY
+            policy += "\n" + POLICY
         return policy + self._character_policy()
+
+    def computer_link_status(self):
+        return {'enabled': bool(self.computer_link and self.computer_link.enabled()
+                                and getattr(self.phone, 'real', False)),
+                'registered': bool(self.computer_tools),
+                'worker_tools': [t['name'] for t in self.computer_tools]}
+
+    def _conversation_tools(self):
+        return CONVERSATION_TOOLS + ([tool('computer_task',
+            'Run the requested goal on the computer through the paired phone Computer Link. '
+            'The owner must grant Allow Rose; use a full goal and constraints.', goal='string')]
+            if self.computer_tools else [])
 
     def _character_policy(self):
         if self.life is not None and hasattr(self.life, 'context'):
@@ -196,7 +213,9 @@ class CodexConductor:
     def start(self):
         self._worker.start()
         try:
-            self._open(self.sessions['conversation'], self._policy(), CONVERSATION_TOOLS)
+            if self.computer_link_status()['enabled']:
+                self.computer_tools = self.client.request('computer_catalog', 'conversation')['tools']
+            self._open(self.sessions['conversation'], self._policy(), self._conversation_tools())
         except Exception as exc:
             code = str(exc) if str(exc) in {'chatgpt_login_required', 'model_unavailable', 'fast_unavailable', 'model_mode_mismatch'} else 'codex_start_failed'
             self.log(self.sessions['conversation'], 'failure', reason=code)
@@ -334,6 +353,48 @@ class CodexConductor:
         self._background(self._start_phone, s)
         return task
 
+    def start_computer(self, goal):
+        from .tasks import Task
+        if not self.computer_tools or not self.computer_link_status()['enabled']:
+            raise PhoneTaskError('computer_link_disabled', 'Computer Link is disabled on this server.')
+        if not isinstance(goal, str) or not goal.strip() or len(goal)>6000:
+            raise PhoneTaskError('invalid_computer_goal', 'Provide a computer goal of at most 6000 characters.')
+        if not getattr(self.phone.link, 'authenticated', False):
+            raise PhoneTaskError('computer_phone_offline', 'Connect the paired phone to Rose before using Computer Link.')
+        with self._session_lock:
+            with self._lock:
+                if self._stopped.is_set():
+                    raise PhoneTaskError('stopped', 'Rose is stopping.')
+                existing = next((s for s in self.sessions.values() if s.computer and not s.closed), None)
+                if existing:
+                    if existing.cancelled.is_set():
+                        raise PhoneTaskError('computer_stopping', 'Wait for the computer task to stop.')
+                    return self.update(existing.task.id, goal)
+                tid = next(self._ids)
+                task = Task(tid, 'phone', goal)
+                session = Session(f'computer-{tid}', task=task, app='Computer Link',
+                                  conversation=self.conversation, computer=True)
+                self.sessions[session.name], self.tasks[tid] = session, task
+            self._task_event(session)
+            self._background(self._start_computer, session)
+            return task
+
+    def _start_computer(self, s):
+        from .computer_link import ComputerSession, WORKER_POLICY
+        from .vision_phone import vision_tools
+        try:
+            with s.submit_lock:
+                if s.cancelled.is_set() or not self.computer_link_status()['enabled']:
+                    raise PhoneTaskError('computer_link_disabled', 'Computer Link was stopped or disabled.')
+                s.view = ComputerSession(self.phone, self.client, s.name, self.computer_link, s.cancelled)
+                s.task.detail = 'Preparing Computer Link; the owner must allow control on the phone.'
+                self._task_event(s)
+                self._open(s, self._policy() + '\n' + WORKER_POLICY,
+                           self.computer_tools + [vision_tools()[-1]])
+                self._submit(s, s.task.goal)
+        except Exception as exc:
+            self._failed(s, exc)
+
     def _start_phone(self, s):
         from .tasks import phone_tools, _Run, REAL_PHONE_SYSTEM, DIRECT
         try:
@@ -469,7 +530,8 @@ class CodexConductor:
                 if s.view:
                     ws = getattr(s.view, 'workspace', None)
                     result = ws.close('workspace reuse' if preserve_task else 'owner stop') if ws else {'status': 'closed'}
-                    self.phone.close_session(s.name)
+                    if not s.computer:
+                        self.phone.close_session(s.name)
                     self.log(s, 'workspace_stop', result=result)
                     if result.get('status') not in {'stopped','closed','idle','no_background_app','stale_session'}:
                         raise RuntimeError('Workspace stop unconfirmed')
@@ -519,7 +581,7 @@ class CodexConductor:
         data.update(contract=1, server=s.conversation if s else self.conversation, workspace=binding,
                     activity={'version': 1, 'sample': time.monotonic_ns() // 1000000,
                               'executing': bool(s and s.busy and s.turn and task.status == 'running'
-                                                and task.background and (s.origin != 'autonomous' or binding))})
+                                                and (s.computer or task.background) and (s.origin != 'autonomous' or binding))})
         return redact(data)
 
     def _task_event(self, s):
@@ -829,10 +891,12 @@ class CodexConductor:
         content = [{'type': 'inputText', 'text': json.dumps(redact(result))}]
         if image is not None and not s.cancelled.is_set():
             image = image.copy()  # preserve the phone's cached observation dimensions
-            image.thumbnail((768, 768))
+            if not s.computer:
+                image.thumbnail((768, 768))
             out = io.BytesIO()
-            image.save(out, format='PNG')
-            content.append({'type': 'inputImage', 'imageUrl': 'data:image/png;base64,' + base64.b64encode(out.getvalue()).decode()})
+            encoding = 'JPEG' if s.computer else 'PNG'
+            image.save(out, format=encoding)
+            content.append({'type': 'inputImage', 'imageUrl': 'data:image/'+encoding.lower()+';base64,' + base64.b64encode(out.getvalue()).decode()})
         try:
             self.client.send({'op': 'tool_result', 'callId': e['callId'],
                               'result': {'success': bool(result.get('ok', True)), 'contentItems': content}})
@@ -944,6 +1008,10 @@ class CodexConductor:
         if name == 'rosie_life':
             return (self.life.call(a) if self.life is not None else
                     {'ok': False, 'reason': 'life_not_configured'}), None
+        if name == 'computer_task':
+            task = self.start_computer(a.get('goal'))
+            self._workspace_attach(page, task)
+            return {'ok': True, 'task_id': task.id, 'status': task.status}, None
         if name == 'phone_task':
             task = self.start_phone(str(a['app']), str(a['goal']))
             self._workspace_attach(page, task)
@@ -991,6 +1059,8 @@ class CodexConductor:
         return {'ok': False, 'reason': 'Unknown tool'}, None
 
     def _app_tool(self, s, name, a):
+        if s.computer:
+            return self._computer_tool(s, name, a)
         if name == 'life_memory' and s.origin == 'autonomous':
             context=self.life.context()
             out={'ok':True,'now':context['now'],'world':context['world'],'content_is_untrusted':True}
@@ -1040,6 +1110,29 @@ class CodexConductor:
         s.task.steps.append({'n': len(s.task.steps)+1, 'actions': [result], 'what': name})
         self._task_event(s)
         return result, image
+
+    def _computer_tool(self, s, name, args):
+        view = s.view
+        if name == 'complete_task':
+            status, summary = args.get('status'), args.get('summary')
+            if status not in ('succeeded','blocked','failed') or not isinstance(summary,str) or not summary.strip():
+                return {'ok': False, 'reason': 'Provide a valid outcome and observed summary.'}, None
+            if status == 'succeeded' and (not self.computer_link_status()['enabled'] or view.image is None
+                    or not view.frame_id or time.monotonic()-view.frame_at>120 or not s.task.steps
+                    or s.task.steps[-1]['what'] != 'computer_screenshot'
+                    or not s.task.steps[-1]['actions'][0].get('ok')):
+                return {'ok': False, 'reason': 'Take a fresh screenshot and verify the result before reporting success.'}, None
+            s.outcome = {'status': status, 'summary': summary.strip()}
+            return {'ok': True, 'outcome': s.outcome}, None
+        if len(s.task.steps)>=200 or time.monotonic()-s.started>=600:
+            return {'ok': False, 'reason': 'Computer task budget reached; checkpoint progress.'}, None
+        s.outcome = None
+        s.task.detail = 'Checking the computer.' if name == 'computer_screenshot' else 'Working through Computer Link.'
+        self._task_event(s)
+        result = view.execute(name, args)
+        s.task.steps.append({'n': len(s.task.steps)+1, 'actions': [result], 'what': name})
+        self._task_event(s)
+        return result, view.image if name == 'computer_screenshot' else None
 
     def _vision_tool(self, s, name, a):
         view = s.view
@@ -1186,7 +1279,7 @@ class CodexConductor:
                 self._copy_outcomes = waiting
             self.identity.offered = None  # the new conversation was offered no voice
             s = self.sessions['conversation'] = Session('conversation', conversation=self.conversation)
-            self._open(s, self._policy(), CONVERSATION_TOOLS)
+            self._open(s, self._policy(), self._conversation_tools())
             self.bus.emit('reset')
 
     def stop(self):

@@ -977,6 +977,7 @@ class Server:
                 self.identity.loaded(getattr(self.speaker, 'voice', None) or self.voice)
             if codex:
                 from .codex_conductor import CodexConductor
+                from .computer_link import ComputerLinkConfig
                 from .life_world import WorldStore, WorldLife
                 from .remote import config_dir
                 try:
@@ -986,7 +987,7 @@ class Server:
                     life = None
                     self.bus.emit('error', message="Character memory is unavailable; background life is disabled.")
                 self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts,
-                                                identity=self.identity, life=life)
+                                                identity=self.identity, life=life, computer_link=ComputerLinkConfig(config_dir()))
                 self.tasks = self.conductor
             else:
                 self.tasks = TaskManager(rt, self.task_brain, self.phone, self.bus, on_done=self._on_task_done)
@@ -1117,7 +1118,9 @@ class Server:
                 "metrics": list(getattr(self.conductor, "turn_metrics", []))[-50:],
                 "stats": self.stats(),
                 "conversation_id": getattr(self.conductor, 'conversation', None),
-                "model": getattr(self.conductor, 'model', None)}
+                "model": getattr(self.conductor, 'model', None),
+                "computer_link": (self.conductor.computer_link_status()
+                                  if hasattr(self.conductor, "computer_link_status") else {"enabled": False, "registered": False})}
 
     # ------------------------------------------------------------- actions
     async def say(self, text: str, typed: bool = False) -> tuple[dict, int]:
