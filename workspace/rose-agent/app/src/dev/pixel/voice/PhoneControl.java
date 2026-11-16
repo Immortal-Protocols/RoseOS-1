@@ -70,6 +70,7 @@ final class PhoneControl {
   if(action.equals("visualization_set"))return VisualStore.set(context,command.opt("visual"));
   if(action.equals("visualization_clear"))return VisualStore.clear(context);
   if(action.equals("visualization_status"))return VisualStore.status(context);
+  if(ComputerLink.handles(action))return ComputerLink.execute(context,command);
   if(action.equals("screenshot"))return ScreenCapture.capture(context,command.optBoolean("visualOnly",false));
   if(action.equals("screen_gesture"))return ScreenGesture.execute(context,command);
   if(action.equals("diagnostics"))return PhoneDiagnostics.read(context);

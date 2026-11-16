@@ -17,12 +17,12 @@ function fixture(reply=()=>({status:'action_accepted'})){
 
 test('every tool has a closed schema and a computer_ action',()=>{
  const definitions=computerToolDefinitions();
- assert.deepEqual(definitions.map(t=>t.name),['computer_status','computer_screenshot','computer_move','computer_click','computer_drag','computer_scroll','computer_type','computer_key']);
+ assert.deepEqual(definitions.map(t=>t.name),['computer_status','computer_open','computer_screenshot','computer_move','computer_click','computer_drag','computer_scroll','computer_type','computer_key']);
  for(const t of definitions){
   assert.equal(t.inputSchema.additionalProperties,false);
   for(const key of t.inputSchema.required)assert.ok(t.inputSchema.properties[key],t.name+'.'+key);
   // Every input is tied to the frame it was chosen from.
-  if(!['computer_status','computer_screenshot'].includes(t.name))assert.ok(t.inputSchema.required.includes('frameId'),t.name);
+  if(!['computer_status','computer_open','computer_screenshot'].includes(t.name))assert.ok(t.inputSchema.required.includes('frameId'),t.name);
  }
 });
 
@@ -35,7 +35,7 @@ test('a click is forwarded with its frame and reported as accepted, not verified
 });
 
 test('a refused or stale action is not a success',async()=>{
- for(const status of ['stale_frame','no_session','no_signal','stopped','error']){
+ for(const status of ['stale_frame','not_open','not_allowed','not_calibrated','no_connection','locked','out_of_frame','unsupported_character','send_failed','task_stopped','uncertain','error']){
   const f=fixture(()=>({status}));
   assert.equal((await f.call('computer_type',{frameId:'f1',text:'hello'})).success,false,status);
  }
@@ -54,7 +54,7 @@ test('invalid calls never reach the phone',async()=>{
   ['computer_click',{frameId:'f1',x:1,y:2,command:'rm'}],
   ['computer_drag',{frameId:'f1',points:[1,2,3]}],
   ['computer_scroll',{frameId:'f1',x:1,y:2,direction:'sideways'}],
-  ['computer_type',{frameId:'f1',text:'x'.repeat(4001)}],
+  ['computer_type',{frameId:'f1',text:'x'.repeat(501)}],
   ['computer_key',{frameId:'f1',keys:[]}],
   ['computer_key',{frameId:'f1',keys:['cmd','power']}],
   ['computer_key',{frameId:'f1',keys:'enter'}],
@@ -100,9 +100,57 @@ test('only the most recent frames are retained',async()=>{
  assert.equal(fs.readdirSync(f.directory).length,8);
 });
 
-test('a screenshot with no signal passes the phone\'s status through',async()=>{
- const f=fixture(()=>({status:'no_signal'}));
+test('a refused screenshot passes the phone\'s status through',async()=>{
+ const f=fixture(()=>({status:'not_calibrated',actionExecuted:false}));
  const out=await f.call('computer_screenshot',{});
  assert.equal(out.success,false);
- assert.deepEqual(JSON.parse(out.contentItems[0].text),{status:'no_signal'});
+ assert.deepEqual(JSON.parse(out.contentItems[0].text),{status:'not_calibrated',actionExecuted:false});
+});
+
+test('opening the screen is reported as a launch request, never as control',async()=>{
+ const f=fixture(()=>({status:'launch_requested',note:'The owner must tap Allow Rose on the phone before any input is sent.'}));
+ const out=await f.call('computer_open',{});
+ assert.deepEqual(f.sent,[{action:'computer_open'}]);
+ assert.equal(out.success,true);
+ assert.match(JSON.parse(out.contentItems[0].text).note,/Allow Rose/);
+});
+
+// server.mjs's own Computer Link wiring, sliced from the source and run with fake Stop, origin and phone.
+test('server wiring: opt-in, task-bound, honours Stop, and never routes to a background display',async()=>{
+ const vm=await import('node:vm');
+ const server=fs.readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
+ const start=server.indexOf('let computerLinkEnabled=false;'),end=server.indexOf('const htmlTools=createTaskHtmlTools(');
+ assert.ok(start>0&&end>start);
+ assert.match(server,/\.\.\.\(computerLinkEnabled\?computerTools\.definitions\(\):\[\]\)/,'tools offered only when enabled');
+ assert.match(server,/if\(computerLinkEnabled&&computerTools\.names\.has\(request\.tool\)\)return computerTools\.handleToolCall\(request\);/);
+ const run=({enabled,artemis=false,origin={taskId:'t1'},stopped=false})=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'computer-link-'));
+  if(enabled!==undefined)fs.writeFileSync(path.join(dir,'computer-link.json'),JSON.stringify({enabled}));
+  const sent=[];
+  const ctx={fs,priv:dir,artemisEnabled:artemis,createComputerTools,Error,JSON,
+   phoneOrigin:{getStore:()=>origin},
+   taskStop:{authorize:({taskId})=>taskId==='t1'?null:{status:'stale_task'},guard:()=>stopped?{status:'task_stopped',actionExecuted:false}:null},
+   rawFastPhone:async data=>{sent.push(data);return {status:'action_accepted'};},
+   backgroundPhone:{execute:()=>{throw Error('must not route to a background display');}}};
+  vm.runInNewContext(server.slice(start,end)+';globalThis.out={computerLinkEnabled,computerTools};',ctx);
+  return {...ctx.out,sent};
+ };
+ assert.equal(run({}).computerLinkEnabled,false,'off without the file');
+ assert.equal(run({enabled:false}).computerLinkEnabled,false);
+ assert.equal(run({enabled:true,artemis:true}).computerLinkEnabled,false,'never with the ARTEMIS trial');
+ const on=run({enabled:true});
+ assert.equal(on.computerLinkEnabled,true);
+ const click={tool:'computer_click',arguments:{frameId:'f1',x:1,y:2}};
+ assert.equal((await on.computerTools.handleToolCall(click)).success,true);
+ assert.deepEqual(JSON.parse(JSON.stringify(on.sent)),[{frameId:'f1',x:1,y:2,action:'computer_click'}]);
+ for(const origin of [{nonTask:true},{legacyRead:true},{taskId:'other'}]){
+  const r=run({enabled:true,origin});
+  assert.equal((await r.computerTools.handleToolCall(click)).success,false,JSON.stringify(origin));
+  assert.deepEqual(r.sent,[]);
+ }
+ const stopped=run({enabled:true,stopped:true});
+ const out=await stopped.computerTools.handleToolCall(click);
+ assert.equal(out.success,false);
+ assert.equal(JSON.parse(out.contentItems[0].text).status,'task_stopped');
+ assert.deepEqual(stopped.sent,[]);
 });
