@@ -42,6 +42,21 @@ export function computerToolDefinitions(){
   inputSchema:{type:'object',properties,required,additionalProperties:false}}));
 }
 
+// Shared by the Node backend and the Python voice bridge. Validation never performs an action.
+export function computerCommand(name,args={}){
+ const spec=specs.find(([tool])=>tool===name);
+ if(!spec)throw Error('Unknown computer tool');
+ const definition=computerToolDefinitions().find(tool=>tool.name===name).inputSchema;
+ if(!args||typeof args!=='object'||Array.isArray(args))throw Error('Arguments must be an object');
+ for(const key of definition.required)if(!(key in args))throw Error('Missing argument: '+key);
+ for(const [key,value] of Object.entries(args)){
+  if(!definition.properties[key])throw Error('Unknown argument: '+key);
+  validate(value,definition.properties[key],key);
+ }
+ if(name==='computer_type'&&!/^[\x20-\x7e\t\n]*$/.test(args.text))throw Error('Only printable ASCII, tab and newline are supported');
+ return {...args,action:spec[1]};
+}
+
 function validate(value,schema,key){
  if(schema.type==='string'&&(typeof value!=='string'||schema.maxLength!==undefined&&value.length>schema.maxLength))throw Error('Invalid argument: '+key);
  if(schema.type==='integer'&&(!Number.isInteger(value)||value<schema.minimum||value>schema.maximum))throw Error('Invalid argument: '+key);
@@ -79,18 +94,9 @@ function storeFrame(result,directory){
 // phone: the request-bound phone function (server.mjs fastPhone), which applies origin and Stop.
 export function createComputerTools({phone,directory=defaultDirectory}){
  const routes=new Map(specs.map(([name,action])=>[name,action]));
- const schemas=new Map(computerToolDefinitions().map(t=>[t.name,t.inputSchema]));
  async function handleToolCall(request){
   const action=routes.get(request.tool);if(!action)throw Error('Unknown computer tool');
-  const definition=schemas.get(request.tool);
-  const args=request.arguments??{};
-  if(typeof args!=='object'||Array.isArray(args))throw Error('Arguments must be an object');
-  for(const key of definition.required)if(!(key in args))throw Error('Missing argument: '+key);
-  for(const [key,value] of Object.entries(args)){
-   if(!definition.properties[key])throw Error('Unknown argument: '+key);
-   validate(value,definition.properties[key],key);
-  }
-  let result=await phone({...args,action});
+  let result=await phone(computerCommand(request.tool,request.arguments??{}));
   if(action==='computer_screenshot'&&result&&typeof result==='object')result=storeFrame(result,directory);
   return {success:executed.has(result?.status)&&result?.actionExecuted!==false,contentItems:[{type:'inputText',text:JSON.stringify(result)}]};
  }

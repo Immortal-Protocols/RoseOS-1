@@ -106,6 +106,10 @@ class PhoneLink:
     def connected(self) -> bool:
         return self._ws is not None
 
+    @property
+    def authenticated(self) -> bool:
+        return self.connected and self._authenticated
+
     async def serve(self, ws: Any, authenticated: bool = False) -> None:
         """Serve one phone connection; the newest wins, except that an unauthenticated (USB)
         connection never replaces an authenticated (paired, remote) one."""
@@ -149,8 +153,10 @@ class PhoneLink:
                     fut.set_result({"status": "disconnected", "message": "The phone disconnected."})
             self._changed()
 
-    def call(self, action: str, timeout: float = CALL_TIMEOUT_S, **args: Any) -> dict:
+    def call(self, action: str, timeout: float = CALL_TIMEOUT_S, *, paired_only: bool = False, **args: Any) -> dict:
         with self._lock:
+            if paired_only and not self._authenticated:
+                return {'status': 'unpaired', 'message': 'Connect the paired phone to Rose.'}
             ws, loop = self._ws, self._loop
             if ws is None or loop is None:
                 return {"status": "offline",
