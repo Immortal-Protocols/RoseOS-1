@@ -44,7 +44,9 @@ coordinates are pixels of that frame.
   actions. They go straight to the phone, never to a background workspace display.
 - **The owner's Allow:** nothing runs unless the Computer Link screen is open and in front and
   the owner tapped **Allow Rose**. Leaving the screen, locking the phone or tapping **Stop**
-  withdraws it. `computer_open` only brings the screen forward.
+  withdraws it. Every HID report rechecks that permission; Stop invalidates in-flight work even
+  if Allow is tapped again. An interrupted capture is discarded. `computer_open` only brings
+  the screen forward.
 - **One frame per input:** every input names the latest `frameId`. Each input except a pointer
   move uses that frame up, and a frame expires after 2 minutes, so each step is chosen from a
   fresh look at the screen.
@@ -78,7 +80,7 @@ Verified, offline only:
 
 - Rose Agent's Java sources, including these files, compile against Android API 35.
 - `ComputerLinkTest`: HID descriptor structure, US key map, pointer axis mapping and corner
-  geometry.
+  geometry, Stop/re-allow revocation, and lock/foreground revocation.
 - `computer-tools.test.mjs`: tool schemas, argument refusal, the frame-file handling, and the
   server's opt-in, task and Stop wiring.
 

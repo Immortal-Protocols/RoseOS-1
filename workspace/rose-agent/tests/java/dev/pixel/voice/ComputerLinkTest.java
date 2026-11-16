@@ -5,8 +5,21 @@ import java.util.Arrays;
 /** Computer Link HID reports, US key map and frame geometry (docs/COMPUTER-LINK.md). No device needed. */
 public final class ComputerLinkTest {
  public static void main(String[] args){
-  descriptor();keys();pointer();geometry();
+  descriptor();keys();pointer();geometry();revocation();
   System.out.println("PASS: Computer Link HID descriptor, US key map, absolute pointer and frame geometry");
+ }
+
+ static void revocation(){
+  ComputerLinkGate gate=new ComputerLinkGate();
+  check(!gate.valid(gate.token(),true),"starts denied");
+  gate.allow();long typing=gate.token();
+  check(gate.valid(typing,true),"allowed first report");
+  gate.stop();check(!gate.valid(typing,true),"Stop blocks next report/capture completion");
+  gate.allow();check(!gate.valid(typing,true),"Allow cannot revive interrupted work");
+  long drag=gate.token();check(gate.valid(drag,true),"new work allowed");
+  check(!gate.valid(drag,false),"lock or background blocks report");
+  check(!gate.valid(drag,true),"unlock alone cannot resume work");
+  gate.allow();check(gate.valid(gate.token(),true),"fresh explicit Allow works");
  }
 
  static void descriptor(){

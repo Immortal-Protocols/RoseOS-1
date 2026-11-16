@@ -99,7 +99,14 @@ final class ComputerBluetooth {
   return "Connected to "+(name==null?"computer":name);
  }
 
- boolean send(int id,byte[] data){
+ boolean send(long token,int id,byte[] data){
+  synchronized(ComputerLink.gate){
+   if(!ComputerLink.permitted(context,token))return false;
+   return rawSend(id,data);
+  }
+ }
+
+ private boolean rawSend(int id,byte[] data){
   BluetoothHidDevice h=hid;BluetoothDevice d=host;
   if(h==null||d==null)return false;
   try{return h.sendReport(d,id,data);}catch(SecurityException e){return false;}
@@ -107,16 +114,20 @@ final class ComputerBluetooth {
 
  private volatile int lastX=-1,lastY=-1;
 
- boolean pointer(int buttons,int x,int y,int wheel,int pan){
-  lastX=x;lastY=y;
-  return send(ComputerHid.POINTER_ID,ComputerHid.pointer(buttons,x,y,wheel,pan));
+ boolean pointer(long token,int buttons,int x,int y,int wheel,int pan){
+  synchronized(ComputerLink.gate){
+   if(!ComputerLink.permitted(context,token))return false;
+   boolean sent=rawSend(ComputerHid.POINTER_ID,ComputerHid.pointer(buttons,x,y,wheel,pan));
+   if(sent){lastX=x;lastY=y;}
+   return sent;
+  }
  }
 
  /** Lift every key and button where the pointer already is. Safe to call at any time. */
- void releaseAll(){
-  send(ComputerHid.KEYBOARD_ID,ComputerHid.keyboard(0));
-  if(lastX>=0)send(ComputerHid.POINTER_ID,ComputerHid.pointer(0,lastX,lastY,0,0));
- }
+ void releaseAll(){synchronized(ComputerLink.gate){
+  rawSend(ComputerHid.KEYBOARD_ID,ComputerHid.keyboard(0));
+  if(lastX>=0)rawSend(ComputerHid.POINTER_ID,ComputerHid.pointer(0,lastX,lastY,0,0));
+ }}
 
  void stop(){
   BluetoothHidDevice h=hid;

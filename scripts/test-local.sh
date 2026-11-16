@@ -540,6 +540,6 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
 java -cp "$JAVA_TESTS/Button" dev.pixel.voice.ButtonTest
 # Computer Link HID reports, US key map and screen-frame geometry.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -encoding UTF-8 -d "$JAVA_TESTS/ComputerLink" \
- workspace/rose-agent/app/src/dev/pixel/voice/ComputerHid.java workspace/rose-agent/app/src/dev/pixel/voice/ComputerGeometry.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/ComputerHid.java workspace/rose-agent/app/src/dev/pixel/voice/ComputerGeometry.java workspace/rose-agent/app/src/dev/pixel/voice/ComputerLinkGate.java \
  workspace/rose-agent/tests/java/dev/pixel/voice/ComputerLinkTest.java
 java -cp "$JAVA_TESTS/ComputerLink" dev.pixel.voice.ComputerLinkTest

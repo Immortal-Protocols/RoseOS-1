@@ -154,7 +154,7 @@ public final class ComputerLinkActivity extends Activity {
 
  private void refresh(){
   if(status==null)return;
-  boolean allowed=ComputerLink.allowed&&ComputerLink.screen==this;
+  boolean allowed=ComputerLink.gate.allowed()&&ComputerLink.screen==this;
   allow.setText(allowed?"Rose allowed":"Allow Rose");
   allow.setBackground(new ColorDrawable(allowed?0xFF2E7D4F:0xFF3A3A44));allow.setTextColor(0xFFFFFFFF);
   String corners=external?"Capture card":calibrated()?"Camera, screen corners set":"Set the screen corners first";
@@ -163,9 +163,9 @@ public final class ComputerLinkActivity extends Activity {
  }
 
  private void toggleAllow(){
-  if(ComputerLink.allowed){ComputerLink.stop();refresh();return;}
+  if(ComputerLink.gate.allowed()){ComputerLink.stop();refresh();return;}
   if(!calibrated()){Toast.makeText(this,"Set the screen corners first",Toast.LENGTH_SHORT).show();return;}
-  ComputerLink.allowed=true;refresh();
+  ComputerLink.allow();refresh();
  }
 
  private void discoverable(){
@@ -318,8 +318,9 @@ public final class ComputerLinkActivity extends Activity {
  }
  private int uprightRotation(){return (sensorOrientation-displayDegrees()+360)%360;}
 
- private void openCamera(){
-  if(camera!=null||cameraHandler==null||checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)return;
+ private boolean cameraOpening;
+ private synchronized void openCamera(){
+  if(cameraOpening||camera!=null||cameraHandler==null||checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)return;
   try{
    CameraManager manager=getSystemService(CameraManager.class);
    // Prefer a USB capture card (an external camera) over the back camera pointed at the monitor.
@@ -345,23 +346,32 @@ public final class ComputerLinkActivity extends Activity {
      CompletableFuture<byte[]> waiting=pendingStill;if(waiting!=null)waiting.complete(bytes);
     }
    },cameraHandler);
+   final Handler openedFor=cameraHandler;
+   cameraOpening=true;
    manager.openCamera(chosen,new CameraDevice.StateCallback(){
-    public void onOpened(CameraDevice device){camera=device;startPreview();}
-    public void onDisconnected(CameraDevice device){device.close();camera=null;}
-    public void onError(CameraDevice device,int error){device.close();camera=null;runOnUiThread(()->status.setText("Camera error "+error));}
-   },cameraHandler);
-  }catch(CameraAccessException|SecurityException e){status.setText("Camera unavailable");}
+    public void onOpened(CameraDevice device){synchronized(ComputerLinkActivity.this){
+     if(cameraHandler!=openedFor||ComputerLink.screen!=ComputerLinkActivity.this){device.close();return;}
+     cameraOpening=false;camera=device;startPreview();
+    }}
+    public void onDisconnected(CameraDevice device){synchronized(ComputerLinkActivity.this){
+     device.close();if(camera==device)camera=null;
+     if(cameraHandler==openedFor)cameraOpening=false;
+    }}
+    public void onError(CameraDevice device,int error){onDisconnected(device);runOnUiThread(()->status.setText("Camera error "+error));}
+   },openedFor);
+  }catch(CameraAccessException|SecurityException e){cameraOpening=false;status.setText("Camera unavailable");}
  }
 
- private void startPreview(){
+ private synchronized void startPreview(){
   try{
-   SurfaceTexture texture=preview.getSurfaceTexture();if(texture==null||camera==null)return;
+   SurfaceTexture texture=preview.getSurfaceTexture();if(texture==null||camera==null||reader==null)return;
    texture.setDefaultBufferSize(previewSize.getWidth(),previewSize.getHeight());
    Surface surface=new Surface(texture);
    runOnUiThread(()->transformPreview(preview.getWidth(),preview.getHeight()));
+   final CameraDevice openedCamera=camera;
    camera.createCaptureSession(Arrays.asList(surface,reader.getSurface()),new CameraCaptureSession.StateCallback(){
-    public void onConfigured(CameraCaptureSession s){
-     if(camera==null)return;
+    public void onConfigured(CameraCaptureSession s){synchronized(ComputerLinkActivity.this){
+     if(camera!=openedCamera||ComputerLink.screen!=ComputerLinkActivity.this){s.close();return;}
      session=s;
      try{
       CaptureRequest.Builder b=camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
@@ -369,13 +379,14 @@ public final class ComputerLinkActivity extends Activity {
       b.set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
       s.setRepeatingRequest(b.build(),null,cameraHandler);
      }catch(CameraAccessException|IllegalStateException ignored){}
-    }
+    }}
     public void onConfigureFailed(CameraCaptureSession s){runOnUiThread(()->status.setText("Camera could not start"));}
    },cameraHandler);
   }catch(CameraAccessException|IllegalStateException e){runOnUiThread(()->status.setText("Camera could not start"));}
  }
 
- private void closeCamera(){
+ private synchronized void closeCamera(){
+  cameraOpening=false;
   CompletableFuture<byte[]> waiting=pendingStill;if(waiting!=null)waiting.completeExceptionally(new IllegalStateException("Computer Link closed"));
   if(session!=null){try{session.close();}catch(RuntimeException ignored){}session=null;}
   if(camera!=null){camera.close();camera=null;}
