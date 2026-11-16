@@ -25,6 +25,7 @@ Nothing is installed on the Mac. This is source and offline-test status only. Se
 | Bluetooth keyboard/pointer registration and reconnect | `.../ComputerBluetooth.java` |
 | HID descriptor, US key map, pointer reports (pure Java) | `.../ComputerHid.java` |
 | Straightened frame size from the corners (pure Java) | `.../ComputerGeometry.java` |
+| Python voice task and opt-in | `prototypes/voice-phone-demo/rose/computer_link.py`, `rose/codex_conductor.py` |
 | Registered tools for the task worker | `workspace/rose-agent/server/computer-tools.mjs`, wired in `server.mjs` |
 
 ## Tools
@@ -32,14 +33,24 @@ Nothing is installed on the Mac. This is source and offline-test status only. Se
 `computer_status`, `computer_open`, `computer_screenshot`, `computer_move`,
 `computer_click`, `computer_drag`, `computer_scroll`, `computer_type`, `computer_key`.
 
-A screenshot returns `frameId`, `width`, `height` and a private `imagePath`. The worker views the
+In the Node backend a screenshot returns `frameId`, `width`, `height` and a private `imagePath`. The worker views the
 image; base64 never enters the transcript, and only the latest 8 frames are kept, mode 0600. Input
-coordinates are pixels of that frame.
+coordinates are pixels of that frame. The Python voice path instead attaches the monitor
+image through its existing Codex image channel, preserving its pixel dimensions; image data
+and paths are not text transcript fields. Its conversation offers `computer_task(goal)`, and
+a separate task worker gets the nine `computer_*` tools plus `complete_task`. It uses the
+same task progress, follow-up and Stop controls as other voice tasks, but allocates no Android
+workspace. Only an authenticated paired-phone link may carry these commands.
 
 ## Rules
 
 - **Opt-in on the server:** the tools are offered only when the server's private directory holds
-  `computer-link.json` containing `{"enabled": true}`, and never with the ARTEMIS trial.
+  `computer-link.json` containing `{"enabled": true}`, and never with the ARTEMIS trial. For the
+  Python voice server (`rose.app --brain codex`), this is `ROSE_CONFIG_DIR` (default
+  `~/.config/rose-local`); the separate Node backend uses `PIXEL_VOICE_CONFIG_DIR`
+  (default `~/.config/pixel-voice`). Restart after enabling to register the tools. The Python
+  path also rechecks the opt-in and either backend's ARTEMIS trial before every call. Missing,
+  unreadable or malformed configuration fails closed; no trial setting is modified.
 - **Task-bound:** calls run only inside the current task and pass the same Stop check as phone
   actions. They go straight to the phone, never to a background workspace display.
 - **The owner's Allow:** nothing runs unless the Computer Link screen is open and in front and
@@ -81,6 +92,10 @@ Verified, offline only:
 - Rose Agent's Java sources, including these files, compile against Android API 35.
 - `ComputerLinkTest`: HID descriptor structure, US key map, pointer axis mapping and corner
   geometry, Stop/re-allow revocation, and lock/foreground revocation.
+- `rose.tests.test_computer_link`: opt-in/ARTEMIS gates, actual bridge schema and validation,
+  paired-only direct transport, screenshot delivery, stale-frame/Stop refusal, and task completion
+  with a synthetic phone and model. `/api/state.computer_link` reports current opt-in and the
+  tools actually loaded from the local bridge; registration is not device acceptance.
 - `computer-tools.test.mjs`: tool schemas, argument refusal, the frame-file handling, and the
   server's opt-in, task and Stop wiring.
 

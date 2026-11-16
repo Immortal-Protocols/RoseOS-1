@@ -1,6 +1,7 @@
 // Private stdio IPC for rose.app. Codex remains the only app-server adapter.
 import {createInterface} from 'node:readline';
 import {Codex} from './codex.mjs';
+import {computerToolDefinitions,computerCommand} from './computer-tools.mjs';
 import {lifeResearchPolicy,publicPageReceipt} from './life-research.mjs';
 import {appBuildPolicy,appBuildCwd,APP_BUILD_ITEMS,APP_BUILD_ITEM_BUDGET} from './app-build.mjs';
 
@@ -15,6 +16,9 @@ const cancelCalls=session=>{
  for(const [id,call] of calls)if(call.session===session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);cancelled(session,id);}
 };
 async function handle(m) {
+ // Pure local contract operations: no Codex session, phone action or model request.
+ if(m.op==='computer_catalog')return {tools:computerToolDefinitions()};
+ if(m.op==='computer_command')return {command:computerCommand(m.tool,m.arguments)};
  if(m.op==='tool_result') {
   const call=calls.get(m.callId);
   if(call){calls.delete(m.callId);clearTimeout(call.timer);call.resolve(m.result);}
