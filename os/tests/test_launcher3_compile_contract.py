@@ -36,7 +36,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '9de2c0ee23b5662c92c458a85bcaee3d35e13548fcb9c4083788b133df808a9c'
+    AGREED_SHA256 = '982efa975e87d88fd6933348c828923642cc36d05ab6dbeb811f5b43401d57d8'
 
     def contract(self):
         import importlib.util
@@ -658,8 +658,9 @@ class Launcher3CompileContractTest(unittest.TestCase):
                     self.assertNotEqual(row['pre']['sha256'], row['post']['sha256'], f'{row["path"]}: pre and post '
                         'are distinguishable, so mixed state is always detectable')
         required = [o['target'] for o in manifest['overlays'] if o['role'] == 'required']
-        # Eleven, then 1E's RoseTheme.java, RoseThemeSetting.java and the Glacier field (drawable-nodpi).
-        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 14)
+        # Eleven, then 1E's RoseTheme.java, RoseThemeSetting.java and the Glacier field (drawable-nodpi), then the
+        # raised tray's RoseEdgeEntry.java (ccde9a3d) and RoseBackgroundActivity.java (f8ef14cb).
+        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 16)
         self.assertEqual(len([t for t in required if t.startswith('build/release/')]), 4)
         self.assertNotIn('Agent.apk', ' '.join(o['target'] for o in manifest['overlays']))
 

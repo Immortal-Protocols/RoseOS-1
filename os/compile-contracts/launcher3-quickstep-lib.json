@@ -1082,7 +1082,7 @@
     },
     {
      "name": "rose-edge-resize-launcher3.patch",
-     "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
+     "sha256": "279dfa179ecb4cf920286dbaaa3173f7db035f9b5cc009e190b1f2c06282ca0f"
     }
    ],
    "files": [
@@ -1426,17 +1426,17 @@
       "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
      },
      "post": {
-      "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
-      "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
+      "sha256": "d5dbd1bf9250076921db1cbcba966eb7ee3b0b5ab5edef924c40b7fd29f13e0e",
+      "gitBlob": "0725fd7cad9f9d10f46e60f122397dc1de3d08e5"
      },
      "chain": [
       {
        "patch": "rose-edge-resize-launcher3.patch",
        "before": "256c991afb42d068a1d5f4520ea003f845a5c6f3",
-       "after": "e75c0302ed42eb5d12c3cf356097dfff88477106",
+       "after": "0725fd7cad9f9d10f46e60f122397dc1de3d08e5",
        "index": [
         "256c991",
-        "e75c030"
+        "0725fd7"
        ],
        "base": "exact"
       }
@@ -1475,6 +1475,8 @@
       "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
       "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
       "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseBackgroundActivity.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeEntry.java",
       "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
       "quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
       "quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
@@ -1725,6 +1727,16 @@
    "role": "required"
   },
   {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseBackgroundActivity.java",
+   "sha256": "d175bc5e9ce9143f13a0276fe2a176edc056ecf4a4dad07de7d55680ab32e0d6",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeEntry.java",
+   "sha256": "ab0734b132e392860f3fd52333a2d505257d4b7a834ebdd3d0f4d5d0a88bcc8e",
+   "role": "required"
+  },
+  {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
    "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5",
    "role": "required"
@@ -1751,7 +1763,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-   "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237",
+   "sha256": "ae883ae065f21fb5f84a5892d699931d5741484c48719880cb736038361b076d",
    "role": "required"
   },
   {
@@ -1852,7 +1864,7 @@
     {
      "project": "packages/apps/Launcher3",
      "name": "rose-edge-resize-launcher3.patch",
-     "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
+     "sha256": "279dfa179ecb4cf920286dbaaa3173f7db035f9b5cc009e190b1f2c06282ca0f"
     },
     {
      "project": "build/release",
@@ -1894,6 +1906,14 @@
      "sha256": "8b8ea1575815ff6cc4f1dca736584c57fb524e5c0e94a81b91d20bc59f9a0ef4"
     },
     {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseBackgroundActivity.java",
+     "sha256": "d175bc5e9ce9143f13a0276fe2a176edc056ecf4a4dad07de7d55680ab32e0d6"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeEntry.java",
+     "sha256": "ab0734b132e392860f3fd52333a2d505257d4b7a834ebdd3d0f4d5d0a88bcc8e"
+    },
+    {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
      "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5"
     },
@@ -1915,7 +1935,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-     "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237"
+     "sha256": "ae883ae065f21fb5f84a5892d699931d5741484c48719880cb736038361b076d"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
@@ -2967,7 +2987,7 @@
      },
      {
       "name": "rose-edge-resize-launcher3.patch",
-      "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
+      "sha256": "279dfa179ecb4cf920286dbaaa3173f7db035f9b5cc009e190b1f2c06282ca0f"
      }
     ],
     "files": [
@@ -3311,17 +3331,17 @@
        "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
       },
       "post": {
-       "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
-       "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
+       "sha256": "d5dbd1bf9250076921db1cbcba966eb7ee3b0b5ab5edef924c40b7fd29f13e0e",
+       "gitBlob": "0725fd7cad9f9d10f46e60f122397dc1de3d08e5"
       },
       "chain": [
        {
         "patch": "rose-edge-resize-launcher3.patch",
         "before": "256c991afb42d068a1d5f4520ea003f845a5c6f3",
-        "after": "e75c0302ed42eb5d12c3cf356097dfff88477106",
+        "after": "0725fd7cad9f9d10f46e60f122397dc1de3d08e5",
         "index": [
          "256c991",
-         "e75c030"
+         "0725fd7"
         ],
         "base": "exact"
        }
@@ -3360,6 +3380,8 @@
        "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
        "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
        "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseBackgroundActivity.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeEntry.java",
        "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
        "quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
        "quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
@@ -3610,6 +3632,16 @@
     "role": "required"
    },
    {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseBackgroundActivity.java",
+    "sha256": "d175bc5e9ce9143f13a0276fe2a176edc056ecf4a4dad07de7d55680ab32e0d6",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeEntry.java",
+    "sha256": "ab0734b132e392860f3fd52333a2d505257d4b7a834ebdd3d0f4d5d0a88bcc8e",
+    "role": "required"
+   },
+   {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
     "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5",
     "role": "required"
@@ -3636,7 +3668,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-    "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237",
+    "sha256": "ae883ae065f21fb5f84a5892d699931d5741484c48719880cb736038361b076d",
     "role": "required"
    },
    {
@@ -3683,7 +3715,7 @@
    "patcher": {
     "patcher": "trusted",
     "sha256": {
-     "apply-os-changes.py": "6b7b11c32f4c533483dfa70b367cbe56aa7ab1db0ba36dcd10592ca4ea42cc6d",
+     "apply-os-changes.py": "45da83a4ea15294dfc60f72a086c4d9b5c9fa207a1b6afb47c57cdb215d623b7",
      "background_apks.py": "af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb",
      "integration_copy.py": "440574cbd3144571f647fc13f17c6c1188b1c61d12ef92a7028fba7eb2a24a05"
     }
@@ -3941,6 +3973,8 @@
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseBackgroundActivity.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeEntry.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",

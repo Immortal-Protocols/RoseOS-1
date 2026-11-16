@@ -67,7 +67,7 @@ SCHEMA = 3
 PATCHER = ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py')
 PATCHER_COPY = ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'
 PATCHER_SHA256 = {
-    'apply-os-changes.py': '6b7b11c32f4c533483dfa70b367cbe56aa7ab1db0ba36dcd10592ca4ea42cc6d',
+    'apply-os-changes.py': '45da83a4ea15294dfc60f72a086c4d9b5c9fa207a1b6afb47c57cdb215d623b7',
     'background_apks.py': 'af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb',
     'integration_copy.py': '440574cbd3144571f647fc13f17c6c1188b1c61d12ef92a7028fba7eb2a24a05',
 }
