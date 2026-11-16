@@ -90,6 +90,7 @@ import {macAccountAlternatives} from './device-preference.mjs';
 import {requestAppContext} from './phone-app-context.mjs';
 import {createEnvironmentTools,environmentToolDefinitions,environmentToolPolicy} from './environment-tools.mjs';
 import {createPhoneUiTools,phoneUiToolDefinitions} from './phone-ui-tools.mjs';
+import {createComputerTools} from './computer-tools.mjs';
 import {voiceRequestContext,voiceRequestMessages} from './voice-request-context.mjs';
 import {roomService} from './room.mjs';
 import {musicService} from './music.mjs';
@@ -327,14 +328,21 @@ const modelTools=createModelTools({available:model=>codex.modelAvailable(model),
 const environmentTools=createEnvironmentTools({phone:fastPhone});
 // With the visual-verification trial, the existing generic UI set passes its display-aware gate, as the shell path did.
 const phoneUiTools=createPhoneUiTools({phone:data=>visualTrial&&busy&&genericUiActions.has(data.action)?visualGuard.execute(data):fastPhone(data),background:()=>backgroundEnabled});
+// Computer Link (docs/COMPUTER-LINK.md), opt-in with {"enabled":true} in computer-link.json. Its actions name the
+// computer the phone is linked to, never a phone display: past the request and Stop checks they go straight to the phone.
+let computerLinkEnabled=false;
+try{computerLinkEnabled=JSON.parse(fs.readFileSync(priv+'/computer-link.json','utf8')).enabled===true;}catch(error){if(error.code!=='ENOENT')throw error;}
+computerLinkEnabled=computerLinkEnabled&&!artemisEnabled;
+const computerTools=createComputerTools({phone:tagged=>{const {taskId:tag,...data}=tagged;const origin=phoneOrigin.getStore();if(origin?.legacyRead||origin?.nonTask)return {status:'refused',actionExecuted:false,reason:'Computer Link runs only inside a task.'};const stopped=taskStop.authorize({taskId:tag??origin?.taskId,required:true})||taskStop.guard(data);if(stopped)return stopped;return rawFastPhone(data);}});
 const htmlTools=createTaskHtmlTools({state:launcherTask,mode:()=>taskWidgets.mode(),record:data=>capture.record('task.html',data,captureContext())});
 const catalog=!artemisEnabled&&appToolsConfig?await phoneOrigin.run(NON_TASK,()=>loadAppToolCatalog({phone:fastPhone,packages:appToolsConfig.packages,catalogs:appToolsConfig.catalogs,adapters:appAdapters,requestContext:()=>({requestId:String(taskStarted)})})):null;
-Object.assign(appRuntime,{dynamicTools:[webLookupTool,...modelTools.definitions,...htmlTools.definitions,...(artemisEnabled?artemisToolDefinitions:[...environmentTools.definitions,...phoneUiTools.definitions()]),...(catalog?.definitions||[])],appToolPolicy:artemisEnabled?artemisPolicy:catalog?appToolPolicy:undefined,handleToolCall:async request=>{
+Object.assign(appRuntime,{dynamicTools:[webLookupTool,...modelTools.definitions,...htmlTools.definitions,...(artemisEnabled?artemisToolDefinitions:[...environmentTools.definitions,...phoneUiTools.definitions()]),...(computerLinkEnabled?computerTools.definitions():[]),...(catalog?.definitions||[])],appToolPolicy:artemisEnabled?artemisPolicy:catalog?appToolPolicy:undefined,handleToolCall:async request=>{
  if(request.tool==='web_lookup'){const result=await webLookup(client,request.arguments);capture.record('model.web_lookup',{usage:result.usage},captureContext());return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]};}
  if(modelToolDefinitions.some(t=>t.name===request.tool))return modelTools.handleToolCall(request);
  if(request.tool===taskHtmlTool.name)return htmlTools.handleToolCall(request);
  if(artemisEnabled)return artemisTrial.handleToolCall(request);
  if(phoneUiTools.names.has(request.tool))return phoneUiTools.handleToolCall(request);
+ if(computerLinkEnabled&&computerTools.names.has(request.tool))return computerTools.handleToolCall(request);
  if(environmentToolDefinitions.some(t=>t.name===request.tool))return environmentTools.handleToolCall(request);
  if(!catalog)throw Error('Unknown registered tool');
  const started=Date.now();

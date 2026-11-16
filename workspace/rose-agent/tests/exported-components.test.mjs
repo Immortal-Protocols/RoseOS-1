@@ -35,6 +35,9 @@ test('no other exported component without a permission appears unreviewed', () =
  // public entry (launcher/HOME, pairing); adding one, or dropping a permission, must update this list on purpose.
  const open=components.filter(c=>c.exported&&!c.permission).map(c=>`${c.kind} ${c.name}`).sort();
  assert.deepEqual(open,[
+  // Computer Link's launcher icon. Starting it only shows the screen: Rose gets no control until the owner taps
+  // Allow Rose on it, and leaving the screen withdraws that (docs/COMPUTER-LINK.md).
+  'activity .ComputerLinkActivity',
   'activity .LocalRosePairActivity',
   'activity .MainActivity',
   'provider .GlassesPhotoProvider',

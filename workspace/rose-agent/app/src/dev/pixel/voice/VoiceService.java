@@ -434,6 +434,20 @@ public class VoiceService extends Service {
      return new JSONObject().put("status","running").toString();
     }
    }
+   if(ComputerLink.handles(c.optString("action"))){
+    synchronized(VoiceService.this){
+     String existing=saved.getString(id,null);if(existing!=null)return existing;
+     savePhoneResult(saved,id,new JSONObject().put("status","running"));
+     // Computer Link waits for the camera and paces Bluetooth input: one at a time, never on the UI thread.
+     ComputerLink.worker.execute(()->{
+      JSONObject result;
+      try{result=c.optLong("expires")<System.currentTimeMillis()?new JSONObject().put("status","expired"):PhoneControl.execute(VoiceService.this,c);}
+      catch(Exception error){result=new JSONObject();try{result.put("status","uncertain").put("reason","The Computer Link result was not confirmed; take a new screenshot before retrying");}catch(Exception ignored){}}
+      savePhoneResult(saved,id,result);
+     });
+     return new JSONObject().put("status","running").toString();
+    }
+   }
    if("diagnostics".equals(c.optString("action"))||"screenshot".equals(c.optString("action"))){JSONObject result=PhoneControl.execute(VoiceService.this,c);savePhoneResult(saved,id,result);return result.toString();}
    // Claim the id with a durable running receipt before scheduling: a re-query never posts a second action.
    PhoneCommandGate gate=new PhoneCommandGate(new PhoneCommandGate.Receipts(){public String get(String k){return saved.getString(k,null);}public void put(String k,String v){try{savePhoneResult(saved,k,new JSONObject(v));}catch(Exception e){throw new IllegalStateException(e);}}},VoiceService.this);

@@ -38,6 +38,8 @@ node --test workspace/rose-agent/tests/rose-presence.test.mjs workspace/rose-age
 node --test workspace/rose-agent/server/unbound-shell-open.test.mjs
 # APP-BUG-OPEN-002: registered phone navigation and input run as the current request and honour Stop.
 node --test workspace/rose-agent/server/phone-ui-tools.test.mjs
+# Computer Link: tool contract, frame files and the server's opt-in, task and Stop wiring (docs/COMPUTER-LINK.md).
+node --test workspace/rose-agent/server/computer-tools.test.mjs
 node --test \
  workspace/rose-agent/security/device-auth.test.mjs \
  workspace/rose-agent/security/recovery-download.test.mjs \
@@ -536,3 +538,8 @@ python3 workspace/rose-agent/app/tests/tray_return_wire_test.py
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Button" \
  workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java
 java -cp "$JAVA_TESTS/Button" dev.pixel.voice.ButtonTest
+# Computer Link HID reports, US key map and screen-frame geometry.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -encoding UTF-8 -d "$JAVA_TESTS/ComputerLink" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ComputerHid.java workspace/rose-agent/app/src/dev/pixel/voice/ComputerGeometry.java workspace/rose-agent/app/src/dev/pixel/voice/ComputerLinkGate.java \
+ workspace/rose-agent/tests/java/dev/pixel/voice/ComputerLinkTest.java
+java -cp "$JAVA_TESTS/ComputerLink" dev.pixel.voice.ComputerLinkTest
