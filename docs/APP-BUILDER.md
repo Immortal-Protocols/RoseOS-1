@@ -1476,6 +1476,44 @@ test, and no model was called.
    35.0.0 and JDK 21 with recorded hashes), or a separate builder is
    authorized. A separate builder is a provisioning decision; no new paid
    infrastructure is assumed.
+   **Qualifying a Linux host for the server build.**
+   `python -m rose.app_builder.qualify --config builder.json` checks a
+   candidate host with the builder's own code, and names what's missing; it
+   never weakens anything. It checks, in order:
+   1. the config, which must set `clientServer`;
+   2. Linux x86-64, as a user other than root;
+   3. the facility checks the server runs at start;
+   4. a confinement probe through the configured bubblewrap, which must find
+      no network, `/etc` and home hidden, a read-only folder read-only and
+      its job folder writable;
+   5. one throwaway client-server job through the real `Builder`, which must
+      produce a static `x86_64-unknown-linux-musl` server whose manifest
+      `server_manifest.check` accepts.
+
+   Inputs the config's `clientServer` needs:
+   - **`rustToolchain`:** an unpacked toolchain tree, not rustup's proxy,
+     with `bin/cargo`, `bin/rustc` and the musl target's
+     `lib/rustlib/x86_64-unknown-linux-musl/lib`, and no links. Its version
+     is not yet pinned.
+   - **`rustToolchainSha256`:** `toolchain_digest(tree)`, supplied by the
+     owner.
+   - **`bubblewrap`:** non-setuid, supporting `--disable-userns`, on a
+     kernel that allows unprivileged user and network namespaces, including
+     loopback setup.
+   - **A musl C compiler** (`musl-gcc`) under `/usr/bin`, because `rusqlite`
+     builds its bundled SQLite.
+   - **`crateStore`:** `index.json` plus `<sha256>.crate` files for the 51
+     registry crates in `rose-app-runtime-signin/Cargo.lock`.
+   - **`runtimeRoot`:** `rose-app-runtime`, `rose-app-runtime-signin` and
+     `rose-signin` at the pinned sign-in revision.
+
+   Verified so far (2026-11-17): no host qualifies yet.
+   - CI builds real servers only for the GNU target, with the runner's
+     unpinned cargo and a test-only pass-through isolation.
+   - Local Worker's dot-cloud Linux host fails the network-namespace
+     loopback setup (`NETLINK_ROUTE … Operation not permitted`), and it has no
+     Rust or `musl-gcc`.
+   - The Mac can't run bubblewrap.
 3. **Build isolation on that host (Server Worker).** Source now runs the
    writer under the `rose_app_build` permission profile (§4A). It denies reads
    outside the project source and the minimal runtime, allows writes only in
