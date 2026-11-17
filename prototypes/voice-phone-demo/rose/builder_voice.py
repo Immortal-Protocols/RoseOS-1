@@ -53,7 +53,7 @@ def call(phone, name: str, args) -> dict:
     if status == 'launch_requested':
         return {'ok': True, 'status': status, 'built': False, 'tool': NAME,
                 'message': 'The app builder is open on the phone with the request filled in; the owner taps Build there.'}
-    if status in UNCERTAIN:  # sent, and not answered: it may have opened, so it is never reported as not opened
+    if status is None or status in UNCERTAIN:  # sent, not answered: it may have opened, so never "did not open"
         return {'ok': False, 'status': 'uncertain', 'tool': NAME,
                 'message': ('The phone did not confirm it; the builder may or may not be open. Ask the owner to check '
                             'the phone before asking again.')}
