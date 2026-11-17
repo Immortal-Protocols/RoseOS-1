@@ -34,9 +34,13 @@ from .ledger import Ledger
 from .service import Builder
 
 SCHEMA_VERSION = 1
-KEYS = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk', 'javaHome',
-        'buildTimeoutS', 'keyCreation', 'writer', 'backup', 'libraryStore', 'clientServer'}
-REQUIRED = {'schemaVersion', 'root', 'remoteDir', 'name', 'port', 'adminPort', 'hosts', 'sdk'}
+# The builder's own settings: the same in the standalone host's config and in the builder config the Rose server
+# reads with ``--app-builder`` (docs/APP-BUILDER.md §6), which has no listener of its own.
+BUILDER_KEYS = {'schemaVersion', 'root', 'sdk', 'javaHome', 'buildTimeoutS', 'keyCreation', 'writer', 'backup',
+                'libraryStore', 'clientServer'}
+BUILDER_REQUIRED = {'schemaVersion', 'root', 'sdk'}
+KEYS = BUILDER_KEYS | {'remoteDir', 'name', 'port', 'adminPort', 'hosts'}
+REQUIRED = BUILDER_REQUIRED | {'remoteDir', 'name', 'port', 'adminPort', 'hosts'}
 RECEIPT_MAX = 200
 NO_WRITER = 'No app writer is set up on this builder host, so nothing was written.'
 
@@ -58,6 +62,20 @@ class ClientServerConfig:
     bubblewrap: Path
     crate_store: Path
     runtime_root: Path
+
+
+@dataclass(frozen=True)
+class BuilderConfig:
+    """The builder alone, served by the Rose server's own signed listener (``rose.app --app-builder``)."""
+    root: Path
+    sdk: Path
+    java_home: Path | None = None
+    build_timeout_s: float = 600.0
+    key_creation: bool = False
+    writer: Command | None = None
+    backup: Command | None = None
+    library_store: Path | None = None
+    client_server: ClientServerConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -110,17 +128,42 @@ def _command(value, name: str, default_timeout: float) -> Command | None:
     return Command(tuple(argv), _seconds(value.get('timeoutS'), f'{name}.timeoutS', default_timeout))
 
 
-def parse_config(data) -> HostConfig:
+def _checked(data, keys: set, required: set) -> dict:
     if not isinstance(data, dict):
         raise ConfigError('the config must be a JSON object')
     if type(data.get('schemaVersion')) is not int or data['schemaVersion'] != SCHEMA_VERSION:
         raise ConfigError('schemaVersion must be 1')
-    unknown = set(data) - KEYS
+    unknown = set(data) - keys
     if unknown:
         raise ConfigError('unknown field ' + sorted(unknown)[0])
-    missing = REQUIRED - set(data)
+    missing = required - set(data)
     if missing:
         raise ConfigError('missing field ' + sorted(missing)[0])
+    return data
+
+
+def _builder_fields(data: dict) -> dict:
+    """The builder's settings, parsed by the one rule both configs share."""
+    key_creation = data.get('keyCreation', False)
+    if type(key_creation) is not bool:
+        raise ConfigError('keyCreation must be true or false')
+    return dict(
+        root=_path(data['root'], 'root'), sdk=_path(data['sdk'], 'sdk'),
+        java_home=None if data.get('javaHome') is None else _path(data['javaHome'], 'javaHome'),
+        build_timeout_s=_seconds(data.get('buildTimeoutS'), 'buildTimeoutS', 600.0), key_creation=key_creation,
+        writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
+        library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'),
+        client_server=_client_server_config(data.get('clientServer')))
+
+
+def parse_builder_config(data) -> BuilderConfig:
+    """The builder config ``rose.app --app-builder`` reads: the standalone host's builder fields, with no listener
+    fields (the Rose server's own listener, pairing and devices serve it)."""
+    return BuilderConfig(**_builder_fields(_checked(data, BUILDER_KEYS, BUILDER_REQUIRED)))
+
+
+def parse_config(data) -> HostConfig:
+    _checked(data, KEYS, REQUIRED)
     if not isinstance(data['name'], str) or not 0 < len(data['name'].strip()) <= 64:
         raise ConfigError('name must be 1 to 64 characters')
     hosts = data['hosts']
@@ -131,23 +174,20 @@ def parse_config(data) -> HostConfig:
         hosts = configured_hosts(hosts)
     except ValueError as exc:
         raise ConfigError(f'hosts: {exc}') from None
-    key_creation = data.get('keyCreation', False)
-    if type(key_creation) is not bool:
-        raise ConfigError('keyCreation must be true or false')
+    builder = _builder_fields(data)
     port, admin_port = _port(data['port'], 'port'), _port(data['adminPort'], 'adminPort')
     if port == admin_port:
         raise ConfigError('port and adminPort must differ')
-    root, remote_dir = _path(data['root'], 'root'), _path(data['remoteDir'], 'remoteDir')
-    if root == remote_dir or root in remote_dir.parents or remote_dir in root.parents:
+    remote_dir = _path(data['remoteDir'], 'remoteDir')
+    if not separate(builder['root'], remote_dir):
         raise ConfigError('root and remoteDir must be separate directories')
-    return HostConfig(
-        root=root, remote_dir=remote_dir, name=data['name'].strip(), port=port, admin_port=admin_port,
-        hosts=tuple(hosts), sdk=_path(data['sdk'], 'sdk'),
-        java_home=None if data.get('javaHome') is None else _path(data['javaHome'], 'javaHome'),
-        build_timeout_s=_seconds(data.get('buildTimeoutS'), 'buildTimeoutS', 600.0), key_creation=key_creation,
-        writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
-        library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'),
-        client_server=_client_server_config(data.get('clientServer')))
+    return HostConfig(remote_dir=remote_dir, name=data['name'].strip(), port=port, admin_port=admin_port,
+                      hosts=tuple(hosts), **builder)
+
+
+def separate(a: Path, b: Path) -> bool:
+    """Neither directory is, or is inside, the other."""
+    return not (a == b or a in b.parents or b in a.parents)
 
 
 def _client_server_config(value) -> ClientServerConfig | None:
@@ -218,12 +258,19 @@ def client_server_facilities(config: ClientServerConfig | None, timeout_s: float
                 server_crate_deps={'rose-signin': paths['rose-signin']})
 
 
-def load_config(path: Path) -> HostConfig:
+def _read(path: Path):
     try:
-        data = json.loads(Path(path).read_text(encoding='utf-8'))
+        return json.loads(Path(path).read_text(encoding='utf-8'))
     except (OSError, ValueError, RecursionError) as exc:
         raise ConfigError(f'the config could not be read ({type(exc).__name__})') from None
-    return parse_config(data)
+
+
+def load_config(path: Path) -> HostConfig:
+    return parse_config(_read(path))
+
+
+def load_builder_config(path: Path) -> BuilderConfig:
+    return parse_builder_config(_read(path))
 
 
 def no_writer(source, kind, request, cancelled):
@@ -325,32 +372,46 @@ class Host:
     worker: threading.Thread | None = field(default=None)
 
     def start_worker(self) -> threading.Thread:
-        self.worker = threading.Thread(target=self.builder.serve_forever, name='app-builder', daemon=True)
-        self.worker.start()
+        self.worker = start_worker(self.builder)
         return self.worker
 
     def stop(self, timeout_s: float = 30.0) -> None:
-        self.builder.stopping.set()
-        self.builder.wake.set()
-        if self.worker is not None:
-            self.worker.join(timeout_s)
+        stop_worker(self.builder, self.worker, timeout_s)
 
 
-def build_host(config: HostConfig, generate=None, backup=None) -> Host:
-    """Everything the host runs, wired but not started: tests drive it with fakes, ``main`` serves it."""
-    from fastapi import FastAPI
+def start_worker(builder: Builder) -> threading.Thread:
+    """The single build worker, on its own thread."""
+    worker = threading.Thread(target=builder.serve_forever, name='app-builder', daemon=True)
+    worker.start()
+    return worker
 
-    from ..remote import Remote, add_pairing_api, build_remote_app
 
+def stop_worker(builder: Builder, worker: threading.Thread | None, timeout_s: float = 30.0) -> None:
+    builder.stopping.set()
+    builder.wake.set()
+    if worker is not None:
+        worker.join(timeout_s)
+
+
+def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None, *,
+                  private: tuple = (), apart_from: tuple = ()) -> Builder:
+    """The builder, its writer, signing-key backup and Level 2 facilities from one config, wired but not started.
+    Shared by the standalone host and the Rose server (``rose.app --app-builder``), so both run the same builder on
+    the same ledger root. Everything configured is checked before any directory is created. The root and each of
+    ``private`` (the standalone host's pairing directory) are then created 0700, refusing a symbolic link, and the
+    root must be separate from each of them and from ``apart_from`` (the Rose server's own configuration)."""
     resolver = library_store(config.library_store)
     level2 = client_server_facilities(config.client_server, config.build_timeout_s)
-    for directory in (config.root, config.remote_dir):
+    for other in apart_from:
+        if not separate(config.root.resolve(), Path(other).resolve()):
+            raise ConfigError("the builder root must be separate from the server's own configuration")
+    for directory in (config.root, *private):
         if directory.is_symlink():
             raise ConfigError(f'{directory} must not be a symbolic link')
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(directory, 0o700)
-    root, remote_dir = config.root.resolve(), config.remote_dir.resolve()
-    if root == remote_dir or root in remote_dir.parents or remote_dir in root.parents:
+    root = config.root.resolve()
+    if not all(separate(root, Path(d).resolve()) for d in (*private, *apart_from)):
         raise ConfigError('root and remoteDir must be separate directories')
     if generate is None:
         if config.writer is not None:
@@ -365,8 +426,17 @@ def build_host(config: HostConfig, generate=None, backup=None) -> Host:
     tools = toolchain.Tools(config.sdk, config.java_home, timeout_s=config.build_timeout_s,
                             key_creation=config.key_creation)
     ledger = Ledger(config.root)
-    builder = Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
-                      server_url=ledger.native_host_endpoint, **level2)
+    return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
+                   server_url=ledger.native_host_endpoint, **level2)
+
+
+def build_host(config: HostConfig, generate=None, backup=None) -> Host:
+    """Everything the standalone host runs, wired but not started: tests drive it with fakes, ``main`` serves it."""
+    from fastapi import FastAPI
+
+    from ..remote import Remote, add_pairing_api, build_remote_app
+
+    builder = build_builder(config, generate, backup, private=(config.remote_dir,))
     remote = Remote(directory=config.remote_dir, port=config.port, name=config.name,
                     hosts=lambda: list(config.hosts))
     remote_app = build_remote_app(SimpleNamespace(app_builder=builder, phone=None), remote, voice=False)

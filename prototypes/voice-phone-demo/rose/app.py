@@ -836,6 +836,14 @@ class Server:
             self.workspace_tasks = WorkspaceTasks(config_dir() / 'workspace-tasks', None)
         from .workspace_model import WorkspaceModel
         self.workspace_model = WorkspaceModel.configured()
+        # The app builder on this one server (docs/APP-BUILDER.md §6): builder API v1 on the signed listener the
+        # Agent already pairs with. Off unless the owner passes a builder config; its root stays outside config_dir().
+        self.app_builder = self._builder_worker = None
+        builder_config = getattr(args, 'app_builder_config', None)
+        if builder_config is not None:
+            from .app_builder.host import build_builder
+            from .remote import config_dir
+            self.app_builder = build_builder(builder_config, apart_from=(config_dir(),))
         self.bus.subscribe(self._watch)
         self.phone.listeners.append(self._on_phone)
 
@@ -862,6 +870,9 @@ class Server:
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self.bus.loop = loop
         if getattr(self, 'workspace_model', None) is not None: self.workspace_model.preload()
+        if getattr(self, 'app_builder', None) is not None and self._builder_worker is None:
+            from .app_builder.host import start_worker
+            self._builder_worker = start_worker(self.app_builder)  # builds need no model: start with the server
         threading.Thread(target=self._stats_loop, name="stats", daemon=True).start()
         if self.mode == "ui-only":
             self.conductor = FakeConductor(self.bus, self.phone)
@@ -880,6 +891,12 @@ class Server:
         if page_tasks is not None:
             page_tasks.stop_accepting()
         if getattr(self, "workspace_model", None) is not None: self.workspace_model.close()
+        if getattr(self, 'app_builder', None) is not None:
+            from .app_builder.host import stop_worker
+            with contextlib.suppress(Exception):  # stops after the running step; the ledger keeps every job
+                stop_worker(self.app_builder, self._builder_worker)
+            with contextlib.suppress(Exception):
+                self.app_builder.ledger.close()
         for obj, method in ((self.listener, "stop"), (self.conductor, "stop"),
                             (self.keepalive, "stop"), (self.transport, "stop"), (self.runtime, "stop")):
             if obj is not None and hasattr(obj, method):
@@ -1538,6 +1555,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--transcript-dir", help="durable private transcript directory (Codex mode)")
     p.add_argument("--workspace-tasks", action="store_true",
                    help="enable signed owner-confirmed workspace page tasks (requires live --brain codex)")
+    p.add_argument("--app-builder", metavar="CONFIG", type=Path, default=None,
+                   help="serve the app builder (builder API v1) on this server's signed listener, from a builder "
+                        "config JSON (docs/APP-BUILDER.md §6); off by default")
     p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
     p.add_argument("--pair-host", action="append", default=[], help="Tailscale MagicDNS/IPv4 host for the shared QR; repeatable")
     p.add_argument("--port", type=int, default=8091)
@@ -1568,6 +1588,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.workspace_tasks and (args.brain != 'codex' or args.ui_only):
         p.error('--workspace-tasks requires live --brain codex')
+    args.app_builder_config = None
+    if args.app_builder is not None:
+        if not args.remote:
+            p.error('--app-builder serves on the signed remote listener; it cannot be used with --no-remote')
+        from .app_builder.host import ConfigError, load_builder_config
+        try:
+            args.app_builder_config = load_builder_config(args.app_builder)
+        except ConfigError as exc:
+            p.error(f'--app-builder config refused: {exc}')
     if args.cloud_audio and args.brain != 'codex':
         p.error('--cloud-audio requires --brain codex')
     if args.vision_control and (args.brain != 'codex' or args.phone != 'real'):
@@ -1582,7 +1611,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    server = Server(args)
+    try:
+        server = Server(args)
+    except Exception as exc:
+        from .app_builder.host import ConfigError
+        if not isinstance(exc, ConfigError):
+            raise
+        print(f"[rose] app builder refused: {exc}", flush=True)  # nothing is served with a broken builder opt-in
+        raise SystemExit(2) from None
     remote = (Remote(port=args.remote_port, **({'hosts': lambda: args.pair_host} if args.pair_host else {}))
               if args.remote else None)
     servers = build_servers(server, args, remote)
