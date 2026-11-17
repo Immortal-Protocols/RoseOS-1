@@ -2973,34 +2973,46 @@ A server for another target is not delivered while `agentHost` is set.
    - The keyring is checked first. Without one, and without
      `generateKeyring`, nothing is touched.
    - If an earlier switch was cut off (its `switching` marker is left), that
-     is undone before anything else: `latest.tar` and the deployed release
-     are put back and started again.
+     is undone before anything else: the deployed release is started again,
+     after `latest.tar` is put back if the marker says another binary may
+     have run. If the data cannot be put back, nothing is started and the
+     marker stays.
+   - A server byte-identical to the deployed one (a version that changed
+     only its client) is just started and published if needed: no backup,
+     no new previous release, and nothing to undo.
    - `app.json` is removed and the server stopped. A server runs while
      Chariot's launcher holds `run.lock`; it gets TERM, then KILL, and only
      while the lock is held, so a stale `server.pid` is never signalled.
    - The data directory is archived to `backups/taking.tar`. Only once that
      is whole does it become `latest.tar`; the archive before it is kept as
      `previous.tar`.
-   - The `switching` marker is written, the release is kept as
-     `releases/<sha256>/` and made the running pair, and it is started with
+   - The `switching` marker (written before the stop, stage `stopped`) moves
+     to stage `installing`. The release is kept as `releases/<sha256>/` and
+     made the running pair, and it is started with
      Chariot's own launcher (`launch_agent_app.sh`, sha256 pinned in source).
    - It must answer `/health` 200 with the new `revision_sha256` within
      60 s.
-   - Then `app.json` (`chariot-agent-app/v1`, the port, `/health`) is
-     published, `deployed.json` written (the one before it kept as
-     `deployed.prev.json`) and the marker removed. Releases other than these
-     two are pruned.
+   - Then `deployed.json` is written (the one before it kept as
+     `deployed.prev.json`), the marker removed, and `app.json`
+     (`chariot-agent-app/v1`, the port, `/health`) published. Releases other
+     than these two are pruned.
 6. **On any failure after the stop** (an EXIT trap), the app goes back to
    `deployed.json`'s release. When the marker says another binary got as
-   far as running, its data comes from `latest.tar` first. It is relaunched
-   and published, and the job fails.
+   far as running, its data comes from `latest.tar` first. That data is
+   unpacked whole before it replaces anything, and the data it replaces is
+   moved to `backups/replaced`. It is relaunched and published, and the job
+   fails.
 7. **Commit point.** The job stops at a cancel only before the setup. Once
    the server is set up, the version is delivered even if a cancel came
    meanwhile, so the agent and the library never disagree. If it is not
    delivered after all (an error), the setup is reverted:
    - the data goes back to `latest.tar`, and what the undone server wrote
-     is kept as `backups/reverted.tar`;
-   - the release before it is started and published again.
+     is kept as `backups/replaced`;
+   - the release before it is started and published again;
+   - if the revert fails after the stop, the deployed release is started
+     again.
+   - One setup, revert or invite runs at a time. An invite during a setup is
+     refused as `server_unavailable`, retryable.
 8. **Check against the baked URL.** The URL the client baked is checked
    against the record at setup time, so a version is never delivered for a
    container other than the one it was built for.
@@ -3019,7 +3031,12 @@ health server. It covers:
   missing applet;
 - BusyBox-only `flock` options and an empty PATH;
 - a switch killed mid-way, then a failing attempt;
+- a switch killed during its backup;
+- data that cannot be put back;
 - a failed backup, twice;
+- the same server again;
+- a revert that fails;
+- an invite during a setup;
 - another app's agent, or leftovers not set up by the builder;
 - reverting an undelivered release;
 - a stale pid;

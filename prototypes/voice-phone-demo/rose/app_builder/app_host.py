@@ -30,6 +30,7 @@ import re
 import unicodedata
 import subprocess
 import tarfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -268,29 +269,41 @@ activate() {
   $B/mv -f server.tmp server
   $B/mv -f start.tmp start
 }
-# The data as backups/latest.tar holds it; the data folder is replaced only once the archive unpacked whole.
+# The data as backups/latest.tar holds it. Each step fails explicitly, whatever errexit says: the data folder is
+# replaced only once the archive unpacked whole, and the data it replaces is moved (not copied) to backups/replaced.
 restore_data() {
-  $B/rm -rf data.restoring
-  $B/mkdir data.restoring
-  $B/tar -C data.restoring -xf backups/latest.tar
-  $B/rm -rf data
-  $B/mv data.restoring data
+  $B/rm -rf data.restoring backups/replaced.tmp || return 1
+  $B/mkdir data.restoring || return 1
+  if ! $B/tar -C data.restoring -xf backups/latest.tar; then $B/rm -rf data.restoring; return 1; fi
+  $B/mv data backups/replaced.tmp || { $B/rm -rf data.restoring; return 1; }
+  if ! $B/mv data.restoring data; then $B/mv backups/replaced.tmp data; return 1; fi
+  $B/rm -rf backups/replaced
+  $B/mv backups/replaced.tmp backups/replaced || true
 }
-# Back to the deployed release (deployed.json): its data from before an interrupted or failed switch when the
-# switching marker says one got as far as starting another binary, then started and published again.
+# The marker a switch leaves while it runs: "<project> <sha> <stage>", stage "stopped" (the deployed release was
+# stopped; the data is untouched) or "installing" (another binary may have run on the data since latest.tar).
+stage_of() {
+  test -f switching || return 0
+  m=$($B/cat switching); printf '%s' "${m##* }"
+}
+# Back to the deployed release (deployed.json), on its data from before the switch when another binary may have
+# touched it, then started and published again. If the data cannot be put back, nothing is started and the marker
+# stays, so the next run tries again.
 recover() {
   stop || true
-  if test -f switching; then restore_data; fi
+  if test "$(stage_of)" = installing; then
+    if ! restore_data; then echo "restored=data-not-restored"; return 0; fi
+  fi
   good=$(sha_of)
   if test -n "$good" && test -f "releases/$good/server" && test -f "releases/$good/start"; then
-    activate "$good"
+    activate "$good" || { echo "restored=not-restored"; return 0; }
+    $B/rm -f switching
     launch
     if healthy "$good"; then publish; echo "restored=$good"; else echo "restored=not-healthy"; fi
   else
-    $B/rm -f server start
+    $B/rm -f server start switching
     echo "restored=nothing-deployed"
   fi
-  $B/rm -f switching
 }
 '''
 SWITCH = COMMON + r'''phase=start
@@ -315,18 +328,25 @@ if test ! -f keys/keyring.json; then
 fi
 phase=switch
 # An earlier switch was cut off (SSH dropped, the builder stopped): back to the deployed release and its data first.
-if test -f switching; then echo "recovered=interrupted"; recover; fi
-# Unpublish and stop; then back up the data while nothing runs. The new archive becomes latest.tar only once it
-# is whole, and the one before it is kept as previous.tar.
+if test -f switching; then
+  echo "recovered=interrupted"
+  recover
+  if test -f switching; then failed=recover; exit 4; fi
+fi
+# From the stop on, a crash leaves the marker, so the next run starts the deployed release again (stage "stopped":
+# its data untouched) or also puts latest.tar back (stage "installing").
+printf '%s %s stopped' '@PROJECT@' '@SHA@' > switching
 $B/rm -f app.json app.json.tmp
 failed=stop
 stop
+# Back up the data while nothing runs: the new archive becomes latest.tar only once it is whole, and the one before
+# it is kept as previous.tar.
 failed=backup
+$B/rm -f backups/taking.tar
 $B/tar -C data -cf backups/taking.tar .
 if test -f backups/latest.tar; then $B/mv -f backups/latest.tar backups/previous.tar; fi
 $B/mv -f backups/taking.tar backups/latest.tar
-# From here a crash leaves the marker: the next run puts latest.tar and the deployed release back first.
-printf '%s %s' '@PROJECT@' '@SHA@' > switching
+printf '%s %s installing' '@PROJECT@' '@SHA@' > switching
 failed=install
 $B/rm -rf "releases/@SHA@"
 $B/mv "@INCOMING@" "releases/@SHA@"
@@ -334,7 +354,7 @@ activate '@SHA@'
 launch
 failed=health
 healthy '@SHA@'
-publish
+# Recorded before it is published: a crash from here leaves it running and set up, never undone.
 if test -f deployed.json; then
   $B/cat deployed.json > deployed.prev.tmp
   $B/mv -f deployed.prev.tmp deployed.prev.json
@@ -343,6 +363,7 @@ printf '%s' '@DEPLOYED@' > deployed.tmp
 $B/mv -f deployed.tmp deployed.json
 $B/rm -f switching
 phase=done
+publish
 prev=$(sha_of deployed.prev.json)
 for d in releases/*; do
   n=${d#releases/}
@@ -350,21 +371,51 @@ for d in releases/*; do
 done
 echo "deployed=@SHA@"
 '''
+# The deployed release is already @SHA@ (a version whose server is byte-identical to the one set up): it is started
+# and published if it is not running, and nothing else changes: no backup, no new previous release.
+ENSURE = COMMON + r'''if test "$(sha_of)" != '@SHA@' || test -f switching; then echo "failed=not-current"; exit 4; fi
+if ! locked; then launch; fi
+if healthy '@SHA@'; then publish; echo "deployed=@SHA@"; else echo "failed=health"; exit 4; fi
+'''
 # Undo a setup whose version was never delivered (the job failed or stopped after it): only while @SHA@ is the
-# deployed release. Its data goes back to latest.tar (taken just before it was switched in; what it wrote since is
-# kept as backups/reverted.tar), and the release before it, if any, is started and published again.
-REVERT = COMMON + r'''if test "$(sha_of)" != '@SHA@'; then echo "reverted=not-current"; exit 0; fi
-$B/rm -f app.json app.json.tmp
-stop || { echo "failed=stop"; exit 5; }
-$B/tar -C data -cf backups/reverted.tmp . && $B/mv -f backups/reverted.tmp backups/reverted.tar
-restore_data
+# deployed release and the one before it is another. Its data goes back to latest.tar (taken just before it was
+# switched in; what it wrote since is kept as backups/replaced), and the release before it, if any, is started and
+# published again. A failure after the stop starts the deployed release again on whatever data is in place.
+REVERT = COMMON + r'''phase=start
+failed=revert
+on_exit() {
+  code=$?
+  trap - EXIT
+  set +e
+  if test "$phase" = done; then exit "$code"; fi
+  echo "failed=$failed"
+  if test "$phase" = stopped; then
+    cur=$(sha_of)
+    if test -n "$cur" && test -f "releases/$cur/server" && activate "$cur"; then
+      launch
+      if healthy "$cur"; then publish; echo "restored=$cur"; fi
+    fi
+  fi
+  exit 4
+}
+trap on_exit EXIT
+if test "$(sha_of)" != '@SHA@'; then echo "reverted=not-current"; phase=done; exit 0; fi
 prev=$(sha_of deployed.prev.json)
+if test "$prev" = '@SHA@'; then echo "reverted=same"; phase=done; exit 0; fi
+$B/rm -f app.json app.json.tmp
+failed=stop
+stop
+phase=stopped
+failed=restore
+restore_data
 if test -n "$prev" && test -f "releases/$prev/server"; then
   activate "$prev"
   $B/mv -f deployed.prev.json deployed.json
+  phase=done
   launch
   if healthy "$prev"; then publish; echo "reverted=$prev"; else echo "reverted=not-healthy"; fi
 else
+  phase=done
   $B/rm -f server start deployed.json deployed.prev.json
   echo "reverted=nothing"
 fi
@@ -446,6 +497,15 @@ def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring
         previous = state['deployed']
     if previous is not None and previous['dataSchema'] > p.data_schema:
         raise SetupFailed('state', 'this version\'s data schema is older than the deployed one')
+    if previous is not None and previous['sha256'] == p.sha256 and state['switching'] is None:
+        # The same server (a version that changed only its client): nothing to back up, switch or ever undo.
+        result = channel.script(_script(ENSURE, p, bin_dir, sha=p.sha256, health_wait_s=health_wait_s,
+                                        stop_wait_s=stop_wait_s))
+        lines = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        if result.code != 0 or lines.get('deployed') != p.sha256:
+            raise SetupFailed('switch', f'the set-up server did not answer ({lines.get("failed", "unknown")})')
+        return {'deployed': p.sha256, 'appUrl': p.app_url, 'dataSchema': p.data_schema,
+                'previous': p.sha256, 'unchanged': True}
     incoming = f'incoming-{p.sha256}'
     _check(channel.script(_sh(PREPARE.replace('@INCOMING@', incoming), bin_dir)), 'upload')
     try:
@@ -463,7 +523,7 @@ def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring
         raise SetupFailed('switch', f'the new server was not set up ({lines.get("failed", "unknown")}); restored: '
                                     f'{lines.get("restored", "nothing was changed")}')
     return {'deployed': p.sha256, 'appUrl': p.app_url, 'dataSchema': p.data_schema,
-            'previous': (previous or {}).get('sha256')}
+            'previous': (previous or {}).get('sha256'), 'unchanged': False}
 
 
 def revert(p: Plan, channel: Channel, sha: str, *, bin_dir: str = BIN, health_wait_s: int = HEALTH_WAIT_S,
@@ -506,6 +566,9 @@ class AgentHosting:
         self.config, self.ledger = config, ledger
         self.channel = channel or (lambda agent: ChariotSsh(config.chariot, agent, config.home))
         self._names = {}  # agent id (hex) -> configured agent name, as each agent reported itself
+        # One setup, revert or invite at a time: an invite never runs while the data it would touch is being backed
+        # up, restored or replaced (it is refused as busy instead, so a phone never waits on a setup).
+        self._busy = threading.Lock()
 
     def _identity(self, name: str) -> tuple[str, str]:
         out = _check(self.channel(name).script(_sh(PROBE.replace('@APPLETS@', ' '.join(APPLETS)), BIN)), 'probe')
@@ -563,24 +626,31 @@ class AgentHosting:
     def deploy(self, project: str, version_code: int, elf: Path, manifest: dict, app_url: str | None = None) -> dict:
         """Set the version's server up; a release the agent runs that was never delivered is reverted first."""
         p = self._plan(project, version_code, elf, manifest, app_url)
-        return deploy(p, self.channel(self.name_for(p.agent_id)), enabled=True,
-                      generate_keyring=self.config.generate_keyring, undelivered=self._undelivered(project))
+        with self._busy:
+            return deploy(p, self.channel(self.name_for(p.agent_id)), enabled=True,
+                          generate_keyring=self.config.generate_keyring, undelivered=self._undelivered(project))
 
     def revert(self, project: str, version_code: int, elf: Path, manifest: dict) -> str:
         """Undo this version's setup after its delivery did not happen (see ``revert``)."""
         p = self._plan(project, version_code, elf, manifest, None)
-        return revert(p, self.channel(self.name_for(p.agent_id)), p.sha256)
+        with self._busy:
+            return revert(p, self.channel(self.name_for(p.agent_id)), p.sha256)
 
     def invite(self, project: str, sha256: str, account: str) -> str:
         """An invite from the project's server in its recorded agent container (see ``invite``)."""
         container = self.ledger.agent_container(project)
         if container is None:
             raise InviteRefused('not_hosted')
+        if not self._busy.acquire(blocking=False):
+            raise InviteRefused('busy')  # its server is being set up: ask again in a moment
         try:
-            name = self.name_for(container['agentId'])
-        except SetupFailed:
-            raise InviteRefused('unreachable') from None
-        return invite(self.channel(name), sha256, account)
+            try:
+                name = self.name_for(container['agentId'])
+            except SetupFailed:
+                raise InviteRefused('unreachable') from None
+            return invite(self.channel(name), sha256, account)
+        finally:
+            self._busy.release()
 
 
 INVITE = '''set -eu

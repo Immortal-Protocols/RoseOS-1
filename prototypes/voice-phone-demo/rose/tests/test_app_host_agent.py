@@ -281,10 +281,79 @@ class Setup(unittest.TestCase):
         app = self.agent.app
         self.assertEqual(out['previous'], v1.sha256)
         self.assertEqual((app / 'data/accounts/a.sqlite3').read_text(), 'v1\nv1\nv3\n')  # v2's writes undone
-        with tarfile.open(app / 'backups/reverted.tar') as tar:  # and kept aside
-            self.assertIn('v2', tar.extractfile('./accounts/a.sqlite3').read().decode())
+        self.assertIn('v2', (app / 'backups/replaced/accounts/a.sqlite3').read_text())  # and kept aside
         self.assertEqual(sorted(p.name for p in (app / 'releases').iterdir()), sorted([v1.sha256, v3.sha256]))
         self.assertIn(v3.sha256, self.get())
+
+    def wrap_tar(self, fails_on):
+        """The agent's tar, failing whenever its arguments contain ``fails_on`` (while the flag file exists)."""
+        real, tar, flag = shutil.which('tar'), self.agent.bin / 'tar', self.root / 'tar-fails'
+        tar.unlink()
+        tar.write_text(f'#!/bin/sh\nif test -f {flag}; then case "$*" in *"{fails_on}"*) exit 1 ;; esac; fi\n'
+                       f'exec {real} "$@"\n')
+        tar.chmod(0o755)
+        flag.touch()
+        return flag
+
+    def test_data_that_cannot_be_put_back_is_never_replaced_or_served(self):
+        v1 = self.plan('v1')
+        self.deploy(v1)
+        flag = self.wrap_tar('-xf backups/latest.tar')
+        with self.assertRaisesRegex(app_host.SetupFailed, 'restored: data-not-restored'):
+            self.deploy(self.plan('broken', schema=2), health_wait_s=3)
+        app = self.agent.app
+        self.assertFalse((app / 'app.json').exists())  # nothing is served on data it could not vouch for
+        self.assertTrue((app / 'switching').read_text().endswith(' installing'))  # so the next run tries again
+        self.assertFalse((app / 'data.restoring').exists())
+        flag.unlink()
+        out = self.deploy(self.plan('v2', schema=2))
+        self.assertEqual(out['previous'], v1.sha256)
+        self.assertNotIn('broken', (app / 'data/accounts/a.sqlite3').read_text())
+        self.assertIn('broken', (app / 'backups/replaced/accounts/a.sqlite3').read_text())  # kept aside, not lost
+
+    def test_the_same_server_again_changes_nothing_and_is_never_undone(self):
+        v1, v2 = self.plan('v1'), self.plan('v2', schema=2)
+        self.deploy(v1)
+        self.deploy(v2)
+        backup = (self.agent.app / 'backups/latest.tar').read_bytes()
+        again = self.deploy(v2)  # a version that changed only its client
+        app = self.agent.app
+        self.assertTrue(again['unchanged'])
+        self.assertEqual(json.loads((app / 'deployed.prev.json').read_text())['sha256'], v1.sha256)
+        self.assertEqual(sorted(p.name for p in (app / 'releases').iterdir()), sorted([v1.sha256, v2.sha256]))
+        self.assertEqual((app / 'backups/latest.tar').read_bytes(), backup)
+        self.assertIn(v2.sha256, self.get())
+        self.assertEqual(app_host.revert(v2, self.agent, v1.sha256, bin_dir=str(self.agent.bin)), 'not-current')
+        (app / 'deployed.prev.json').write_text((app / 'deployed.json').read_text())  # as an older build left it
+        self.assertEqual(app_host.revert(v2, self.agent, v2.sha256, bin_dir=str(self.agent.bin)), 'same')
+        self.assertIn(v2.sha256, self.get())
+
+    def test_a_revert_that_fails_starts_the_deployed_release_again(self):
+        v1, v2 = self.plan('v1'), self.plan('v2', schema=2)
+        self.deploy(v1)
+        self.deploy(v2)
+        self.wrap_tar('-xf backups/latest.tar')
+        with self.assertRaisesRegex(app_host.SetupFailed, 'revert'):
+            self.deploy(self.plan('v3', schema=2), undelivered=lambda sha: sha == v2.sha256)
+        self.assertIn(v2.sha256, self.get())  # stopped for the revert, then started again
+        self.assertTrue((self.agent.app / 'app.json').is_file())
+
+    def test_a_switch_cut_off_during_the_backup_only_restarts_the_app(self):
+        v1 = self.plan('v1')
+        self.deploy(v1)
+        real, tar = shutil.which('tar'), self.agent.bin / 'tar'
+        tar.unlink()  # the SSH session dies while the backup runs: the shell is killed, no trap runs
+        tar.write_text(f'#!/bin/sh\ncase "$*" in *-cf*) kill -KILL $PPID; exit 1 ;; esac\nexec {real} "$@"\n')
+        tar.chmod(0o755)
+        with self.assertRaises(app_host.SetupFailed):
+            self.deploy(self.plan('v2', schema=2))
+        app = self.agent.app
+        self.assertTrue((app / 'switching').read_text().endswith(' stopped'))
+        tar.unlink()
+        tar.symlink_to(real)
+        self.deploy(self.plan('v2', schema=2))
+        self.assertFalse((app / 'backups/replaced').exists())  # its data was never touched, so never put back
+        self.assertEqual((app / 'data/accounts/a.sqlite3').read_text(), 'v1\nv1\nv2\n')
 
     def test_a_stale_pid_file_is_never_signalled(self):
         bystander = subprocess.Popen(['sleep', '60'])
@@ -434,6 +503,14 @@ class Hosting(unittest.TestCase):
         with self.assertRaisesRegex(app_host.SetupFailed, 'no configured agent is free'):
             self.h.ensure(c)
         self.assertEqual(self.h.name_for(AGENT_HEX), 'one')
+
+    def test_an_invite_never_runs_during_a_setup(self):
+        a = self.l.create('d', 'r1', 'x', 'X')['projectId']
+        self.h.ensure(a)
+        with self.h._busy:
+            with self.assertRaises(app_host.InviteRefused) as caught:
+                self.h.invite(a, 'ab' * 32, 'me')
+        self.assertEqual(caught.exception.word, 'busy')
 
 
 @unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK and a JDK')

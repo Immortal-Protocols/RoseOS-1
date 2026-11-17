@@ -48,6 +48,7 @@ class Unavailable(Exception):
 INVITE_REASONS = {  # the agent's word -> (the wire's reason, retryable, the sentence)
     'already_enrolled': ('already_enrolled', False, 'That account is already signed up to this app.'),
     'invalid_name': ('invalid_account', False, 'That account name cannot be used in this app.'),
+    'busy': ('server_unavailable', True, 'This app\'s server is being set up; ask again in a moment.'),
     'not_set_up': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
     'not_hosted': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
 }
@@ -500,8 +501,9 @@ class Builder:
                         if self.ledger.cancel_requested(job_id):  # the last point a cancel stops it
                             raise toolchain.StepFailed('cancelled', 'Cancelled.')
                         target = (project_id, code, artifacts / f'{built.sha256}.server', manifest)
-                        hosted = self._host(*target, level2['url'])
-                        undo = target  # set up: undone if the version is not delivered after all
+                        hosted, changed = self._host(*target, level2['url'])
+                        if changed:  # a new server set up: undone if the version is not delivered after all
+                            undo = target
                 elif self.hosting is not None:
                     raise toolchain.StepFailed('toolchain', 'This app\'s server was not built for its host, so the app '
                                                'was not delivered.')
@@ -608,13 +610,15 @@ class Builder:
         except Exception:
             pass
 
-    def _host(self, project_id: str, code: int, elf: Path, manifest: dict, url: str) -> tuple[str, float]:
-        """Set the version's server up; returns ``(app URL, when)`` once it answered its health check."""
+    def _host(self, project_id: str, code: int, elf: Path, manifest: dict, url: str):
+        """Set the version's server up; returns ``((app URL, when), changed)`` once it answered its health check,
+        ``changed`` False when the server was byte-identical to the one already set up."""
         from .app_host import SetupFailed
         self.ledger.clear_server_setup(project_id)  # whatever runs there from now on is not an older version's
         try:
-            self.hosting.deploy(project_id, code, elf, manifest, url)
-            return self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()
+            out = self.hosting.deploy(project_id, code, elf, manifest, url)
+            changed = not (isinstance(out, dict) and out.get('unchanged'))
+            return (self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()), changed
         except SetupFailed as failed:
             raise toolchain.StepFailed('toolchain', f'The app\'s server could not be set up in its Chariot agent '
                                        f'container ({failed.step}), so the app was not delivered.', retryable=True,
