@@ -1507,6 +1507,63 @@ test, and no model was called.
    - **`runtimeRoot`:** `rose-app-runtime`, `rose-app-runtime-signin` and
      `rose-signin` at the pinned sign-in revision.
 
+   **Preparation recipe.** Each step is marked by what this session actually
+   ran on 2026-11-17, in a disposable Linux x86-64 container.
+
+   1. **Rust toolchain tree. VERIFIED.**
+      - Fetch the official standalone archives and check them against their
+        published `.sha256` files:
+        `https://static.rust-lang.org/dist/rust-1.97.0-x86_64-unknown-linux-gnu.tar.xz`
+        and
+        `…/rust-std-1.97.0-x86_64-unknown-linux-musl.tar.xz`.
+      - Unpack both, then install into the tree's final, canonical path, not
+        inside a home directory:
+        `<rust-1.97.0>/install.sh --prefix=<TREE>
+        --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
+        --disable-ldconfig`, then
+        `<rust-std-1.97.0-x86_64-unknown-linux-musl>/install.sh
+        --prefix=<TREE> --disable-ldconfig`.
+      - The result was 812 MB, with no links and no setuid or setgid file.
+        `PinnedRustTools.available()` accepted it.
+      - 1.97.0 is the version this run used. Choosing the pin is the owner's
+        decision.
+   2. **Digest. VERIFIED.** `python -m rose.app_builder.prepare digest
+      <TREE>` gives `rustToolchainSha256`.
+      - The installer writes `<TREE>` into `lib/rustlib/install.log` and the
+        `manifest-*` files, so the digest belongs to that path.
+      - Install at the final path and digest it there; never copy the tree.
+      - At this run's path the digest was `299bae99…6fbf`, so another path
+        gives another digest.
+   3. **Crate store. VERIFIED.**
+      - Fetch the crates into a dedicated download cache:
+        `CARGO_HOME=<dedicated empty dir> <TREE>/bin/cargo fetch --locked
+        --manifest-path workspace/rose-app-runtime-signin/Cargo.toml`.
+      - Build the store:
+        `python -m rose.app_builder.prepare crate-store --lock
+        workspace/rose-app-runtime-signin/Cargo.lock --from
+        <CARGO_HOME>/registry/cache/<index dir> --out <STORE>`.
+      - It writes the 51 crates, each checked against the lock's own
+        checksum, and reads the store back as the builder will.
+   4. **Runtime root. VERIFIED.** `python -m rose.app_builder.prepare
+      runtime-root --repo <clean checkout> --out <RUNTIME>` copies the three
+      path crates (`Cargo.toml`, `src/`). It refuses uncommitted changes, and
+      refuses a `rose-signin` that differs from its tree at `23062a04`.
+   5. **Facility check. VERIFIED.** Steps 1–4 with `/usr/bin/bwrap` pass
+      `host.client_server_facilities`, the server's own start-up check.
+   6. **musl C compiler. VERIFIED, required.** Without one, the build fails:
+      "The crate libsqlite3-sys's build script failed". With Ubuntu
+      `musl-tools` 1.2.4 (`/usr/bin/musl-gcc`), one job through the real
+      `Builder` and real code generator produced a static
+      `x86_64-unknown-linux-musl` server of 3,203,624 bytes, and
+      `server_manifest.check` accepted its manifest. This run used a
+      pass-through isolation, because the container runs as root.
+   7. **Confinement and `qualify` as a whole. NOT TESTED.**
+      `python -m rose.app_builder.qualify --config builder.json` must run as
+      a non-root user, on a host whose kernel allows bubblewrap's
+      unprivileged user and network namespaces, including loopback setup.
+      No such host has been run. dot-cloud fails the loopback step, and an
+      attempt here as an unprivileged user also failed.
+
    Verified so far (2026-11-17): no host qualifies yet.
    - CI builds real servers only for the GNU target, with the runner's
      unpinned cargo and a test-only pass-through isolation.

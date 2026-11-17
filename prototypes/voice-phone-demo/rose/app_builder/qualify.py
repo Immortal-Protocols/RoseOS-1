@@ -12,10 +12,11 @@ with less isolation, installs anything, changes a setting or contacts a network.
 3. ``facilities``: the same checks the server runs at start (``host.client_server_facilities``): the Rust toolchain
    matches its owner-supplied pin, bubblewrap is executable, the crate store and runtime root are readable.
 4. ``confinement``: a probe run through the configured bubblewrap exactly as builds run (``BubblewrapIsolation``),
-   which must find no network, no ``/etc`` or home, a read-only folder read-only (a throwaway one of its own, never
-   the pinned toolchain), and its own job folder writable.
+   which must find only the loopback interface and no network, no ``/etc`` or home, a read-only folder read-only (a
+   throwaway one of its own, never the pinned toolchain), and its own job folder writable.
 5. ``build``: one throwaway client-server job (a built-in one-route notes app) through the real ``Builder``, in a
-   temporary root with throwaway signing keys: it must end ``ready`` with a static musl server ELF whose manifest
+   fresh folder inside the configured root (where real jobs run; it is removed afterwards) with throwaway signing
+   keys, after the root and library checks ``build_builder`` makes: it must end ``ready`` with a static musl server ELF whose manifest
    ``server_manifest.check`` accepts. The temporary root, its keys and the APK are removed afterwards.
 
 A check that cannot run because an earlier one failed is reported ``skipped``. Output is one JSON line per check
@@ -60,14 +61,17 @@ PROBE_TIMEOUT_S = 60
 # Run inside the confinement: every line is what it found. Nothing it tries leaves the job folder.
 PROBE = r'''
 import json, os, socket, sys
-job, shown = sys.argv[1], sys.argv[2]
+job, shown, home = sys.argv[1], sys.argv[2], sys.argv[3]
 found = {}
+# A network namespace has only loopback; any other interface means the build could reach a network.
+names = sorted(name for _, name in socket.if_nameindex())
+found["interfaces"] = "loopback only" if names in ([], ["lo"]) else ",".join(names)
 try:
     socket.create_connection(("1.1.1.1", 443), timeout=3).close(); found["network"] = "reachable"
 except OSError:
     found["network"] = "none"
 found["etc"] = "visible" if os.path.exists("/etc/passwd") else "hidden"
-found["home"] = "visible" if os.path.isdir("/root") or os.path.isdir("/home") else "hidden"
+found["home"] = "visible" if os.path.exists(home) or os.path.isdir("/root") else "hidden"
 try:
     open(os.path.join(shown, ".qualify-write"), "w").close(); found["readonly"] = "writable"
 except OSError:
@@ -79,7 +83,7 @@ except OSError:
     found["job"] = "not writable"
 print(json.dumps(found))
 '''
-CONFINED = {'network': 'none', 'etc': 'hidden', 'home': 'hidden', 'readonly': 'read-only', 'job': 'writable'}
+CONFINED = {'interfaces': 'loopback only', 'network': 'none', 'etc': 'hidden', 'home': 'hidden', 'readonly': 'read-only', 'job': 'writable'}
 
 
 def generate(source, kind, request, cancelled):
@@ -134,8 +138,10 @@ def check_confinement(facilities: dict, run=subprocess.run) -> str:
         shown.mkdir()
         env = {'PATH': '/usr/bin:/bin', 'HOME': str(job / 'home'), 'LANG': 'C.UTF-8'}
         try:
-            argv, run_env = isolation.command(['/usr/bin/python3', '-c', PROBE, str(job), str(shown)], env,
-                                              writable=job, readonly=(shown,))
+            argv, run_env = isolation.command(['/usr/bin/python3', '-c', PROBE, str(job), str(shown),
+                                               str(Path.home())], env, writable=job, readonly=(shown,))
+        except toolchain.StepFailed as exc:  # the real provider's refusal (BuildFailed), named
+            raise Failed(f'the build confinement cannot be set up here: {exc.summary}') from None
         except ValueError as exc:
             raise Failed(f'the build confinement cannot be set up here: {exc}') from None
         try:
@@ -149,15 +155,34 @@ def check_confinement(facilities: dict, run=subprocess.run) -> str:
             found = json.loads(done.stdout.strip().splitlines()[-1])
         except (ValueError, IndexError):
             raise Failed('the confinement probe gave no result') from None
-    wrong = {k: v for k, v in found.items() if CONFINED.get(k) != v}
-    if wrong or set(found) != set(CONFINED):
+    judge(found)
+    return 'loopback only, no network, /etc and home hidden, read-only folder read-only, job writable'
+
+
+def judge(found: dict) -> None:
+    """The probe's findings must be exactly the confined ones, every key present."""
+    wrong = {k: found.get(k, 'not checked') for k in sorted(set(found) | set(CONFINED)) if found.get(k) != CONFINED.get(k)}
+    if wrong:
         raise Failed('the build confinement is incomplete here: '
-                     + ', '.join(f'{k} {v}' for k, v in sorted(wrong.items())))
-    return 'no network, /etc and home hidden, read-only folder read-only, job writable'
+                     + ', '.join(f'{k} {v}' for k, v in wrong.items()))
 
 
-def check_build(config, facilities: dict) -> str:
-    with tempfile.TemporaryDirectory(prefix='rose-qualify-build-') as tmp:
+def check_build(config, facilities: dict, apart_from=None) -> str:
+    """One throwaway job where real jobs run: in a fresh folder inside the configured root (so its parents, volume
+    and mount options are the real jobs'), after the same root and library checks ``build_builder`` makes."""
+    if apart_from is None:
+        from ..remote import config_dir
+        apart_from = (config_dir(),)
+    try:
+        host.library_store(config.library_store)
+        if config.root.is_symlink():
+            raise host.ConfigError(f'{config.root} must not be a symbolic link')
+        if not all(host.separate(config.root.resolve(), Path(d).resolve()) for d in apart_from):
+            raise host.ConfigError("the builder root must be separate from the server's own configuration")
+        config.root.mkdir(mode=0o700, parents=True, exist_ok=True)  # as build_builder does at start
+    except (host.ConfigError, OSError) as exc:
+        raise Failed(f'the builder root is not usable: {exc}') from None
+    with tempfile.TemporaryDirectory(prefix='.qualify-', dir=config.root) as tmp:
         root = Path(tmp) / 'builder'
         tools = toolchain.Tools(config.sdk, config.java_home, timeout_s=config.build_timeout_s, key_creation=True)
         if missing := tools.available():

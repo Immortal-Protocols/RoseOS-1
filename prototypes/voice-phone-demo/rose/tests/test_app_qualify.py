@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from rose.app_builder import codegen, contract as C, qualify, template
@@ -34,8 +35,11 @@ class Refusing:
 
 
 class Unsupported:
+    """As the real BubblewrapIsolation refuses: a BuildFailed naming why."""
+
     def command(self, argv, env, *, writable, readonly):
-        raise ValueError('requires unprivileged Linux x86-64')
+        from rose.app_builder.server_build import BuildFailed
+        raise BuildFailed('toolchain', 'build_isolation_unavailable', 'requires unprivileged Linux x86-64')
 
 
 class Checks(unittest.TestCase):
@@ -73,7 +77,20 @@ class Checks(unittest.TestCase):
         with self.assertRaisesRegex(qualify.Failed, 'incomplete') as cm:
             qualify.check_confinement({'server_isolation': Unconfined()})
         self.assertIn('etc visible', str(cm.exception))  # the host's own /etc is in reach without confinement
+        self.assertIn('interfaces', str(cm.exception))  # and its network interfaces
         self.assertIn('readonly writable', str(cm.exception))
+
+    def test_only_every_confined_finding_passes(self):
+        self.assertEqual(qualify.CONFINED, {'interfaces': 'loopback only', 'network': 'none', 'etc': 'hidden',
+                                            'home': 'hidden', 'readonly': 'read-only', 'job': 'writable'})
+        qualify.judge(dict(qualify.CONFINED))
+        for key, value in (('interfaces', 'eth0,lo'), ('network', 'reachable'), ('etc', 'visible'),
+                           ('home', 'visible'), ('readonly', 'writable'), ('job', 'not writable')):
+            with self.subTest(key=key), self.assertRaisesRegex(qualify.Failed, f'{key} {value}'):
+                qualify.judge({**qualify.CONFINED, key: value})
+        for key in qualify.CONFINED:
+            with self.subTest(missing=key), self.assertRaisesRegex(qualify.Failed, f'{key} not checked'):
+                qualify.judge({k: v for k, v in qualify.CONFINED.items() if k != key})
 
     def test_a_refused_or_unsupported_confinement_names_the_cause(self):
         with self.assertRaisesRegex(qualify.Failed, 'Operation not permitted'):
@@ -121,12 +138,37 @@ class BuiltInApp(unittest.TestCase):
 
 @unittest.skipUnless(HAS_SDK, 'needs the pinned Android SDK and a JDK')
 class BuildCheck(unittest.TestCase):
+    def config(self, root, **extra):
+        return host.parse_builder_config({'schemaVersion': 1, 'root': str(root), 'sdk': str(SDK),
+                                          **({'javaHome': str(JAVA_HOME)} if JAVA_HOME else {}), **extra})
+
     def test_the_real_builder_without_server_facilities_is_a_named_failure(self):
-        config = host.parse_builder_config({'schemaVersion': 1, 'root': '/unused', 'sdk': str(SDK),
-                                            **({'javaHome': str(JAVA_HOME)} if JAVA_HOME else {})})
-        with self.assertRaisesRegex(qualify.Failed, 'the test app did not build: ') as cm:
-            qualify.check_build(config, {})  # the builder's own refusal, through a real job
-        self.assertNotIn('unknown', str(cm.exception))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'builder'
+            seen = []
+            real = qualify.Builder
+
+            def builder(job_root, *args, **kw):
+                seen.append(Path(job_root))
+                return real(job_root, *args, **kw)
+            with unittest.mock.patch.object(qualify, 'Builder', builder), \
+                    self.assertRaisesRegex(qualify.Failed, 'the test app did not build: ') as cm:
+                qualify.check_build(self.config(root), {}, apart_from=(Path(tmp) / 'config',))
+            self.assertNotIn('unknown', str(cm.exception))
+            self.assertEqual(seen[0].parent.parent, root)  # where real jobs run: inside the configured root
+            self.assertEqual(list(root.iterdir()), [])  # and nothing is left there
+
+    def test_the_root_and_library_checks_of_build_builder_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / 'config'
+            for config, why in ((self.config(cfg / 'builder'), 'separate'),
+                                (self.config(Path(tmp) / 'b', libraryStore=f'{tmp}/missing'), 'libraryStore')):
+                with self.subTest(why=why), self.assertRaisesRegex(qualify.Failed, why):
+                    qualify.check_build(config, {}, apart_from=(cfg,))
+            (Path(tmp) / 'real').mkdir()
+            (Path(tmp) / 'link').symlink_to(Path(tmp) / 'real')
+            with self.assertRaisesRegex(qualify.Failed, 'symbolic link'):
+                qualify.check_build(self.config(Path(tmp) / 'link'), {}, apart_from=(cfg,))
 
 
 @unittest.skipUnless(os.environ.get('ROSE_QUALIFY_CONFIG'), 'an owner runs this against a real builder config')
