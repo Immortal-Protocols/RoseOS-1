@@ -468,8 +468,10 @@ a test fail:
 
 All requests use the paired device's `rose-auth-v1` signature, under the
 `/builder/v1/` prefix on the remote listener (`rose/app_builder/routes.py`).
-The routes are mounted only when the server has an app builder enabled, and
-`rose.app` enables none today. The signature covers the method, path, time and
+The routes are mounted only when the server has an app builder enabled:
+`rose.app --app-builder CONFIG` (§6.1) enables it on the one Rose server, the
+listener Rose Agent already pairs with, and no host passes that flag yet. The
+signature covers the method, path, time and
 nonce. Body integrity comes from the pinned TLS link. Every JSON response is an
 object carrying `schemaVersion: 1`, including a 401 refusal. An unknown path
 or method under `/builder/v1` gets the web framework's own 404 or 405 body. The library response is `{schemaVersion,
@@ -1272,7 +1274,47 @@ Proof levels:
 - **Not done:** any real model turn, the live enforcement check of read
   isolation (blocker 3) and any host wiring.
 
-## 6. Standalone builder host (source only; not configured, deployed or enabled)
+## 6. Builder hosting (source only; not configured, deployed or enabled)
+
+### 6.1 On the one Rose server (`rose.app --app-builder`)
+
+The builder runs inside the Rose server (`rose.app`), the one Rose Agent
+already pairs with. There is no separate builder server, pairing or device.
+
+- **Switch.** `--app-builder CONFIG` is off by default. CONFIG is a strict
+  builder config: the standalone host's builder fields below, without its
+  listener fields (`remoteDir`, `name`, `port`, `adminPort`, `hosts`):
+  `{schemaVersion: 1, root, sdk, javaHome?, buildTimeoutS?, keyCreation?,
+  writer?, backup?, libraryStore?, clientServer?}`. Both configs are parsed
+  by one rule (`host.parse_builder_config`, `host.parse_config`).
+- **Refusals before anything is served.** The server refuses to start (exit 2)
+  on any of these: an unreadable or unknown-field config; `--no-remote`;
+  a library store or Level 2 facility that doesn't check out; a root that is a
+  symbolic link; or a root that is, contains or is inside the server's own
+  configuration (`ROSE_CONFIG_DIR`, with pairing, TLS and provider state).
+- **Serving.** `Server.app_builder` is set, so `build_remote_app` mounts
+  `/builder/v1` (§3) beside `/hello` and the voice websockets. It answers the
+  same paired devices with the same `rose-auth-v1` signatures, and Rose
+  Agent's existing device key is enough. The single build worker starts with
+  the server and stops at shutdown after its current step. The ledger keeps
+  every job.
+- **Data.** `host.build_builder` builds the same builder, writer, key backup
+  and Level 2 facilities as the standalone host. Pointing `root` at the
+  directory a standalone host used serves its projects, versions, signing keys
+  and records unchanged. Nothing is copied or migrated.
+- **Tests.** `rose/tests/test_app_builder_one_server.py` covers the real
+  `rose.app` parser and `Server` in `--ui-only` mode with a temporary
+  `ROSE_CONFIG_DIR`. It checks:
+  - off by default;
+  - each refusal, including `main` exiting 2;
+  - a paired device reaching `/builder/v1` beside `/hello` and the voice
+    websockets;
+  - the worker lifecycle;
+  - a standalone host's ledger root served unchanged.
+- **Not done:** enabling it on the Mac (Local Server), the Agent client (Home,
+  §3), and retiring the standalone host (§6.2) once this path works.
+
+### 6.2 Standalone builder host (to be retired once §6.1 works)
 
 `rose/app_builder/host.py` runs the builder on its own machine, without the
 Rose conversation server. It reads one strict JSON config file:
