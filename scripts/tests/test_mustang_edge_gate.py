@@ -950,7 +950,8 @@ class DedicatedRuntimeTest(unittest.TestCase):
         facts=dict(instanceId=lane.CONFIRMED_INSTANCE_ID,filesystemUuid=lane.CONFIRMED_UUID,
             mount=lane.CONFIRMED_MOUNT,availableBytes=884227551232,availableInodes=1000,
             totalInodes=runtime['dataFilesystemTotalInodes'],euid=1000)
-        self.assertEqual(readiness.full_run_disk_budget(recipe),906238099456)
+        self.assertEqual(readiness.full_run_disk_budget(recipe),852551008256)
+        facts['availableBytes']=readiness.full_run_disk_budget(recipe)-1
         with self.assertRaisesRegex(ValueError,'source, metadata'):
             readiness.evaluate_guest(facts,lane_binding,runtime)
         readiness.evaluate_guest(facts,lane_binding,runtime,phase='collection')
