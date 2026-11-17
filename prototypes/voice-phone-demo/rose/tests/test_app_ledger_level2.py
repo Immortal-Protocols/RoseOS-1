@@ -346,6 +346,23 @@ class AgentContainer(Base):
         with self.assertRaises(L.LedgerError):
             self.l.record_agent_container('nope', AGENT2, APP_URL2)
 
+    def test_no_two_projects_bake_one_server_across_the_two_records(self):
+        other = self.l.create('d', 'other', 'y', 'Y')['projectId']
+        self.l.record_native_host(self.project, HOST, ENDPOINT)
+        with self.assertRaises(L.LedgerError):  # one project's native endpoint as another's container URL
+            self.l.record_agent_container(other, AGENT, ENDPOINT)
+        self.l.record_agent_container(other, AGENT, APP_URL)
+        with self.assertRaises(L.LedgerError):  # and the reverse
+            self.l.record_native_host(self.project, HOST, APP_URL, replaces={'hostId': HOST, 'endpoint': ENDPOINT})
+        third = self.l.create('d', 'third', 'z', 'Z')['projectId']
+        with self.assertRaises(L.LedgerError):
+            self.l.record_native_host(third, HOST2, APP_URL)
+        self.assertEqual((self.l.backend_endpoint(self.project), self.l.backend_endpoint(other),
+                          self.l.backend_endpoint(third)), (ENDPOINT, APP_URL, None))
+        # One project may hold the same server in both records (its container is baked ahead of its host).
+        self.l.record_agent_container(self.project, AGENT2, ENDPOINT)
+        self.assertEqual(self.l.backend_endpoint(self.project), ENDPOINT)
+
     def test_the_agent_id_and_url_are_checked(self):
         for bad in ('', AGENT.upper(), AGENT[:-1], AGENT + '0', 'g' * 32, None, 7, HOST):
             with self.subTest(agent=bad), self.assertRaises(L.LedgerError):

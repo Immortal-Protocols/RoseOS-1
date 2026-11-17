@@ -656,6 +656,8 @@ class Ledger:
                 raise LedgerError('the native host to replace is not the one recorded')
             if current is not None and replaces is None:
                 raise LedgerError('this project already has a native host; replacing it names the current one')
+            if self._baked_elsewhere(project, endpoint):
+                raise LedgerError('that native host id or endpoint belongs to another project')
             try:
                 if current is None:
                     self.db.execute('INSERT INTO project_native_hosts VALUES (?,?,?,?)',
@@ -693,6 +695,8 @@ class Ledger:
                 raise LedgerError('the agent container to replace is not the one recorded')
             if current is not None and replaces is None:
                 raise LedgerError('this project already has an agent container; replacing it names the current one')
+            if self._baked_elsewhere(project, app_url):
+                raise LedgerError('that agent or app URL belongs to another project')
             try:
                 if current is None:
                     self.db.execute('INSERT INTO project_agent_containers VALUES (?,?,?,?)',
@@ -702,6 +706,14 @@ class Ledger:
                                     'project_id=?', (agent_id, app_url, self.clock(), project))
             except sqlite3.IntegrityError:
                 raise LedgerError('that agent or app URL belongs to another project') from None
+
+    def _baked_elsewhere(self, project: str, url: str) -> bool:
+        """Whether another project's native host endpoint or agent container URL is ``url``: either one can be what
+        that project's builds bake, so no two projects may hold the same server across the two records."""
+        return self.db.execute(
+            'SELECT 1 FROM project_native_hosts WHERE endpoint=? AND project_id<>? UNION ALL '
+            'SELECT 1 FROM project_agent_containers WHERE app_url=? AND project_id<>?',
+            (url, project, url, project)).fetchone() is not None
 
     def backend_endpoint(self, project: str) -> str | None:
         """What a client-server build bakes into ``RoseServer.URL`` (the Builder's ``server_url``): the recorded agent

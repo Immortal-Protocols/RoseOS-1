@@ -106,12 +106,16 @@ class Records(Base):
         code, out = self.container('--replaces-agent-id', AGENT, '--replaces-app-url', APP_URL, agent=AGENT2,
                                    url=APP_URL2)
         self.assertEqual((code, out['agentContainer']), (0, {'agentId': AGENT2, 'appUrl': APP_URL2}))
-        for agent, url in ((AGENT.upper(), APP_URL), (AGENT, APP_URL + '/'), (AGENT, 'http://agent.example.org')):
-            with self.subTest(agent=agent, url=url):
-                self.assertEqual(self.container(agent=agent, url=url, project=self.project)[0], 3)
         ledger = L.Ledger(self.dir)
         self.addCleanup(ledger.close)
         self.assertEqual(ledger.backend_endpoint(self.project), APP_URL2)  # what a build bakes
+        fresh = ledger.create('d', 'fresh', 'y', 'Y')['projectId']  # no record yet: only the value is refused
+        for agent, url, why in ((AGENT.upper(), APP_URL, 'agent id'), (AGENT, APP_URL + '/', 'trailing'),
+                                (AGENT, 'http://agent.example.org', 'https address')):
+            with self.subTest(agent=agent, url=url):
+                code, out = self.container(agent=agent, url=url, project=fresh)
+                self.assertEqual((code, out['agentContainer']), (3, None))
+                self.assertIn(why, out['message'])
 
     def test_it_runs_as_a_module(self):
         result = subprocess.run([sys.executable, '-m', 'rose.app_builder.owner_records', 'native-host', '--ledger',

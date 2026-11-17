@@ -1350,9 +1350,11 @@ Rose conversation server. It reads one strict JSON config file:
   or listeners are constructed; it is never silently disabled. Job resolution
   still verifies artifact digests, structure and prior-version locks. No
   downloads or store population are performed by the host.
-- **Native host endpoint.** The host passes its one ledger and that same
-  ledger's `native_host_endpoint` reader to `Builder(server_url=...)` (§7.7).
-  A client-server job reads its project's current recorded endpoint when it
+- **Backend endpoint.** The host passes its one ledger and that same
+  ledger's `backend_endpoint` reader to `Builder(server_url=...)`. It returns
+  the recorded agent container's app URL (§7.7a), else a recorded native
+  host's endpoint (§7.7). A client-server job reads its project's current
+  recorded endpoint when it
   generates `RoseServer.URL`; a missing record yields `null`. An explicitly
   replaced record affects later builds, not previously generated clients.
   This adds no configuration field, record writer, owner route or provisioning
@@ -2548,11 +2550,13 @@ the server does.
     - The same record again changes nothing. A different one is refused
       unless `replaces` names the current record exactly, so a replaced host
       or a changed domain is an explicit change, never a silent move.
-    - A host id or endpoint another project holds is refused, so no two
-      projects' records name the same host or server. Where a domain
+    - A host id or endpoint another project holds is refused, and so is an
+      endpoint another project holds as its agent container URL (§7.7a), so
+      no two projects' records name the same host or server. Where a domain
       actually routes is Chariot's to decide.
-    - `native_host_endpoint(project)` is what a host passes as the Builder's
-      `server_url`, and the build checks the value again. Versions already
+    - The host passes `backend_endpoint(project)` as the Builder's
+      `server_url`. That is the agent container's URL when one is recorded,
+      else this endpoint, and the build checks the value again. Versions already
       built keep the endpoint they baked until they are rebuilt.
   - **The writer** (`app_builder/owner_records.py`; source, run by no one
     yet) is the one source path for owner tooling. It records, or shows, a
@@ -2785,7 +2789,7 @@ Still open for the Chariot owner (App Core's proposal in brackets):
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
 
-### 7.7a Backend in the Chariot agent container (PROPOSAL: not implemented, not approved)
+### 7.7a Backend in the Chariot agent container (the URL record is in source; the `app_host` setup is a PROPOSAL, not implemented or approved)
 
 Nathan's direction (2026-11-16) puts each generated app's backend in the
 existing Chariot agent container. Rose's existing Codex obtains it with the
@@ -2841,7 +2845,9 @@ up the server.
 - **The rules match the native-host record:**
   - the same record again is a no-op;
   - a different record needs `replaces` naming the current one;
-  - an agent or URL another project holds is refused;
+  - an agent or URL another project holds is refused. This holds across both
+    records: one project's native endpoint can't be another project's
+    container URL, so no two projects bake the same server;
   - the URL is in its one https spelling, with no trailing `/` and no
     `:443`.
 - **What a build bakes.** `Ledger.backend_endpoint` returns the container's
