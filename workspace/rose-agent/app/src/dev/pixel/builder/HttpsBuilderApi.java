@@ -1,12 +1,12 @@
 package dev.pixel.builder;
 
-import android.content.Context;
-import dev.pixel.voice.RoseLink;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -16,10 +16,13 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLSocketFactory;
 
 /**
- * Project 1: builder API v1 over the paired link (docs/APP-BUILDER.md §3). Every request carries this app's
+ * Project 1: builder API v1 over the paired link (docs/APP-BUILDER.md §3). Every request carries the phone's
  * rose-auth-v1 signature over method, path, time and nonce, on TLS pinned to the backend's certificate, to its
  * Tailscale addresses in order (the last one that answered first). A refusal that isn't final is signed afresh once;
  * a final one asks the owner to pair again. Network: never call on the main thread.
+ *
+ * <p>The {@link Endpoint} is the pairing it rides on: in Rose Agent, the Agent's own pairing with its one Rose server
+ * ({@link AgentEndpoint}); nothing here trusts, stores or signs on its own.
  *
  * <p>The library carries each project's active job as {jobId, state}; the job's details (attempt, failure, start)
  * come from GET jobs/<jobId>. After a build ends, the client keeps following the last job it saw for that project, so
@@ -27,21 +30,31 @@ import javax.net.ssl.SSLSocketFactory;
  */
 final class HttpsBuilderApi implements BuilderApi {
  static final int MAX_JSON = 1024 * 1024;
+ /** The paired server answers, but serves no builder API: app building isn't turned on there. */
+ static final String NOT_ENABLED = "not enabled";
 
- final Pairing pairing;
- final RoseLink.Key key;
+ /** A paired backend: its Tailscale addresses and port, TLS pinned to its certificate, and rose-auth-v1 signing. */
+ interface Endpoint {
+  /** The backend's Tailscale addresses, the one that answered last first. */
+  List<String> hosts();
+  int port();
+  /** TLS that accepts only the paired backend's certificate. */
+  SSLSocketFactory tls() throws java.security.GeneralSecurityException;
+  /** The rose-auth-v1 headers for one request, signed now with a fresh nonce. */
+  Map<String, String> headers(String method, String path) throws java.security.GeneralSecurityException;
+ }
+
+ final Endpoint endpoint;
  final SSLSocketFactory tls;
  final List<String> hosts;
  /** projectId → the last job this client followed (create, revise, retry, or the library's active job). */
  final Map<String, String> followed = new HashMap<>();
 
- HttpsBuilderApi(Context c, Pairing pairing) throws java.security.GeneralSecurityException {
-  this.pairing = pairing;
-  RoseLink.Key k = RoseLink.existingKey();
-  if (k == null || !k.deviceId().equals(pairing.deviceId)) throw new java.security.GeneralSecurityException("This phone's pairing key is missing; pair again.");
-  this.key = k;
-  this.tls = RoseLink.pinned(pairing.pin);
-  this.hosts = new ArrayList<>(pairing.hosts);
+ HttpsBuilderApi(Endpoint endpoint) throws java.security.GeneralSecurityException {
+  this.endpoint = endpoint;
+  this.tls = endpoint.tls();
+  this.hosts = new ArrayList<>(endpoint.hosts());
+  if (hosts.isEmpty()) throw new java.security.GeneralSecurityException("no address for the backend");
  }
 
  /** A non-2xx answer, already classified. */
@@ -120,7 +133,7 @@ final class HttpsBuilderApi implements BuilderApi {
      h = connect(host, "GET", path);
      int code = h.getResponseCode();
      if (code / 100 != 2) {
-      BuilderWire.Refusal r = BuilderWire.refusal(code, Pairing.read(h.getErrorStream(), MAX_JSON));
+      BuilderWire.Refusal r = BuilderWire.refusal(code, read(h.getErrorStream(), MAX_JSON));
       if (r.kind == BuilderWire.Kind.RETRY_SIGNED && signed == 0) break;
       throw unreachable(new Answer(r));
      }
@@ -148,7 +161,7 @@ final class HttpsBuilderApi implements BuilderApi {
 
  private List<BuilderWire.LibraryProject> library() throws Unreachable {
   try { return BuilderWire.library(get(BuilderWire.PREFIX + "/projects")); }
-  catch (Answer a) { throw unreachable(a); }
+  catch (Answer a) { throw BuilderWire.notEnabled(a.refusal) ? new Unreachable(NOT_ENABLED) : unreachable(a); }
   catch (BuilderWire.Malformed e) { throw malformed(); }
  }
 
@@ -187,7 +200,7 @@ final class HttpsBuilderApi implements BuilderApi {
       try (OutputStream out = h.getOutputStream()) { out.write(bytes); }
      }
      int code = h.getResponseCode();
-     String text = Pairing.read(code / 100 == 2 ? h.getInputStream() : h.getErrorStream(), MAX_JSON);
+     String text = read(code / 100 == 2 ? h.getInputStream() : h.getErrorStream(), MAX_JSON);
      answered(host);
      if (code / 100 == 2) return text;
      last = new Answer(BuilderWire.refusal(code, text));
@@ -204,9 +217,9 @@ final class HttpsBuilderApi implements BuilderApi {
  }
 
  private HttpsURLConnection connect(String host, String method, String path) throws IOException {
-  HttpsURLConnection h = Pairing.open(tls, host, pairing.port, path);
+  HttpsURLConnection h = open(tls, host, endpoint.port(), path);
   h.setRequestMethod(method);
-  try { for (Map.Entry<String, String> e : key.headers(method, path, pairing.pin).entrySet()) h.setRequestProperty(e.getKey(), e.getValue()); }
+  try { for (Map.Entry<String, String> e : endpoint.headers(method, path).entrySet()) h.setRequestProperty(e.getKey(), e.getValue()); }
   catch (java.security.GeneralSecurityException e) { throw new IOException("signing failed"); }
   return h;
  }
@@ -219,4 +232,27 @@ final class HttpsBuilderApi implements BuilderApi {
   return new Unreachable(a.refusal.kind == BuilderWire.Kind.RETRY_SIGNED ? "clock" : "unavailable");
  }
  private static Unreachable malformed() { return new Unreachable("the builder's answer wasn't understood"); }
+
+ /** The pin is the backend's identity, so the certificate's hostname isn't checked; the endpoint gives only Tailscale hosts. */
+ static HttpsURLConnection open(SSLSocketFactory tls, String host, int port, String path) throws IOException {
+  HttpsURLConnection h = (HttpsURLConnection) new URL("https", host, port, path).openConnection();
+  h.setSSLSocketFactory(tls);
+  h.setHostnameVerifier((n, s) -> true);
+  h.setConnectTimeout(5000);
+  h.setReadTimeout(20000);
+  h.setUseCaches(false);
+  h.setInstanceFollowRedirects(false);
+  return h;
+ }
+
+ /** A bounded answer, as UTF-8; an absent stream is empty. */
+ static String read(InputStream in, int max) throws IOException {
+  if (in == null) return "";
+  try (InputStream i = in) {
+   ByteArrayOutputStream b = new ByteArrayOutputStream();
+   byte[] buf = new byte[8192];
+   for (int n; (n = i.read(buf)) > 0; ) { b.write(buf, 0, n); if (b.size() > max) throw new IOException("answer too large"); }
+   return new String(b.toByteArray(), StandardCharsets.UTF_8);
+  }
+ }
 }

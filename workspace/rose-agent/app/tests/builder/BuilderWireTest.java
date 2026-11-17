@@ -83,6 +83,14 @@ public final class BuilderWireTest {
         expect(cv.get(2).server.unreadable && cv.get(3).server.unreadable, "a minimum above the version itself, or not an object: unavailable");
         expect(cv.get(4).server.status == ServerSummary.Status.UNAVAILABLE && !cv.get(4).server.unreadable, "a served unavailable");
 
+        // Rose Agent: a server that answers but has no builder mounted, and the workspace's hand-off into "New app".
+        expect(BuilderWire.notEnabled(BuilderWire.refusal(404, "{\"detail\":\"Not Found\"}")), "no builder routes: not enabled");
+        expect(!BuilderWire.notEnabled(BuilderWire.refusal(404, "{\"schemaVersion\":1,\"error\":\"no such job\"}")), "the builder's own 404: not that");
+        expect(!BuilderWire.notEnabled(BuilderWire.refusal(503, "")), "unreachable: not that");
+        expect(BuilderWire.handoff(null) == null && BuilderWire.handoff("  \n ") == null, "no words: nothing handed over");
+        expect("A tip calculator".equals(BuilderWire.handoff("  A tip calculator \n")), "trimmed");
+        expect(BuilderWire.handoff(new String(new char[5000]).replace('\0', 'a')).length() == BuilderWire.MAX_HANDOFF, "bounded");
+
         // Job (§3.2), with a failure.
         BuildJob j = BuilderWire.job("{\"schemaVersion\":1,\"jobId\":\"j3\",\"projectId\":\"p1\",\"attempt\":2,\"state\":\"failed\",\"stage\":\"compile\",\"message\":\"m\",\"logTail\":\"...\","
             + "\"startedAt\":1794608705.5,\"updatedAt\":1794608710.0,\"failure\":{\"category\":\"dependency\",\"summary\":\"Kotlin\",\"retryable\":false}}");
