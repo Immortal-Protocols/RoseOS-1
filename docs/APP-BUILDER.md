@@ -2897,7 +2897,7 @@ Still open for the Chariot owner (App Core's proposal in brackets):
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
 
-### 7.7a Backend in the Chariot agent container (the URL record is in source; the `app_host` setup is a PROPOSAL, not implemented or approved)
+### 7.7a Backend in the Chariot agent container (in source, off unless `agentHost` is configured; no live target yet)
 
 Nathan's direction (2026-11-16) puts each generated app's backend in the
 existing Chariot agent container. Rose's existing Codex obtains it with the
@@ -2911,34 +2911,91 @@ not part of it.
   writes untrusted-request code and must not hold Chariot credentials.
 - The voice worker keeps its shell disabled.
 
-The proposal is a separate backend-setup turn, a new bridge purpose
-`app_host`, in the same per-job bridge. It runs after the builder has a
-built and signed version with its server ELF and manifest. It needs, only
-for that turn:
-- **Tools:** the shell tool.
-- **Network:** the Chariot API (`app.chariots.sh`) and SSH gateway
-  (`ssh.chariots.sh`) only. Codex permission profiles have no per-host
-  network list, so the host limit comes from the Mac (Local Worker).
-- **Reads:** that version's server ELF and manifest, the `chariot` binary and
-  its skill.
-- **Writes:** a dedicated `HOME` with `~/.chariot`, logged in by Local Worker
-  (the CLI writes its SSH certificate and `known_hosts` there), plus a scratch
-  directory.
-- **Denied:** `ROSE_CONFIG_DIR`, project signing keys and other projects.
-- **No printing:** credentials or keys.
+**Who runs the setup.** The builder itself, in the one Rose server's build
+worker (`rose/app_builder/app_host.py`). It runs fixed scripts over the existing
+Chariot CLI (`chariot ssh AGENT -- /chariot/bin/sh -s`, script on stdin). No
+model turn is involved, so no Codex process gains a shell, network or
+credentials. The `app_host` bridge purpose proposed earlier is not needed.
+Which binary, data and keys are touched is the builder's code, not a model's
+choice, and the data-safety rules below are enforced by that code.
 
-**What the setup must keep** (from §7.7, now enforced inside the container):
-- Before replacing the binary, back up every regular, non-symlinked
-  `*.sqlite3` under the app's data directory (`auth.sqlite3`,
-  `shared.sqlite3`, `accounts/*.sqlite3`), and keep the previous ELF.
-- Never run an older schema on newer data. The server itself refuses with
-  `NewerSchema`, and the setup doesn't retry around it.
-- Start the server with `PORT`, `DATA_DIR` and a sealing keyring
-  (`CHARIOT_SEALING_KEY_FILE`, D9). Without the keyring the server stays not
-  ready (503). Where the keyring comes from inside a container is a decision:
-  App Core proposes generating it once into the persistent data area,
-  mode 0400.
-- Readiness is a 200 from `/health` with the expected `revision_sha256`.
+**Turning it on** (builder config, beside `clientServer`, which it requires):
+```
+"agentHost": {"chariot": "/abs/path/chariot", "home": "/abs/path/chariot-home",
+              "agents": ["<agent name>", ...], "generateKeyring": false, "port": 8090}
+```
+- `chariot`: the Chariot CLI.
+- `home`: the `HOME` where its owner ran `chariot login`. Only `HOME` is
+  passed; the CLI keeps its certificate there. The builder never reads it.
+- `agents`: 1 to 16 agents the owner has authorized for apps, one app each.
+  This list is the whole pool. A project is given the first listed agent not
+  already holding another project's app, by the identity that agent reports
+  (`CHARIOT_APP_ID`, `CHARIOT_APP_URL`). No agent is discovered, listed or
+  created.
+- `generateKeyring` (D9): whether the setup may write a new sealing keyring
+  (`rose-signin-keyring/v1`, one 32-byte key, mode 0400) into an agent that
+  has none. With `false`, an agent without one is refused before anything in
+  it is touched.
+- `port`: the loopback port the server binds and `app.json` names. The
+  default is 8090; 8088 and 42617 are refused.
+
+**The job.** For a client-server version whose server is built for
+`server_manifest.TARGET` (musl):
+1. Before the client is generated, `ensure` records the project's agent
+   container (`record_agent_container`, below), so its URL is baked. A hosted
+   build without a record is refused.
+2. After the APK is signed and placed, and before the version is delivered,
+   `deploy` sets the server up. A failure fails the job (`toolchain`,
+   retryable) and delivers nothing.
+
+A server for another target is not delivered while `agentHost` is set.
+
+**The setup** (`deploy`, following `chariot/docs/agent-app-hosting.md` at
+30349c92):
+1. **Probe.** The agent reports `CHARIOT_APP_ID` and `CHARIOT_APP_URL`. It must
+   be the recorded agent, with every applet the scripts use in `/chariot/bin`.
+2. **State.** The deployed record (`deployed.json`) is read. An older
+   `data_schema` than the one deployed is refused, so older code never runs on
+   newer data.
+3. **Prepare.** An incoming folder is made under
+   `$HOME/workspace/.chariot-app`.
+4. **Transfer.** The server ELF and its start script go as a tar on stdin.
+   The sha256 of each is checked inside the agent.
+5. **Switch:**
+   - the keyring is checked first;
+   - `app.json` is removed and the running server stopped (TERM, then wait on
+     `run.lock`, then KILL);
+   - the data directory is archived to `backups/latest.tar`, and the previous
+     archive is kept as `previous.tar`;
+   - the previous `server` and `start` are kept as `server.prev` and
+     `start.prev`;
+   - the new pair is moved in and started with Chariot's own launcher
+     (`launch_agent_app.sh`, sha256 pinned in source);
+   - it must answer `/health` 200 with the new `revision_sha256` within 60 s;
+   - then `app.json` (`chariot-agent-app/v1`, the port, `/health`) is
+     published and `deployed.json` written.
+6. **On failure** the new server is stopped. The data is restored from
+   `latest.tar`, and the previous server and start script are put back,
+   relaunched and published again. The job fails.
+
+**The start script** exports `PORT`, `ROSE_LISTEN_HOST=127.0.0.1` (the
+generated server accepts only `127.0.0.1` or `0.0.0.0`, default `0.0.0.0`),
+`DATA_DIR`, `CHARIOT_SEALING_KEY_FILE`, `CHARIOT_REVISION_SHA256` and
+`CHARIOT_DEPLOYMENT_SHA256`. `CHARIOT_APP_ID` is the container's own. The
+script then runs `exec ./server`.
+
+**Tests:** `test_app_host_agent`. A fake agent runs the real scripts in a
+local `sh` with the applets linked into a temporary `/chariot/bin` and a fake
+health server. It covers:
+- first setup, update and rollback;
+- refusal without a keyring, of an older schema, of another agent, and of a
+  missing applet;
+- the pinned launcher;
+- the pool;
+- the job: URL baked, setup before delivery, a failed setup delivering
+  nothing.
+
+`test_app_host_level2` covers the config.
 
 **The client URL.** `RoseApi.serverUrl()` is baked into the APK, so the
 container's public `https` endpoint must be known before the client build.
@@ -2968,8 +3025,8 @@ up the server.
     --project ID --agent-id HEX --app-url URL
     [--replaces-agent-id HEX --replaces-app-url URL]
   ```
-  This is for Local Worker or the future `app_host` step, after the Chariot
-  CLI returns the agent and its URL. The command contacts nothing.
+  With `agentHost` the builder records it itself; this command is for an owner
+  recording one by hand. The command contacts nothing.
 - **Status.** The record tracks Chariot's proposed contract
   (`https://agent-<agent UUID hex>.apps.chariots.sh`, not yet confirmed).
   It checks only the id format and the https spelling, not that domain.
@@ -2977,22 +3034,16 @@ up the server.
   `test_app_owner_records`, and `test_app_host.NativeHosts`, which includes a
   job baking the container URL.
 
-**Open contract (Chariot Engineer).** As of 2026-11-17, Saba's and Chariot's
-reports say no public container app endpoint exists:
-- the service is internal `:8088`;
-- SSH is certificate-only and rejects forwarding and SFTP, so `scp` (which
-  uses SFTP) is not a supported transfer;
-- idle agents hibernate (48 h by default) and their processes stop.
-
-Needed before any implementation:
-1. the gateway from a public `https` URL to an authorized pod and a declared
-   port, and the port the server binds;
-2. a verified file-transfer method for the ELF;
-3. whether the data area persists across restart and hibernation;
-4. how the server is restarted after hibernation or a pod restart (the
-   activity contract);
-5. which container is the app's, and that the account is authorized to use
-   it (credits included).
+**What it still needs to run for real** (inputs, not source work):
+1. **The gateway domain.** `CHARIOT_AGENT_APP_DOMAIN=apps.chariots.sh` live on
+   Chariot (Saba). Until then `CHARIOT_APP_URL` has no public route.
+2. **An authorized agent with credits.** The `agents` list and a logged-in
+   `home` (Local Worker, once Nathan funds the account).
+3. **The applet set.** The probe refuses any agent whose `/chariot/bin`
+   lacks one of `app_host.APPLETS`; Chariot's doc confirms only some of them.
+4. **D9.** Whether `generateKeyring` may be `true`.
+5. **A qualified Linux build host** for the musl server (§5.2 recipe step 7,
+   confinement), which `agentHost` builds need.
 
 **Separate, not a gate on this work:** Saba's report of unenforced network
 policy and node service-account scope is tracked by Chariot and Saba. Any IAM,

@@ -37,7 +37,7 @@ SCHEMA_VERSION = 1
 # The builder's own settings: the same in the standalone host's config and in the builder config the Rose server
 # reads with ``--app-builder`` (docs/APP-BUILDER.md §6), which has no listener of its own.
 BUILDER_KEYS = {'schemaVersion', 'root', 'sdk', 'javaHome', 'buildTimeoutS', 'keyCreation', 'writer', 'backup',
-                'libraryStore', 'clientServer'}
+                'libraryStore', 'clientServer', 'agentHost'}
 BUILDER_REQUIRED = {'schemaVersion', 'root', 'sdk'}
 KEYS = BUILDER_KEYS | {'remoteDir', 'name', 'port', 'adminPort', 'hosts'}
 REQUIRED = BUILDER_REQUIRED | {'remoteDir', 'name', 'port', 'adminPort', 'hosts'}
@@ -76,6 +76,7 @@ class BuilderConfig:
     backup: Command | None = None
     library_store: Path | None = None
     client_server: ClientServerConfig | None = None
+    agent_host: object | None = None  # app_host.AgentHostConfig (§7.7a)
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ class HostConfig:
     backup: Command | None = None
     library_store: Path | None = None
     client_server: ClientServerConfig | None = None
+    agent_host: object | None = None
 
 
 def _path(value, name: str) -> Path:
@@ -153,7 +155,8 @@ def _builder_fields(data: dict) -> dict:
         build_timeout_s=_seconds(data.get('buildTimeoutS'), 'buildTimeoutS', 600.0), key_creation=key_creation,
         writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
         library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'),
-        client_server=_client_server_config(data.get('clientServer')))
+        client_server=_client_server_config(data.get('clientServer')),
+        agent_host=_agent_host_config(data.get('agentHost'), data.get('clientServer')))
 
 
 def parse_builder_config(data) -> BuilderConfig:
@@ -188,6 +191,30 @@ def parse_config(data) -> HostConfig:
 def separate(a: Path, b: Path) -> bool:
     """Neither directory is, or is inside, the other."""
     return not (a == b or a in b.parents or b in a.parents)
+
+
+def _agent_host_config(value, client_server):
+    """``agentHost`` (§7.7a): {chariot, home, agents[], generateKeyring?, port?}; only with ``clientServer``."""
+    if value is None:
+        return None
+    from .app_host import AGENT_NAME, APP_PORT, RESERVED_PORTS, AgentHostConfig
+    if client_server is None:
+        raise ConfigError('agentHost needs clientServer: it hosts client-server apps')
+    if not isinstance(value, dict) or set(value) - {'chariot', 'home', 'agents', 'generateKeyring', 'port'} \
+            or not {'chariot', 'home', 'agents'} <= set(value):
+        raise ConfigError('agentHost must contain chariot, home and agents (generateKeyring and port optional)')
+    agents = value['agents']
+    if (not isinstance(agents, list) or not 1 <= len(agents) <= 16 or len(set(agents)) != len(agents)
+            or not all(isinstance(a, str) and AGENT_NAME.fullmatch(a) for a in agents)):
+        raise ConfigError('agentHost.agents must be 1 to 16 distinct agent names')
+    generate = value.get('generateKeyring', False)
+    if type(generate) is not bool:
+        raise ConfigError('agentHost.generateKeyring must be true or false')
+    port = value.get('port', APP_PORT)
+    if type(port) is not int or not 1024 <= port <= 65535 or port in RESERVED_PORTS:
+        raise ConfigError('agentHost.port must be an unprivileged port other than 8088 and 42617')
+    return AgentHostConfig(_path(value['chariot'], 'agentHost.chariot'), _path(value['home'], 'agentHost.home'),
+                           tuple(agents), generate, port)
 
 
 def _client_server_config(value) -> ClientServerConfig | None:
@@ -426,8 +453,12 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
     tools = toolchain.Tools(config.sdk, config.java_home, timeout_s=config.build_timeout_s,
                             key_creation=config.key_creation)
     ledger = Ledger(config.root)
+    hosting = None
+    if config.agent_host is not None:
+        from .app_host import AgentHosting
+        hosting = AgentHosting(config.agent_host, ledger)
     return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
-                   server_url=ledger.backend_endpoint, **level2)
+                   server_url=ledger.backend_endpoint, hosting=hosting, **level2)
 
 
 def build_host(config: HostConfig, generate=None, backup=None) -> Host:

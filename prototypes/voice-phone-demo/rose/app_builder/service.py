@@ -230,7 +230,7 @@ def client_tree_ignore(snapshot: Path):
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
                  resolver=None, *, codegen=None, server_isolation=None, rust_tools=None, crate_source=None,
-                 server_crates=None, server_crate_deps=None, server_url=None):
+                 server_crates=None, server_crate_deps=None, server_url=None, hosting=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
@@ -247,7 +247,10 @@ class Builder:
           the path crates those depend on (rose-signin);
         - ``server_url(project_id) -> str | None``: the app's hosted https base URL from the hosting record (§7.7),
           which only owner tooling writes; None (the default) means it is not hosted yet. It is baked into the
-          client (``RoseServer.URL``), so the first hosted version needs a build after the record exists."""
+          client (``RoseServer.URL``), so the first hosted version needs a build after the record exists.
+        - ``hosting`` (rose.app_builder.app_host.AgentHosting, §7.7a): ``ensure(project_id)`` records the app's agent
+          container before its client is generated, and ``deploy(project_id, version_code, elf, manifest)`` sets the
+          server up there before the version is delivered; None (the default) hosts nothing."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         if tools.cache is None:  # the Java system image, made once per toolchain, in this builder's own storage
@@ -259,6 +262,7 @@ class Builder:
         self.crate_source = crate_source
         self.server_crates, self.server_crate_deps = dict(server_crates or {}), dict(server_crate_deps or {})
         self.server_url = server_url
+        self.hosting = hosting
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -441,8 +445,15 @@ class Builder:
                 server_records = dict(profile=CLIENT_SERVER, server=built.record(), migrations=level2['locks'],
                                       crates=built.crates, cargo_lock=built.cargo_lock, contract=level2['contract'])
                 if built.target == server_manifest.TARGET:  # §7.7: a manifest only for a server the host runs
-                    server_records['manifest'] = server_manifest.encode(server_manifest.manifest(
-                        project_id, code, built.record(), level2['locks'], shared=profile.server.shared))
+                    manifest = server_manifest.manifest(project_id, code, built.record(), level2['locks'],
+                                                        shared=profile.server.shared)
+                    server_records['manifest'] = server_manifest.encode(manifest)
+                    if self.hosting is not None:  # §7.7a: its server runs before any phone can get the app
+                        self._step(job, 'signing', 'hosting', 'Setting up the app\'s server.')
+                        self._host(project_id, code, artifacts / f'{built.sha256}.server', manifest)
+                elif self.hosting is not None:
+                    raise toolchain.StepFailed('toolchain', 'This app\'s server was not built for its host, so the app '
+                                               'was not delivered.')
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
                                        _note(note, job['request']), libraries, _api_report(work), **server_records):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
@@ -525,19 +536,42 @@ class Builder:
                 'server': built,
                 'locks': locks, 'contract': canonical.decode('utf-8')}
 
+    def _host(self, project_id: str, code: int, elf: Path, manifest: dict) -> None:
+        from .app_host import SetupFailed
+        try:
+            self.hosting.deploy(project_id, code, elf, manifest)
+        except SetupFailed as failed:
+            raise toolchain.StepFailed('toolchain', f'The app\'s server could not be set up in its Chariot agent '
+                                       f'container ({failed.step}), so the app was not delivered.', retryable=True,
+                                       log=failed.message[:2000]) from None
+
     def _hosted_url(self, project_id: str) -> str | None:
         """The app's hosted base URL from the injected hosting record, or None when it is not hosted yet. A record
-        the generated client would refuse is the builder's failure, here, never the user's first tap."""
-        if self.server_url is None:
+        the generated client would refuse is the builder's failure, here, never the user's first tap. With
+        ``hosting``, the app's agent container is recorded first (§7.7a)."""
+        if self.hosting is not None:
+            from .app_host import SetupFailed
+            try:
+                self.hosting.ensure(project_id)
+            except SetupFailed as failed:
+                raise toolchain.StepFailed('toolchain', f'No Chariot agent container could be set aside for this '
+                                           f'app ({failed.step}).', retryable=True, log=failed.message[:2000]) from None
+        read = self.server_url
+        if read is None and self.hosting is not None:  # the agent container just recorded is the hosting record
+            read = self.ledger.backend_endpoint
+        if read is None:
             return None
         try:
-            url = self.server_url(project_id)
+            url = read(project_id)
         except Exception:
             raise toolchain.StepFailed('toolchain', 'The builder could not read this app\'s hosting record.',
                                        retryable=True) from None
         if url is not None and not (isinstance(url, str) and HOSTED_URL.fullmatch(url)):
             raise toolchain.StepFailed('toolchain', 'This app\'s hosting record is not an https address the app '
                                        'can use, so the app was not built.')
+        if url is None and self.hosting is not None:  # a hosted app's client must know its server
+            raise toolchain.StepFailed('toolchain', 'This app has no agent container recorded, so it was not built.',
+                                       retryable=True)
         return url
 
     def _libraries(self, snapshot: Path, work: Path, project_id: str, package: str) -> list:

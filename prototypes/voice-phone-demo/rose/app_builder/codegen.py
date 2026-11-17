@@ -400,6 +400,21 @@ fn port(value: Option<String>) -> Result<u16, String> {
     }
 }
 
+/// The variable naming the address to listen on (§7.7a: an agent container's gateway reaches the app on loopback,
+/// so its start script sets 127.0.0.1), and the address when it names none.
+const LISTEN_HOST_ENV: &str = "ROSE_LISTEN_HOST";
+const DEFAULT_LISTEN_HOST: &str = "0.0.0.0";
+
+/// The listen address: exactly `127.0.0.1` or `0.0.0.0`, nothing else.
+fn listen_host(value: Option<String>) -> Result<&'static str, String> {
+    match value.as_deref() {
+        None => Ok(DEFAULT_LISTEN_HOST),
+        Some("127.0.0.1") => Ok("127.0.0.1"),
+        Some("0.0.0.0") => Ok("0.0.0.0"),
+        Some(_) => Err(format!("{LISTEN_HOST_ENV} is not 127.0.0.1 or 0.0.0.0")),
+    }
+}
+
 /// What the program was asked to do.
 #[derive(Debug, PartialEq)]
 enum Command {
@@ -443,6 +458,7 @@ fn invite_one(account: &str) -> Result<(), String> {
 
 fn run() -> Result<(), String> {
     let port = port(var(PORT_ENV)?)?;
+    let host = listen_host(var(LISTEN_HOST_ENV)?)?;
     let config = config()?;
     // The adapter loads the host's keyring. Any problem leaves no key, never a stop: sign-in answers
     // `auth_unavailable` and `/health` answers 503, and the reason is one word, never the path or a byte of the file.
@@ -455,7 +471,7 @@ fn run() -> Result<(), String> {
         .server(routes::routes::<handlers::App>())
         .map_err(|e| format!("routes: {e}"))?
         .with_client_header(CLIENT_HEADER);
-    let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("listening on {PORT_ENV}: {e}"))?;
+    let listener = TcpListener::bind((host, port)).map_err(|e| format!("listening on {PORT_ENV}: {e}"))?;
     Arc::new(server).serve(listener).map_err(|e| format!("serving: {e}"))
 }
 
