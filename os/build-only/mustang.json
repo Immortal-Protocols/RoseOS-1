@@ -120,9 +120,9 @@
   "capacity": {
     "reserveBytes": 322122547200,
     "allowanceRequired": true,
-    "compileAllowanceBytes": 214748364800,
+    "compileAllowanceBytes": 161061273600,
     "compileAllowanceKind": "first-build-proposal",
-    "basis": "Keep the existing 300GiB reserve, fresh source/output isolation and sampled whole-process-group stops. Tighten the compile write ceiling from250GiB to200GiB using the authenticated run43486889593 compile receipt: sampled peak120590569472 bytes (about112.3GiB), leaving about87.7GiB headroom. This is a finite allowance, not a guaranteed future peak or quota. Cache growth and other writers count in the same filesystem drop. Provenance: os/build-only/mustang-compile-space-43486889593.json. No deletion, reclaim, disk growth or resource-bound increase."
+    "basis": "Keep the existing 300GiB reserve and sampled process-group stops. Tighten the compile write ceiling to150GiB using successful compile receipts43486889593 (peak120590569472) and43973807439 (peak119562973184), leaving at least40.6GiB above the larger sampled peak. This is a finite allowance, not a future peak guarantee or quota; cache growth and other writers count in filesystem drop. Provenance: os/build-only/mustang-daily-space-43973807439.json. No deletion, reclaim, disk growth or resource increase."
   },
   "preparation": {
     "stages": [
@@ -136,7 +136,7 @@
     "boundsKind": "proposal",
     "boundsBasis": "Existing finite byte/time ceilings with reserve admission and reserve sampling enabled after the run44 filesystem-exhaustion failure.",
     "source": {
-      "boundBytes": 161061273600,
+      "boundBytes": 137438953472,
       "timeoutSeconds": 7200,
       "cleanupSeconds": 240,
       "cleanupBasis": "After a stop, removal of this run's own staging is bounded to 240 s, inside the 300 s between timeoutSeconds and Release's outer timeout, so completed.json is written before that timeout. Removal of ~1.7 million files is unmeasured: whatever is not removed in time stays, is named in completed.json (stagingLeft) and blocks the next source run until it is removed deliberately.",
@@ -147,7 +147,7 @@
       ],
       "includeBasis": "Existing pinned adevtool host dependencies; copy only the revision marker and complete host/linux-x86 distribution. No prior Mustang copy evidence.",
       "stagingPrefix": ".source-staging-",
-      "boundBasis": "Existing 150 GiB / 7200 s source-copy proposal reused for Mustang; unmeasured.",
+      "boundBasis": "128GiB finite write ceiling from authenticated successful run43973807439: source selection107141551298 file bytes, projected113425088512 filesystem bytes, plus547106816 selection-record allowance; about21.9GiB headroom. The selected pinned source and prepared vendor are copied together. Projection and reserve checks remain enforced. Provenance: os/build-only/mustang-daily-space-43973807439.json.",
       "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includePaths are adevtool's deps the vendor stage needs (the adevtool_revision file and the complete host/linux-x86 distribution, copied as its own selection whose links may not leave it); the selected deps must hold the pinned revision and the tools (never the vendor stage's other needs). The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
     },
     "download": {
