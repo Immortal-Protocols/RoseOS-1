@@ -19,6 +19,7 @@ public final class BuilderActivity extends BuilderScreen {
  }
 
  @Override void showPair(String error) {
+  shown = Refresh.Shown.OTHER;
   screen++;
   openProject = null;
   main.removeCallbacks(poll);
@@ -41,12 +42,12 @@ public final class BuilderActivity extends BuilderScreen {
  /** Back from pairing Rose Agent: the real builder, with the owner's words if they brought any, without asking again.
   *  If the Agent was paired again (another server or a new phone identity) while this screen lived, its old link can
   *  only fail closed, so the builder starts over on the current pairing. */
- @Override protected void onResume() {
-  super.onResume();
-  if (demo) return;
+ @Override boolean resumeConnect() {
+  if (demo) return false;
   boolean repaired = api != null && link != null && !link.samePairing(RoseServerLink.paired(this));
   if (repaired) { api = null; link = null; }
-  if (api == null && connect()) showConnected();
-  else if (repaired) showPair(null);
+  if (api == null && connect()) { showConnected(); return true; }
+  if (repaired) { showPair(null); return true; }
+  return false;
  }
 }

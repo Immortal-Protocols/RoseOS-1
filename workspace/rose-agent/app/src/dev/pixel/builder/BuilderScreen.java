@@ -59,7 +59,13 @@ public abstract class BuilderScreen extends Activity {
   * refusal of a change, shown above the change box. Plain text only. */
  final java.util.Map<String, List<String>> notesFor = new java.util.HashMap<>();
  final java.util.Map<String, String> refusalFor = new java.util.HashMap<>();
- final Runnable poll = new Runnable() { @Override public void run() { if (openProject != null) showProject(openProject); } };
+ /** What is showing, so a resume or a poll refreshes the right screen (Refresh). */
+ Refresh.Shown shown = Refresh.Shown.OTHER;
+ private boolean resumedSinceCreate;
+ /** A project's screen polls while its build runs; the library polls while any build in it runs (Refresh). */
+ final Runnable poll = new Runnable() { @Override public void run() {
+  if (openProject != null) showProject(openProject); else if (shown == Refresh.Shown.LIBRARY) refreshLibrary();
+ } };
 
  interface Work<T> { T run() throws Exception; }
  interface Done<T> { void got(T t); }
@@ -134,6 +140,27 @@ public abstract class BuilderScreen extends Activity {
   if (state == null && Installer.ACTION_STATUS.equals(getIntent().getAction())) installStatus(getIntent());
  }
 
+ /** Back in the foreground (from another app, the workspace, the installer, or pairing): the subclass may reconnect
+  *  first; otherwise the library or project on screen is read again, so a build that finished or was repaired while
+  *  the builder sat in the background shows as it is now. The resume right after onCreate has just fetched. */
+ @Override protected void onResume() {
+  super.onResume();
+  boolean first = !resumedSinceCreate;
+  resumedSinceCreate = true;
+  if (resumeConnect()) return;
+  switch (Refresh.onResume(shown, first, api != null)) {
+   case LIBRARY: refreshLibrary(); break;
+   case PROJECT: if (openProject != null) showProject(openProject); break;
+   default: break;
+  }
+ }
+
+ /** Out of the foreground: no polling while unseen. The resume refresh reads the screen again and polls from there. */
+ @Override protected void onPause() { main.removeCallbacks(poll); super.onPause(); }
+
+ /** The subclass's chance to reconnect on resume; true when it drew a new screen itself. */
+ boolean resumeConnect() { return false; }
+
  @Override protected void onSaveInstanceState(Bundle out) { super.onSaveInstanceState(out); out.putString("project", openProject); out.putBoolean("demo", demo); }
  @Override protected void onDestroy() { main.removeCallbacks(poll); io.shutdownNow(); super.onDestroy(); }
  @Override public void onBackPressed() { if (openProject != null && api != null) showLibrary(); else super.onBackPressed(); }
@@ -178,6 +205,7 @@ public abstract class BuilderScreen extends Activity {
 
  void showLibrary() {
   openProject = null;
+  shown = Refresh.Shown.LIBRARY;
   // Notes and refusals belong to the request just made; leaving the project ends them.
   notesFor.clear();
   refusalFor.clear();
@@ -190,8 +218,17 @@ public abstract class BuilderScreen extends Activity {
   async(api::projects, this::drawLibrary, e -> { root.removeAllViews(); unreachable(e, this::showLibrary); });
  }
 
+ /** The library read again in place: the list on screen stays until the new answer arrives. */
+ void refreshLibrary() {
+  main.removeCallbacks(poll);
+  async(api::projects, this::drawLibrary, e -> { root.removeAllViews(); unreachable(e, this::showLibrary); });
+ }
+
  void drawLibrary(List<BuilderApi.Project> projects) {
   root.removeAllViews();
+  main.removeCallbacks(poll);
+  // A build still queued or running keeps the library polling, as its project's screen does.
+  if (shown == Refresh.Shown.LIBRARY && Refresh.libraryPolls(projects)) main.postDelayed(poll, POLL_MS);
   title(demo ? "Your apps (demo)" : "Your apps");
   if (demo) body("This is a demo: nothing is built and nothing can be installed.");
   if (projects.isEmpty()) body("Describe an app and Rose builds it on your Mac or builder. Nothing is built on this phone.");
@@ -206,6 +243,7 @@ public abstract class BuilderScreen extends Activity {
 
  /** prefill keeps the owner's words after a refusal; refusal is the builder's own sentence, shown as plain text. */
  void showCreate(String prefill, String refusal) {
+  shown = Refresh.Shown.OTHER;
   main.removeCallbacks(poll);
   screen++;
   root.removeAllViews();
@@ -236,6 +274,7 @@ public abstract class BuilderScreen extends Activity {
  void showProject(String id) {
   boolean refresh = id.equals(openProject) && root.getChildCount() > 0;
   openProject = id;
+  shown = Refresh.Shown.PROJECT;
   main.removeCallbacks(poll);
   // A refresh of the same project is the same screen: a button's answer still in flight is kept.
   if (!refresh) { screen++; root.removeAllViews(); body("Loading…"); }
@@ -332,6 +371,7 @@ public abstract class BuilderScreen extends Activity {
  /** The creator's sign-in: the backend makes a one-time invite for the account the owner names, and it goes straight to
   *  the installed app (EnrollHandoff), which finishes the enrolment. The invite is never shown, stored or logged here. */
  void showSignIn(BuilderApi.Project p) {
+  shown = Refresh.Shown.OTHER;
   screen++;
   main.removeCallbacks(poll);
   root.removeAllViews();

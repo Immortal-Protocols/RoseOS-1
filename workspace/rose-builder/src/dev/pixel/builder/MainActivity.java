@@ -37,6 +37,7 @@ public final class MainActivity extends BuilderScreen {
 
  /** Pairing: the owner makes a pairing code on their Mac and pastes its link here. */
  @Override void showPair(String error) {
+  shown = Refresh.Shown.OTHER;
   screen++;
   openProject = null;
   main.removeCallbacks(poll);
