@@ -53,7 +53,7 @@ public final class HostingFixtureTest {
         String[][] expected = {
             {"invalid_account", "invalid_account", "false"}, {"not_hosted", "not_hosted", "false"},
             {"already_enrolled", "already_enrolled", "false"}, {"server_unavailable", "server_unavailable", "true"},
-            {"not_found", "not_found", "false"},
+            {"not_found", "not_found", "false"}, {"invites_unsupported", "invites_unsupported", "false"},
         };
         expect(refusals.size() == expected.length, "every refusal in the fixture is covered (" + refusals.keySet() + ")");
         for (String[] e : expected) {
