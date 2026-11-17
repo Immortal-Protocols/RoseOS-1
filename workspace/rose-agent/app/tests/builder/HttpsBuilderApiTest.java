@@ -43,6 +43,7 @@ public final class HttpsBuilderApiTest {
         asksToPairAgain("library", BuilderApi::projects);
         asksToPairAgain("create", api -> api.create("r1", "a stopwatch"));
         asksToPairAgain("retry", api -> api.retry("j1"));
+        asksToPairAgain("invite", api -> api.invite("p1", "nate"));
         asksToPairAgain("download", api -> api.download("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", 10,
             File.createTempFile("artifact", ".apk")));
         // A request whose body may have reached the server never goes to a second address; one that never left may.

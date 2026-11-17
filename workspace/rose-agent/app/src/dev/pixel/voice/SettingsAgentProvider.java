@@ -120,6 +120,17 @@ public final class SettingsAgentProvider extends ContentProvider {
    long end=SystemClock.elapsedRealtime()+2500;while(SystemClock.elapsedRealtime()<end){PhoneAccessibility a=PhoneAccessibility.active;if(a!=null){JSONObject screen=a.execute(new JSONObject().put("action","inspect_ui"));if("com.android.settings".equals(screen.optString("packageName")))return state().put("status","verified").put("panelOpened",panel).put("settingChanged",false);}Thread.sleep(60);}
    return state().put("status","uncertain").put("reason","Settings panel foreground was not confirmed").put("settingChanged",false);
   }
+  if(method.equals("open_builder")){
+   // A voice request for an app (App Core's voice tool, over the existing link): opens "New app" in the app builder with
+   // the owner's words filled in. It never builds: the owner confirms with "Build it" there. Not over the lock screen.
+   only(p,"description");Object d=p.opt("description");
+   if(d!=null&&!(d instanceof String))throw new IllegalArgumentException("Expected text description");
+   if(((android.app.KeyguardManager)getContext().getSystemService(Context.KEYGUARD_SERVICE)).isKeyguardLocked())return new JSONObject().put("status","locked");
+   Intent open=new Intent(getContext(),dev.pixel.builder.BuilderActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+   if(d!=null)open.putExtra(dev.pixel.builder.BuilderScreen.EXTRA_DESCRIPTION,(String)d);
+   getContext().startActivity(open);
+   return new JSONObject().put("status","launch_requested").put("built",false);
+  }
   throw new IllegalArgumentException("Unknown settings operation");
  }
  @Override public Bundle call(String method,String arg,Bundle extras){

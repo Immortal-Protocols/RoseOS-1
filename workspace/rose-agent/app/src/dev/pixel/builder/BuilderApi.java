@@ -20,6 +20,9 @@ interface BuilderApi {
   final ShareState share;
   /** Slice 9: a client-server version's server summary; never null (absent for a plain version), never a gate. */
   final ServerSummary server;
+  /** This version's server set up in the project's agent container (versions[].hosting); never null (absent unless
+   *  this is the version whose server is set up there), never a gate. */
+  final Hosting hosting;
   Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes) {
    this(versionCode, versionName, createdAt, jobId, sourceRevision, apkSha256, apkSize, notes, ApiReport.none(), ShareState.unpublished());
   }
@@ -29,6 +32,11 @@ interface BuilderApi {
   }
   Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes,
     ApiReport apiReport, ShareState share, ServerSummary server) {
+   this(versionCode, versionName, createdAt, jobId, sourceRevision, apkSha256, apkSize, notes, apiReport, share, server, Hosting.absent());
+  }
+  Version(long versionCode, String versionName, long createdAt, String jobId, String sourceRevision, String apkSha256, long apkSize, String notes,
+    ApiReport apiReport, ShareState share, ServerSummary server, Hosting hosting) {
+   this.hosting = hosting == null ? Hosting.absent() : hosting;
    this.versionCode = versionCode; this.versionName = versionName; this.createdAt = createdAt; this.jobId = jobId;
    this.sourceRevision = sourceRevision; this.apkSha256 = apkSha256; this.apkSize = apkSize; this.notes = notes;
    this.apiReport = apiReport == null ? ApiReport.none() : apiReport;
@@ -100,4 +108,22 @@ interface BuilderApi {
   * refused by the builder. Returns the job's new attempt. */
  int retry(String jobId) throws Unreachable, Refused;
  void reportInstall(InstallReceipt receipt) throws Unreachable;
+
+ /** The creator's one-time invite to their own client-server app: a credential, held only in memory, handed straight
+  * to the installed app and never shown, stored or logged. toString never includes the token. */
+ final class Invite {
+  final String projectId, account, token; final long versionCode, expiresInS;
+  Invite(String projectId, long versionCode, String account, String token, long expiresInS) {
+   this.projectId = projectId; this.versionCode = versionCode; this.account = account; this.token = token; this.expiresInS = expiresInS;
+  }
+  @Override public String toString() { return "Invite(" + account + ", <redacted>)"; }
+ }
+ /** The builder didn't issue an invite: its reason word (invalid_account, not_hosted, invites_unsupported, already_enrolled,
+  * server_unavailable, not_found, or another it may add) and whether asking again may help. */
+ final class InviteRefused extends Exception {
+  final String word; final boolean retryable;
+  InviteRefused(String word, boolean retryable) { super(word); this.word = word; this.retryable = retryable; }
+ }
+ /** POST projects/<projectId>/invite {account}: a fresh single-use invite from the project's set-up backend. */
+ Invite invite(String projectId, String account) throws Unreachable, InviteRefused;
 }

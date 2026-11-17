@@ -376,14 +376,14 @@ java -cp "$JAVA_TESTS/RequestIds" dev.pixel.builder.RequestIdsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderWire" \
  workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java \
  workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java \
- workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
  workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/tests/builder/BuilderWireTest.java
 java -cp "$JAVA_TESTS/BuilderWire" dev.pixel.builder.BuilderWireTest
 # Project 1: the advisory API level summary (§3.3) against App Core's shared fixtures; no status is ever worded as a pass.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ApiReport" \
  workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java \
  workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java \
- workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java \
  workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/tests/builder/ApiReportTest.java
 java -cp "$JAVA_TESTS/ApiReport" dev.pixel.builder.ApiReportTest prototypes/voice-phone-demo/rose/tests/fixtures/api-report-summary-v1.json
 # Project 1, slice 9: a client-server version's server summary (§3.3) against App Core's shared fixture; it never says
@@ -396,13 +396,13 @@ java -cp "$JAVA_TESTS/ServerSummary" dev.pixel.builder.ServerSummaryTest prototy
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ShareState" \
  workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java \
  workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java \
- workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
  workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java \
  workspace/rose-agent/app/tests/builder/ShareStateTest.java
 java -cp "$JAVA_TESTS/ShareState" dev.pixel.builder.ShareStateTest prototypes/voice-phone-demo/rose/tests/fixtures/share-summary-v1.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/FakeBuilderApi" \
  workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java \
- workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java \
  workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java \
  workspace/rose-agent/app/src/dev/pixel/builder/Json.java \
  workspace/rose-agent/app/src/dev/pixel/builder/FakeBuilderApi.java workspace/rose-agent/app/tests/builder/FakeBuilderApiTest.java
@@ -410,15 +410,27 @@ java -cp "$JAVA_TESTS/FakeBuilderApi" dev.pixel.builder.FakeBuilderApiTest
 # Project 1, one server: builder API v1 exactly as rose.app --app-builder serves it, against App Core's recorded fixture.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderFixture" \
  workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java \
- workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
  workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/tests/builder/BuilderFixtureTest.java
 java -cp "$JAVA_TESTS/BuilderFixture" dev.pixel.builder.BuilderFixtureTest prototypes/voice-phone-demo/rose/tests/fixtures/builder-library-v1.json
 # Rose Agent: the builder transport over the Agent's pairing; a phone that can't sign is asked to pair again (no network).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HttpsBuilderApi" \
  workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java \
- workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
  workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/HttpsBuilderApi.java workspace/rose-agent/app/tests/builder/HttpsBuilderApiTest.java
 java -cp "$JAVA_TESTS/HttpsBuilderApi" dev.pixel.builder.HttpsBuilderApiTest
+# Rose Agent: the creator signing in to their own client-server app (backend status, invite wire, hand-off rules).
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/SignIn" \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/SignIn.java workspace/rose-agent/app/src/dev/pixel/builder/FakeBuilderApi.java workspace/rose-agent/app/tests/builder/SignInTest.java
+java -cp "$JAVA_TESTS/SignIn" dev.pixel.builder.SignInTest
+# The complete flow: versions[].hosting and the creator's invite as rose.app serves them, against App Core's recorded fixture.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HostingFixture" \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/SignIn.java \
+ workspace/rose-agent/app/tests/builder/BuilderFixtureTest.java workspace/rose-agent/app/tests/builder/HostingFixtureTest.java
+java -cp "$JAVA_TESTS/HostingFixture" dev.pixel.builder.HostingFixtureTest prototypes/voice-phone-demo/rose/tests/fixtures/builder-hosting-v1.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
