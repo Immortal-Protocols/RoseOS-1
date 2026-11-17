@@ -125,10 +125,14 @@ nor checks it, and it is not part of the APK.
 - backend/: the backend's own source, in any language and any files, kept here so later revisions start from
   it. The Android app's rules above (Java, no scripts or native code) do not apply inside backend/. Never put a
   credential or secret in it.
-- The container is small and plain: its root filesystem is read-only and HOME=/agent-data is the only writable
-  place; about 1 GiB of disk is shared with the app's data, memory is about 512 MiB, and no compiler or Python is
-  guaranteed. BusyBox applets are in /chariot/bin, which is not on PATH (name them as /chariot/bin/tar and so on,
-  or set PATH in your command). Prefer a light stack. Python is fine if it is there or can be installed into the
+- The container is small and plain: you run as UID 65534, not root, its root filesystem is read-only, and
+  HOME=/agent-data (a 1 GiB volume) is the only writable and the only persistent place. apt or any system-wide
+  install cannot work: install everything user-local inside the release folder (a venv, or pyenv/rustup with their
+  homes pointed there); anything put elsewhere is lost when the container restarts. That 1 GiB also holds the app's
+  data, two backups of it and two releases, so keep the release small (a Rust toolchain plus its build artifacts
+  likely does not fit). Memory is about 512 MiB, and no compiler or Python is
+  guaranteed. BusyBox applets are in /chariot/bin, which is not on PATH (name them as /chariot/bin/tar and so
+  on, or set PATH in your command). Prefer a light stack. Python is fine if it is there or can be installed into the
   release folder; Rust only if a toolchain fits. Pin a sha256 for anything you download, and check it before use.
 - agent_container runs one command in that container as /chariot/bin/sh -c COMMAND, with stdin if given, and
   returns the exit code, stdout and stderr, each cut to its last 64 KiB. It is the only way to reach the

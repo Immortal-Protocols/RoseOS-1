@@ -3019,8 +3019,12 @@ choice, and the data-safety rules below are enforced by that code.
   created.
 - `generateKeyring` (D9): whether the setup may write a new sealing keyring
   (`rose-signin-keyring/v1`, one 32-byte key, mode 0400) into an agent that
-  has none. With `false`, an agent without one is refused before anything in
-  it is touched.
+  has none.
+  - Only a builder-built (`client-server-v1`) server needs one: with `false`,
+    an agent without one is refused for it before anything is touched.
+  - An agent-built (`client-backend-v1`) backend needs none and starts
+    without one; `CHARIOT_SEALING_KEY_FILE` is set only when a keyring
+    exists. So D9 does not gate agent-built backends.
 - `port`: the loopback port the server binds and `app.json` names. The
   default is 8090; 8088 and 42617 are refused.
 
@@ -3055,8 +3059,9 @@ A server for another target is not delivered while `agentHost` is set.
 5. **Switch.** Every tool is called by its `/chariot/bin` path, which is not
    on PATH, and only with options BusyBox's applets take (its `flock` takes
    `-s -x -u -n` only). In order:
-   - The keyring is checked first. Without one, and without
-     `generateKeyring`, nothing is touched.
+   - The keyring is checked first. A builder-built server without one, and
+     without `generateKeyring`, is refused before anything is touched; an
+     agent-built backend goes on without one.
    - If an earlier switch was cut off (its `switching` marker is left), that
      is undone before anything else: the deployed release is started again,
      after `latest.tar` is put back if the marker says another binary may
@@ -3216,9 +3221,13 @@ up the server.
    `home` (Local Worker, once Nathan funds the account).
 3. **The applet set.** The probe refuses any agent whose `/chariot/bin`
    lacks one of `app_host.APPLETS`; Chariot's doc confirms only some of them.
-4. **D9.** Whether `generateKeyring` may be `true`.
-5. **A qualified Linux build host** for the musl server (§5.2 recipe step 7,
-   confinement), which `agentHost` builds need.
+4. **D9.** Whether `generateKeyring` may be `true`. This applies only to
+   builder-built (`client-server-v1`) servers; agent-built backends need no
+   keyring.
+
+Agent-built backends need no Linux build host: the building agent builds in
+the app's own agent container. A qualified Linux host (§5.2) matters only for
+the builder-built `client-server-v1` path, kept for apps already on it.
 
 **Separate, not a gate on this work:** Saba's report of unenforced network
 policy and node service-account scope is tracked by Chariot and Saba. Any IAM,
