@@ -106,4 +106,9 @@ final class FakeBuilderApi implements BuilderApi {
 
  @Override public synchronized void reportInstall(InstallReceipt receipt) { receipts.add(receipt); }
 
+ /** The demo's apps are client-only, with no backend: it never issues an invite, and never a pretend one. */
+ @Override public synchronized Invite invite(String projectId, String account) throws InviteRefused {
+  throw new InviteRefused("not_hosted", false);
+ }
+
 }

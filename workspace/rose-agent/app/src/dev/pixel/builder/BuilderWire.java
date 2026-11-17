@@ -38,6 +38,53 @@ final class BuilderWire {
 
  static String emptyBody() { return Json.write(base()); }
 
+ /** rose-signin valid_name, as the builder checks it: 1..128 UTF-8 bytes, no ':' and no control characters. */
+ static final int MAX_ACCOUNT_BYTES = 128;
+
+ /** The owner's account name for their own app, trimmed, or null when rose-signin would refuse it (invalid_account). */
+ static String account(String typed) {
+  if (typed == null) return null;
+  String a = text(typed.trim());
+  if (a.isEmpty() || a.indexOf(':') >= 0 || a.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_ACCOUNT_BYTES) return null;
+  for (int i = 0; i < a.length(); i++) if (Character.isISOControl(a.charAt(i))) return null;
+  return a;
+ }
+
+ static String inviteBody(String account) {
+  Map<String, Object> m = base();
+  m.put("account", text(account));
+  return Json.write(m);
+ }
+
+ /** The invite token: rose-signin base32, exactly 52 characters (A-Z, 2-7, no padding). */
+ static final java.util.regex.Pattern INVITE_TOKEN = java.util.regex.Pattern.compile("[A-Z2-7]{52}");
+
+ /** POST projects/<id>/invite 200: {projectId, versionCode, account, invite, expiresInS}, for exactly the project
+  *  and account asked for. A token of any other shape, or for another project or account, is malformed and never
+  *  handed on. No message ever includes the token. */
+ static BuilderApi.Invite invite(String body, String projectId, String asked) throws Malformed {
+  Map<String, Object> o = response(body);
+  String project = str(o, "projectId"), account = str(o, "account"), token = str(o, "invite");
+  if (!project.equals(projectId)) throw new Malformed("invite for another project");
+  if (!account.equals(text(asked))) throw new Malformed("invite for another account");
+  if (!INVITE_TOKEN.matcher(token).matches()) throw new Malformed("bad invite token");
+  long version = integer(o, "versionCode"), expires = integer(o, "expiresInS");
+  if (version < 1 || expires < 1) throw new Malformed("bad invite");
+  return new BuilderApi.Invite(project, version, account, token, expires);
+ }
+
+ /** A refused invite: the builder's {reason} word (400/404/409), and whether asking again may help. Null when the
+  *  answer carries no reason word (the builder is unavailable, or answered off-spec). */
+ static BuilderApi.InviteRefused inviteRefusal(int status, String body) {
+  Map<String, Object> o = null;
+  try { Object v = Json.parse(body); if (v instanceof Map) o = asObject(v); } catch (Json.ParseError | Malformed e) { o = null; }
+  if (status == 404) return new BuilderApi.InviteRefused("not_found", false);
+  if (o == null || !(o.get("reason") instanceof String)) return null;
+  String reason = (String) o.get("reason");
+  if (!reason.matches("[a-z_]{1,40}")) return null;
+  return new BuilderApi.InviteRefused(reason, Boolean.TRUE.equals(o.get("retryable")));
+ }
+
  /** §3.5 limits: a receipt the builder would refuse is never sent (it would only fail). versionCode is 1…2^31−1. */
  static final int DETAIL_MAX = 500;
  static boolean sendable(BuilderApi.InstallReceipt r) { return r != null && r.versionCode >= 1 && r.versionCode <= Integer.MAX_VALUE; }
@@ -127,7 +174,9 @@ final class BuilderWire {
     // Level 3: the recorded public links, read strictly; a bad share state is never a link and never fails the version.
     ShareState.parse(v.get("share")),
     // Slice 9: a client-server version's server summary, read strictly; a bad one is unavailable on its own.
-    ServerSummary.parse(v.get("server"), versionCode));
+    ServerSummary.parse(v.get("server"), versionCode),
+    // Its server set up in the agent container (versions[].hosting): read strictly on its own, never a gate.
+    Hosting.parse(v.get("hosting")));
  }
 
  static BuildJob job(String body) throws Malformed {

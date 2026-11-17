@@ -60,7 +60,10 @@ final class HttpsBuilderApi implements BuilderApi {
  /** A non-2xx answer, already classified. */
  static final class Answer extends Exception {
   final BuilderWire.Refusal refusal;
-  Answer(BuilderWire.Refusal refusal) { super(refusal.kind.name()); this.refusal = refusal; }
+  /** The answer as it came: its status and its (bounded) body, for calls that read their own refusal shape. */
+  final int status; final String body;
+  Answer(BuilderWire.Refusal refusal) { this(refusal, 0, ""); }
+  Answer(BuilderWire.Refusal refusal, int status, String body) { super(refusal.kind.name()); this.refusal = refusal; this.status = status; this.body = body; }
  }
 
  // ---- calls -----------------------------------------------------------------------------------------------------
@@ -121,6 +124,22 @@ final class HttpsBuilderApi implements BuilderApi {
  @Override public synchronized void reportInstall(InstallReceipt receipt) throws Unreachable {
   try { post(BuilderWire.PREFIX + "/installs", BuilderWire.receiptBody(receipt)); }
   catch (Answer a) { throw unreachable(a); }
+ }
+
+ /** POST projects/<id>/invite: a fresh single-use invite for the creator. The token is only ever returned to the
+  *  caller: never logged, never in an exception message. A request whose body was sent is never resent (send's rule),
+  *  so a lost answer reads as unreachable and the owner simply asks again: each call makes a fresh invite. */
+ @Override public synchronized Invite invite(String projectId, String account) throws Unreachable, InviteRefused {
+  String path;
+  try { path = BuilderWire.PREFIX + "/projects/" + BuilderWire.segment(projectId) + "/invite"; }
+  catch (BuilderWire.Malformed e) { throw malformed(); }
+  try { return BuilderWire.invite(post(path, BuilderWire.inviteBody(account)), projectId, account); }
+  catch (Answer a) {
+   if (a.refusal.kind == BuilderWire.Kind.PAIR_AGAIN || a.refusal.kind == BuilderWire.Kind.RETRY_SIGNED) throw unreachable(a);
+   InviteRefused r = BuilderWire.inviteRefusal(a.status, a.body);
+   if (r != null) throw r;
+   throw unreachable(a);
+  } catch (BuilderWire.Malformed e) { throw malformed(); }
  }
 
  /** GET artifacts/<sha256> to dest, refusing anything longer than the recorded size; the caller verifies the rest. */
@@ -213,7 +232,7 @@ final class HttpsBuilderApi implements BuilderApi {
      String text = read(code / 100 == 2 ? h.getInputStream() : h.getErrorStream(), MAX_JSON);
      answered(host);
      if (code / 100 == 2) return text;
-     last = new Answer(BuilderWire.refusal(code, text));
+     last = new Answer(BuilderWire.refusal(code, text), code, text);
      if (last.refusal.kind == BuilderWire.Kind.RETRY_SIGNED) { resign = true; break; }
      throw last;
     } catch (CantSign e) {

@@ -142,7 +142,7 @@ class Summary(unittest.TestCase):
         # The phone's own ShareState.link, compiled from workspace/rose-agent (the builder screens in Rose Agent): whatever the server would call
         # published, the phone must show as a link (the server may be stricter; it is never looser).
         builder = Path(__file__).resolve().parents[4] / 'workspace/rose-agent/app/src/dev/pixel/builder'
-        sources = [builder / f'{n}.java' for n in ('ShareState', 'ShareMessage', 'BuilderWire', 'Json', 'BuilderApi',
+        sources = [builder / f'{n}.java' for n in ('ShareState', 'ShareMessage', 'BuilderWire', 'Json', 'BuilderApi', 'Hosting',
                                                   'ApiReport', 'ServerSummary', 'BuildJob', 'InstallPlan')]
         corpus = self.LINKS_GOOD + self.LINKS_BAD + ['https://h/' + c for c in "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"]
         corpus += ['https://' + h + '/x' for h in ('a', 'a1', '1a', 'a-b', 'a.b', 'A.B', 'x.1', '1.2.3', 'h.', 'a..b')]

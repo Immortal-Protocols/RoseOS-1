@@ -283,6 +283,9 @@ public abstract class BuilderScreen extends Activity {
    // Slice 9: which app versions this version's server serves. Information only: it never decides what is offered
    // below, and it never says the server runs.
    for (String line : ServerSummary.lines(v.server, v.versionCode, names, installedCode)) small(line);
+   // Its server set up in the agent container: only what the builder says, never that it runs now.
+   String hostingLine = Hosting.line(v.hosting);
+   if (hostingLine != null) small(hostingLine);
    // Level 3: this exact version's immutable link, or why it can't be shared.
    if (v.share.published()) button("Share version " + v.versionName, x -> shareLink(p, v, v.share.versionUrl, false));
    else small(ShareState.line(v.share));
@@ -291,6 +294,10 @@ public abstract class BuilderScreen extends Activity {
    if (v.apkSha256 == null) { body("Version " + v.versionName + " isn't downloadable yet."); continue; }
    button(InstallPlan.label(offer) + " version " + v.versionName, x -> download(p, v, installed));
   }
+  // The creator signing in to their own app: only with a ready backend and a version with a server on this phone.
+  SignIn.Offer signIn = SignIn.offer(p, installed);
+  if (signIn == SignIn.Offer.OFFER) button(SignIn.button(p.name), x -> showSignIn(p));
+  else { String l = SignIn.offerLine(signIn, p.name); if (l != null) small(l); }
   // One active job per project: a change can be asked whenever none is queued or running, including after a failed
   // first build (the builder starts again from the original description plus the change).
   if (p.job == null || p.job.terminal()) {
@@ -320,6 +327,37 @@ public abstract class BuilderScreen extends Activity {
   BuilderApi.Version newest = p.latest();
   if (newest != null && newest.share.published()) button("Share latest version", x -> shareLink(p, newest, newest.share.latestUrl, true));
   button("All apps", x -> showLibrary());
+ }
+
+ /** The creator's sign-in: the backend makes a one-time invite for the account the owner names, and it goes straight to
+  *  the installed app (EnrollHandoff), which finishes the enrolment. The invite is never shown, stored or logged here. */
+ void showSignIn(BuilderApi.Project p) {
+  screen++;
+  main.removeCallbacks(poll);
+  root.removeAllViews();
+  title(SignIn.button(p.name));
+  body("Rose asks " + p.name + "'s backend for a one-time invite for your account and hands it straight to " + p.name
+    + ". You finish setting up your account there.");
+  if (!EnrollHandoff.canOpen(this, p.packageName)) {
+   body(SignIn.cantOpen(p.name));
+   button("Back", x -> showProject(p.projectId));
+   return;
+  }
+  EditText name = input("Your account name in " + p.name);
+  button("Get invite and open " + p.name, x -> {
+   String account = BuilderWire.account(name.getText().toString());
+   if (account == null) { toast("Type an account name: up to " + BuilderWire.MAX_ACCOUNT_BYTES + " bytes, with no ':'"); return; }
+   act(() -> api.invite(p.projectId, account), invite -> {
+    boolean opened = EnrollHandoff.start(this, p.packageName, invite);
+    toast(opened ? SignIn.handedOver(p.name) : SignIn.cantOpen(p.name));
+    showProject(p.projectId);
+   }, e -> {
+    if (pairAgain(e)) return;
+    if (e instanceof BuilderApi.InviteRefused) body(SignIn.refused((BuilderApi.InviteRefused) e, p.name));
+    else toast("Can't reach your builder. Try again for a fresh invite.");
+   });
+  });
+  button("Back", x -> showProject(p.projectId));
  }
 
  /** Downloads one version (HTTPS only), checks it is exactly what the builder recorded, then asks Android. */
