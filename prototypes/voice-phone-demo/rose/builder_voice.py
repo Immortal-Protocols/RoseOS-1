@@ -14,6 +14,9 @@ NAME = 'open_app_builder'
 NAMES = frozenset({NAME})
 MAX_DESCRIPTION = 4000
 TIMEOUT_S = 12.0  # the provider answers at once; the link adds its own round trip
+# Replies after which the builder may already be open: the provider's own wait ran out, the phone's receipt is still
+# running, the link's wait ran out, or the link dropped mid-call (as rose.customization and rose.composer read them).
+UNCERTAIN = frozenset({'uncertain', 'running', 'timeout', 'disconnected'})
 
 TOOLS = [{'type': 'function', 'name': NAME,
           'description': ('Open the app builder on the owner\'s phone with their description of an app filled in, for '
@@ -50,6 +53,10 @@ def call(phone, name: str, args) -> dict:
     if status == 'launch_requested':
         return {'ok': True, 'status': status, 'built': False, 'tool': NAME,
                 'message': 'The app builder is open on the phone with the request filled in; the owner taps Build there.'}
+    if status in UNCERTAIN:  # sent, and not answered: it may have opened, so it is never reported as not opened
+        return {'ok': False, 'status': 'uncertain', 'tool': NAME,
+                'message': ('The phone did not confirm it; the builder may or may not be open. Ask the owner to check '
+                            'the phone before asking again.')}
     if status == 'locked':
         return {'ok': False, 'status': status, 'tool': NAME,
                 'message': 'The phone is locked, so the builder was not opened; ask the owner to unlock it and ask again.'}

@@ -33,10 +33,16 @@ class OpenBuilder(unittest.TestCase):
     def test_each_reply_is_reported_for_what_it_is(self):
         for reply, error, status in (({'status': 'locked'}, None, 'locked'), ({'status': 'unavailable'}, None,
                                                                                 'unavailable'),
-                                     (None, TimeoutError(), 'uncertain'), ('junk', None, 'uncertain')):
+                                     (None, TimeoutError(), 'uncertain'), ('junk', None, 'uncertain'),
+                                     ({'status': 'uncertain'}, None, 'uncertain'), ({'status': 'running'}, None,
+                                                                                    'uncertain'),
+                                     ({'status': 'timeout'}, None, 'uncertain'), ({'status': 'disconnected'}, None,
+                                                                                  'uncertain')):
             with self.subTest(status=status):
                 out = builder_voice.call(phone(Link(reply, error)), 'open_app_builder', {'description': 'notes'})
                 self.assertEqual((out['ok'], out['status']), (False, status))
+                if status == 'uncertain':
+                    self.assertIn('may or may not be open', out['message'])  # never "did not open"
 
     def test_nothing_is_sent_for_a_request_it_cannot_take(self):
         for args in ({}, {'description': ''}, {'description': 7}, {'description': 'x' * 4001},
