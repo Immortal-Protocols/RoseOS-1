@@ -25,6 +25,7 @@ already-authorized ``chariot ssh`` with its own HOME.
 from __future__ import annotations
 
 import io
+import os
 import json
 import re
 import unicodedata
@@ -92,9 +93,10 @@ class Channel:
     def receive(self, tar: bytes, folder: str) -> Result:
         raise NotImplementedError
 
-    def run(self, command: str, stdin: bytes = b'', timeout_s: float | None = None) -> Result:
+    def run(self, command: str, stdin: bytes = b'', timeout_s: float | None = None, stopped=lambda: False) -> Result:
         """One command as ``/chariot/bin/sh -c COMMAND`` with ``stdin``: the building agent's ``agent_container``
-        tool (§7.7a), in this channel's container only."""
+        tool (§7.7a), in this channel's container only; stopped (and its process killed) when ``stopped()`` says so
+        or ``timeout_s`` passes."""
         raise NotImplementedError
 
 
@@ -124,8 +126,43 @@ class ChariotSsh(Channel):
             raise ValueError('folder')
         return self._run([f'exec {BIN}/tar -xf - -C "$HOME/workspace/.chariot-app/{folder}"'], tar)
 
-    def run(self, command: str, stdin: bytes = b'', timeout_s: float | None = None) -> Result:
-        return self._run([f'{BIN}/sh', '-c', command], stdin, timeout_s)
+    def run(self, command: str, stdin: bytes = b'', timeout_s: float | None = None, stopped=lambda: False) -> Result:
+        return run_stoppable([str(self.chariot), 'ssh', self.agent, '--', f'{BIN}/sh', '-c', command], stdin,
+                             {'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
+                             timeout_s or self.timeout_s, stopped)
+
+
+def run_stoppable(argv: list[str], stdin: bytes, env: dict, timeout_s: float, stopped) -> Result:
+    """``argv`` with ``stdin``, its whole process group killed when ``stopped()`` turns true or ``timeout_s``
+    passes (a cancelled job, the writer's deadline); output read through files, so a stuck reader never blocks."""
+    import signal
+    import tempfile
+    import time
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err, tempfile.TemporaryFile() as inp:
+        inp.write(stdin)
+        inp.seek(0)
+        try:
+            proc = subprocess.Popen(argv, stdin=inp, stdout=out, stderr=err, env=env, start_new_session=True)
+        except OSError as exc:
+            raise SetupFailed('ssh', f'chariot ssh did not run ({type(exc).__name__})') from None
+        deadline = time.monotonic() + timeout_s
+        why = None
+        while proc.poll() is None:
+            if stopped():
+                why = 'stopped'
+            elif time.monotonic() > deadline:
+                why = 'timeout'
+            if why:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                proc.wait()
+                raise SetupFailed('ssh', f'the command was {"stopped" if why == "stopped" else "timed out"}')
+            time.sleep(0.2)
+        out.seek(0)
+        err.seek(0)
+        return Result(proc.returncode, out.read().decode('utf-8', 'replace'), err.read().decode('utf-8', 'replace'))
 
 
 @dataclass(frozen=True)
@@ -239,6 +276,8 @@ umask 077
 @BIN@/rm -rf "$app/@INCOMING@"
 @BIN@/mkdir "$app/@INCOMING@"
 '''
+# The building agent's release folder (§7.7a): a fresh one, after the releases of attempts never switched to are
+# removed (only the current, the previous and this one stay), so failed attempts never fill the disk the data shares.
 # Shared by SWITCH and REVERT. Every tool is called by its /chariot/bin path (that folder is not on PATH), and only
 # with options BusyBox's applets take (its flock: -s -x -u -n only). The launcher holds run.lock for as long as the
 # server runs (its fd 9 is inherited through ./start's exec), so "locked" means a server is running.
@@ -265,7 +304,7 @@ healthy() {
   while test "$i" -lt @HEALTH_WAIT@; do
     reply=$(printf 'GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' |
       $B/timeout 3 $B/nc -w 2 127.0.0.1 @PORT@ 2>/dev/null || true)
-    case "$reply" in "HTTP/1."?" 200 "*) return 0 ;; esac
+    case "$reply" in "HTTP/1."?" 200 "*"$1"*) return 0 ;; esac
     $B/sleep 1
     i=$((i + 1))
   done
@@ -278,6 +317,18 @@ LAUNCH
 publish() {
   printf '%s' '@DESCRIPTOR@' > app.json.tmp
   $B/mv -f app.json.tmp app.json
+}
+# Remove a folder whatever modes its contents were given (a release can hold read-only folders); never fails.
+discard() { $B/chmod -R u+w "$1" 2>/dev/null || true; $B/rm -rf "$1" 2>/dev/null || true; }
+# Every release but the ones named (the current one, the previous one, one being built): gone, never failing.
+prune() {
+  for d in releases/*; do
+    test -e "$d" || continue
+    n=${d#releases/}
+    keep=no
+    for k in "$@"; do if test -n "$k" && test "$n" = "$k"; then keep=yes; fi; done
+    if test "$keep" = no; then discard "$d"; fi
+  done
 }
 # The release a deployed record names (deployed.json by default), or nothing.
 sha_of() {
@@ -334,6 +385,11 @@ recover() {
   fi
 }
 '''
+PREPARE_RELEASE = COMMON + r'''$B/mkdir -p releases
+prune "$(sha_of)" "$(sha_of deployed.prev.json)" "$(if test -f current; then $B/cat current; fi)"
+discard "releases/@SHA@"
+$B/mkdir "releases/@SHA@"
+'''
 SWITCH = COMMON + r'''phase=start
 failed=interrupted
 on_exit() {
@@ -384,6 +440,9 @@ if test "@INCOMING@" != "releases/@SHA@"; then  # an uploaded release; an agent-
   $B/mv "@INCOMING@" "releases/@SHA@"
 fi
 activate '@SHA@'
+# Nothing else may answer on the port: the health check below must hear this release, not a process left behind.
+reply=$(printf 'GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' | $B/timeout 3 $B/nc -w 2 127.0.0.1 @PORT@ 2>/dev/null || true)
+if test -n "$reply"; then failed=port-busy; exit 4; fi
 launch
 failed=health
 healthy '@SHA@'
@@ -397,12 +456,8 @@ $B/mv -f deployed.tmp deployed.json
 $B/rm -f switching
 phase=done
 publish
-prev=$(sha_of deployed.prev.json)
-for d in releases/*; do
-  n=${d#releases/}
-  if test "$n" != '@SHA@' && test "$n" != "$prev"; then $B/rm -rf "$d"; fi
-done
 echo "deployed=@SHA@"
+prune '@SHA@' "$(sha_of deployed.prev.json)"
 '''
 # The deployed release is already @SHA@ (a version whose server is byte-identical to the one set up): it is started
 # and published if it is not running, and nothing else changes: no backup, no new previous release.
@@ -452,7 +507,7 @@ else
   $B/rm -f server start current deployed.json deployed.prev.json
   echo "reverted=nothing"
 fi
-$B/rm -rf "releases/@SHA@"
+discard "releases/@SHA@"
 '''
 
 
@@ -627,6 +682,11 @@ class AgentHosting:
         last = None
         for name in self.config.agents:
             agent_id, url = self._identity(name)
+            try:  # an agent holding another app's server or data is never handed to this one
+                _check_owner(_state(self.channel(name), BIN), project)
+            except SetupFailed as refused:
+                last = refused
+                continue
             try:
                 self.ledger.record_agent_container(project, agent_id, url)
                 return
@@ -690,17 +750,24 @@ class AgentHosting:
         container = self.ledger.agent_container(project)
         if container is None:
             raise SetupFailed('plan', 'no agent container is recorded for this project')
+        p = Plan(project, 0, container['agentId'], container['appUrl'], None, release, None, self.config.port)
         with self._busy:
             channel = self.channel(self.name_for(container['agentId']))
-            _check(channel.script(_sh(PREPARE.replace('@INCOMING@', f'releases/{release}'), BIN)), 'prepare')
+            # The same checks as every setup: this agent is the recorded one, and holds this app or nothing, before
+            # anything is made there or any command of the building agent runs.
+            _identity_matches(channel, p, BIN)
+            _check_owner(_state(channel, BIN), project)
+            _check(channel.script(_script(PREPARE_RELEASE, p, BIN, sha=release, health_wait_s=HEALTH_WAIT_S,
+                                          stop_wait_s=STOP_WAIT_S)), 'prepare')
 
-    def exec(self, project: str, command: str, stdin: bytes = b'', timeout_s: float = 1800.0) -> Result:
+    def exec(self, project: str, command: str, stdin: bytes = b'', timeout_s: float = 1800.0,
+             stopped=lambda: False) -> Result:
         """The building agent's ``agent_container`` tool: one command in the project's own recorded agent container
         (never one the model names), through the configured Chariot CLI. Its output goes back to the model only."""
         container = self.ledger.agent_container(project)
         if container is None:
             raise SetupFailed('plan', 'no agent container is recorded for this project')
-        return self.channel(self.name_for(container['agentId'])).run(command, stdin, timeout_s)
+        return self.channel(self.name_for(container['agentId'])).run(command, stdin, timeout_s, stopped)
 
     def deploy_release(self, project: str, version_code: int, release: str, app_url: str | None = None) -> dict:
         """Switch to the release the building agent put in its folder (no upload; the builder built nothing)."""

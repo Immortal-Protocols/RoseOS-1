@@ -125,8 +125,12 @@ class CodexGenerator:
                 if e.get('session') != session:
                     continue
                 if e.get('event') == 'tool':
+                    left = deadline - time.monotonic()
                     client.send({'op': 'tool_result', 'callId': e.get('callId'),
-                                 'result': self._tool(backend, e.get('params'))})
+                                 'result': self._tool(backend, e.get('params'), max(1.0, min(self.tool_timeout_s, left)),
+                                                      lambda: cancelled() or time.monotonic() > deadline)})
+                    if cancelled():
+                        raise StepFailed('cancelled', 'Cancelled.')
                 elif e.get('event') == 'message' and isinstance(e.get('text'), str):
                     note = e['text'].strip()[:NOTE_MAX]
                 elif e.get('event') == 'failure':
@@ -148,7 +152,7 @@ class CodexGenerator:
                 # The writer's processes may still be running: fail the job rather than build next to them.
                 raise StepFailed('internal', 'The app writer did not confirm it stopped.') from failure
 
-    def _tool(self, backend, params) -> dict:
+    def _tool(self, backend, params, timeout_s: float | None = None, stopped=lambda: False) -> dict:
         """One ``agent_container`` call: run in the job's own container (BackendSession), its exit code and output
         back to the writer only (never logged, never in the job). Anything else is refused."""
         def answer(text: str, ok: bool = True) -> dict:
@@ -166,7 +170,8 @@ class CodexGenerator:
             return answer('agent_container takes {command, stdin?}, both text.', False)
         from .app_host import SetupFailed
         try:
-            done = backend.exec(args['command'], args.get('stdin', '').encode('utf-8'), self.tool_timeout_s)
+            done = backend.exec(args['command'], args.get('stdin', '').encode('utf-8'),
+                                timeout_s or self.tool_timeout_s, stopped)
         except SetupFailed as failed:
             return answer(f'The agent container could not be reached ({failed.step}).', False)
         out = done.stdout[-TOOL_OUTPUT_MAX:]

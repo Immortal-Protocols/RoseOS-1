@@ -95,7 +95,7 @@ class LocalAgent(app_host.Channel):
         self.scripts.append(text)
         return self._run([str(self.bin / 'sh'), '-s'], text.encode())
 
-    def run(self, command, stdin=b'', timeout_s=None):
+    def run(self, command, stdin=b'', timeout_s=None, stopped=lambda: False):
         return self._run([str(self.bin / 'sh'), '-c', command], stdin)
 
     def receive(self, tar, folder):

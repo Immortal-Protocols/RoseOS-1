@@ -5,6 +5,7 @@ delivers the version with its release. Here the container is the local stand-in 
 writer: no Chariot, SSH or model."""
 import json
 import os
+from unittest import mock
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ CONTRACT = {'schemaVersion': 1, 'api': 1, 'types': {'Note': {'fields': {'id': 'i
 
 def release_start(name: str) -> str:
     """An agent-built release's start: a Python backend in its own folder, by relative path."""
-    return f'set -eu\nexport CHARIOT_REVISION_SHA256={name}\nexec {sys.executable} ./server.py\n'
+    return f'set -eu\nexport CHARIOT_REVISION_SHA256="$ROSE_RELEASE"\nexec {sys.executable} ./server.py\n'
 
 
 class AgentBuiltRelease(unittest.TestCase):
@@ -61,12 +62,12 @@ class AgentBuiltRelease(unittest.TestCase):
         app = self.agent.app
         self.assertEqual((app / 'current').read_text(), v1.sha256)
         self.assertTrue((app / 'releases' / v1.sha256 / 'server.py').is_file())  # in place: never moved
-        self.assertIn('a1', self.get())
+        self.assertIn(v1.sha256, self.get())
         self.assertIsNone(json.loads((app / 'deployed.json').read_text())['dataSchema'])
         broken = self.build('b2', broken=True)
         with self.assertRaisesRegex(app_host.SetupFailed, f'restored: {v1.sha256}'):
             self.deploy(broken, health_wait_s=3)
-        self.assertIn('a1', self.get())  # rolled back to the agent's previous release, on its own data
+        self.assertIn(v1.sha256, self.get())  # rolled back to the agent's previous release, on its own data
         v2 = self.build('c3')
         self.assertEqual(self.deploy(v2)['previous'], v1.sha256)
         self.assertEqual(sorted(p.name for p in (app / 'releases').iterdir()), sorted([v1.sha256, v2.sha256]))
@@ -94,8 +95,49 @@ class AgentBuiltRelease(unittest.TestCase):
                 break
             except OSError:
                 time.sleep(0.1)
-        self.assertIn('c3', reply)  # the current release, not the previous one
+        self.assertIn(v2.sha256, reply)  # the current release, not the previous one
         self.assertEqual((self.agent.app / 'data/accounts/a.sqlite3').read_text(), 'a1\nc3\nc3\n')  # its data kept
+
+    def test_a_process_left_on_the_port_is_never_taken_for_the_release(self):
+        import http.server
+        import threading
+        stray = http.server.HTTPServer(('127.0.0.1', self.port), http.server.SimpleHTTPRequestHandler)
+        threading.Thread(target=stray.serve_forever, daemon=True).start()
+        self.addCleanup(stray.server_close)
+        self.addCleanup(stray.shutdown)
+        with self.assertRaisesRegex(app_host.SetupFailed, 'port-busy'):
+            self.deploy(self.build('a1'))
+        self.assertFalse((self.agent.app / 'deployed.json').exists())
+
+    def test_read_only_folders_in_an_old_release_never_fail_a_switch(self):
+        v1 = self.build('a1')
+        self.deploy(v1)
+        locked = self.agent.app / 'releases' / v1.sha256 / 'cache'
+        locked.mkdir()
+        (locked / 'mod').write_text('x')
+        locked.chmod(0o555)  # as a Go module cache leaves it
+        self.deploy(self.build('b2'))
+        self.assertEqual(self.deploy(self.build('c3'))['deployed'], 'c3' * 32)  # v1 pruned, whatever its modes
+        self.assertFalse((self.agent.app / 'releases' / v1.sha256).exists())
+
+    def test_preparing_checks_the_agent_and_clears_unused_releases(self):
+        ledger = L.Ledger(self.root / 'builder')
+        self.addCleanup(ledger.close)
+        project = ledger.create('d', 'r1', 'x', 'X')['projectId']
+        ledger.record_agent_container(project, AGENT_HEX, APP_URL)
+        cfg = app_host.AgentHostConfig(Path('/x'), Path('/y'), ('one',), True, self.port)
+        hosting = app_host.AgentHosting(cfg, ledger, channel=lambda name: self.agent)
+        with mock.patch.object(app_host, 'BIN', str(self.agent.bin)):
+            stale = self.agent.app / 'releases' / ('9' * 64)
+            stale.mkdir(parents=True)
+            hosting.prepare(project, 'a' * 64)
+            self.assertFalse(stale.exists())  # an attempt never switched to: removed
+            self.assertTrue((self.agent.app / 'releases' / ('a' * 64)).is_dir())
+            other = ledger.create('d', 'r2', 'y', 'Y')['projectId']
+            (self.agent.app / 'deployed.json').write_text(json.dumps({'release': 'a' * 64, 'project': project,
+                                                                      'dataSchema': None, 'versionCode': 1}))
+            with self.assertRaisesRegex(app_host.SetupFailed, 'another app'):
+                app_host._check_owner(app_host._state(self.agent, str(self.agent.bin)), other)
 
     def test_a_release_without_its_start_touches_nothing(self):
         v1 = self.build('a1')
@@ -104,7 +146,7 @@ class AgentBuiltRelease(unittest.TestCase):
         (self.agent.app / 'releases' / empty.sha256).mkdir()
         with self.assertRaisesRegex(app_host.SetupFailed, r'\(release\)'):
             self.deploy(empty)
-        self.assertIn('a1', self.get())
+        self.assertIn(v1.sha256, self.get())
         self.assertTrue((self.agent.app / 'app.json').is_file())
 
     def test_the_agents_invite_is_its_own_and_opaque(self):
@@ -119,6 +161,20 @@ class AgentBuiltRelease(unittest.TestCase):
         self.assertEqual(caught.exception.word, 'bad_output')
 
 
+class StoppableCommand(unittest.TestCase):
+    def test_a_cancel_or_deadline_kills_the_command_and_its_children(self):
+        import time
+        started = time.monotonic()
+        with self.assertRaisesRegex(app_host.SetupFailed, 'stopped'):
+            app_host.run_stoppable(['/bin/sh', '-c', 'sleep 60 & sleep 60'], b'', {'PATH': '/usr/bin:/bin'}, 60,
+                                   lambda: time.monotonic() - started > 0.5)
+        with self.assertRaisesRegex(app_host.SetupFailed, 'timed out'):
+            app_host.run_stoppable(['/bin/sleep', '60'], b'', {'PATH': '/usr/bin:/bin'}, 0.5, lambda: False)
+        self.assertLess(time.monotonic() - started, 10)
+        done = app_host.run_stoppable(['/bin/cat'], b'in', {'PATH': '/usr/bin:/bin'}, 10, lambda: False)
+        self.assertEqual((done.code, done.stdout), (0, 'in'))
+
+
 class WriterTool(unittest.TestCase):
     """The writer's one tool: answered from the job's own backend session, nothing else."""
 
@@ -128,7 +184,7 @@ class WriterTool(unittest.TestCase):
         def __init__(self):
             self.calls = []
 
-        def exec(self, command, stdin=b'', timeout_s=1800):
+        def exec(self, command, stdin=b'', timeout_s=1800, stopped=lambda: False):
             self.calls.append((command, stdin, timeout_s))
             return app_host.Result(0, 'built\n', 'warn\n')
 
@@ -160,7 +216,8 @@ class WriterTool(unittest.TestCase):
         self.assertEqual((opened['containerTool'], opened['toolTimeoutS'], opened['tools']), (True, 600, []))
         submitted = next(p for op, _, p in client.calls if op == 'submit')
         self.assertIn(session.folder, submitted['text'])
-        self.assertEqual(session.calls, [('echo hi', b'x', 600)])
+        self.assertEqual(session.calls[0][:2], ('echo hi', b'x'))
+        self.assertLessEqual(session.calls[0][2], 600)  # never past the writer's own deadline
         first, second = client.sent
         self.assertEqual((first['op'], first['callId'], first['result']['success']), ('tool_result', '7', True))
         self.assertIn('exit 0\n--- stdout ---\nbuilt', first['result']['contentItems'][0]['text'])
@@ -194,7 +251,7 @@ class InTheJob(unittest.TestCase):
         def prepare(self, project, release):
             self.calls.append(('prepare', project, release))
 
-        def exec(self, project, command, stdin=b'', timeout_s=1800):
+        def exec(self, project, command, stdin=b'', timeout_s=1800, stopped=lambda: False):
             self.calls.append(('exec', project, command))
             return app_host.Result(0, '', '')
 

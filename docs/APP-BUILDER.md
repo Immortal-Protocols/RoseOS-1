@@ -2934,14 +2934,22 @@ agent container:
     certificate or token.
   - The first call records the container from the owner-listed pool and
     makes the release folder, so a client-only app takes no agent.
+  - Before any of the agent's commands run, the agent is checked to be the
+    recorded one and to hold this app or nothing. A pool agent holding
+    another app's server or data is never recorded for this one.
+  - Each call stops, and its `chariot ssh` is killed, on a cancel or at the
+    writer's deadline.
+  - The tool is offered only to projects that are new or already
+    `client-backend-v1`.
 - **The release.** The agent builds this attempt's release in place, in
   `$HOME/workspace/.chariot-app/releases/<release id>`. The id is a sha256
   of the project, job and attempt. The release is never moved, so absolute
   paths inside it stay valid.
   - It must contain `start`: a POSIX sh script run by `/chariot/bin/sh
     ./start` from that folder, ending by exec-ing one foreground server.
-  - That server listens on `127.0.0.1:$PORT` and answers `/health` with 200.
-    Its data lives only under `$DATA_DIR`, migrated forward in place.
+  - That server listens on `127.0.0.1:$PORT` and answers `/health` with 200,
+    with `$ROSE_RELEASE` in the body. Its data lives only under `$DATA_DIR`,
+    migrated forward in place.
   - An optional `invite <account>` prints one opaque token (printable ASCII,
     no whitespace, at most 512 characters). A backend with no creator
     invites ships none, and the route then answers `invites_unsupported`.
@@ -2950,7 +2958,13 @@ agent container:
     `ROSE_LISTEN_HOST`, `DATA_DIR`, `CHARIOT_SEALING_KEY_FILE` when a keyring
     exists, and `ROSE_RELEASE` / `CHARIOT_DEPLOYMENT_SHA256` (the release
     id), then runs the release named by `current`.
-  - Health is a 200 from `/health`.
+  - Health is a 200 from `/health` whose body names the release, so a
+    process left on the port never passes for it. A port that already
+    answers before the launch is refused (`port-busy`).
+  - Old releases are pruned only after the switch has succeeded, whatever
+    modes their files have, so pruning never fails a switch. Preparing a
+    release also removes attempts that were never switched to; only the
+    current and previous releases stay.
   - `deployed.json` names the release. Its `dataSchema` is null for an
     agent-built backend, which migrates its own data.
   - A release without `start` is refused before anything is touched.

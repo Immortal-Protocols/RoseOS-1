@@ -138,7 +138,8 @@ nor checks it, and it is not part of the APK.
 - The release folder must end up holding an executable start: a POSIX sh script, run as /chariot/bin/sh ./start
   from inside the release folder, that ends by exec-ing one foreground server process. The release runs where
   you build it (it is never moved), so absolute paths inside it, a virtualenv's say, stay valid. That server listens on 127.0.0.1:$PORT, serves the contract's routes,
-  answers GET /health (a plain HTTP/1.0 request) with 200 once it is ready, and keeps all persistent data only
+  answers GET /health (a plain HTTP/1.0 request) with 200 once it is ready, with $ROSE_RELEASE in the reply body
+  (the builder checks it is this release answering, not something left running), and keeps all persistent data only
   under $DATA_DIR. That data must never be deleted or reset: migrate it forward in place. The builder backs it up
   before each switch and restores it if the switch fails.
 - The builder provides PORT, DATA_DIR, ROSE_LISTEN_HOST=127.0.0.1, ROSE_RELEASE and CHARIOT_DEPLOYMENT_SHA256

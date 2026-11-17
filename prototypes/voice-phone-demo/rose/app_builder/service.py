@@ -258,12 +258,12 @@ class BackendSession:
         self.folder = hosting.release_folder(release)
         self.used = False
 
-    def exec(self, command: str, stdin: bytes = b'', timeout_s: float = 1800.0):
+    def exec(self, command: str, stdin: bytes = b'', timeout_s: float = 1800.0, stopped=lambda: False):
         if not self.used:
             self.hosting.ensure(self.project_id)
-            self.hosting.prepare(self.project_id, self.release)
+            self.hosting.prepare(self.project_id, self.release)  # identity and owner checked there first
             self.used = True
-        return self.hosting.exec(self.project_id, command, stdin, timeout_s)
+        return self.hosting.exec(self.project_id, command, stdin, timeout_s, stopped)
 
 
 class Builder:
@@ -459,7 +459,9 @@ class Builder:
                 # Nothing delivered yet: this starts from the skeleton, so the generator writes the whole app.
                 kind, request = 'create', project['description'] + '\n\nChange requested: ' + request
             backend = None
-            if self.hosting is not None and getattr(self.generate, 'backend', False):
+            # The tool only for an app that is, or may become, client-backend-v1: never for one bound to another kind.
+            if self.hosting is not None and getattr(self.generate, 'backend', False) \
+                    and self.ledger.profile(project_id) in ('app-v1', CLIENT_BACKEND):
                 release = hashlib.sha256(f'{project_id}:{job_id}:{job["attempt"]}'.encode()).hexdigest()
                 backend = BackendSession(self.hosting, project_id, release)
                 note = self.generate(source, kind, request, cancelled, backend=backend)

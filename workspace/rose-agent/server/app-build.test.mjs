@@ -465,7 +465,7 @@ test('the policy carries the client-backend-v1 contract',()=>{
    /PORT, DATA_DIR, ROSE_LISTEN_HOST=127\.0\.0\.1, ROSE_RELEASE and CHARIOT_DEPLOYMENT_SHA256\n  \(both the release id\), CHARIOT_SEALING_KEY_FILE when a keyring exists, and Chariot's own CHARIOT_APP_ID and\n  CHARIOT_APP_URL/,
    /invite <account> prints one single-use invite token on stdout,\n  printable ASCII with no whitespace and at most 512 characters, and nothing else on stdout/,
    /A backend without\n  accounts ships none/,
-   /not data\/, the other\n  releases, start, current, app\.json, keys\/, backups\/, run\.lock or server\.pid/,/it is never moved/,/The builder switches releases after this turn/,
+   /not data\/, the other\n  releases, start, current, app\.json, keys\/, backups\/, run\.lock or server\.pid/,/it is never moved/,/with \$ROSE_RELEASE in the reply body/,/The builder switches releases after this turn/,
    /Never read, print or copy credentials or secrets in the container: agent tokens, config files,\n  \/var\/run\/secrets or keys\//,
    /Do not leave the server, or anything else you started, running in the background past the end of this turn/,
    /you have no network, and your own shell runs only in this directory's sandbox/,/It is the only way to reach the\n  container; your own shell cannot/])
