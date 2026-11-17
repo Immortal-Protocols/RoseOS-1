@@ -402,13 +402,18 @@ on_exit() {
   exit 4
 }
 trap on_exit EXIT
-# Before anything is touched: the keyring the server needs (D9), never replaced once there.
+# Before anything is touched: the sealing keyring (D9), never replaced once there. Written only with the owner's
+# generateKeyring; required only by a builder-built server (its sign-in adapter seals with it). An agent-built
+# backend starts without one (the shim exports CHARIOT_SEALING_KEY_FILE only when there is one).
 if test ! -f keys/keyring.json; then
-  if test "@GENERATE_KEYRING@" != yes; then echo "failed=keyring"; phase=done; exit 6; fi
-  key=$($B/head -c 32 /dev/urandom | $B/base64)
-  printf '{"format":"rose-signin-keyring/v1","current":1,"keys":[{"version":1,"key":"%s"}]}' "$key" > keys/keyring.tmp
-  $B/chmod 0400 keys/keyring.tmp
-  $B/mv -f keys/keyring.tmp keys/keyring.json
+  if test "@GENERATE_KEYRING@" = yes; then
+    key=$($B/head -c 32 /dev/urandom | $B/base64)
+    printf '{"format":"rose-signin-keyring/v1","current":1,"keys":[{"version":1,"key":"%s"}]}' "$key" > keys/keyring.tmp
+    $B/chmod 0400 keys/keyring.tmp
+    $B/mv -f keys/keyring.tmp keys/keyring.json
+  elif test "@REQUIRE_KEYRING@" = yes; then
+    echo "failed=keyring"; phase=done; exit 6
+  fi
 fi
 # The release (uploaded by the builder, or put there by the building agent) must have its start, before anything
 # is touched.
@@ -614,7 +619,8 @@ def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring
                            'project': p.project}, separators=(',', ':'), sort_keys=True)
     result = channel.script(_script(SWITCH, p, bin_dir, sha=p.sha256, health_wait_s=health_wait_s,
                                     stop_wait_s=stop_wait_s, INCOMING=incoming, DEPLOYED=deployed, PROJECT=p.project,
-                                    GENERATE_KEYRING='yes' if generate_keyring else 'no'))
+                                    GENERATE_KEYRING='yes' if generate_keyring else 'no',
+                                    REQUIRE_KEYRING='yes' if p.elf is not None else 'no'))
     lines = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
     if result.code != 0 or lines.get('deployed') != p.sha256:
         raise SetupFailed('switch', f'the new server was not set up ({lines.get("failed", "unknown")}); restored: '
