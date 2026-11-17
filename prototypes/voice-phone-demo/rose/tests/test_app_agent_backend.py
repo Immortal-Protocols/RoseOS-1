@@ -75,6 +75,28 @@ class AgentBuiltRelease(unittest.TestCase):
                 app_host.invite(self.agent, v2.sha256, 'me', bin_dir=str(self.agent.bin))
         self.assertEqual(caught.exception.word, 'unsupported')
 
+    def test_after_a_pod_replacement_chariots_own_hook_runs_the_current_release_again(self):
+        """Chariot reruns its launcher (the postStart hook) against .chariot-app/start after a pod replacement or
+        restart, with the PVC kept: the shim, current, the releases and the data are all on it, so the release that
+        was current serves again on its data, with no setup and nothing from the builder."""
+        v1 = self.build('a1')
+        self.deploy(v1)
+        v2 = self.build('c3')
+        self.deploy(v2)
+        self.agent.stop()  # the pod goes away: the process dies, the PVC stays
+        import time
+        time.sleep(0.5)
+        launcher = app_host.LAUNCHER.replace('/chariot/bin', str(self.agent.bin))
+        self.assertEqual(self.agent.script(launcher).code, 0)  # the hook, exactly Chariot's launcher
+        for _ in range(100):
+            try:
+                reply = self.get()
+                break
+            except OSError:
+                time.sleep(0.1)
+        self.assertIn('c3', reply)  # the current release, not the previous one
+        self.assertEqual((self.agent.app / 'data/accounts/a.sqlite3').read_text(), 'a1\nc3\nc3\n')  # its data kept
+
     def test_a_release_without_its_start_touches_nothing(self):
         v1 = self.build('a1')
         self.deploy(v1)
