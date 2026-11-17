@@ -36,6 +36,8 @@ node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-
 node --test workspace/rose-agent/tests/trial-removal.test.mjs
 node --test workspace/rose-agent/tests/trial-menu-removal.test.mjs
 node --test workspace/rose-agent/tests/rose-presence.test.mjs workspace/rose-agent/tests/assistant-name.test.mjs
+# App builder refresh lifecycle: a build finished or repaired on the server shows without opening a project.
+node --test workspace/rose-agent/tests/builder-refresh.test.mjs
 # APP-BUG-OPEN-001: the shell open_app refusal stays fail-closed; registered launches keep their turn's task.
 node --test workspace/rose-agent/server/unbound-shell-open.test.mjs
 # APP-BUG-OPEN-002: registered phone navigation and input run as the current request and honour Stop.
@@ -431,6 +433,12 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/SignIn.java \
  workspace/rose-agent/app/tests/builder/BuilderFixtureTest.java workspace/rose-agent/app/tests/builder/HostingFixtureTest.java
 java -cp "$JAVA_TESTS/HostingFixture" dev.pixel.builder.HostingFixtureTest prototypes/voice-phone-demo/rose/tests/fixtures/builder-hosting-v1.json
+# Rose Agent builder: when the library and a project are read again (resume, and the library polling while a build runs).
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Refresh" \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/Refresh.java \
+ workspace/rose-agent/app/tests/builder/RefreshTest.java
+java -cp "$JAVA_TESTS/Refresh" dev.pixel.builder.RefreshTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
