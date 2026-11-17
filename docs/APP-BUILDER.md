@@ -2833,6 +2833,36 @@ container's public `https` endpoint must be known before the client build.
 The order is: obtain the container and its endpoint, build and sign, then set
 up the server.
 
+**Recorded in source: the agent container whose URL is baked.**
+- **The record.** `Ledger.record_agent_container(project, agent_id, app_url)`
+  stores the agent id (32 lower-case hex) and the app URL Chariot returns
+  for that agent (`CHARIOT_APP_URL`). It is recorded only from owner tooling,
+  and the URL is never derived from the id.
+- **The rules match the native-host record:**
+  - the same record again is a no-op;
+  - a different record needs `replaces` naming the current one;
+  - an agent or URL another project holds is refused;
+  - the URL is in its one https spelling, with no trailing `/` and no
+    `:443`.
+- **What a build bakes.** `Ledger.backend_endpoint` returns the container's
+  URL, ahead of a native host. The builder's `server_url` uses it, so a
+  client-server build writes it into `RoseServer.URL`. Versions already built
+  keep the URL they baked.
+- **Recording it:**
+  ```
+  python -m rose.app_builder.owner_records agent-container --ledger DIR
+    --project ID --agent-id HEX --app-url URL
+    [--replaces-agent-id HEX --replaces-app-url URL]
+  ```
+  This is for Local Worker or the future `app_host` step, after the Chariot
+  CLI returns the agent and its URL. The command contacts nothing.
+- **Status.** The record tracks Chariot's proposed contract
+  (`https://agent-<agent UUID hex>.apps.chariots.sh`, not yet confirmed).
+  It checks only the id format and the https spelling, not that domain.
+- **Tests:** `test_app_ledger_level2.AgentContainer`,
+  `test_app_owner_records`, and `test_app_host.NativeHosts`, which includes a
+  job baking the container URL.
+
 **Open contract (Chariot Engineer).** As of 2026-11-17, Saba's and Chariot's
 reports say no public container app endpoint exists:
 - the service is internal `:8088`;

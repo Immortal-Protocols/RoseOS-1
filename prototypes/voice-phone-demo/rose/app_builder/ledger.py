@@ -82,6 +82,12 @@ CREATE TABLE IF NOT EXISTS project_hosting (
 CREATE TABLE IF NOT EXISTS project_native_hosts (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), host_id TEXT NOT NULL UNIQUE,
   endpoint TEXT NOT NULL UNIQUE, recorded REAL NOT NULL);
+-- The Chariot agent container serving a project's server (§7.7a; Chariot's proposed contract, not yet confirmed):
+-- the agent's id and the app URL Chariot returns for it (CHARIOT_APP_URL), recorded only from owner tooling, never
+-- derived or guessed. When recorded it is what a client-server build bakes into RoseServer.URL, ahead of a native host.
+CREATE TABLE IF NOT EXISTS project_agent_containers (
+  project_id TEXT PRIMARY KEY REFERENCES projects(project_id), agent_id TEXT NOT NULL UNIQUE,
+  app_url TEXT NOT NULL UNIQUE, recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -108,6 +114,17 @@ HOSTED_URL = re.compile(r'https://(?=[^/:]{1,253}(?:[:/]|$))(?:[a-z0-9](?:[a-z0-
                         r'|6553[0-5]))?'
                         r"(?:/[A-Za-z0-9._~!$&'()*+,;=:@/-]*)?")
 MAX_ENDPOINT = 2048
+AGENT_ID = re.compile(r'[0-9a-f]{32}')  # Chariot's agent UUID as hex (agent-<hex>.apps.chariots.sh, proposed)
+
+
+def _check_endpoint(endpoint, what: str) -> None:
+    """An https address the generated client accepts, in its one spelling: the client drops a trailing '/', and :443
+    is https's own port, so either would let a second project record another spelling of the same server past the
+    uniqueness check."""
+    if not isinstance(endpoint, str) or len(endpoint) > MAX_ENDPOINT or not HOSTED_URL.fullmatch(endpoint):
+        raise LedgerError(f'{what} is an https address the generated client accepts')
+    if endpoint.endswith('/') or re.match(r'https://[^/]*:443(?:/|$)', endpoint):
+        raise LedgerError(f'{what} is written without a trailing / or the default port :443')
 SCOPES = ('account', 'shared')
 MIGRATION_NAME = re.compile(r'[a-z0-9_]{1,40}')
 CRATE_NAME = re.compile(r'[A-Za-z0-9_-]{1,64}')
@@ -627,12 +644,7 @@ class Ledger:
         no two projects' records name the same host or server."""
         if not isinstance(host_id, str) or not UUID.fullmatch(host_id):
             raise LedgerError('a native host id is a lower-case UUID')
-        if not isinstance(endpoint, str) or len(endpoint) > MAX_ENDPOINT or not HOSTED_URL.fullmatch(endpoint):
-            raise LedgerError('a native host endpoint is an https address the generated client accepts')
-        # One spelling per server: the client drops a trailing '/', and :443 is https's own port, so either would
-        # let a second project record another spelling of the same server past the uniqueness check.
-        if endpoint.endswith('/') or re.match(r'https://[^/]*:443(?:/|$)', endpoint):
-            raise LedgerError('a native host endpoint is written without a trailing / or the default port :443')
+        _check_endpoint(endpoint, 'a native host endpoint')
         record = {'hostId': host_id, 'endpoint': endpoint}
         with self.lock, self._immediate():  # read and write as one, against another process too (owner_records)
             if self._project(project) is None:
@@ -653,6 +665,49 @@ class Ledger:
                                     'project_id=?', (host_id, endpoint, self.clock(), project))
             except sqlite3.IntegrityError:
                 raise LedgerError('that native host id or endpoint belongs to another project') from None
+
+    def agent_container(self, project: str) -> dict | None:
+        """The Chariot agent container owner tooling recorded for the project, ``{agentId, appUrl}``, or None."""
+        with self.lock:
+            row = self.db.execute('SELECT agent_id, app_url FROM project_agent_containers WHERE project_id=?',
+                                  (project,)).fetchone()
+        return None if row is None else {'agentId': row[0], 'appUrl': row[1]}
+
+    def record_agent_container(self, project: str, agent_id: str, app_url: str, *,
+                               replaces: dict | None = None) -> None:
+        """Record the project's Chariot agent container, from owner tooling only: the agent id and the app URL
+        Chariot returned for it (CHARIOT_APP_URL). The same rules as a native host: the same record again is a no-op,
+        a different one is refused unless ``replaces`` names the current record exactly (``{agentId, appUrl}``), and
+        an agent or URL another project holds is refused. Versions already built keep the URL they baked."""
+        if not isinstance(agent_id, str) or not AGENT_ID.fullmatch(agent_id):
+            raise LedgerError('an agent id is 32 lower-case hex characters')
+        _check_endpoint(app_url, 'an agent app URL')
+        record = {'agentId': agent_id, 'appUrl': app_url}
+        with self.lock, self._immediate():  # read and write as one, against another process too (owner_records)
+            if self._project(project) is None:
+                raise LedgerError('unknown project')
+            current = self.agent_container(project)
+            if current == record:
+                return
+            if replaces is not None and replaces != current:
+                raise LedgerError('the agent container to replace is not the one recorded')
+            if current is not None and replaces is None:
+                raise LedgerError('this project already has an agent container; replacing it names the current one')
+            try:
+                if current is None:
+                    self.db.execute('INSERT INTO project_agent_containers VALUES (?,?,?,?)',
+                                    (project, agent_id, app_url, self.clock()))
+                else:
+                    self.db.execute('UPDATE project_agent_containers SET agent_id=?, app_url=?, recorded=? WHERE '
+                                    'project_id=?', (agent_id, app_url, self.clock(), project))
+            except sqlite3.IntegrityError:
+                raise LedgerError('that agent or app URL belongs to another project') from None
+
+    def backend_endpoint(self, project: str) -> str | None:
+        """What a client-server build bakes into ``RoseServer.URL`` (the Builder's ``server_url``): the recorded agent
+        container's app URL (§7.7a), else a recorded native host's endpoint (§7.7, until it is retired), else None."""
+        container = self.agent_container(project)
+        return container['appUrl'] if container is not None else self.native_host_endpoint(project)
 
     def library_lock(self, project: str) -> dict:
         """coordinate -> sha256 for every library any delivered version of the project used (the newest digest if

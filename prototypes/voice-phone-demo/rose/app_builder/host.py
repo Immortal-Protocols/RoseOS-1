@@ -427,7 +427,7 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
                             key_creation=config.key_creation)
     ledger = Ledger(config.root)
     return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
-                   server_url=ledger.native_host_endpoint, **level2)
+                   server_url=ledger.backend_endpoint, **level2)
 
 
 def build_host(config: HostConfig, generate=None, backup=None) -> Host:

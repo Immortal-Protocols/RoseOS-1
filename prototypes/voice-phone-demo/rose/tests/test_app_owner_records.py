@@ -18,6 +18,8 @@ HOST2 = '5c5c5c5c-5555-4555-8555-55555555555d'
 APK = '1e1e1e1e-1111-4111-8111-11111111111f'
 ENDPOINT = 'https://notes.example.org'
 ENDPOINT2 = 'https://notes.example.net/app'
+AGENT, AGENT2 = 'a1' * 16, 'b2' * 16
+APP_URL, APP_URL2 = f'https://agent-{AGENT}.apps.example.org', f'https://agent-{AGENT2}.apps.example.org'
 _connect = sqlite3.connect
 ROOT = Path(__file__).resolve().parents[2]  # prototypes/voice-phone-demo
 
@@ -36,6 +38,10 @@ class Base(unittest.TestCase):
         code = O.main(list(args), out=out)
         return code, json.loads(out.getvalue())
 
+    def container(self, *extra, agent=None, url=None, project=None):
+        return self.run_tool('agent-container', '--ledger', str(self.dir), '--project', project or self.project,
+                             '--agent-id', agent or AGENT, '--app-url', url or APP_URL, *extra)
+
     def native(self, *extra, host=HOST, endpoint=ENDPOINT, project=None):
         return self.run_tool('native-host', '--ledger', str(self.dir), '--project', project or self.project,
                              '--host-id', host, '--endpoint', endpoint, *extra)
@@ -45,7 +51,7 @@ class Records(Base):
     def test_show_then_record_then_the_same_again(self):
         code, out = self.run_tool('show', '--ledger', str(self.dir), '--project', self.project)
         self.assertEqual((code, out), (0, {'status': 'ok', 'projectId': self.project, 'nativeHost': None,
-                                           'hostedAppId': None}))
+                                           'agentContainer': None, 'hostedAppId': None}))
         for _ in range(2):  # the same record again is still ok
             code, out = self.native()
             self.assertEqual(code, 0)
@@ -89,6 +95,23 @@ class Records(Base):
         self.assertEqual((code, out['status']), (4, 'not_found'))
         self.assertFalse(missing.exists())  # no ledger is created
         self.assertEqual(self.native(project='0' * 16)[0], 4)
+
+    def test_an_agent_container_is_recorded_then_replaced_by_naming_it(self):
+        for _ in range(2):
+            code, out = self.container()
+            self.assertEqual((code, out['agentContainer'], out['nativeHost']), (0, {'agentId': AGENT,
+                                                                                   'appUrl': APP_URL}, None))
+        self.assertEqual(self.container(agent=AGENT2, url=APP_URL2)[0], 3)
+        self.assertEqual(self.container('--replaces-agent-id', AGENT, agent=AGENT2, url=APP_URL2)[0], 2)
+        code, out = self.container('--replaces-agent-id', AGENT, '--replaces-app-url', APP_URL, agent=AGENT2,
+                                   url=APP_URL2)
+        self.assertEqual((code, out['agentContainer']), (0, {'agentId': AGENT2, 'appUrl': APP_URL2}))
+        for agent, url in ((AGENT.upper(), APP_URL), (AGENT, APP_URL + '/'), (AGENT, 'http://agent.example.org')):
+            with self.subTest(agent=agent, url=url):
+                self.assertEqual(self.container(agent=agent, url=url, project=self.project)[0], 3)
+        ledger = L.Ledger(self.dir)
+        self.addCleanup(ledger.close)
+        self.assertEqual(ledger.backend_endpoint(self.project), APP_URL2)  # what a build bakes
 
     def test_it_runs_as_a_module(self):
         result = subprocess.run([sys.executable, '-m', 'rose.app_builder.owner_records', 'native-host', '--ledger',

@@ -303,5 +303,59 @@ class Upgrade(unittest.TestCase):
             self.assertEqual((new.crate_lock(project), new.cargo_lock(project)), ({}, None))
 
 
+AGENT = 'a1' * 16
+AGENT2 = 'b2' * 16
+APP_URL = f'https://agent-{AGENT}.apps.example.org'
+APP_URL2 = f'https://agent-{AGENT2}.apps.example.org'
+
+
+class AgentContainer(Base):
+    """§7.7a: the Chariot agent container (its agent id and CHARIOT_APP_URL), recorded only from owner tooling under
+    the native host's rules, and ahead of a native host in what a client-server build bakes into RoseServer.URL.
+    Synthetic reserved names only (RFC 2606), never a live agent."""
+
+    def test_recorded_once_then_replaced_only_by_naming_the_current_record(self):
+        self.assertIsNone(self.l.agent_container(self.project))
+        self.assertIsNone(self.l.backend_endpoint(self.project))
+        self.l.record_agent_container(self.project, AGENT, APP_URL)
+        self.l.record_agent_container(self.project, AGENT, APP_URL)  # the same again changes nothing
+        self.assertEqual(self.l.agent_container(self.project), {'agentId': AGENT, 'appUrl': APP_URL})
+        for agent, url in ((AGENT2, APP_URL), (AGENT, APP_URL2), (AGENT2, APP_URL2)):
+            with self.subTest(agent=agent, url=url), self.assertRaises(L.LedgerError):
+                self.l.record_agent_container(self.project, agent, url)  # never a silent move
+        with self.assertRaises(L.LedgerError):
+            self.l.record_agent_container(self.project, AGENT2, APP_URL2, replaces={'agentId': AGENT2,
+                                                                                   'appUrl': APP_URL})
+        self.l.record_agent_container(self.project, AGENT2, APP_URL2, replaces={'agentId': AGENT, 'appUrl': APP_URL})
+        self.assertEqual(self.l.backend_endpoint(self.project), APP_URL2)
+
+    def test_the_container_is_baked_ahead_of_a_native_host(self):
+        self.l.record_native_host(self.project, HOST, ENDPOINT)
+        self.assertEqual(self.l.backend_endpoint(self.project), ENDPOINT)  # until a container is recorded
+        self.l.record_agent_container(self.project, AGENT, APP_URL)
+        self.assertEqual(self.l.backend_endpoint(self.project), APP_URL)
+        self.assertEqual(self.l.native_host(self.project), {'hostId': HOST, 'endpoint': ENDPOINT})  # kept
+
+    def test_another_projects_agent_or_url_is_refused(self):
+        self.l.record_agent_container(self.project, AGENT, APP_URL)
+        other = self.l.create('d', 'other', 'y', 'Y')['projectId']
+        for agent, url in ((AGENT, APP_URL2), (AGENT2, APP_URL)):
+            with self.subTest(agent=agent, url=url), self.assertRaises(L.LedgerError):
+                self.l.record_agent_container(other, agent, url)
+        self.assertIsNone(self.l.agent_container(other))
+        with self.assertRaises(L.LedgerError):
+            self.l.record_agent_container('nope', AGENT2, APP_URL2)
+
+    def test_the_agent_id_and_url_are_checked(self):
+        for bad in ('', AGENT.upper(), AGENT[:-1], AGENT + '0', 'g' * 32, None, 7, HOST):
+            with self.subTest(agent=bad), self.assertRaises(L.LedgerError):
+                self.l.record_agent_container(self.project, bad, APP_URL)
+        for bad in ('http://agent.example.org', APP_URL + '/', APP_URL + ':443', APP_URL + '?q=1', 'https://10.0.0.1',
+                    '', None, ' ' + APP_URL):
+            with self.subTest(url=bad), self.assertRaises(L.LedgerError):
+                self.l.record_agent_container(self.project, AGENT, bad)
+        self.assertIsNone(self.l.agent_container(self.project))
+
+
 if __name__ == '__main__':
     unittest.main()

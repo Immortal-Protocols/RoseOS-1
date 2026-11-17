@@ -251,11 +251,14 @@ class NativeHosts(unittest.TestCase):
         b.ledger.record_native_host(project, self.HOST, self.ENDPOINT)
         self.assertEqual(b.server_url(project), self.ENDPOINT)
         self.assertIsNone(b.server_url(other))
+        container = 'https://agent-' + 'c3' * 16 + '.apps.example.org'
+        b.ledger.record_agent_container(other, 'c3' * 16, container)  # §7.7a: the container's URL is baked
+        self.assertEqual(b.server_url(other), container)
         rebuilt = host.build_host(self.config)
         self.addCleanup(rebuilt.builder.ledger.close)
         self.assertIs(rebuilt.builder.server_url.__self__, rebuilt.builder.ledger)
         self.assertEqual(rebuilt.builder.server_url(project), self.ENDPOINT)
-        self.assertIsNone(rebuilt.builder.server_url(other))
+        self.assertEqual(rebuilt.builder.server_url(other), container)
         self.assertIsNone(rebuilt.worker)
 
     def test_jobs_bake_missing_recorded_and_explicitly_replaced_endpoints(self):
@@ -296,7 +299,14 @@ class NativeHosts(unittest.TestCase):
             self.assertTrue(b.run_next())
             self.assertIn(f'static final String URL = "{self.NEXT_ENDPOINT}";', written[-1].read_text())
             self.assertIn(f'static final String URL = "{self.ENDPOINT}";', recorded_client.read_text())
-            self.assertEqual(compile_server.call_count, 3)
+            # §7.7a: once its agent container is recorded, the container's app URL is baked ahead of the host.
+            container = 'https://agent-' + 'd4' * 16 + '.apps.example.org'
+            b.ledger.record_agent_container(project, 'd4' * 16, container)
+            b.revise('fixture', project, {'schemaVersion': 1, 'clientRequestId': 'container',
+                                          'request': 'Build against the agent container.'})
+            self.assertTrue(b.run_next())
+            self.assertIn(f'static final String URL = "{container}";', written[-1].read_text())
+            self.assertEqual(compile_server.call_count, 4)
             compile_client.assert_not_called()
             keys.assert_not_called()
         for job in (first, second, third):
