@@ -33,8 +33,9 @@ public final class HostingFixtureTest {
         expect(v.hosting.setUp() && v.hosting.appUrl.startsWith("https://") && v.hosting.setUpAt > 0, "hosting reads as set up, with its address and time");
         expect(v.server.status == ServerSummary.Status.OK, "the server summary beside it keeps its exact keys and stays readable");
         expect(Hosting.line(v.hosting).startsWith("Backend set up · "), "worded as set up, never as running");
-        BuilderApi.Project p = new BuilderApi.Project("p", "Notes", "app.rose.gen.pp", null, java.util.Collections.singletonList(v), null);
-        expect(SignIn.offer(p, new InstallPlan.Installed("app.rose.gen.pp", null, v.versionCode)) == SignIn.Offer.OFFER, "the hosted version installed: sign-in offered");
+        String signer = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        BuilderApi.Project p = new BuilderApi.Project("p", "Notes", "app.rose.gen.pp", signer, java.util.Collections.singletonList(v), null);
+        expect(SignIn.offer(p, new InstallPlan.Installed("app.rose.gen.pp", signer, v.versionCode)) == SignIn.Offer.OFFER, "the hosted version installed, builder-signed: sign-in offered");
         expect(SignIn.offer(p, null) == SignIn.Offer.INSTALL_FIRST, "not installed: no invite asked for");
 
         // POST /builder/v1/projects/{id}/invite 200.
