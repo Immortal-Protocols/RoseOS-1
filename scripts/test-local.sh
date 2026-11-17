@@ -425,6 +425,12 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
  workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/SignIn.java workspace/rose-agent/app/src/dev/pixel/builder/FakeBuilderApi.java workspace/rose-agent/app/tests/builder/SignInTest.java
 java -cp "$JAVA_TESTS/SignIn" dev.pixel.builder.SignInTest
+# The complete flow: versions[].hosting and the creator's invite as rose.app serves them, against App Core's recorded fixture.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HostingFixture" \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/Hosting.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/src/dev/pixel/builder/SignIn.java \
+ workspace/rose-agent/app/tests/builder/BuilderFixtureTest.java workspace/rose-agent/app/tests/builder/HostingFixtureTest.java
+java -cp "$JAVA_TESTS/HostingFixture" dev.pixel.builder.HostingFixtureTest prototypes/voice-phone-demo/rose/tests/fixtures/builder-hosting-v1.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
