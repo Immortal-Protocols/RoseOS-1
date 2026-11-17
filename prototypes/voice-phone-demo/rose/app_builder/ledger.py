@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS project_native_hosts (
 CREATE TABLE IF NOT EXISTS project_agent_containers (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), agent_id TEXT NOT NULL UNIQUE,
   app_url TEXT NOT NULL UNIQUE, recorded REAL NOT NULL);
+-- The version whose server the builder last set up in the project's agent container (§7.7a) and then delivered:
+-- its server answered its health check there before the version was delivered. Cleared once another server replaces
+-- it (a failed setup rolls back to it, so it stays), so a server replaced by a version that is never delivered is
+-- never claimed for an older one. Not a claim it runs now.
+CREATE TABLE IF NOT EXISTS project_server_setups (
+  project_id TEXT PRIMARY KEY REFERENCES projects(project_id), version_code INTEGER NOT NULL,
+  app_url TEXT NOT NULL, set_up REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -104,6 +111,10 @@ class LedgerError(ValueError):
 
 
 CLIENT_SERVER = 'client-server-v1'
+# §7.7a: the building agent's backend, set up in the project's agent container; the builder built none of it, so a
+# version records its release id (and its contract), not a server binary, a lock, crates or migrations.
+CLIENT_BACKEND = 'client-backend-v1'
+AGENT_RELEASE_TARGET = 'chariot-agent'
 HEX64 = re.compile(r'[0-9a-f]{64}')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 # What RoseApi.HttpsTransport accepts, narrowed: https, a lower-case DNS name (no IP address: as java.net.URI reads
@@ -396,14 +407,25 @@ class Ledger:
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
                 dependencies=(), api_report: dict | None = None, profile: str | None = None, server=None,
                 migrations=(), crates=(), cargo_lock: str | None = None, contract: str | None = None,
-                manifest: bytes | None = None):
+                manifest: bytes | None = None, committed: bool = False):
         """Record the delivered version and, in the same transaction, the libraries it was built with (its lock).
         A client-server version (profile CLIENT_SERVER) also records its server ELF, its migration lock, the crates
         its server was built with and its Cargo.lock, and binds the project's profile; once bound, a version without
-        its server is refused. Nothing is half recorded."""
-        if profile not in (None, CLIENT_SERVER):
+        its server is refused. Nothing is half recorded. ``committed``: the version's server is already set up in
+        its agent container, so a cancel asked for since no longer stops the delivery."""
+        if profile not in (None, CLIENT_SERVER, CLIENT_BACKEND):
             raise LedgerError('unknown profile')
-        if profile == CLIENT_SERVER:
+        if profile == CLIENT_BACKEND:
+            if not isinstance(server, dict) or set(server) != {'release'} or not isinstance(server['release'], str) \
+                    or not HEX64.fullmatch(server['release']):
+                raise LedgerError('an agent-backend version needs its release as {release}')
+            if migrations or crates or cargo_lock is not None or manifest is not None:
+                raise LedgerError('an agent-backend version has no builder-built server, lock or migrations')
+            if contract is not None and (not isinstance(contract, str) or not contract
+                                         or len(contract.encode('utf-8', 'replace')) > MAX_CONTRACT):
+                raise LedgerError('a contract is its canonical JSON text')
+            server_row = (server['release'], 0, AGENT_RELEASE_TARGET)
+        elif profile == CLIENT_SERVER:
             server_row = _server(server)
             migration_rows = [_migration(m) for m in migrations]
             if len({(r[0], r[1]) for r in migration_rows}) != len(migration_rows):
@@ -430,10 +452,13 @@ class Ledger:
                               'manifest')
         with self.lock:
             job = self.job(job_id)
-            if job['state'] not in ACTIVE or self.cancel_requested(job_id):
+            if job['state'] not in ACTIVE or (self.cancel_requested(job_id) and not committed):
                 return False
-            if profile is None and self._profile(job['projectId']) == CLIENT_SERVER:
+            bound = self._profile(job['projectId'])
+            if profile is None and bound != 'app-v1':
                 raise LedgerError('this project has a server; a version without it is refused')
+            if profile is not None and bound not in ('app-v1', profile):
+                raise LedgerError('this project\'s server is of another kind; a version of this kind is refused')
             if profile == CLIENT_SERVER:  # the lock, kept by the ledger itself and not only by its callers
                 locked = {(r[0], r[1]): (r[2], r[3]) for r in self.db.execute(
                     'SELECT DISTINCT scope, number, name, sha256 FROM version_migrations WHERE project_id=?',
@@ -462,6 +487,14 @@ class Ledger:
                 if api_report is not None:  # advisory, kept with the version it describes
                     self.db.execute('INSERT INTO version_api_reports VALUES (?,?,?)',
                                     (job['projectId'], job['versionCode'], json.dumps(api_report, sort_keys=True)))
+                if profile == CLIENT_BACKEND:
+                    self.db.execute('INSERT OR IGNORE INTO project_profiles VALUES (?,?,?)',
+                                    (job['projectId'], CLIENT_BACKEND, job['versionCode']))
+                    self.db.execute('INSERT INTO version_servers VALUES (?,?,?,?,?)',
+                                    (job['projectId'], job['versionCode'], *server_row))
+                    if contract is not None:
+                        self.db.execute('INSERT INTO version_contracts VALUES (?,?,?)',
+                                        (job['projectId'], job['versionCode'], contract))
                 if profile == CLIENT_SERVER:
                     self.db.execute('INSERT OR IGNORE INTO project_profiles VALUES (?,?,?)',
                                     (job['projectId'], CLIENT_SERVER, job['versionCode']))
@@ -707,6 +740,28 @@ class Ledger:
             except sqlite3.IntegrityError:
                 raise LedgerError('that agent or app URL belongs to another project') from None
 
+    def clear_server_setup(self, project: str) -> None:
+        """Another server replaced the project's set-up one: no delivered version is claimed set up until one is."""
+        with self.lock, self._immediate():
+            self.db.execute('DELETE FROM project_server_setups WHERE project_id=?', (project,))
+
+    def server_setup(self, project: str) -> dict | None:
+        """The delivered version whose server was last set up in the project's agent container, or None."""
+        with self.lock:
+            row = self.db.execute('SELECT version_code, app_url, set_up FROM project_server_setups WHERE project_id=?',
+                                  (project,)).fetchone()
+        return None if row is None else {'versionCode': row[0], 'appUrl': row[1], 'setUpAt': row[2]}
+
+    def record_server_setup(self, project: str, version_code: int, app_url: str, at: float) -> None:
+        """The delivered ``version_code``'s server answered its health check at ``app_url``'s container at ``at``."""
+        _check_endpoint(app_url, 'an agent app URL')
+        with self.lock, self._immediate():
+            if self.db.execute('SELECT 1 FROM versions WHERE project_id=? AND version_code=?',
+                               (project, version_code)).fetchone() is None:
+                raise LedgerError('that version was not delivered')
+            self.db.execute('INSERT OR REPLACE INTO project_server_setups VALUES (?,?,?,?)',
+                            (project, version_code, app_url, at))
+
     def _baked_elsewhere(self, project: str, url: str) -> bool:
         """Whether another project's native host endpoint or agent container URL is ``url``: either one can be what
         that project's builds bake, so no two projects may hold the same server across the two records."""
@@ -744,9 +799,16 @@ class Ledger:
                                's.project_id=v.project_id AND s.version_code=v.version_code WHERE v.project_id=? '
                                'ORDER BY v.version_code', (project,)).fetchall()
         servers = server_summary.summaries([(r[0], r[10] is not None, r[9]) for r in rows])
+        setup = self.db.execute('SELECT version_code, app_url, set_up FROM project_server_setups WHERE project_id=?',
+                                (project,)).fetchone()
+        # §7.7a: `hosting` beside `server`, only on the version whose server is the one set up (setUpAt in unix ms);
+        # beside, not inside, so phones that read `server` with its exact keys read it unchanged.
+        hosting = {} if setup is None or setup[0] not in servers else {
+            setup[0]: {'state': 'set_up', 'appUrl': setup[1], 'setUpAt': int(setup[2] * 1000)}}
         return [{'versionCode': r[0], 'versionName': r[1], 'createdAt': r[2], 'jobId': r[3], 'sourceRevision': r[4],
                  'apk': {'sha256': r[5], 'size': r[6]}, 'notes': r[7], 'apiReport': wire_summary(r[8])}
-                | ({'server': servers[r[0]]} if r[0] in servers else {}) for r in rows]
+                | ({'server': servers[r[0]]} if r[0] in servers else {})
+                | ({'hosting': hosting[r[0]]} if r[0] in hosting else {}) for r in rows]
 
     def projects(self) -> list[dict]:
         with self.lock:

@@ -9,10 +9,12 @@ on an authorized host) is injected: this module never decides how code is writte
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import threading
@@ -20,7 +22,7 @@ import time
 from pathlib import Path
 
 from . import appprofile, contract, dependencies, migrations, server_build, server_manifest, template, toolchain
-from .ledger import CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
+from .ledger import CLIENT_BACKEND, CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
 MAX_TEXT = 4000
@@ -33,6 +35,25 @@ class Refused(ValueError):
     def __init__(self, message: str, **details):
         super().__init__(message)
         self.details = details
+
+
+class Unavailable(Exception):
+    """A valid request the builder cannot do now (HTTP 409): ``reason`` is one word, ``retryable`` whether asking
+    again later can work."""
+
+    def __init__(self, message: str, reason: str, retryable: bool):
+        super().__init__(message)
+        self.reason, self.retryable = reason, retryable
+
+
+INVITE_REASONS = {  # the agent's word -> (the wire's reason, retryable, the sentence)
+    'already_enrolled': ('already_enrolled', False, 'That account is already signed up to this app.'),
+    'invalid_name': ('invalid_account', False, 'That account name cannot be used in this app.'),
+    'busy': ('server_unavailable', True, 'This app\'s server is being set up; ask again in a moment.'),
+    'unsupported': ('invites_unsupported', False, 'This app\'s backend has no sign-in invites.'),
+    'not_set_up': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
+    'not_hosted': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
+}
 
 
 def _body(body, keys: dict) -> dict:
@@ -220,17 +241,35 @@ def rose_server_java(package: str, url: str | None) -> str:
             '}\n')
 
 
-def client_tree_ignore(snapshot: Path):
+def client_tree_ignore(snapshot: Path, top_names=appprofile.SERVER_TOP):
     """copytree's ignore for a client-server app's client tree: the server's parts at the top of the snapshot only
     (a writer's own folder named server/ or contract/ further down is the app's)."""
     top = Path(snapshot)
-    return lambda d, names: [n for n in names if Path(d) == top and n in appprofile.SERVER_TOP]
+    return lambda d, names: [n for n in names if Path(d) == top and n in top_names]
+
+
+class BackendSession:
+    """The building agent's backend for one job attempt (§7.7a, client-backend-v1): the release folder it builds
+    in, in the project's own agent container, and the one tool it has there. The container is recorded and the
+    folder made on the first call, so a client-only app never takes an agent from the pool."""
+
+    def __init__(self, hosting, project_id: str, release: str):
+        self.hosting, self.project_id, self.release = hosting, project_id, release
+        self.folder = hosting.release_folder(release)
+        self.used = False
+
+    def exec(self, command: str, stdin: bytes = b'', timeout_s: float = 1800.0, stopped=lambda: False):
+        if not self.used:
+            self.hosting.ensure(self.project_id)
+            self.hosting.prepare(self.project_id, self.release)  # identity and owner checked there first
+            self.used = True
+        return self.hosting.exec(self.project_id, command, stdin, timeout_s, stopped)
 
 
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
                  resolver=None, *, codegen=None, server_isolation=None, rust_tools=None, crate_source=None,
-                 server_crates=None, server_crate_deps=None, server_url=None):
+                 server_crates=None, server_crate_deps=None, server_url=None, hosting=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
@@ -247,7 +286,10 @@ class Builder:
           the path crates those depend on (rose-signin);
         - ``server_url(project_id) -> str | None``: the app's hosted https base URL from the hosting record (§7.7),
           which only owner tooling writes; None (the default) means it is not hosted yet. It is baked into the
-          client (``RoseServer.URL``), so the first hosted version needs a build after the record exists."""
+          client (``RoseServer.URL``), so the first hosted version needs a build after the record exists.
+        - ``hosting`` (rose.app_builder.app_host.AgentHosting, §7.7a): ``ensure(project_id)`` records the app's agent
+          container before its client is generated, and ``deploy(project_id, version_code, elf, manifest)`` sets the
+          server up there before the version is delivered; None (the default) hosts nothing."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         if tools.cache is None:  # the Java system image, made once per toolchain, in this builder's own storage
@@ -259,6 +301,7 @@ class Builder:
         self.crate_source = crate_source
         self.server_crates, self.server_crate_deps = dict(server_crates or {}), dict(server_crate_deps or {})
         self.server_url = server_url
+        self.hosting = hosting
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -314,6 +357,34 @@ class Builder:
             return None
         path = self.root / 'artifacts' / f'{sha256}.apk'
         return path if self.ledger.artifact(sha256) and path.is_file() else None
+
+    def invite(self, device: str, project_id: str, body):
+        """One single-use invite for the creator (§7.7a): the project's server, as set up in its agent container,
+        runs its ``invite <account>``. The token is returned once and never stored or logged; asking again issues a
+        new one. None for an unknown project."""
+        from .app_host import InviteRefused, valid_account
+        if self.ledger.project(project_id) is None:
+            return None
+        if not isinstance(body, dict) or type(body.get('schemaVersion')) is not int or body['schemaVersion'] != 1:
+            raise Refused('schemaVersion must be 1')
+        if set(body) - {'schemaVersion', 'account'}:
+            raise Refused('unknown field ' + sorted(set(body) - {'schemaVersion', 'account'})[0])
+        account = body.get('account')
+        if not valid_account(account):
+            raise Refused('account must be 1 to 128 bytes of text with no ":" or control character',
+                          reason='invalid_account')
+        setup = self.ledger.server_setup(project_id)
+        server = None if setup is None else self.ledger.server(project_id, setup['versionCode'])
+        if self.hosting is None or server is None:
+            raise Unavailable(INVITE_REASONS['not_hosted'][2], 'not_hosted', False)
+        try:
+            token = self.hosting.invite(project_id, server['sha256'], account)
+        except InviteRefused as refused:
+            reason, retryable, message = INVITE_REASONS.get(refused.word, (
+                'server_unavailable', True, 'This app\'s server could not issue an invite now; try again.'))
+            raise Unavailable(message, reason, retryable) from None
+        return {'projectId': project_id, 'versionCode': setup['versionCode'], 'account': account, 'invite': token,
+                'expiresInS': 7 * 24 * 3600}
 
     def install(self, device: str, body) -> dict:
         # versionCode: the version this receipt is about (the one attempted). signerSha256: what the phone has for
@@ -378,6 +449,7 @@ class Builder:
         source = self.root / 'projects' / project_id / 'source'
         work = self.root / 'jobs' / job_id / f'attempt-{job["attempt"]}'
         cancelled = lambda: self.ledger.cancel_requested(job_id) or self.stopping.is_set()
+        undo = None  # a set-up server whose version is not (yet) delivered
         try:
             self._step(job, 'preparing', 'source', 'Preparing the project source.')
             self._prepare(source, project, job)
@@ -386,7 +458,15 @@ class Builder:
             if kind == 'revise' and not self.ledger.versions(project_id):
                 # Nothing delivered yet: this starts from the skeleton, so the generator writes the whole app.
                 kind, request = 'create', project['description'] + '\n\nChange requested: ' + request
-            note = self.generate(source, kind, request, cancelled)
+            backend = None
+            # The tool only for an app that is, or may become, client-backend-v1: never for one bound to another kind.
+            if self.hosting is not None and getattr(self.generate, 'backend', False) \
+                    and self.ledger.profile(project_id) in ('app-v1', CLIENT_BACKEND):
+                release = hashlib.sha256(f'{project_id}:{job_id}:{job["attempt"]}'.encode()).hexdigest()
+                backend = BackendSession(self.hosting, project_id, release)
+                note = self.generate(source, kind, request, cancelled, backend=backend)
+            else:
+                note = self.generate(source, kind, request, cancelled)
             if cancelled():
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
             # From here on only the snapshot is read: checked, recorded and built are the same files. The live
@@ -408,12 +488,20 @@ class Builder:
             if work.exists():
                 shutil.rmtree(work)
             libraries = self._libraries(snapshot, work, project_id, package)
-            level2 = None
+            level2 = agent = None
             if profile.name == CLIENT_SERVER:
                 level2 = self._client_server(snapshot, work, project, profile, cancelled)
                 unsigned, log = toolchain.build(level2['client_source'], work, package, code, name, self.tools,
                                                 cancelled, libraries, builder_files=level2['builder_files'],
                                                 builder_packages=level2['packages'])
+            elif profile.name == CLIENT_BACKEND:
+                if backend is None:
+                    raise toolchain.StepFailed('toolchain', 'This builder has no agent container set up for app '
+                                               'backends, so the app was not built.')
+                agent = self._client_backend(snapshot, work, project)
+                unsigned, log = toolchain.build(agent['client_source'], work, package, code, name, self.tools,
+                                                cancelled, libraries, builder_files=agent['builder_files'],
+                                                builder_packages=agent['packages'])
             else:  # a plain app's build is called exactly as before Level 2
                 unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
@@ -434,19 +522,48 @@ class Builder:
             if idsig.exists():
                 _place(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
             _place(signed, artifacts / f'{receipt["sha256"]}.apk')  # durable before the version row exists
-            server_records = {}
+            server_records, hosted = {}, None
+            if agent is not None:  # §7.7a: the release the building agent made, switched to before any phone gets it
+                server_records = dict(profile=CLIENT_BACKEND, server={'release': backend.release},
+                                      contract=agent['contract'])
+                self._step(job, 'signing', 'hosting', 'Setting up the app\'s backend.')
+                if self.ledger.cancel_requested(job_id):  # the last point a cancel stops it
+                    raise toolchain.StepFailed('cancelled', 'Cancelled.')
+                hosted = self._host_release(project_id, code, backend.release, agent['url'])
+                undo = ('release', project_id, code, backend.release)
             if level2 is not None:
                 built = level2['server']
                 _place(built.elf, artifacts / f'{built.sha256}.server')  # the ELF, by its digest (§7.7)
                 server_records = dict(profile=CLIENT_SERVER, server=built.record(), migrations=level2['locks'],
                                       crates=built.crates, cargo_lock=built.cargo_lock, contract=level2['contract'])
                 if built.target == server_manifest.TARGET:  # §7.7: a manifest only for a server the host runs
-                    server_records['manifest'] = server_manifest.encode(server_manifest.manifest(
-                        project_id, code, built.record(), level2['locks'], shared=profile.server.shared))
+                    manifest = server_manifest.manifest(project_id, code, built.record(), level2['locks'],
+                                                        shared=profile.server.shared)
+                    server_records['manifest'] = server_manifest.encode(manifest)
+                    if self.hosting is not None:  # §7.7a: its server runs before any phone can get the app
+                        self._step(job, 'signing', 'hosting', 'Setting up the app\'s server.')
+                        if self.ledger.cancel_requested(job_id):  # the last point a cancel stops it
+                            raise toolchain.StepFailed('cancelled', 'Cancelled.')
+                        target = (project_id, code, artifacts / f'{built.sha256}.server', manifest)
+                        hosted, changed = self._host(*target, level2['url'])
+                        if changed:  # a new server set up: undone if the version is not delivered after all
+                            undo = target
+                elif self.hosting is not None:
+                    raise toolchain.StepFailed('toolchain', 'This app\'s server was not built for its host, so the app '
+                                               'was not delivered.')
+            # Once its server is set up, delivery is the commit point: a cancel no longer stops it.
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
-                                       _note(note, job['request']), libraries, _api_report(work), **server_records):
+                                       _note(note, job['request']), libraries, _api_report(work),
+                                       committed=hosted is not None, **server_records):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
+            undo = None  # delivered: its server stays
+            if hosted is not None:  # §7.7a: the library says this version's server is the one set up
+                try:
+                    self.ledger.record_server_setup(project_id, code, *hosted)
+                except (LedgerError, sqlite3.Error):
+                    pass  # delivered all the same; the library then claims no setup rather than a wrong one
         except toolchain.StepFailed as failed:
+            self._undo_hosting(undo)
             self._safe_reset(source, project_id)
             category, summary, retryable = failed.category, failed.summary, failed.retryable
             if category == 'cancelled' and not self.ledger.cancel_requested(job_id):
@@ -454,6 +571,7 @@ class Builder:
                 category, summary, retryable = 'internal', 'Stopped by a server shutdown; outcome unknown.', True
             self._record_failure(job_id, category, summary, retryable, failed.log)
         except Exception as error:  # never leave a job running; the summary carries no paths or tool output
+            self._undo_hosting(undo)
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
 
@@ -498,7 +616,8 @@ class Builder:
                or any(part in ('', '.', '..') for part in k[len(prefix):].split('/')) for k, v in client_files.items()):
             raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote outside its own '
                                        'folder.')
-        client_files[prefix + ROSE_SERVER] = rose_server_java(package, self._hosted_url(project_id))
+        url = self._hosted_url(project_id)
+        client_files[prefix + ROSE_SERVER] = rose_server_java(package, url)
         # The client's tree: the writer's checked app without the server's parts, plus the builder's own files.
         client = work / 'client'
         shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot))
@@ -522,22 +641,129 @@ class Builder:
             if declared and declared.group(1) != package and not declared.group(1).startswith(package + '.'):
                 packages.add(declared.group(1))  # the sign-in core keeps its own package
         return {'client_source': client, 'builder_files': frozenset(client_files), 'packages': frozenset(packages),
-                'server': built,
+                'server': built, 'url': url,
                 'locks': locks, 'contract': canonical.decode('utf-8')}
+
+    def _undo_hosting(self, undo) -> None:
+        """A version whose server was set up but which was not delivered: put the agent back (best effort; a later
+        setup reverts it anyway, as the agent's release is not a delivered one)."""
+        if undo is None or self.hosting is None:
+            return
+        try:
+            if undo[0] == 'release':
+                self.hosting.revert_release(*undo[1:])
+            else:
+                self.hosting.revert(*undo)
+        except Exception:
+            pass
+
+    def _host_release(self, project_id: str, code: int, release: str, url: str) -> tuple[str, float]:
+        """Switch to the building agent's release; returns ``(app URL, when)`` once it answered its health check."""
+        from .app_host import SetupFailed
+        try:
+            self.hosting.deploy_release(project_id, code, release, url)
+        except SetupFailed as failed:
+            if failed.step == 'switch' and '(release)' in failed.message:
+                raise toolchain.StepFailed('compile', 'The app\'s backend release was not finished: its release '
+                                           'folder has no start script, so the app was not delivered.') from None
+            raise toolchain.StepFailed('toolchain', f'The app\'s backend could not be set up in its Chariot agent '
+                                       f'container ({failed.step}), so the app was not delivered.', retryable=True,
+                                       log=failed.message[:2000]) from None
+        self.ledger.clear_server_setup(project_id)  # another release runs there now, until this one is delivered
+        return self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()
+
+    def _client_backend(self, snapshot: Path, work: Path, project: dict) -> dict:
+        """An app whose backend the building agent set up (§7.7a): the contract against every delivered version's,
+        and the client's tree with the builder's generated client files (the API client from the contract, sign-in,
+        RoseInvite, RoseServer.URL). Nothing of backend/ is built here, or goes into the APK."""
+        project_id, package = project['projectId'], project['packageName']
+        try:
+            api = contract.load(snapshot)
+            canonical = contract.canonical_bytes(api.data)
+            if len(canonical) > MAX_CONTRACT:
+                raise contract.ContractRefused(f'contract/api.json is too large once normalised ({len(canonical)} '
+                                               f'bytes; at most {MAX_CONTRACT}).', 'contract_invalid')
+            delivered = [contract.parse(json.loads(text)) for text in self.ledger.contracts(project_id)]
+            contract.check_update(delivered, api)
+        except appprofile.ProfileRefused as refused:
+            raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
+        if self.codegen is None:
+            raise toolchain.StepFailed('toolchain', 'This builder has no code generator for the app\'s API client, '
+                                       'so the app was not built.')
+        try:
+            client_files = dict(self.codegen.client_files(api, package))
+        except Exception:
+            raise toolchain.StepFailed('toolchain', 'The builder could not generate the app\'s API client code.') \
+                from None
+        prefix = f'src/{package.replace(".", "/")}/rose/'
+        if prefix + ROSE_SERVER in client_files or any(
+                not isinstance(k, str) or not isinstance(v, str) or not k.startswith(prefix)
+                or any(part in ('', '.', '..') for part in k[len(prefix):].split('/')) for k, v in client_files.items()):
+            raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote outside its own '
+                                       'folder.')
+        url = self._hosted_url(project_id)
+        client_files[prefix + ROSE_SERVER] = rose_server_java(package, url)
+        client = work / 'client'
+        shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot, appprofile.BACKEND_TOP))
+        try:
+            for path, text in client_files.items():
+                target = client / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, 'x', encoding='utf-8') as stream:
+                    stream.write(text)
+        except (OSError, ValueError, UnicodeError):
+            raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote files that could not '
+                                       'be written.') from None
+        packages = set()
+        for path, text in client_files.items():
+            declared = re.match(r'\s*package\s+([A-Za-z_][\w.]*)\s*;', text) if path.endswith('.java') else None
+            if declared and declared.group(1) != package and not declared.group(1).startswith(package + '.'):
+                packages.add(declared.group(1))
+        return {'client_source': client, 'builder_files': frozenset(client_files), 'packages': frozenset(packages),
+                'url': url, 'contract': canonical.decode('utf-8')}
+
+    def _host(self, project_id: str, code: int, elf: Path, manifest: dict, url: str):
+        """Set the version's server up; returns ``((app URL, when), changed)`` once it answered its health check,
+        ``changed`` False when the server was byte-identical to the one already set up."""
+        from .app_host import SetupFailed
+        try:
+            out = self.hosting.deploy(project_id, code, elf, manifest, url)
+            changed = not (isinstance(out, dict) and out.get('unchanged'))
+            if changed:  # another server runs there now: no older version is claimed set up until this one is delivered
+                self.ledger.clear_server_setup(project_id)
+            return (self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()), changed
+        except SetupFailed as failed:
+            raise toolchain.StepFailed('toolchain', f'The app\'s server could not be set up in its Chariot agent '
+                                       f'container ({failed.step}), so the app was not delivered.', retryable=True,
+                                       log=failed.message[:2000]) from None
 
     def _hosted_url(self, project_id: str) -> str | None:
         """The app's hosted base URL from the injected hosting record, or None when it is not hosted yet. A record
-        the generated client would refuse is the builder's failure, here, never the user's first tap."""
-        if self.server_url is None:
+        the generated client would refuse is the builder's failure, here, never the user's first tap. With
+        ``hosting``, the app's agent container is recorded first (§7.7a)."""
+        if self.hosting is not None:
+            from .app_host import SetupFailed
+            try:
+                self.hosting.ensure(project_id)
+            except SetupFailed as failed:
+                raise toolchain.StepFailed('toolchain', f'No Chariot agent container could be set aside for this '
+                                           f'app ({failed.step}).', retryable=True, log=failed.message[:2000]) from None
+        read = self.server_url
+        if read is None and self.hosting is not None:  # the agent container just recorded is the hosting record
+            read = self.ledger.backend_endpoint
+        if read is None:
             return None
         try:
-            url = self.server_url(project_id)
+            url = read(project_id)
         except Exception:
             raise toolchain.StepFailed('toolchain', 'The builder could not read this app\'s hosting record.',
                                        retryable=True) from None
         if url is not None and not (isinstance(url, str) and HOSTED_URL.fullmatch(url)):
             raise toolchain.StepFailed('toolchain', 'This app\'s hosting record is not an https address the app '
                                        'can use, so the app was not built.')
+        if url is None and self.hosting is not None:  # a hosted app's client must know its server
+            raise toolchain.StepFailed('toolchain', 'This app has no agent container recorded, so it was not built.',
+                                       retryable=True)
         return url
 
     def _libraries(self, snapshot: Path, work: Path, project_id: str, package: str) -> list:

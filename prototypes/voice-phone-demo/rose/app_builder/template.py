@@ -112,11 +112,13 @@ def write_skeleton(source: Path, package: str, label: str):
 
 
 def check(source: Path, package: str, *, extra_top: frozenset = frozenset(),
-          builder_files: frozenset = frozenset()) -> None:
+          builder_files: frozenset = frozenset(), opaque_top: frozenset = frozenset()) -> None:
     """Refuse generated source that could change the app's identity or escape the pinned toolchain. ``extra_top``
     lets a declared profile (rose.app_builder.appprofile) add top-level entries; every other check still covers them.
     ``builder_files`` are paths (relative to ``source``) the builder wrote itself after checking the writer's tree,
-    such as the client's sign-in core, which keeps its own package; only the package rule skips them."""
+    such as the client's sign-in core, which keeps its own package; only the package rule skips them.
+    ``opaque_top`` are top-level folders never part of the APK build (a backend's own source, §7.7a): only the
+    file-name suffix rule skips them; links, modes, sizes and hard links are refused there too."""
     source = Path(source)
     if os.lstat(source).st_mode & 0o700 != 0o700:
         raise TemplateRefused('The app\'s source folder is not readable and writable by the builder.')
@@ -142,6 +144,8 @@ def check(source: Path, package: str, *, extra_top: frozenset = frozenset(),
             raise TemplateRefused(f'{name} is a hard link; it is not built.')
         if stat.S_ISREG(mode) and os.lstat(path).st_size > MAX_FILE:
             raise TemplateRefused(f'{name} is larger than {MAX_FILE // (1024 * 1024)} MB.')
+        if name.parts[0] in opaque_top:
+            continue
         if path.name.lower().endswith(('.java',) + FORBIDDEN_SUFFIXES) and not stat.S_ISREG(mode):
             raise TemplateRefused(f'{name} is a directory with a source file name; it is not built.')
         if stat.S_ISREG(mode) and path.name.lower().endswith(FORBIDDEN_SUFFIXES):

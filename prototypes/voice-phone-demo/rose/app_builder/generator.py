@@ -16,6 +16,7 @@ Server Worker (APP-BUILDER.md §5, blocker 3). Until then no host should constru
 """
 from __future__ import annotations
 
+import json
 import queue
 import time
 import uuid
@@ -39,9 +40,13 @@ OPEN_MESSAGES = {
 
 CLIENT_SERVER = ('\n\nThis builder builds client-server apps (rose-app.json, contract/ and server/), as your '
                  'instructions describe.')
+BACKEND = ('\n\nThis builder sets up the app\'s backend in its own Chariot agent container (client-backend-v1), as '
+           'your instructions describe, with the agent_container tool; the release folder for this build is {folder}.')
+TOOL_OUTPUT_MAX = 64 * 1024  # each of stdout and stderr, its last bytes, back to the writer
+TOOL = 'agent_container'
 
 
-def prompt(kind: str, request: str, libraries=(), client_server: bool = False) -> str:
+def prompt(kind: str, request: str, libraries=(), client_server: bool = False, backend_folder: str | None = None) -> str:
     """The owner's request as the turn's text, with the libraries this builder provides (declared in
     dependencies.json, never shipped) and, when it can build them, that it builds client-server apps: the policy
     (fixed by the bridge, the same for every job) offers one only when the turn says so."""
@@ -49,6 +54,8 @@ def prompt(kind: str, request: str, libraries=(), client_server: bool = False) -
                 + ', '.join(libraries) + '.') if libraries else ''
     if client_server:
         provided += CLIENT_SERVER
+    if backend_folder is not None:
+        provided += BACKEND.format(folder=backend_folder)
     if kind == 'create':
         return ('Write this new app (the skeleton in the current directory is its starting point).' + provided
                 + '\n\n' + request)
@@ -60,7 +67,7 @@ def prompt(kind: str, request: str, libraries=(), client_server: bool = False) -
 
 class CodexGenerator:
     def __init__(self, timeout_s: float = 900.0, model: str = MODEL, command: list[str] | None = None, connect=None,
-                 libraries=None, client_server: bool = False):
+                 libraries=None, client_server: bool = False, backend: bool = False, tool_timeout_s: int = 1800):
         """``command`` is the bridge command line (for example one that runs it as a separate OS user); ``connect``
         replaces the client for tests: connect(on_event) -> object with request(op, session, **params) and close().
         ``libraries`` lists the coordinates the builder's library store provides (its ``available``), if any.
@@ -69,15 +76,20 @@ class CodexGenerator:
         self.timeout_s, self.model = timeout_s, model
         self.libraries = libraries
         self.client_server = client_server
+        # §7.7a: the writer also sets the app's backend up in its agent container, through one host-run tool the
+        # Builder answers (BackendSession); the writer itself still has no network, credentials or other tools.
+        self.backend, self.tool_timeout_s = backend, int(tool_timeout_s)
         if connect is None:
             from ..codex_client import CodexClient
             connect = lambda on_event: CodexClient(on_event, command)
         self.connect = connect
         self.last_note = ''
 
-    def __call__(self, source: Path, kind: str, request: str, cancelled) -> str:
+    def __call__(self, source: Path, kind: str, request: str, cancelled, backend=None) -> str:
         available = self.libraries() if callable(self.libraries) else self.libraries
-        text = prompt(kind, request, sorted(available or ()), self.client_server)
+        text = prompt(kind, request, sorted(available or ()), self.client_server,
+                      backend.folder if backend is not None else None)
+        container = {'containerTool': True, 'toolTimeoutS': self.tool_timeout_s} if backend is not None else {}
         events: queue.Queue = queue.Queue()
         session = 'app-build-' + uuid.uuid4().hex
         client = self.connect(events.put)
@@ -88,7 +100,7 @@ class CodexGenerator:
             try:
                 opened = True
                 reply = client.request('open', session, _timeout=60, cwd=str(Path(source).resolve()),
-                                       model=self.model, tools=[], purpose='app_build')
+                                       model=self.model, tools=[], purpose='app_build', **container)
             except RuntimeError as error:
                 code = str(error)
                 opened = code not in CLEAN_OPEN_ERRORS
@@ -112,7 +124,14 @@ class CodexGenerator:
                     raise StepFailed('internal', 'The app writer stopped unexpectedly.', retryable=True)
                 if e.get('session') != session:
                     continue
-                if e.get('event') == 'message' and isinstance(e.get('text'), str):
+                if e.get('event') == 'tool':
+                    left = deadline - time.monotonic()
+                    client.send({'op': 'tool_result', 'callId': e.get('callId'),
+                                 'result': self._tool(backend, e.get('params'), max(1.0, min(self.tool_timeout_s, left)),
+                                                      lambda: cancelled() or time.monotonic() > deadline)})
+                    if cancelled():
+                        raise StepFailed('cancelled', 'Cancelled.')
+                elif e.get('event') == 'message' and isinstance(e.get('text'), str):
                     note = e['text'].strip()[:NOTE_MAX]
                 elif e.get('event') == 'failure':
                     raise StepFailed('internal', 'The app writer stopped before finishing.', retryable=True)
@@ -132,6 +151,32 @@ class CodexGenerator:
             if not stopped:
                 # The writer's processes may still be running: fail the job rather than build next to them.
                 raise StepFailed('internal', 'The app writer did not confirm it stopped.') from failure
+
+    def _tool(self, backend, params, timeout_s: float | None = None, stopped=lambda: False) -> dict:
+        """One ``agent_container`` call: run in the job's own container (BackendSession), its exit code and output
+        back to the writer only (never logged, never in the job). Anything else is refused."""
+        def answer(text: str, ok: bool = True) -> dict:
+            return {'success': ok, 'contentItems': [{'type': 'inputText', 'text': text}]}
+        if backend is None or not isinstance(params, dict) or params.get('tool') != TOOL:
+            return answer('Tool unavailable.', False)
+        args = params.get('arguments')
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = None
+        if not isinstance(args, dict) or set(args) - {'command', 'stdin'} or not isinstance(args.get('command'), str) \
+                or not args['command'] or not isinstance(args.get('stdin', ''), str):
+            return answer('agent_container takes {command, stdin?}, both text.', False)
+        from .app_host import SetupFailed
+        try:
+            done = backend.exec(args['command'], args.get('stdin', '').encode('utf-8'),
+                                timeout_s or self.tool_timeout_s, stopped)
+        except SetupFailed as failed:
+            return answer(f'The agent container could not be reached ({failed.step}).', False)
+        out = done.stdout[-TOOL_OUTPUT_MAX:]
+        err = done.stderr[-TOOL_OUTPUT_MAX:]
+        return answer(f'exit {done.code}\n--- stdout ---\n{out}\n--- stderr ---\n{err}')
 
     @staticmethod
     def _stop(client, session: str, opened: bool) -> bool:

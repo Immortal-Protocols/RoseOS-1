@@ -8,7 +8,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Codex} from './codex.mjs';
 import {appBuildPolicy,appBuildConfig,appBuildCwd,appBuildLaunchArgs,appBuildProfile,checkAppBuildProfile,checkActiveProfile,supportsAppBuildVersion,
- APP_BUILD_PROFILE,APP_BUILD_ITEMS} from './app-build.mjs';
+ APP_BUILD_PROFILE,APP_BUILD_ITEMS,APP_BUILD_ITEM_BUDGET,APP_BUILD_CONTAINER_ITEM_BUDGET,appBuildItems,appBuildItemBudget,
+ appBuildContainerOptions,agentContainerCallProblem,appBuildToolResult,AGENT_CONTAINER_TOOL} from './app-build.mjs';
 import {researchConfig} from './life-research.mjs';
 
 // A stand-in for `codex app-server`: records argv and requests, and plays a scenario from ROSE_TEST_SCENARIO.
@@ -18,8 +19,21 @@ if(process.argv.includes('--version')){console.log(process.env.ROSE_TEST_SCENARI
 const args=process.argv.slice(2),file=process.env.ROSE_TEST_RECORD,scenario=process.env.ROSE_TEST_SCENARIO||'normal';
 const log=x=>fs.appendFileSync(file,JSON.stringify(x)+'\\n');log({args,cwd:process.cwd()});
 const out=x=>console.log(JSON.stringify(x));let reads=0;
+// Tool calls the fake sends the client (item/tool/call, ids from 9000), per scenario; the turn ends once all are answered.
+const toolCalls={
+ container:[{tool:'agent_container',arguments:{command:'cat > start',stdin:'exec ./server'}}],
+ container_slow:[{tool:'agent_container',arguments:{command:'sleep 100'}}],
+ container_bad:[{tool:'phone_task',arguments:{command:'x'}},{tool:'agent_container',arguments:{command:'x',agent:'other'}},
+  {tool:'agent_container',arguments:{command:'x'.repeat(8001)}},{tool:'agent_container',arguments:{stdin:'x'}},
+  {tool:'agent_container',arguments:{command:'a\u0000b'}}],
+}[scenario]||[];
+let answered=0;
+const finish=()=>{out({method:'item/completed',params:{threadId:'build',turnId:'t1',item:{type:'agentMessage',text:'A notes app.',phase:'final_answer'}}});
+ out({method:'turn/completed',params:{threadId:'build',turn:{id:'t1',status:'completed'}}});};
 require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line);if(m.id===undefined)return;log({method:m.method,params:m.params});let result={};
+ const m=JSON.parse(line);if(m.id===undefined)return;
+ if(m.method===undefined){log({response:m});if(m.id>=9000&&++answered===toolCalls.length)finish();return;}
+ log({method:m.method,params:m.params});let result={};
  if(m.method==='account/read')result={account:{type:'chatgpt'}};
  if(m.method==='model/list')result={data:[{id:'gpt-6.1-terra',serviceTiers:[{id:'priority'}]}]};
  if(m.method==='config/read'){
@@ -57,6 +71,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
   if(scenario==='web')item('webSearch');
   else if(scenario==='dynamic')item('dynamicToolCall');
   else if(scenario==='flood')for(let i=0;i<401;i++)item('fileChange');
+  else if(scenario==='container_flood')for(let i=0;i<801;i++)item(i%2?'dynamicToolCall':'reasoning');
+  else if(toolCalls.length)toolCalls.forEach((call,i)=>{item('dynamicToolCall');
+   out({id:9000+i,method:'item/tool/call',params:{threadId:'build',turnId:'t1',callId:'call-'+i,...call}});});
   else if(scenario==='linger'){
    // A command the writer left running in its process group, one that even ignores SIGTERM.
    const c=require('node:child_process').spawn('sh',['-c','trap "" TERM; while :; do sleep 0.05; done'],{stdio:'ignore'});
@@ -131,7 +148,7 @@ test('the policy offers a client-server app only when the turn says so, and neve
  for(const phrase of [/A client-server app, only when this turn says the builder builds them/,
    /Otherwise write the app\nwithout a server and say in your reply what would need one/,
    /RoseApi\.serverUrl\(\) is null until this app's host is recorded/,/so the app must work with null/,
-   /Never say in your reply that the server\nruns, is reachable or syncs/,/Do not use the network yourself \(the app may\)/,
+   /Never say in your reply that the server\nruns, is reachable or syncs/,/Do not use the network yourself \(the app may,/,
    /all in one transaction with foreign keys off; then every reference is checked/,
    /ON DELETE actions do not fire there: delete\n  child rows yourself/,
    /never call one on the main thread/,/Never edit, rename or delete a migration that was delivered/])
@@ -383,4 +400,170 @@ test('the profile check and the version gate refuse anything else',()=>{
   assert.doesNotThrow(()=>checkAppBuildProfile(config),JSON.stringify(config));
  for(const v of ['codex-cli 0.167.1','codex-cli 0.168.0\n','codex-cli 1.0.0'])assert.equal(supportsAppBuildVersion(v),true,v);
  for(const v of ['codex-cli 0.167.0','codex-cli 0.167.1-alpha.2','codex-cli 0.166.9','unknown',''])assert.equal(supportsAppBuildVersion(v),false,v);
+});
+
+test('the container tool is one fixed definition, and container options are checked',()=>{
+ assert.deepEqual(JSON.parse(JSON.stringify(AGENT_CONTAINER_TOOL)),{type:'function',name:'agent_container',
+  description:AGENT_CONTAINER_TOOL.description,inputSchema:{type:'object',properties:{command:{type:'string',maxLength:8000},
+   stdin:{type:'string',maxLength:1048576}},required:['command'],additionalProperties:false}});
+ assert.match(AGENT_CONTAINER_TOOL.description,/own Chariot agent container \(as \/chariot\/bin\/sh -c COMMAND, with stdin if given\)/);
+ assert.match(AGENT_CONTAINER_TOOL.description,/each cut to its last 64 KiB/);
+ for(const v of [AGENT_CONTAINER_TOOL,AGENT_CONTAINER_TOOL.inputSchema,AGENT_CONTAINER_TOOL.inputSchema.properties.command,
+  AGENT_CONTAINER_TOOL.inputSchema.required])assert.ok(Object.isFrozen(v));
+ assert.throws(()=>{'use strict';AGENT_CONTAINER_TOOL.inputSchema.properties.command.maxLength=1e9;});
+ assert.deepEqual(appBuildContainerOptions({}),{containerTool:false,toolTimeoutMs:1800000});
+ assert.deepEqual(appBuildContainerOptions({containerTool:true}),{containerTool:true,toolTimeoutMs:1800000});
+ assert.deepEqual(appBuildContainerOptions({containerTool:true,toolTimeoutS:1}),{containerTool:true,toolTimeoutMs:1000});
+ assert.deepEqual(appBuildContainerOptions({containerTool:true,toolTimeoutS:3600}),{containerTool:true,toolTimeoutMs:3600000});
+ assert.deepEqual(appBuildContainerOptions({containerTool:null,toolTimeoutS:null}),{containerTool:false,toolTimeoutMs:1800000});
+ for(const bad of [{containerTool:'yes'},{containerTool:1},{containerTool:true,toolTimeoutS:0},{containerTool:true,toolTimeoutS:3601},
+  {containerTool:true,toolTimeoutS:1.5},{containerTool:true,toolTimeoutS:'60'},{containerTool:true,toolTimeoutS:-1},{toolTimeoutS:9999}])
+  assert.throws(()=>appBuildContainerOptions(bad),JSON.stringify(bad));
+ // Items: dynamicToolCall only for a container session, with its own documented budget.
+ assert.equal(appBuildItems(false).includes('dynamicToolCall'),false);
+ assert.equal(appBuildItems(true).includes('dynamicToolCall'),true);
+ assert.deepEqual(appBuildItems(true).filter(x=>x!=='dynamicToolCall'),[...APP_BUILD_ITEMS]);
+ assert.equal(appBuildItemBudget(false),APP_BUILD_ITEM_BUDGET);
+ assert.equal(appBuildItemBudget(true),APP_BUILD_CONTAINER_ITEM_BUDGET);
+ for(const t of ['webSearch','mcpToolCall','collabAgentToolCall','imageView'])assert.equal(appBuildItems(true).includes(t),false,t);
+ // Calls: only agent_container, only in a container session, only arguments that fit the schema.
+ const call=args=>({tool:'agent_container',arguments:args});
+ assert.equal(agentContainerCallProblem(call({command:'ls'}),true),null);
+ assert.equal(agentContainerCallProblem(call({command:'x'.repeat(8000),stdin:'y'.repeat(1048576)}),true),null);
+ assert.equal(agentContainerCallProblem(call({command:'\u{1F600}'.repeat(8000)}),true),null);  // code points, not UTF-16 units
+ assert.equal(agentContainerCallProblem(call({command:'ls'}),false),'unknown_tool');
+ assert.equal(agentContainerCallProblem({tool:'phone_task',arguments:{command:'ls'}},true),'unknown_tool');
+ for(const [args,reason] of [[{command:'ls',x:1},'invalid_arguments'],[null,'invalid_arguments'],[['ls'],'invalid_arguments'],
+  [{stdin:'x'},'invalid_command'],[{command:7},'invalid_command'],[{command:'x'.repeat(8001)},'invalid_command'],
+  [{command:'a\0b'},'invalid_command'],[{command:'ls',stdin:3},'invalid_stdin'],[{command:'ls',stdin:'y'.repeat(1048577)},'invalid_stdin']])
+  assert.equal(agentContainerCallProblem(call(args),true),reason,JSON.stringify(args)?.slice(0,40));
+ // Results: text only, never an image.
+ const text={success:true,contentItems:[{type:'inputText',text:'{"exitCode":0}'}]};
+ assert.deepEqual(appBuildToolResult(text),text);
+ assert.deepEqual(appBuildToolResult({...text,extra:1,contentItems:[{type:'inputText',text:'a',extra:2}]}),
+  {success:true,contentItems:[{type:'inputText',text:'a'}]});
+ for(const bad of [null,{},{success:'yes',contentItems:[]},{success:true},{success:true,contentItems:[{type:'inputImage',imageUrl:'data:image/png;base64,AQ=='}]},
+  {success:true,contentItems:[{type:'inputText',text:7}]},{success:true,contentItems:[{type:'inputText',text:'x'.repeat(2097153)}]}])
+  assert.equal(appBuildToolResult(bad).success,false,JSON.stringify(bad)?.slice(0,60));
+});
+
+test('the policy carries the client-backend-v1 contract',()=>{
+ for(const phrase of [/A client-backend-v1 app, only when this turn says this builder sets up the app's backend in its own Chariot\nagent container \(client-backend-v1\)/,
+   /\$HOME\/workspace\/\.chariot-app\/releases\/<release id>/,/Python is supported, Rust is recommended where it fits, and\nnothing is required/,
+   /rose-app\.json: \{"schemaVersion": 1, "profile": "client-backend-v1"\}/,/contract\/api\.json: written exactly as for a client-server app above/,
+   /\(RoseApi, RoseTypes, RoseSignin, RoseSession, RoseInvite\) from it under src\/<package>\/rose\//,
+   /backend\/: the backend's own source, in any language and any files, kept here so later revisions start from\n  it/,
+   /the builder neither compiles\nnor checks it, and it is not part of the APK/,
+   /root filesystem is read-only and HOME=\/agent-data is the only writable\n  place/,/about 1 GiB of disk is shared with the app's data, memory is about 512 MiB/,
+   /no compiler or Python is\n  guaranteed/,/BusyBox applets are in \/chariot\/bin, which is not on PATH/,/Prefer a light stack/,
+   /Rust only if a toolchain fits/,/Pin a sha256 for anything you download, and check it/,
+   /\/chariot\/bin\/sh -c COMMAND, with stdin if given/,/cut to its last 64 KiB/,/cat > file with\n  the file as stdin, or a tar on stdin/,
+   /install the backend's dependencies inside the release folder, build it,\n  and try it locally on 127\.0\.0\.1/,
+   /an executable start: a POSIX sh script, run as \/chariot\/bin\/sh \.\/start\n  from inside the release folder, that ends by exec-ing one foreground server process/,
+   /listens on 127\.0\.0\.1:\$PORT, serves the contract's routes,\n  answers GET \/health/,/with 200 once it is ready/,/only\n  under \$DATA_DIR/,
+   /must never be deleted or reset: migrate it forward in place/,/backs it up\n  before each switch and restores it if the switch fails/,
+   /PORT, DATA_DIR, ROSE_LISTEN_HOST=127\.0\.0\.1, ROSE_RELEASE and CHARIOT_DEPLOYMENT_SHA256\n  \(both the release id\), CHARIOT_SEALING_KEY_FILE when a keyring exists, and Chariot's own CHARIOT_APP_ID and\n  CHARIOT_APP_URL/,
+   /invite <account> prints one single-use invite token on stdout,\n  printable ASCII with no whitespace and at most 512 characters, and nothing else on stdout/,
+   /A backend without\n  accounts ships none/,
+   /not data\/, the other\n  releases, start, current, app\.json, keys\/, backups\/, run\.lock or server\.pid/,/it is never moved/,/with \$ROSE_RELEASE in the reply body/,/The builder switches releases after this turn/,
+   /Never read, print or copy credentials or secrets in the container: agent tokens, config files,\n  \/var\/run\/secrets or keys\//,
+   /Do not leave the server, or anything else you started, running in the background past the end of this turn/,
+   /you have no network, and your own shell runs only in this directory's sandbox/,/It is the only way to reach the\n  container; your own shell cannot/])
+  assert.match(appBuildPolicy,phrase);
+ assert.doesNotMatch(appBuildPolicy,/You cannot build here\./);
+ // The existing client usage the generated client hangs on stays.
+ for(const phrase of [/RoseApi\.serverUrl\(\)/,/new RoseSignin\(transport, session\)/,/RoseInvite\.take\(activity\)/])assert.match(appBuildPolicy,phrase);
+});
+
+test('bridge: app_build without containerTool has no tools and refuses a tool call unforwarded',async()=>{
+ const f=fixture(),b=bridge(f.env('container'));
+ try{
+  await b.request('open','s1',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',tools:[],containerTool:false});
+  assert.deepEqual(f.rows().find(r=>r.method==='thread/start').params.dynamicTools,[]);
+  await b.request('submit','s1',{text:'Build a notes app.'});
+  assert.match((await b.until(e=>e.session==='s1'&&e.event==='failure')).message,/boundary/);  // the dynamicToolCall item
+  const reply=await b.until(()=>f.rows().find(r=>r.response?.id===9000))&&f.rows().find(r=>r.response?.id===9000).response;
+  assert.equal(reply.result.success,false);
+  assert.match(reply.result.contentItems[0].text,/unknown_tool/);
+  assert.equal(b.events.some(e=>e.event==='tool'),false);
+  assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
+ }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('bridge: containerTool gives exactly the fixed tool, forwards its call as a tool event and returns the text result',async()=>{
+ const f=fixture(),b=bridge(f.env('container'));
+ try{
+  // Caller tools stay refused, with or without containerTool, and bad options are refused before Codex starts.
+  for(const bad of [{tools:[{name:'agent_container'}],containerTool:true},{tools:[AGENT_CONTAINER_TOOL],containerTool:true},
+    {containerTool:true},{tools:[],containerTool:true,toolTimeoutS:0},{tools:[],containerTool:true,toolTimeoutS:3601},
+    {tools:[],containerTool:true,toolTimeoutS:30.5},{tools:[],containerTool:'true'}]){
+   const r=await b.request('open','s-bad',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',...bad});
+   assert.equal(r.error,'codex_request_failed',JSON.stringify(bad));
+  }
+  assert.equal(f.rows().length,0);
+  const opened=await b.request('open','s1',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',tools:[],containerTool:true,
+   toolTimeoutS:600,instructions:'Use the network.'});
+  assert.equal(opened.result.model,'gpt-6.1-terra');
+  const start=f.rows().find(r=>r.method==='thread/start').params;
+  assert.deepEqual(start.dynamicTools,[JSON.parse(JSON.stringify(AGENT_CONTAINER_TOOL))]);
+  assert.equal(start.developerInstructions,appBuildPolicy);
+  assert.equal(start.permissions,APP_BUILD_PROFILE);
+  assert.equal(start.config.web_search,'disabled');
+  await b.request('submit','s1',{text:'Build a notes app.'});
+  const tool=await b.until(e=>e.session==='s1'&&e.event==='tool');
+  assert.deepEqual(tool.params,{threadId:'build',turnId:'t1',callId:'call-0',tool:'agent_container',
+   arguments:{command:'cat > start',stdin:'exec ./server'}});
+  const result={success:true,contentItems:[{type:'inputText',text:'{"exitCode":0,"stdout":"","stderr":""}'}]};
+  b.events.length=0;
+  b.request('tool_result','s1',{callId:tool.callId,result});
+  const done=await b.until(e=>e.session==='s1'&&e.event==='done');
+  assert.equal(done.turn.status,'completed');
+  assert.equal(b.events.some(e=>e.event==='failure'),false);  // the dynamicToolCall item is allowed
+  assert.deepEqual(f.rows().find(r=>r.response?.id===9000).response.result,result);
+  assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
+ }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('bridge: a container call waits toolTimeoutS, then fails and is reported cancelled',async()=>{
+ const f=fixture(),b=bridge(f.env('container_slow'));
+ try{
+  await b.request('open','s1',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',tools:[],containerTool:true,toolTimeoutS:1});
+  await b.request('submit','s1',{text:'Build a notes app.'});
+  const tool=await b.until(e=>e.session==='s1'&&e.event==='tool'),began=Date.now();
+  const cancelled=await b.until(e=>e.session==='s1'&&e.event==='tool_cancelled',5000);
+  const waited=Date.now()-began;
+  assert.equal(cancelled.callId,tool.callId);
+  assert.ok(waited>=800&&waited<4000,String(waited));  // 1 s, not the 60 s other purposes keep
+  assert.ok(await b.until(()=>f.rows().some(r=>r.response?.id===9000)));
+  assert.equal(f.rows().find(r=>r.response?.id===9000).response.result.success,false);
+  assert.ok(await b.until(e=>e.session==='s1'&&e.event==='done'));
+  assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
+ }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('bridge: a container session refuses other tools and bad arguments without forwarding them',async()=>{
+ const f=fixture(),b=bridge(f.env('container_bad'));
+ try{
+  await b.request('open','s1',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',tools:[],containerTool:true});
+  await b.request('submit','s1',{text:'Build a notes app.'});
+  assert.ok(await b.until(e=>e.session==='s1'&&e.event==='done'));
+  assert.equal(b.events.some(e=>e.event==='tool'),false);
+  const reasons=[0,1,2,3,4].map(i=>{const r=f.rows().find(x=>x.response?.id===9000+i).response.result;
+   assert.equal(r.success,false);return JSON.parse(r.contentItems[0].text).reason;});
+  assert.deepEqual(reasons,['unknown_tool','invalid_arguments','invalid_command','invalid_command','invalid_command']);
+  assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
+ }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('bridge: a container session still stops a web search and its own larger budget',async()=>{
+ for(const scenario of ['web','container_flood']){
+  const f=fixture(),b=bridge(f.env(scenario));
+  try{
+   await b.request('open','s1',{purpose:'app_build',cwd:f.source,model:'gpt-6.1-terra',tools:[],containerTool:true});
+   await b.request('submit','s1',{text:'Build a notes app.'});
+   assert.match((await b.until(e=>e.session==='s1'&&e.event==='failure')).message,scenario==='web'?/boundary/:/budget/);
+   assert.ok(await b.until(()=>f.rows().some(r=>r.method==='turn/interrupt')));
+   assert.deepEqual((await b.request('close','s1')).result,{stopped:true});
+  }finally{await b.stop();rmSync(f.dir,{recursive:true,force:true});}
+ }
 });

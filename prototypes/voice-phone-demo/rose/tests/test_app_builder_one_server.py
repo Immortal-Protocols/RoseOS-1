@@ -66,7 +66,7 @@ class BuilderConfig(unittest.TestCase):
         hosted = host.parse_config(config_data('/srv/x', **extra))
         alone = host.parse_builder_config(builder_data('/srv/x', **extra))
         for name in ('root', 'sdk', 'java_home', 'build_timeout_s', 'key_creation', 'writer', 'backup',
-                     'library_store', 'client_server'):
+                     'library_store', 'client_server', 'agent_host'):
             self.assertEqual(getattr(hosted, name), getattr(alone, name), name)
 
 
