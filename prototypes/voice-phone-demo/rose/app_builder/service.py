@@ -249,6 +249,7 @@ def client_tree_ignore(snapshot: Path, top_names=appprofile.SERVER_TOP):
 
 
 REPAIRS = 2  # repairs of the writer's own build errors in one job, after its first turn
+REPAIR_MIN_S = 60.0  # writing time a repair needs left in the job's one writer budget to be worth starting
 REPAIR_TEXT_MAX = 4000
 _ABSOLUTE_PATH = re.compile(r'(?<![\w.~-])/(?:[\w.@+~-]+/)*[\w.@+~-]+')
 _REDACTED_FOLDER = re.compile(r'<[\w.@+~-]+>/')  # toolchain.run's redaction of the folder it built in
@@ -263,9 +264,14 @@ def _repairable(failed: toolchain.StepFailed) -> bool:
 
 
 def _repair_text(failed: toolchain.StepFailed, folders) -> str:
-    """What the writer is told about its build error: the failure and the tool's own output, with the builder's
-    folders made relative and every other absolute path removed, bounded. Build output never holds signing material:
-    signing happens only after a build passes."""
+    """What the writer is told about its build error: the failure's summary and the tail of the build tool's own
+    output, bounded. That output can quote any file the build read: the writer's own source, the builder's generated
+    files (rose.app_builder.codegen: no key, token or account; the app's hosted URL), the pinned libraries and SDK. It
+    cannot hold an inherited environment value: toolchain.run and server_build give each tool a fixed environment
+    (paths, LANG, offline cargo settings) and nothing else. The signing key and its password are not read until a
+    build has passed, and the server's keyring only at its runtime. What is removed here is location: the builder's
+    folders (and toolchain.run's ``<folder>/`` redactions) become relative, and every other absolute path is
+    replaced with ``<path>``."""
     text = f'{failed.summary}\n{(failed.log or "")[-REPAIR_TEXT_MAX * 2:]}'
     for folder in sorted({str(f) for f in folders}, key=len, reverse=True):
         text = text.replace(folder + '/', '').replace(folder, '.')
@@ -491,21 +497,27 @@ class Builder:
                     and self.ledger.profile(project_id) in ('app-v1', CLIENT_BACKEND):
                 release = hashlib.sha256(f'{project_id}:{job_id}:{job["attempt"]}'.encode()).hexdigest()
                 backend = BackendSession(self.hosting, project_id, release)
-            repairs = 0
+            repairs, notes = 0, []
+            # One writer budget for the job: repairs share the writer's own turn timeout with the first turn (and the
+            # builds between), so repairing never makes the job's writing take longer than one turn could.
+            budget = getattr(self.generate, 'timeout_s', None)
+            deadline = time.monotonic() + budget if isinstance(budget, (int, float)) and budget > 0 else None
             while True:  # one writer turn and build, then at most self.repairs repairs of the writer's own build errors
                 try:
                     (note, snapshot, profile, revision, code, name, libraries, level2, agent, unsigned,
                      log) = self._write_and_build(job, project, source, work, kind, request, cancelled, backend,
-                                                  repairs)
+                                                  repairs, notes, deadline if repairs else None)
                     break
                 except toolchain.StepFailed as failed:
-                    if not _repairable(failed) or repairs >= self.repairs or cancelled():
+                    if not _repairable(failed) or repairs >= self.repairs or cancelled() or (
+                            deadline is not None and deadline - time.monotonic() < REPAIR_MIN_S):
                         raise
                     repairs += 1
                     self._step(job, 'building', 'repairing',
                                f'Fixing a build error ({repairs} of {self.repairs}).')
                     kind, request = 'repair', _repair_text(failed, (work / 'client', work, work.parent, source,
                                                                     self.root))
+            note = notes[0]  # the version's notes describe what the owner asked for, not the last repair
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
             self._step(job, 'signing', 'signing', 'Signing the app.')
             keys = self.root / 'keys' / project_id
@@ -660,14 +672,15 @@ class Builder:
             pass
 
     def _write_and_build(self, job, project, source: Path, work: Path, kind: str, request: str, cancelled, backend,
-                         repairs: int):
+                         repairs: int, notes: list, deadline: float | None):
         """One writer turn (or a repair of the writer's own build error), then the checks and the unsigned build of
         exactly what it wrote. Raises StepFailed; nothing here signs, delivers or uses a version up."""
         job_id, project_id, package = job['jobId'], job['projectId'], project['packageName']
-        if backend is not None:
-            note = self.generate(source, kind, request, cancelled, backend=backend)
-        else:
-            note = self.generate(source, kind, request, cancelled)
+        extra = {'backend': backend} if backend is not None else {}
+        if deadline is not None:  # a repair turn: what is left of the job's writer budget
+            extra['deadline'] = deadline
+        note = self.generate(source, kind, request, cancelled, **extra)
+        notes.append(note)
         if cancelled():
             raise toolchain.StepFailed('cancelled', 'Cancelled.')
         # From here on only the snapshot is read: checked, recorded and built are the same files. The live

@@ -89,7 +89,10 @@ class CodexGenerator:
         self.connect = connect
         self.last_note = ''
 
-    def __call__(self, source: Path, kind: str, request: str, cancelled, backend=None) -> str:
+    def __call__(self, source: Path, kind: str, request: str, cancelled, backend=None,
+                 deadline: float | None = None) -> str:
+        """``deadline`` (time.monotonic) ends the turn sooner than ``timeout_s`` would: a repair gets only what is
+        left of its job's writer budget."""
         available = self.libraries() if callable(self.libraries) else self.libraries
         text = prompt(kind, request, sorted(available or ()), self.client_server,
                       backend.folder if backend is not None else None)
@@ -113,7 +116,7 @@ class CodexGenerator:
             if reply.get('model') != self.model:
                 raise StepFailed('internal', 'The app writer started with the wrong model.', retryable=True)
             client.request('submit', session, _timeout=60, text=text)
-            deadline = time.monotonic() + self.timeout_s
+            deadline = min(time.monotonic() + self.timeout_s, deadline if deadline is not None else float('inf'))
             while True:
                 if cancelled():
                     raise StepFailed('cancelled', 'Cancelled.')

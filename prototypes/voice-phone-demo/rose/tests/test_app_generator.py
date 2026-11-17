@@ -129,6 +129,11 @@ class Generator(unittest.TestCase):
             self.run_gen(self.gen(timeout_s=0.3))
         self.assertEqual(cm.exception.category, 'timeout')
         self.assertEqual(self.clients[-1].calls[-1][0], 'close')
+        started = time.monotonic()  # a repair's deadline: what is left of its job's writer budget, sooner than timeout_s
+        with self.assertRaises(StepFailed) as cm:
+            self.gen(timeout_s=30)(self.source, 'repair', 'x', lambda: False, deadline=time.monotonic() + 0.3)
+        self.assertEqual(cm.exception.category, 'timeout')
+        self.assertLess(time.monotonic() - started, 10)
 
     def test_open_refusals(self):
         with self.assertRaises(StepFailed) as cm:

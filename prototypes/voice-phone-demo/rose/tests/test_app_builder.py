@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -366,6 +367,7 @@ class BuildTest(Base):
         self.assertIn('MainActivity.java', repair)  # the tool's own output, its paths relative
         self.assertNotIn(str(self.root), repair)  # never the builder's folders
         self.assertEqual([v['versionCode'] for v in b.projects()[0]['versions']], [1])  # one version, signed once
+        self.assertEqual(b.projects()[0]['versions'][0]['notes'], 'note 1')  # the first turn's, not the repair's
         log = _git(self.root / 'projects' / out['projectId'] / 'source', 'log', '--format=%s')
         self.assertIn('repair 1', log)
 
@@ -384,6 +386,32 @@ class BuildTest(Base):
         b2.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
         b2.run_next()
         self.assertEqual([k for k, _ in none.calls], ['create'])
+
+    def test_repairs_share_the_writers_one_budget(self):
+        seen = []
+        gen = self.breaking(fix_on=1)
+
+        def timed(source, kind, request, cancelled, deadline=None):
+            seen.append((deadline, time.monotonic()))
+            return gen(source, kind, request, cancelled)
+        timed.timeout_s = 600.0
+        b = self.builder(timed)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready')
+        (first, first_at), (repair, repair_at) = seen
+        self.assertIsNone(first)  # the first turn keeps the writer's own timeout
+        self.assertLessEqual(repair, first_at + 600.0)  # the repair gets only what is left of that budget
+        self.assertGreater(repair, repair_at)
+
+        short = self.breaking(fix_on=1)  # too little budget left to start a repair: the build error stands
+        short.timeout_s = 30.0
+        b2 = Builder(self.root / 'short', b.tools, short, backup=fake_backup)
+        self.addCleanup(b2.ledger.close)
+        out = b2.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b2.run_next()
+        self.assertEqual(b2.job(out['jobId'])['failure']['category'], 'compile')
+        self.assertEqual([k for k, _ in short.calls], ['create'])
 
     def test_a_cancel_during_a_repair_stops_the_job(self):
         b = None
