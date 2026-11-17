@@ -1,0 +1,63 @@
+{
+ "job": {
+  "attempt": 1,
+  "jobId": "5d1ad3bff94a8efd",
+  "logTail": "API level report (advisory, not device proof): 0 reference(s) above API 26 not guarded in their method, 0 unverified, 0 guarded; analysis complete.",
+  "message": "Ready to install.",
+  "projectId": "7dce0d76145cccdc",
+  "schemaVersion": 1,
+  "stage": "ready",
+  "startedAt": 1794876612.7524714,
+  "state": "ready",
+  "updatedAt": 1794876618.4790835
+ },
+ "library": {
+  "projects": [
+   {
+    "activeJob": null,
+    "name": "a stopwatch",
+    "packageName": "app.rose.gen.p7dce0d76145cccdc",
+    "projectId": "7dce0d76145cccdc",
+    "signerSha256": "c61bff6cbe5a0fc5c57fe61e840fe423fd67153ddec741d236ca0589ebff2f5a",
+    "versions": [
+     {
+      "apiReport": {
+       "advisory": true,
+       "counts": {
+        "guarded": 0,
+        "notGuardedHere": 0,
+        "unverified": 0
+       },
+       "deviceProof": false,
+       "highestLevel": null,
+       "minSdk": 26,
+       "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install.",
+       "schemaVersion": 1,
+       "status": "complete",
+       "truncated": 0,
+       "unlistedCount": 0
+      },
+      "apk": {
+       "sha256": "bf5d964867b694e1ac49cfd44565a216d696c9a660d054e26de930169869177f",
+       "size": 12681
+      },
+      "createdAt": 1794876618.4789648,
+      "jobId": "5d1ad3bff94a8efd",
+      "notes": "a stopwatch",
+      "sourceRevision": "ab421f2a61a8a6f6b781492d9eeb3b617319c5ae",
+      "versionCode": 1,
+      "versionName": "1"
+     }
+    ]
+   }
+  ],
+  "schemaVersion": 1
+ },
+ "schemaVersion": 1,
+ "started": {
+  "jobId": "5d1ad3bff94a8efd",
+  "notes": [],
+  "projectId": "7dce0d76145cccdc",
+  "schemaVersion": 1
+ }
+}

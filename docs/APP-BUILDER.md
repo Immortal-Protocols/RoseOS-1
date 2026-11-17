@@ -468,8 +468,10 @@ a test fail:
 
 All requests use the paired device's `rose-auth-v1` signature, under the
 `/builder/v1/` prefix on the remote listener (`rose/app_builder/routes.py`).
-The routes are mounted only when the server has an app builder enabled, and
-`rose.app` enables none today. The signature covers the method, path, time and
+The routes are mounted only when the server has an app builder enabled:
+`rose.app --app-builder CONFIG` (§6.1) enables it on the one Rose server, the
+listener Rose Agent already pairs with, and no host passes that flag yet. The
+signature covers the method, path, time and
 nonce. Body integrity comes from the pinned TLS link. Every JSON response is an
 object carrying `schemaVersion: 1`, including a 401 refusal. An unknown path
 or method under `/builder/v1` gets the web framework's own 404 or 405 body. The library response is `{schemaVersion,
@@ -1272,7 +1274,51 @@ Proof levels:
 - **Not done:** any real model turn, the live enforcement check of read
   isolation (blocker 3) and any host wiring.
 
-## 6. Standalone builder host (source only; not configured, deployed or enabled)
+## 6. Builder hosting (source only; not configured, deployed or enabled)
+
+### 6.1 On the one Rose server (`rose.app --app-builder`)
+
+The builder runs inside the Rose server (`rose.app`), the one Rose Agent
+already pairs with. There is no separate builder server, pairing or device.
+
+- **Switch.** `--app-builder CONFIG` is off by default. CONFIG is a strict
+  builder config: the standalone host's builder fields below, without its
+  listener fields (`remoteDir`, `name`, `port`, `adminPort`, `hosts`):
+  `{schemaVersion: 1, root, sdk, javaHome?, buildTimeoutS?, keyCreation?,
+  writer?, backup?, libraryStore?, clientServer?}`. Both configs are parsed
+  by one rule (`host.parse_builder_config`, `host.parse_config`).
+- **Refusals before anything is served.** The server refuses to start (exit 2)
+  with one line on any of these: an unreadable or unknown-field config;
+  `--no-remote`; a root that can't be created or opened;
+  a library store or Level 2 facility that doesn't check out; a root that is a
+  symbolic link; or a root that is, contains or is inside the server's own
+  configuration (`ROSE_CONFIG_DIR`, with pairing, TLS and provider state).
+- **Serving.** `Server.app_builder` is set, so `build_remote_app` mounts
+  `/builder/v1` (§3) beside `/hello` and the voice websockets. It answers the
+  same paired devices with the same `rose-auth-v1` signatures, and Rose
+  Agent's existing device key is enough. The single build worker starts with
+  the server. At shutdown it stops, and a running step is cancelled: that job is
+  recorded failed and retryable ("Stopped by a server shutdown"), and the Agent
+  can retry it after restart. The ledger stays open until the process exits,
+  because the listener still answers `/builder/v1` until it stops. The entry
+  point in the Agent is the Workspace page's "Build an app" button (Home).
+- **Data.** `host.build_builder` builds the same builder, writer, key backup
+  and Level 2 facilities as the standalone host. Pointing `root` at the
+  directory a standalone host used serves its projects, versions, signing keys
+  and records unchanged. Nothing is copied or migrated.
+- **Tests.** `rose/tests/test_app_builder_one_server.py` covers the real
+  `rose.app` parser and `Server` in `--ui-only` mode with a temporary
+  `ROSE_CONFIG_DIR`. It checks:
+  - off by default;
+  - each refusal, including `main` exiting 2;
+  - a paired device reaching `/builder/v1` beside `/hello` and the voice
+    websockets;
+  - the worker lifecycle;
+  - a standalone host's ledger root served unchanged.
+- **Not done:** enabling it on the Mac (Local Server), the Agent client (Home,
+  §3), and retiring the standalone host (§6.2) once this path works.
+
+### 6.2 Standalone builder host (to be retired once §6.1 works)
 
 `rose/app_builder/host.py` runs the builder on its own machine, without the
 Rose conversation server. It reads one strict JSON config file:
@@ -2379,6 +2425,17 @@ builder's too. A plain app's job is unchanged.
 
 ### 7.7 Hosting boundary (Chariot owner's proposal: native ELF + manifest + health path + client base URL)
 
+> **Delivery path superseded (2026-11-16).** Generated backends go to the
+> Chariot agent container, set up over the Chariot CLI and SSH (§7.7a). The
+> native-host calls below (`/v1/app-hosts`, the deploy plan, host records,
+> invites over that API) are not part of the new delivery path. They stay in
+> source only until §7.7a replaces them. These still apply:
+> - the server ELF and manifest;
+> - its runtime environment (`PORT`, `DATA_DIR`, sealing keyring, restore
+>   marker);
+> - its health and readiness rules;
+> - the data and migration protections.
+
 App Core accepts this boundary. The server is one Rust ELF plus a manifest,
 with nothing Chariot-specific inside the app. The fake host in tests checks
 the same manifest.
@@ -2727,6 +2784,76 @@ Still open for the Chariot owner (App Core's proposal in brackets):
 
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
+
+### 7.7a Backend in the Chariot agent container (PROPOSAL: not implemented, not approved)
+
+Nathan's direction (2026-11-16) puts each generated app's backend in the
+existing Chariot agent container. Rose's existing Codex obtains it with the
+Chariot CLI, then installs, configures and runs the server over SSH. That
+replaces the native-host deploy API in §7.7 for the delivery path:
+`/v1/app-hosts`, `server_delivery plan` and `owner_records native-host` are
+not part of it.
+
+**Which Codex does it.** Neither existing Codex process changes:
+- The writer (`app_build`, §4A) stays network-off and read-isolated. It
+  writes untrusted-request code and must not hold Chariot credentials.
+- The voice worker keeps its shell disabled.
+
+The proposal is a separate backend-setup turn, a new bridge purpose
+`app_host`, in the same per-job bridge. It runs after the builder has a
+built and signed version with its server ELF and manifest. It needs, only
+for that turn:
+- **Tools:** the shell tool.
+- **Network:** the Chariot API (`app.chariots.sh`) and SSH gateway
+  (`ssh.chariots.sh`) only. Codex permission profiles have no per-host
+  network list, so the host limit comes from the Mac (Local Worker).
+- **Reads:** that version's server ELF and manifest, the `chariot` binary and
+  its skill.
+- **Writes:** a dedicated `HOME` with `~/.chariot`, logged in by Local Worker
+  (the CLI writes its SSH certificate and `known_hosts` there), plus a scratch
+  directory.
+- **Denied:** `ROSE_CONFIG_DIR`, project signing keys and other projects.
+- **No printing:** credentials or keys.
+
+**What the setup must keep** (from §7.7, now enforced inside the container):
+- Before replacing the binary, back up every regular, non-symlinked
+  `*.sqlite3` under the app's data directory (`auth.sqlite3`,
+  `shared.sqlite3`, `accounts/*.sqlite3`), and keep the previous ELF.
+- Never run an older schema on newer data. The server itself refuses with
+  `NewerSchema`, and the setup doesn't retry around it.
+- Start the server with `PORT`, `DATA_DIR` and a sealing keyring
+  (`CHARIOT_SEALING_KEY_FILE`, D9). Without the keyring the server stays not
+  ready (503). Where the keyring comes from inside a container is a decision:
+  App Core proposes generating it once into the persistent data area,
+  mode 0400.
+- Readiness is a 200 from `/health` with the expected `revision_sha256`.
+
+**The client URL.** `RoseApi.serverUrl()` is baked into the APK, so the
+container's public `https` endpoint must be known before the client build.
+The order is: obtain the container and its endpoint, build and sign, then set
+up the server.
+
+**Open contract (Chariot Engineer).** As of 2026-11-17, Saba's and Chariot's
+reports say no public container app endpoint exists:
+- the service is internal `:8088`;
+- SSH is certificate-only and rejects forwarding and SFTP, so `scp` (which
+  uses SFTP) is not a supported transfer;
+- idle agents hibernate (48 h by default) and their processes stop.
+
+Needed before any implementation:
+1. the gateway from a public `https` URL to an authorized pod and a declared
+   port, and the port the server binds;
+2. a verified file-transfer method for the ELF;
+3. whether the data area persists across restart and hibernation;
+4. how the server is restarted after hibernation or a pod restart (the
+   activity contract);
+5. which container is the app's, and that the account is authorized to use
+   it (credits included).
+
+**Separate, not a gate on this work:** Saba's report of unenforced network
+policy and node service-account scope is tracked by Chariot and Saba. Any IAM,
+network, security, credential or spending action still needs its own
+confirmation when it is taken.
 
 ### 7.8 Slices
 
