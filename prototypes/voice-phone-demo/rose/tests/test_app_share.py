@@ -139,9 +139,9 @@ class Summary(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('java') or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs a JDK')
     def test_the_phone_accepts_every_link_the_server_does(self):
-        # The phone's own ShareState.link, compiled from workspace/rose-builder: whatever the server would call
+        # The phone's own ShareState.link, compiled from workspace/rose-agent (the builder screens in Rose Agent): whatever the server would call
         # published, the phone must show as a link (the server may be stricter; it is never looser).
-        builder = Path(__file__).resolve().parents[4] / 'workspace/rose-builder/src/dev/pixel/builder'
+        builder = Path(__file__).resolve().parents[4] / 'workspace/rose-agent/app/src/dev/pixel/builder'
         sources = [builder / f'{n}.java' for n in ('ShareState', 'ShareMessage', 'BuilderWire', 'Json', 'BuilderApi',
                                                   'ApiReport', 'ServerSummary', 'BuildJob', 'InstallPlan')]
         corpus = self.LINKS_GOOD + self.LINKS_BAD + ['https://h/' + c for c in "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"]

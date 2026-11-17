@@ -60,8 +60,9 @@ final class Installer {
     for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
     session.fsync(out);
    }
-   // The project rides on the report, so its outcome reaches the builder even if this activity was recreated.
-   Intent status = new Intent(ACTION_STATUS).setPackage(c.getPackageName()).setClass(c, MainActivity.class)
+   // The project rides on the report, so its outcome reaches the builder even if this activity was recreated. The
+   // report goes back to the builder screen that asked (c is that activity: Rose Agent's BuilderActivity).
+   Intent status = new Intent(ACTION_STATUS).setPackage(c.getPackageName()).setClass(c, c.getClass())
      .putExtra(EXTRA_PROJECT, projectId).putExtra(PackageInstaller.EXTRA_PACKAGE_NAME, packageName)
      .putExtra(EXTRA_VERSION, versionCode).putExtra(EXTRA_WAS_INSTALLED, wasInstalled);
    int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
