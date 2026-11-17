@@ -269,11 +269,11 @@ class BackendSession:
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
                  resolver=None, *, codegen=None, server_isolation=None, rust_tools=None, crate_source=None,
-                 server_crates=None, server_crate_deps=None, server_url=None, hosting=None):
+                 server_crates=None, server_crate_deps=None, server_url=None, hosting=None, require_key_backup=True):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
-        host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
-        lost. Without one, nothing is delivered.
+        host; it must succeed once before the project's signer is bound unless the owner explicitly permits
+        local-only key persistence with require_key_backup=False. Signing identity checks always apply.
 
         A client-server app (docs/APP-BUILDER.md §7) also needs, all injected by the host and each None by default,
         when a job for one fails with an honest category instead of building half of it:
@@ -296,6 +296,7 @@ class Builder:
             tools = dataclasses.replace(tools, cache=self.root / 'toolchain')  # the caller's Tools is not changed
         self.tools, self.generate = tools, generate
         self.backup = backup
+        self.require_key_backup = require_key_backup
         self.resolver = resolver  # an offline dependencies.Resolver; None: an app that declares libraries fails
         self.codegen, self.server_isolation, self.rust_tools = codegen, server_isolation, rust_tools
         self.crate_source = crate_source
@@ -793,6 +794,8 @@ class Builder:
         if self.ledger.key_backup(project_id) is not None:
             return
         if self.backup is None:
+            if not self.require_key_backup:
+                return  # owner accepted local key persistence only; never invent a backup receipt
             raise toolchain.StepFailed('signing', 'This builder has no signing-key backup set up, so the app was not '
                                        'delivered.')
         try:

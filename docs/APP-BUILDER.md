@@ -1399,6 +1399,12 @@ Rose conversation server. It reads one strict JSON config file:
   approved toolchain/pin, binding, deployment or runtime activation. A full
   pinned musl build and real Linux isolation remain unverified.
 - **Signing-key backup before first delivery.**
+  - `requireKeyBackup` defaults to `true`. An owner may explicitly set it to
+    `false` to deliver without a configured backup. Keys still persist in the
+    private project key directory; package/signer binding and missing-bound-key
+    refusal are unchanged. No backup receipt is invented. Losing this Mac or its
+    key storage can then make app updates impossible. A configured backup still
+    must succeed; this option only permits an absent backup.
   - After a project's first signed build, and before its signer is bound or
     anything is delivered, `Builder(backup=…)` must return a receipt. The
     receipt is recorded in the `key_backups` table.
