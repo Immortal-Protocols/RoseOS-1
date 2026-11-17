@@ -139,6 +139,16 @@ visual judgment, not an assertion that a dispatched tap succeeded.
 
 Each app is bound to one target; device-wide intent shortcuts are excluded, so timers and other actions use that app’s workspace UI; reads, commands and stop carry the controller session ID and task ID. Schema-4 `multiSession=true,maxSessions>=2` is required for this mode: older controllers are refused rather than replacing a workspace or falling back to the owner's visible screen. Native owner Stop is observed on that same binding and interrupts only its Codex thread. A command already dispatched can complete before stop; its outcome is retained, and unacknowledged cleanup is recorded as uncertain.
 
+Installed-app names are cached for five minutes. A name without an exact cached
+label refreshes the inventory before an unavailable result or loose alias match,
+so a newly installed app is discoverable immediately. Reconnection invalidates
+the cache age without blocking the socket callback. An unresolved app fails with
+`app_unavailable` before a controller launch; a queued task alone does not prove
+that an app or search has started.
+Workspace allocation also uses the resolved package identity, so aliases such as
+Maps and Google Maps reuse one worker and controller task binding. They cannot
+reserve two workers that invalidate each other's targeted Stop receipts.
+
 App threads and their workspaces are reused for follow-ups during a backend run. Reconnect rechecks each bound session. Stop latches against late tool calls. Reset starts a new conversation without deleting earlier logs. A backend restart explicitly creates new Codex threads, leaving prior transcripts available. Codex threads are **ephemeral** to avoid native rollout persistence of private reasoning or screenshots; prior transcripts are not silently uploaded or replayed as commands.
 
 When a new app needs a workspace and both slots are reserved, the oldest idle, completed session is closed before starting the new app. Its task result stays in history; a retained session still supports follow-ups. Running tasks are never evicted. If both are running or stopping, Rose reports `app_sessions_busy`. An unconfirmed release reports `session_cleanup_unconfirmed` and blocks replacement until the operator checks the phone and restarts the backend.
