@@ -16,11 +16,21 @@ from fastapi.testclient import TestClient
 
 from rose.app_builder import host
 from rose.remote import Remote, build_remote_app
-from rose.tests.test_app_builder import SDK, fake_backup
+from rose.tests.test_app_builder import HAS_SDK, SDK, fake_backup
 from rose.tests.test_app_host import config_data
 from rose.tests.test_builder_routes import Device, label
 
 REQUEST = {'schemaVersion': 1, 'clientRequestId': 'a', 'description': 'a stopwatch'}
+WIRE = Path(__file__).resolve().parent / 'fixtures/builder-library-v1.json'
+
+
+def shape(value):
+    """The JSON shape the phone parses: keys and value types, recursively (a list by its first element)."""
+    if isinstance(value, dict):
+        return {k: shape(v) for k, v in sorted(value.items())}
+    if isinstance(value, list):
+        return [shape(value[0])] if value else []
+    return type(value).__name__
 
 
 def builder_data(tmp, **extra):
@@ -84,7 +94,7 @@ class BuildBuilder(unittest.TestCase):
             host.build_builder(host.parse_builder_config({**builder_data('/'), 'root': str(self.root / 'link')}))
 
 
-class OneServer(unittest.TestCase):
+class ServerCase(unittest.TestCase):
     """The real rose.app Server and argument parser, with ROSE_CONFIG_DIR in a temporary directory."""
 
     def setUp(self):
@@ -122,6 +132,9 @@ class OneServer(unittest.TestCase):
     def signed(self, client, method, path, body=None):
         return client.request(method, path, json=body, headers=self.device.headers(method, path,
                                                                                     self.remote.identity.pin))
+
+
+class OneServer(ServerCase):
 
     def test_off_by_default(self):
         args = self.parse()
@@ -182,6 +195,34 @@ class OneServer(unittest.TestCase):
         self.assertIsNotNone(server.app_builder.job(made['jobId']))
         projects = self.signed(self.client(server), 'GET', '/builder/v1/projects').json()['projects']
         self.assertEqual([p['projectId'] for p in projects], [made['projectId']])
+
+
+@unittest.skipUnless(HAS_SDK, 'needs the Android SDK to build a version')
+class Wire(ServerCase):
+    """The library and job responses the one server sends, recorded in fixtures/builder-library-v1.json for the
+    Agent's BuilderWire tests (workspace/rose-agent/app/tests/builder), and held to the server's live shape here.
+    Regenerate with ROSE_WRITE_WIRE_FIXTURE=1 after an agreed v1 change."""
+
+    def test_the_library_and_job_wire_is_the_recorded_fixture(self):
+        self.config.write_text(json.dumps(builder_data(self.tmp.name, keyCreation=True)))
+        real = host.build_builder
+        with mock.patch.object(host, 'build_builder',
+                               lambda config, **kw: real(config, generate=label, backup=fake_backup, **kw)):
+            server = self.make_server()  # the real server and builder, with a fake writer and key backup
+        client = self.client(server)
+        started = self.signed(client, 'POST', '/builder/v1/projects', REQUEST).json()
+        self.assertTrue(server.app_builder.run_next())
+        job = self.signed(client, 'GET', f'/builder/v1/jobs/{started["jobId"]}').json()
+        self.assertEqual(job['state'], 'ready', job)
+        library = self.signed(client, 'GET', '/builder/v1/projects').json()
+        self.assertEqual(len(library['projects'][0]['versions']), 1)
+        live = {'schemaVersion': 1, 'started': started, 'job': job, 'library': library}
+        if os.environ.get('ROSE_WRITE_WIRE_FIXTURE') == '1':
+            WIRE.write_text(json.dumps(live, indent=1, sort_keys=True) + '\n')
+        recorded = json.loads(WIRE.read_text())
+        self.assertEqual(shape(live), shape(recorded))
+        self.assertEqual((recorded['job']['state'], recorded['started']['projectId']),
+                         ('ready', recorded['library']['projects'][0]['projectId']))
 
 
 if __name__ == '__main__':
