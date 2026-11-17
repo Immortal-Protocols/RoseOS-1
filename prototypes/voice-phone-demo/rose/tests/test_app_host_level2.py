@@ -196,6 +196,32 @@ class Composition(unittest.TestCase):
         with self.assertRaises(toolchain.StepFailed):
             built.builder.generate(None, None, None, None)
 
+    def test_agent_host_is_off_unless_configured_and_needs_no_local_toolchain(self):
+        from rose.app_builder import app_host
+        built = self.build_host(self.config())
+        self.assertIsNone(built.builder.hosting)
+        agent = {'chariot': '/usr/local/bin/chariot', 'home': '/srv/chariot-cli', 'agents': ['rose-app-1']}
+        config = self.config(agentHost=agent)
+        self.assertEqual(config.agent_host, app_host.AgentHostConfig(
+            Path('/usr/local/bin/chariot'), Path('/srv/chariot-cli'), ('rose-app-1',), False, app_host.APP_PORT))
+        hosting = self.build_host(config).builder.hosting
+        self.assertIsInstance(hosting, app_host.AgentHosting)
+        bad = [{**agent, 'extra': 1}, {'chariot': agent['chariot'], 'home': agent['home']},
+               {**agent, 'chariot': 'chariot'}, {**agent, 'agents': []}, {**agent, 'agents': ['a', 'a']},
+               {**agent, 'agents': ['bad name']}, {**agent, 'generateKeyring': 'yes'}, {**agent, 'port': 8088},
+               {**agent, 'port': 42617}, {**agent, 'port': 80}, {**agent, 'port': True}]
+        for data in bad:
+            with self.subTest(data=data), self.assertRaises(host.ConfigError):
+                self.config(agentHost=data)
+        # No local toolchain needed: the building agent sets backends up in the container (client-backend-v1).
+        alone = host.parse_config(config_data(str(self.root / 'alone'), writer={'argv': ['/not-invoked/test-bridge']},
+                                              agentHost=agent))
+        b = self.build_host(alone).builder
+        self.assertIsInstance(b.hosting, app_host.AgentHosting)
+        self.assertIsNotNone(b.codegen)
+        self.assertEqual((b.rust_tools, b.server_isolation, b.crate_source), (None, None, None))
+        self.assertTrue(b.generate.backend)
+
 
 if __name__ == '__main__':
     unittest.main()

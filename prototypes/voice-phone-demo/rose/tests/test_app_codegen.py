@@ -67,6 +67,9 @@ def require(env: str, tool: str):
         raise unittest.SkipTest(f'{tool} is not installed')
 
 
+ANDROID_ONLY = {'RoseSession.java', 'RoseInvite.java'}  # compiled only against android.jar
+
+
 def android_jar() -> Path | None:
     for root in (os.environ.get('ANDROID_SDK_ROOT'), REPO / '.tools/android-sdk', '/opt/roseos/android-sdk'):
         if root and (Path(root) / 'platforms/android-35/android.jar').is_file():
@@ -107,11 +110,15 @@ class Server(unittest.TestCase):
                      'const CLIENT_HEADER: &str = "X-Chariot-Client-Address";',
                      '.map_err(|e| format!("routes: {e}"))?\n        .with_client_header(CLIENT_HEADER);',
                      'const PORT_ENV: &str = "PORT";',
-                     'const DEFAULT_PORT: u16 = 8080;', 'TcpListener::bind(("0.0.0.0", port))'):
+                     'const DEFAULT_PORT: u16 = 8080;', 'const LISTEN_HOST_ENV: &str = "ROSE_LISTEN_HOST";',
+                     'const DEFAULT_LISTEN_HOST: &str = "0.0.0.0";', 'let host = listen_host(var(LISTEN_HOST_ENV)?)?;',
+                     'TcpListener::bind((host, port))'):
             self.assertIn(line, main)
-        # The only variable it reads itself; the host's identity, data directory and keyring are the adapter's.
+        # The only variables it reads itself (the port and the listen address); the host's identity, data directory
+        # and keyring are the adapter's.
         self.assertEqual(main.count('std::env::var('), 1)
-        self.assertEqual((main.count('var('), main.count('var(PORT_ENV)')), (3, 1))
+        self.assertEqual((main.count('var('), main.count('var(PORT_ENV)'), main.count('var(LISTEN_HOST_ENV)')),
+                         (4, 1, 1))
         # Keys come only from the adapter's loader, which never stops start-up (no `?` on it).
         self.assertNotIn('Keys::from_env()?', main)
         for invented in ('Keys::Supplied', 'Keys::Unavailable', 'http://', 'https://', 'DATA_DIR"',
@@ -195,6 +202,7 @@ class Server(unittest.TestCase):
                     ({**ready, 'PORT': '+80'}, ['PORT is not a port']),
                     ({**ready, 'PORT': '0'}, ['PORT is not a port']),
                     ({**ready, 'PORT': '65536'}, ['PORT is not a port']),
+                    ({**ready, 'ROSE_LISTEN_HOST': 'localhost'}, ['ROSE_LISTEN_HOST is not 127.0.0.1 or 0.0.0.0']),
                     (host, ['DATA_DIR is not set']),
                     ({k: v for k, v in ready.items() if k != 'CHARIOT_APP_ID'}, ['CHARIOT_APP_ID is not set']),
                     ({**ready, 'CHARIOT_DEPLOYMENT_SHA256': 'x'}, [keyless, 'CHARIOT_DEPLOYMENT_SHA256 is not valid']),
@@ -276,7 +284,7 @@ class Client(unittest.TestCase):
 
     def test_files_are_in_the_reserved_folder(self):
         self.assertEqual(sorted(self.files), [self.base + n for n in (
-            'RoseApi.java', 'RoseJson.java', 'RoseQr.java', 'RoseSession.java', 'RoseSignin.java',
+            'RoseApi.java', 'RoseInvite.java', 'RoseJson.java', 'RoseQr.java', 'RoseSession.java', 'RoseSignin.java',
             'RoseSigninCore.java', 'RoseTypes.java')])
         self.assertTrue(all(f'package {PACKAGE}.rose;' in v for k, v in self.files.items()
                             if not k.endswith('RoseSigninCore.java')))
@@ -318,7 +326,7 @@ class Client(unittest.TestCase):
         write_tree(tmp, self.files)
         write_tree(tmp, {self.base + V.ROSE_SERVER: V.rose_server_java(PACKAGE, url)})  # the builder's own file
         write_tree(tmp, extra)
-        sources = [str(p) for p in tmp.rglob('*.java') if android or p.name != 'RoseSession.java']
+        sources = [str(p) for p in tmp.rglob('*.java') if android or p.name not in ANDROID_ONLY]
         out = tmp / 'classes'
         cmd = ['javac', '--release', '17', '-Xlint:all', '-Werror', '-d', str(out)]
         if android:
@@ -417,7 +425,7 @@ class Parity(unittest.TestCase):
             write_tree(java, {'test/Check.java': JAVA_HARNESS})
             out = java / 'classes'
             javac = subprocess.run(['javac', '--release', '17', '-d', str(out)] +
-                                   [str(p) for p in java.rglob('*.java') if p.name != 'RoseSession.java'],
+                                   [str(p) for p in java.rglob('*.java') if p.name not in ANDROID_ONLY],
                                    capture_output=True, text=True, timeout=300)
             self.assertEqual(javac.returncode, 0, javac.stderr)
             request = subprocess.run(['java', '-cp', str(out), 'Check', 'request'], capture_output=True, text=True,
@@ -454,6 +462,13 @@ STARTUP_CHECKS = textwrap.dedent('''
         assert_eq!(port(Some("65535".into())), Ok(65535));
         for bad in ["", "0", "00", "+80", "-1", "65536", " 80", "80 ", "8o", "0x50", "\\u{0660}"] {
             assert_eq!(port(Some(bad.into())), Err("PORT is not a port".to_string()), "{:?}", bad);
+        }
+        assert_eq!(listen_host(None), Ok("0.0.0.0"));
+        assert_eq!(listen_host(Some("127.0.0.1".into())), Ok("127.0.0.1"));
+        assert_eq!(listen_host(Some("0.0.0.0".into())), Ok("0.0.0.0"));
+        for bad in ["", "localhost", "::1", "127.0.0.2", " 127.0.0.1", "127.0.0.1 ", "0.0.0.0:80"] {
+            assert_eq!(listen_host(Some(bad.into())), Err("ROSE_LISTEN_HOST is not 127.0.0.1 or 0.0.0.0".to_string()),
+                       "{:?}", bad);
         }
         assert_eq!(var("ROSE_CODEGEN_CHECK_UNSET"), Ok(None));
         let args = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
