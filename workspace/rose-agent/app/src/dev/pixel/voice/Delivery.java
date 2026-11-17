@@ -1,7 +1,7 @@
 package dev.pixel.voice;
 import android.app.*;import android.content.*;import android.content.pm.PackageInstaller;import android.net.Uri;import android.provider.Settings;import java.io.*;import java.net.*;import java.security.*;import javax.net.ssl.*;import org.json.JSONObject;
 public class Delivery {
- static final String GENERATED_PREFIX="app.rose.gen.",GENERATED="Apps you build install from Rose App Builder";
+ static final String GENERATED_PREFIX="app.rose.gen.",GENERATED="Apps you build install from Build an app in Rose Agent's workspace";
  /** Project 1's generated apps (App Core's app.rose.gen.p<projectId>): this generic path never installs them. */
  static boolean generated(String pkg){return pkg!=null&&pkg.startsWith(GENERATED_PREFIX);}
  public static void install(VoiceService a,String id,String label,String endpoint,SSLSocketFactory ssl){
@@ -16,7 +16,7 @@ public class Delivery {
   JSONObject metadata=manifest(endpoint+"/apps/"+id+"/manifest",ssl);
   // Rose Agent itself is installed only through the explicit Update Rose Agent flow (voice idle, identity checked).
   if(a.getPackageName().equals(metadata.optString("packageName")))throw new IOException("Use Update Rose Agent to update Rose Agent");
-  // Apps the owner builds (Project 1, app.rose.gen.*) install only from Rose App Builder, by the owner's tap, never here.
+  // Apps the owner builds (Project 1, app.rose.gen.*) install only from the app builder in Rose Agent (dev.pixel.builder), by the owner's tap, never here.
   if(generated(metadata.optString("packageName")))throw new IOException(GENERATED);
   long size=download(endpoint+"/apps/"+id+"/apk",ssl,file,id,150L*1024*1024);
   android.content.pm.PackageInfo archive=a.getPackageManager().getPackageArchiveInfo(file.getPath(),0);
