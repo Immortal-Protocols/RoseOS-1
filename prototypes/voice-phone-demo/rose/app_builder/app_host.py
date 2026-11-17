@@ -92,6 +92,11 @@ class Channel:
     def receive(self, tar: bytes, folder: str) -> Result:
         raise NotImplementedError
 
+    def run(self, command: str, stdin: bytes = b'', timeout_s: float | None = None) -> Result:
+        """One command as ``/chariot/bin/sh -c COMMAND`` with ``stdin``: the building agent's ``agent_container``
+        tool (§7.7a), in this channel's container only."""
+        raise NotImplementedError
+
 
 @dataclass
 class ChariotSsh(Channel):
@@ -102,11 +107,11 @@ class ChariotSsh(Channel):
     home: Path
     timeout_s: float = 1200.0  # above the switch's own worst case (two stops and two health waits)
 
-    def _run(self, remote: list[str], stdin: bytes) -> Result:
+    def _run(self, remote: list[str], stdin: bytes, timeout_s: float | None = None) -> Result:
         env = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
         try:
             done = subprocess.run([str(self.chariot), 'ssh', self.agent, '--', *remote], input=stdin, env=env,
-                                  capture_output=True, timeout=self.timeout_s)
+                                  capture_output=True, timeout=timeout_s or self.timeout_s)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise SetupFailed('ssh', f'chariot ssh did not run ({type(exc).__name__})') from None
         return Result(done.returncode, done.stdout.decode('utf-8', 'replace'), done.stderr.decode('utf-8', 'replace'))
@@ -119,16 +124,23 @@ class ChariotSsh(Channel):
             raise ValueError('folder')
         return self._run([f'exec {BIN}/tar -xf - -C "$HOME/workspace/.chariot-app/{folder}"'], tar)
 
+    def run(self, command: str, stdin: bytes = b'', timeout_s: float | None = None) -> Result:
+        return self._run([f'{BIN}/sh', '-c', command], stdin, timeout_s)
+
 
 @dataclass(frozen=True)
 class Plan:
+    """One release to set up. ``sha256`` is the release id: a builder-built server's ELF digest, or the id the
+    builder gave the building agent's release folder (``elf`` None: the agent put the release there, nothing is
+    uploaded). ``data_schema`` is the builder's own schema number for a builder-built server, None otherwise (an
+    agent-built backend migrates its own data)."""
     project: str
     version_code: int
     agent_id: str
     app_url: str
-    elf: Path
+    elf: Path | None
     sha256: str
-    data_schema: int
+    data_schema: int | None
     port: int = APP_PORT
 
 
@@ -160,26 +172,38 @@ def plan(ledger: Ledger, root: Path, project: str, version_code: int | None = No
     return Plan(project, code, container['agentId'], container['appUrl'], elf, m['elf']['sha256'], schema, port)
 
 
-def start_script(p: Plan) -> str:
-    """The foreground ``start`` the launcher runs: loopback only, the contract's data folder, the keyring outside
-    it, this binary's identity for /health, and the pid the next setup stops."""
-    return f'''#!{BIN}/sh
-set -eu
+def release_files(p: Plan) -> dict[str, bytes]:
+    """A builder-built server as a release: the static ELF, a ``start`` that runs it with its own identity for
+    /health, and an ``invite`` for the creator's invite (§7.4). An agent-built release has its own (``p.elf`` None)."""
+    start = f'set -eu\nexport CHARIOT_REVISION_SHA256={p.sha256}\nexec ./server\n'
+    invite = 'set -eu\nexec ./server invite "$1"\n'
+    return {'server': p.elf.read_bytes(), 'start': start.encode(), 'invite': invite.encode()}
+
+
+def shim(p: Plan, bin_dir: str = BIN) -> str:
+    """The foreground ``start`` Chariot's launcher runs, the same for every release: loopback only, the contract's
+    data folder, the keyring (when there is one) outside it, the current release's identity, and the pid the next
+    setup stops; then the release's own ``start``, run by the agent's shell from the release's folder. That script
+    must end by exec-ing its server (one foreground process, listening on 127.0.0.1:$PORT, /health answering 200)."""
+    return f'''set -eu
+app="$HOME/workspace/.chariot-app"
 export PORT={p.port}
 export ROSE_LISTEN_HOST=127.0.0.1
-export DATA_DIR="$HOME/workspace/.chariot-app/data"
-export CHARIOT_SEALING_KEY_FILE="$HOME/workspace/.chariot-app/keys/keyring.json"
-export CHARIOT_REVISION_SHA256={p.sha256}
-export CHARIOT_DEPLOYMENT_SHA256={p.sha256}
-printf '%s\\n' "$$" > server.pid
-exec ./server
+export DATA_DIR="$app/data"
+if test -f "$app/keys/keyring.json"; then export CHARIOT_SEALING_KEY_FILE="$app/keys/keyring.json"; fi
+release=$({bin_dir}/cat "$app/current")
+export ROSE_RELEASE="$release"
+export CHARIOT_DEPLOYMENT_SHA256="$release"
+printf "%s\\n" "$$" > "$app/server.pid"
+cd "$app/releases/$release"
+exec {bin_dir}/sh ./start
 '''
 
 
 def bundle(p: Plan) -> bytes:
     out = io.BytesIO()
     with tarfile.open(fileobj=out, mode='w', format=tarfile.USTAR_FORMAT) as tar:
-        for name, data in (('server', p.elf.read_bytes()), ('start', start_script(p).encode())):
+        for name, data in release_files(p).items():
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(data), 0o700, 0
             tar.addfile(info, io.BytesIO(data))
@@ -202,7 +226,7 @@ umask 077
 @BIN@/mkdir -p "$app/data" "$app/backups" "$app/keys" "$app/releases"
 cd "$app"
 occupied=no
-if test -e server || test -e start; then occupied=yes; fi
+if test -e server || test -e start || test -e current; then occupied=yes; fi
 for f in data/* data/.[!.]*; do if test -e "$f"; then occupied=yes; fi; done
 echo "occupied=$occupied"
 if test -f switching; then printf 'switching=%s\n' "$(@BIN@/cat switching)"; fi
@@ -211,6 +235,7 @@ if test -f deployed.json; then printf 'deployed=%s\n' "$(@BIN@/cat deployed.json
 PREPARE = '''set -eu
 app="$HOME/workspace/.chariot-app"
 umask 077
+@BIN@/mkdir -p "$app/releases"
 @BIN@/rm -rf "$app/@INCOMING@"
 @BIN@/mkdir "$app/@INCOMING@"
 '''
@@ -240,7 +265,7 @@ healthy() {
   while test "$i" -lt @HEALTH_WAIT@; do
     reply=$(printf 'GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' |
       $B/timeout 3 $B/nc -w 2 127.0.0.1 @PORT@ 2>/dev/null || true)
-    case "$reply" in "HTTP/1."?" 200 "*"$1"*) return 0 ;; esac
+    case "$reply" in "HTTP/1."?" 200 "*) return 0 ;; esac
     $B/sleep 1
     i=$((i + 1))
   done
@@ -254,20 +279,22 @@ publish() {
   printf '%s' '@DESCRIPTOR@' > app.json.tmp
   $B/mv -f app.json.tmp app.json
 }
-# The ELF sha256 a deployed record names (deployed.json by default), or nothing.
+# The release a deployed record names (deployed.json by default), or nothing.
 sha_of() {
   test -f "${1:-deployed.json}" || return 0
-  s=$($B/cat "${1:-deployed.json}"); s=${s#*'"sha256":"'}; s=${s%%'"'*}
+  s=$($B/cat "${1:-deployed.json}"); s=${s#*'"release":"'}; s=${s%%'"'*}
   case "$s" in *[!0-9a-f]* | '') return 0 ;; esac
   if test "${#s}" -eq 64; then printf '%s' "$s"; fi
 }
-# A release as the running pair, written beside and moved into place.
+# A release made the current one: the launcher's start is the shim (the same for every release), and ``current``
+# names the release it runs, each written beside and moved into place.
 activate() {
-  $B/cat "releases/$1/server" > server.tmp
-  $B/cat "releases/$1/start" > start.tmp
-  $B/chmod 0700 server.tmp start.tmp
-  $B/mv -f server.tmp server
+  test -f "releases/$1/start" && test ! -L "releases/$1/start" || return 1
+  printf '%s' '@SHIM@' > start.tmp
+  printf '%s' "$1" > current.tmp
+  $B/chmod 0700 start.tmp
   $B/mv -f start.tmp start
+  $B/mv -f current.tmp current
 }
 # The data as backups/latest.tar holds it. Each step fails explicitly, whatever errexit says: the data folder is
 # replaced only once the archive unpacked whole, and the data it replaces is moved (not copied) to the folder $1
@@ -296,13 +323,13 @@ recover() {
     if ! restore_data backups/replaced; then echo "restored=data-not-restored"; return 0; fi
   fi
   good=$(sha_of)
-  if test -n "$good" && test -f "releases/$good/server" && test -f "releases/$good/start"; then
+  if test -n "$good" && test -f "releases/$good/start"; then
     activate "$good" || { echo "restored=not-restored"; return 0; }
     $B/rm -f switching
     launch
     if healthy "$good"; then publish; echo "restored=$good"; else echo "restored=not-healthy"; fi
   else
-    $B/rm -f server start switching
+    $B/rm -f server start current switching
     echo "restored=nothing-deployed"
   fi
 }
@@ -327,6 +354,9 @@ if test ! -f keys/keyring.json; then
   $B/chmod 0400 keys/keyring.tmp
   $B/mv -f keys/keyring.tmp keys/keyring.json
 fi
+# The release (uploaded by the builder, or put there by the building agent) must have its start, before anything
+# is touched.
+if test ! -f "@INCOMING@/start" || test -L "@INCOMING@/start"; then echo "failed=release"; phase=done; exit 7; fi
 phase=switch
 # An earlier switch was cut off (SSH dropped, the builder stopped): back to the deployed release and its data first.
 if test -f switching; then
@@ -349,8 +379,10 @@ if test -f backups/latest.tar; then $B/mv -f backups/latest.tar backups/previous
 $B/mv -f backups/taking.tar backups/latest.tar
 printf '%s %s installing' '@PROJECT@' '@SHA@' > switching
 failed=install
-$B/rm -rf "releases/@SHA@"
-$B/mv "@INCOMING@" "releases/@SHA@"
+if test "@INCOMING@" != "releases/@SHA@"; then  # an uploaded release; an agent-built one is already in place
+  $B/rm -rf "releases/@SHA@"
+  $B/mv "@INCOMING@" "releases/@SHA@"
+fi
 activate '@SHA@'
 launch
 failed=health
@@ -392,7 +424,7 @@ on_exit() {
   echo "failed=$failed"
   if test "$phase" = stopped; then
     cur=$(sha_of)
-    if test -n "$cur" && test -f "releases/$cur/server" && activate "$cur"; then
+    if test -n "$cur" && activate "$cur"; then
       launch
       if healthy "$cur"; then publish; echo "restored=$cur"; fi
     fi
@@ -409,7 +441,7 @@ stop
 phase=stopped
 failed=restore
 restore_data backups/reverted
-if test -n "$prev" && test -f "releases/$prev/server"; then
+if test -n "$prev" && test -f "releases/$prev/start"; then
   activate "$prev"
   $B/mv -f deployed.prev.json deployed.json
   phase=done
@@ -417,7 +449,7 @@ if test -n "$prev" && test -f "releases/$prev/server"; then
   if healthy "$prev"; then publish; echo "reverted=$prev"; else echo "reverted=not-healthy"; fi
 else
   phase=done
-  $B/rm -f server start deployed.json deployed.prev.json
+  $B/rm -f server start current deployed.json deployed.prev.json
   echo "reverted=nothing"
 fi
 $B/rm -rf "releases/@SHA@"
@@ -438,9 +470,10 @@ def _state(channel: Channel, bin_dir: str) -> dict:
     if 'deployed' in lines:
         try:
             deployed = json.loads(lines['deployed'])
-            if not (isinstance(deployed, dict) and isinstance(deployed.get('dataSchema'), int)
+            schema = deployed.get('dataSchema') if isinstance(deployed, dict) else None
+            if not (isinstance(deployed, dict) and (schema is None or type(schema) is int)
                     and isinstance(deployed.get('project'), str)
-                    and re.fullmatch(r'[0-9a-f]{64}', str(deployed.get('sha256', '')))):
+                    and re.fullmatch(r'[0-9a-f]{64}', str(deployed.get('release', '')))):
                 raise ValueError
         except ValueError:
             raise SetupFailed('state', 'the deployed record on the agent is not readable') from None
@@ -463,7 +496,11 @@ def _check_owner(state: dict, project: str) -> None:
 def _script(text: str, p: Plan, bin_dir: str, *, sha: str, health_wait_s: int, stop_wait_s: int, **extra) -> str:
     descriptor = json.dumps({'format': 'chariot-agent-app/v1', 'port': p.port, 'health_path': '/health'},
                             separators=(',', ':'))
-    out = (text.replace('@LAUNCHER@', LAUNCHER.replace('/chariot/bin', bin_dir)).replace('@SHA@', sha)
+    shim_text = shim(p, bin_dir)
+    if "'" in shim_text:
+        raise ValueError('the shim is written inside single quotes')
+    out = (text.replace('@SHIM@', shim_text).replace('@LAUNCHER@', LAUNCHER.replace('/chariot/bin', bin_dir))
+           .replace('@SHA@', sha)
            .replace('@PORT@', str(p.port)).replace('@DESCRIPTOR@', descriptor)
            .replace('@HEALTH_WAIT@', str(int(health_wait_s))).replace('@STOP_WAIT@', str(int(stop_wait_s))))
     for key, value in extra.items():
@@ -486,19 +523,22 @@ def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring
     if not enabled:
         raise SetupFailed('disabled', 'agent-container setup is not enabled on this builder')
     if not re.fullmatch(r'[A-Za-z0-9]{1,64}', p.project) or not re.fullmatch(r'[0-9a-f]{64}', p.sha256):
-        raise SetupFailed('plan', 'the project or server digest is not in its recorded form')
+        raise SetupFailed('plan', 'the project or release id is not in its recorded form')
     _identity_matches(channel, p, bin_dir)
     state = _state(channel, bin_dir)
     _check_owner(state, p.project)
     previous = state['deployed']
-    if previous is not None and previous['sha256'] != p.sha256 and undelivered(previous['sha256']):
-        revert(p, channel, previous['sha256'], bin_dir=bin_dir, health_wait_s=health_wait_s, stop_wait_s=stop_wait_s)
+    if previous is not None and previous['release'] != p.sha256 and undelivered(previous['release']):
+        revert(p, channel, previous['release'], bin_dir=bin_dir, health_wait_s=health_wait_s, stop_wait_s=stop_wait_s)
         state = _state(channel, bin_dir)
         _check_owner(state, p.project)
         previous = state['deployed']
-    if previous is not None and previous['dataSchema'] > p.data_schema:
+    # The builder's own schema numbers, when both releases have one (a builder-built server); an agent-built
+    # backend migrates its own data.
+    if previous is not None and None not in (previous['dataSchema'], p.data_schema) \
+            and previous['dataSchema'] > p.data_schema:
         raise SetupFailed('state', 'this version\'s data schema is older than the deployed one')
-    if previous is not None and previous['sha256'] == p.sha256 and state['switching'] is None:
+    if previous is not None and previous['release'] == p.sha256 and state['switching'] is None:
         # The same server (a version that changed only its client): nothing to back up, switch or ever undo.
         result = channel.script(_script(ENSURE, p, bin_dir, sha=p.sha256, health_wait_s=health_wait_s,
                                         stop_wait_s=stop_wait_s))
@@ -507,14 +547,15 @@ def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring
             raise SetupFailed('switch', f'the set-up server did not answer ({lines.get("failed", "unknown")})')
         return {'deployed': p.sha256, 'appUrl': p.app_url, 'dataSchema': p.data_schema,
                 'previous': p.sha256, 'unchanged': True}
-    incoming = f'incoming-{p.sha256}'
-    _check(channel.script(_sh(PREPARE.replace('@INCOMING@', incoming), bin_dir)), 'upload')
-    try:
-        tar = bundle(p)
-    except OSError as exc:
-        raise SetupFailed('upload', f'the server could not be read ({type(exc).__name__})') from None
-    _check(channel.receive(tar, incoming), 'upload')
-    deployed = json.dumps({'sha256': p.sha256, 'dataSchema': p.data_schema, 'versionCode': p.version_code,
+    incoming = f'incoming-{p.sha256}' if p.elf is not None else f'releases/{p.sha256}'
+    if p.elf is not None:  # a builder-built server is uploaded; an agent-built release is already in incoming
+        _check(channel.script(_sh(PREPARE.replace('@INCOMING@', incoming), bin_dir)), 'upload')
+        try:
+            tar = bundle(p)
+        except OSError as exc:
+            raise SetupFailed('upload', f'the server could not be read ({type(exc).__name__})') from None
+        _check(channel.receive(tar, incoming), 'upload')
+    deployed = json.dumps({'release': p.sha256, 'dataSchema': p.data_schema, 'versionCode': p.version_code,
                            'project': p.project}, separators=(',', ':'), sort_keys=True)
     result = channel.script(_script(SWITCH, p, bin_dir, sha=p.sha256, health_wait_s=health_wait_s,
                                     stop_wait_s=stop_wait_s, INCOMING=incoming, DEPLOYED=deployed, PROJECT=p.project,
@@ -524,7 +565,7 @@ def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring
         raise SetupFailed('switch', f'the new server was not set up ({lines.get("failed", "unknown")}); restored: '
                                     f'{lines.get("restored", "nothing was changed")}')
     return {'deployed': p.sha256, 'appUrl': p.app_url, 'dataSchema': p.data_schema,
-            'previous': (previous or {}).get('sha256'), 'unchanged': False}
+            'previous': (previous or {}).get('release'), 'unchanged': False}
 
 
 def revert(p: Plan, channel: Channel, sha: str, *, bin_dir: str = BIN, health_wait_s: int = HEALTH_WAIT_S,
@@ -637,6 +678,52 @@ class AgentHosting:
         with self._busy:
             return revert(p, self.channel(self.name_for(p.agent_id)), p.sha256)
 
+    # ---- the building agent's backend (§7.7a, client-backend-v1) ----------------------------------------------
+
+    def release_folder(self, release: str) -> str:
+        return f'$HOME/workspace/.chariot-app/releases/{release}'  # where it runs: never moved, so paths hold
+
+    def prepare(self, project: str, release: str) -> None:
+        """A fresh, empty release folder in the project's recorded agent container, for the building agent."""
+        if not re.fullmatch(r'[0-9a-f]{64}', release):
+            raise SetupFailed('plan', 'the release id is not in its recorded form')
+        container = self.ledger.agent_container(project)
+        if container is None:
+            raise SetupFailed('plan', 'no agent container is recorded for this project')
+        with self._busy:
+            channel = self.channel(self.name_for(container['agentId']))
+            _check(channel.script(_sh(PREPARE.replace('@INCOMING@', f'releases/{release}'), BIN)), 'prepare')
+
+    def exec(self, project: str, command: str, stdin: bytes = b'', timeout_s: float = 1800.0) -> Result:
+        """The building agent's ``agent_container`` tool: one command in the project's own recorded agent container
+        (never one the model names), through the configured Chariot CLI. Its output goes back to the model only."""
+        container = self.ledger.agent_container(project)
+        if container is None:
+            raise SetupFailed('plan', 'no agent container is recorded for this project')
+        return self.channel(self.name_for(container['agentId'])).run(command, stdin, timeout_s)
+
+    def deploy_release(self, project: str, version_code: int, release: str, app_url: str | None = None) -> dict:
+        """Switch to the release the building agent put in its folder (no upload; the builder built nothing)."""
+        container = self.ledger.agent_container(project)
+        if container is None:
+            raise SetupFailed('plan', 'no agent container is recorded for this project')
+        if app_url is not None and container['appUrl'] != app_url:
+            raise SetupFailed('plan', 'the agent container changed after the app\'s client was built')
+        p = Plan(project, version_code, container['agentId'], container['appUrl'], None, release, None,
+                 self.config.port)
+        with self._busy:
+            return deploy(p, self.channel(self.name_for(p.agent_id)), enabled=True,
+                          generate_keyring=self.config.generate_keyring, undelivered=self._undelivered(project))
+
+    def revert_release(self, project: str, version_code: int, release: str) -> str:
+        container = self.ledger.agent_container(project)
+        if container is None:
+            raise SetupFailed('plan', 'no agent container is recorded for this project')
+        p = Plan(project, version_code, container['agentId'], container['appUrl'], None, release, None,
+                 self.config.port)
+        with self._busy:
+            return revert(p, self.channel(self.name_for(p.agent_id)), release)
+
     def invite(self, project: str, sha256: str, account: str) -> str:
         """An invite from the project's server in its recorded agent container (see ``invite``)."""
         container = self.ledger.agent_container(project)
@@ -654,15 +741,21 @@ class AgentHosting:
             self._busy.release()
 
 
+# The current release's own ``invite <account>`` (optional: a backend with no creator invites ships none), with the
+# shim's environment, from the release's folder; its stdout is the token, once.
 INVITE = '''set -eu
 app="$HOME/workspace/.chariot-app"
-cd "$app" 2>/dev/null && test -x ./server || { echo "failed=not_set_up" >&2; exit 5; }
+cd "$app" 2>/dev/null && test -f current || { echo "failed=not_set_up" >&2; exit 5; }
+release=$(@BIN@/cat current)
+test "$release" = @SHA@ || { echo "failed=not_set_up" >&2; exit 5; }
+test -f "releases/$release/invite" && test ! -L "releases/$release/invite" || { echo "failed=unsupported" >&2; exit 6; }
 export DATA_DIR="$app/data"
-export CHARIOT_DEPLOYMENT_SHA256=@SHA@
-export CHARIOT_REVISION_SHA256=@SHA@
-exec ./server invite @ACCOUNT@
+export ROSE_RELEASE="$release"
+export CHARIOT_DEPLOYMENT_SHA256="$release"
+cd "releases/$release"
+exec @BIN@/sh ./invite @ACCOUNT@
 '''
-INVITE_TOKEN = re.compile(r'[A-Z2-7]{52}')  # rose-signin base32, no padding
+INVITE_TOKEN = re.compile(r'[\x21-\x7e]{1,512}')  # opaque: printable ASCII, no whitespace (rose-signin's fits)
 INVITE_REFUSAL = re.compile(r'(?:no invite: |failed=)([a-z_]+)')
 
 

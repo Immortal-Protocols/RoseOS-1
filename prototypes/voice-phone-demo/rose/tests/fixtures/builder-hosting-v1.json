@@ -3,7 +3,7 @@
   "account": "me",
   "expiresInS": 604800,
   "invite": "AAAAAAAAAAAAAAAAAAAAAAAAAA22222222222222222222222222",
-  "projectId": "2babd1f5b49a4058",
+  "projectId": "ba5128cb393cd39a",
   "schemaVersion": 1,
   "versionCode": 1
  },
@@ -24,6 +24,15 @@
     "schemaVersion": 1
    },
    "status": 400
+  },
+  "invites_unsupported": {
+   "body": {
+    "error": "This app's backend has no sign-in invites.",
+    "reason": "invites_unsupported",
+    "retryable": false,
+    "schemaVersion": 1
+   },
+   "status": 409
   },
   "not_found": {
    "body": {
@@ -70,16 +79,16 @@
    "unlistedCount": 0
   },
   "apk": {
-   "sha256": "5b3d4feaaa82916514650c82891549c536f6db557788740713a7269bc285570a",
+   "sha256": "6c0332867351e6544586415b1234809a8f529fe9bf1373aa02ba74353e443e8c",
    "size": 12681
   },
-  "createdAt": 1794883211.5772276,
+  "createdAt": 1794887467.9662414,
   "hosting": {
    "appUrl": "https://agent-0f1e2d3c4b5a69788796a5b4c3d2e1f0.apps.example.org",
-   "setUpAt": 1794883211576,
+   "setUpAt": 1794887467965,
    "state": "set_up"
   },
-  "jobId": "557b903f466b1f52",
+  "jobId": "4e43aa4c48142899",
   "notes": "Notes",
   "server": {
    "api": 1,
@@ -87,7 +96,7 @@
    "schemaVersion": 1,
    "status": "ok"
   },
-  "sourceRevision": "6ad9cef84b1bc193aff8d11d5bb549e2175c3211",
+  "sourceRevision": "47c11cb2eae06a383dbfce08225036f0f2c4d5a2",
   "versionCode": 1,
   "versionName": "1"
  }

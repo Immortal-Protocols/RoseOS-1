@@ -194,12 +194,12 @@ def separate(a: Path, b: Path) -> bool:
 
 
 def _agent_host_config(value, client_server):
-    """``agentHost`` (§7.7a): {chariot, home, agents[], generateKeyring?, port?}; only with ``clientServer``."""
+    """``agentHost`` (§7.7a): {chariot, home, agents[], generateKeyring?, port?}. It needs no ``clientServer``: the
+    building agent sets an app's backend up in its own agent container (client-backend-v1), and the builder builds no
+    server; with ``clientServer`` too, builder-built (client-server-v1) servers are set up there as well."""
     if value is None:
         return None
     from .app_host import AGENT_NAME, APP_PORT, RESERVED_PORTS, AgentHostConfig
-    if client_server is None:
-        raise ConfigError('agentHost needs clientServer: it hosts client-server apps')
     if not isinstance(value, dict) or set(value) - {'chariot', 'home', 'agents', 'generateKeyring', 'port'} \
             or not {'chariot', 'home', 'agents'} <= set(value):
         raise ConfigError('agentHost must contain chariot, home and agents (generateKeyring and port optional)')
@@ -445,7 +445,8 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
             from .generator import CodexGenerator
             generate = CodexGenerator(timeout_s=config.writer.timeout_s, command=list(config.writer.argv),
                                       libraries=resolver.available if resolver is not None else None,
-                                      client_server=config.client_server is not None)
+                                      client_server=config.client_server is not None,
+                                      backend=config.agent_host is not None)
         else:
             generate = no_writer
     if backup is None and config.backup is not None:
@@ -455,8 +456,10 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
     ledger = Ledger(config.root)
     hosting = None
     if config.agent_host is not None:
+        from . import codegen
         from .app_host import AgentHosting
         hosting = AgentHosting(config.agent_host, ledger)
+        level2.setdefault('codegen', codegen)  # the API client an agent-built backend's app is built with
     return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
                    server_url=ledger.backend_endpoint, hosting=hosting, **level2)
 

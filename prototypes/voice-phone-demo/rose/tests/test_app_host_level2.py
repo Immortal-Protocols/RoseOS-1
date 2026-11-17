@@ -196,7 +196,7 @@ class Composition(unittest.TestCase):
         with self.assertRaises(toolchain.StepFailed):
             built.builder.generate(None, None, None, None)
 
-    def test_agent_host_is_off_unless_configured_and_only_with_client_server(self):
+    def test_agent_host_is_off_unless_configured_and_needs_no_local_toolchain(self):
         from rose.app_builder import app_host
         built = self.build_host(self.config())
         self.assertIsNone(built.builder.hosting)
@@ -213,8 +213,14 @@ class Composition(unittest.TestCase):
         for data in bad:
             with self.subTest(data=data), self.assertRaises(host.ConfigError):
                 self.config(agentHost=data)
-        with self.assertRaisesRegex(host.ConfigError, 'needs clientServer'):
-            host.parse_config(config_data(str(self.root), agentHost=agent))
+        # No local toolchain needed: the building agent sets backends up in the container (client-backend-v1).
+        alone = host.parse_config(config_data(str(self.root / 'alone'), writer={'argv': ['/not-invoked/test-bridge']},
+                                              agentHost=agent))
+        b = self.build_host(alone).builder
+        self.assertIsInstance(b.hosting, app_host.AgentHosting)
+        self.assertIsNotNone(b.codegen)
+        self.assertEqual((b.rust_tools, b.server_isolation, b.crate_source), (None, None, None))
+        self.assertTrue(b.generate.backend)
 
 
 if __name__ == '__main__':

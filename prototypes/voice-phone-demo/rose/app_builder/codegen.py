@@ -1205,7 +1205,7 @@ public final class RoseInvite {
         }
         intent.removeExtra(EXTRA_ACCOUNT);
         intent.removeExtra(EXTRA_INVITE);
-        if (account == null || account.isEmpty() || invite == null || !invite.matches("[A-Z2-7]{52}")) return null;
+        if (account == null || account.isEmpty() || invite == null || !invite.matches("[\\x21-\\x7e]{1,512}")) return null;
         return new RoseInvite(account, invite);
     }
 

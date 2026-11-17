@@ -3,7 +3,8 @@ import {createInterface} from 'node:readline';
 import {Codex} from './codex.mjs';
 import {computerToolDefinitions,computerCommand} from './computer-tools.mjs';
 import {lifeResearchPolicy,publicPageReceipt} from './life-research.mjs';
-import {appBuildPolicy,appBuildCwd,APP_BUILD_ITEMS,APP_BUILD_ITEM_BUDGET} from './app-build.mjs';
+import {appBuildPolicy,appBuildCwd,appBuildItems,appBuildItemBudget,appBuildContainerOptions,agentContainerCallProblem,
+ appBuildToolResult,AGENT_CONTAINER_TOOL} from './app-build.mjs';
 
 const sessions = new Map(), calls = new Map();
 let nextCall = 0;
@@ -30,18 +31,26 @@ async function handle(m) {
   const character=m.purpose==='character_life';
   const appBuild=m.purpose==='app_build';
   if(research && (!Array.isArray(m.tools)||m.tools.length))throw Error('Research cannot have phone tools');
-  // app_build: fixed instructions, no tools of any kind, and only a project source directory as cwd (app-build.mjs).
+  // app_build: fixed instructions, no caller tools of any kind, and only a project source directory as cwd
+  // (app-build.mjs). With containerTool the bridge itself adds its one fixed agent_container tool.
   if(appBuild && (!Array.isArray(m.tools)||m.tools.length||!appBuildCwd(m.cwd)))throw Error('App build cannot have tools');
-  if(appBuild)m={...m,instructions:appBuildPolicy};  // never the caller's
+  const container=appBuild?appBuildContainerOptions(m):null;
+  if(appBuild)m={...m,instructions:appBuildPolicy,tools:container.containerTool?[AGENT_CONTAINER_TOOL]:[]};  // never the caller's
+  const toolTimeoutMs=container?.containerTool?container.toolTimeoutMs:60000;
   const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,threadId:c.thread,...event});};
   const c=new Codex(m.cwd, '', null, {externalPhone:true,publicResearch:research,characterLife:character,appBuild,model:m.model,
    developerInstructions:research?lifeResearchPolicy:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
-   handleToolCall:params=>new Promise(resolve=>{
+   handleToolCall:params=>{
+    // app_build forwards only a well-formed agent_container call of a container session, and passes back text only.
+    const refused=appBuild&&agentContainerCallProblem(params,container.containerTool);
+    if(refused)return Promise.resolve({success:false,contentItems:[{type:'inputText',text:JSON.stringify({status:'error',reason:refused})}]});
+    return new Promise(resolve=>{
     const callId=String(++nextCall);
-    const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());cancelled(m.session,callId);},60000);
+    const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());cancelled(m.session,callId);},toolTimeoutMs);
     calls.set(callId,{resolve,timer,session:m.session});
     publish({event:'tool',callId,params});
    }).then(async result=>{
+    if(appBuild)return appBuildToolResult(result);
     try{
      const images=(result.contentItems||[]).filter(x=>x.type==='inputImage').length;
      const forwarded=await c.forwardToolImages(params,result);
@@ -52,7 +61,7 @@ async function handle(m) {
      await c.interruptForModelSwitch().catch(()=>{});
      return fail();
     }
-   })});
+   });}});
   sessions.set(m.session,c);
   c.on('turnCreated',p=>publish({event:'started',turnId:p.turnId}));
   c.on('textDelta',p=>publish({event:'delta',...p}));
@@ -83,9 +92,10 @@ async function handle(m) {
   });
   if(appBuild){
    let items=0,refused=false;
+   const allowed=appBuildItems(container.containerTool),budget=appBuildItemBudget(container.containerTool);
    c.on('toolActivity',(method,params)=>{
     if(refused||method!=='item/started')return;
-    if(APP_BUILD_ITEMS.includes(params.item?.type)&&++items<=APP_BUILD_ITEM_BUDGET)return;
+    if(allowed.includes(params.item?.type)&&++items<=budget)return;
     refused=true;publish({event:'failure',message:'App build tool boundary or budget exceeded'});
     c.interruptForModelSwitch().catch(()=>{});
    });

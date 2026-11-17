@@ -181,7 +181,9 @@ class Routes(unittest.TestCase):
                 ('already_enrolled', Unavailable('That account is already signed up to this app.', 'already_enrolled',
                                                  False), 409),
                 ('server_unavailable', Unavailable('This app\'s server could not issue an invite now; try again.',
-                                                   'server_unavailable', True), 409)):
+                                                   'server_unavailable', True), 409),
+                ('invites_unsupported', Unavailable('This app\'s backend has no sign-in invites.',
+                                                    'invites_unsupported', False), 409)):
             def refuse(device, project, data, raised=raised):
                 raise raised
             with mock.patch.object(self.builder, 'invite', refuse):

@@ -57,6 +57,11 @@ exec @FLOCK@ "$@"
 '''
 
 
+def running(app: Path) -> Path:
+    """The server binary of the release the shim runs (``current``)."""
+    return app / 'releases' / (app / 'current').read_text() / 'server'
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -89,6 +94,9 @@ class LocalAgent(app_host.Channel):
     def script(self, text):
         self.scripts.append(text)
         return self._run([str(self.bin / 'sh'), '-s'], text.encode())
+
+    def run(self, command, stdin=b'', timeout_s=None):
+        return self._run([str(self.bin / 'sh'), '-c', command], stdin)
 
     def receive(self, tar, folder):
         return self._run([str(self.bin / 'sh'), '-c',
@@ -144,15 +152,17 @@ class Setup(unittest.TestCase):
         app = self.agent.app
         self.assertEqual(json.loads((app / 'app.json').read_text()),
                          {'format': 'chariot-agent-app/v1', 'port': self.port, 'health_path': '/health'})
-        self.assertEqual(json.loads((app / 'deployed.json').read_text())['sha256'], p.sha256)
+        self.assertEqual(json.loads((app / 'deployed.json').read_text())['release'], p.sha256)
         self.assertIn(p.sha256, self.get())
         keyring = json.loads((app / 'keys/keyring.json').read_text())
         self.assertEqual((keyring['format'], keyring['current'], len(keyring['keys'])), ('rose-signin-keyring/v1', 1, 1))
         self.assertEqual(len(__import__('base64').b64decode(keyring['keys'][0]['key'])), 32)
         self.assertEqual((app / 'keys/keyring.json').stat().st_mode & 0o777, 0o400)
-        start = (app / 'start').read_text()
+        start = (app / 'start').read_text()  # the shim, the same for every release
         self.assertIn('export ROSE_LISTEN_HOST=127.0.0.1', start)  # never the pod's own address
-        self.assertIn(f'export CHARIOT_REVISION_SHA256={p.sha256}', start)
+        self.assertIn('export CHARIOT_DEPLOYMENT_SHA256="$release"', start)
+        self.assertEqual((app / 'current').read_text(), p.sha256)
+        self.assertIn(f'export CHARIOT_REVISION_SHA256={p.sha256}', (app / 'releases' / p.sha256 / 'start').read_text())
         self.assertFalse(any(app.glob('incoming-*')))
 
     def test_an_update_backs_up_the_data_and_keeps_the_previous_binary(self):
@@ -166,7 +176,7 @@ class Setup(unittest.TestCase):
         self.assertEqual((app / 'releases' / v1.sha256 / 'server').read_bytes(), v1.elf.read_bytes())
         self.assertIn(f'CHARIOT_REVISION_SHA256={v1.sha256}',  # its own start
                       (app / 'releases' / v1.sha256 / 'start').read_text())
-        self.assertEqual(json.loads((app / 'deployed.prev.json').read_text())['sha256'], v1.sha256)
+        self.assertEqual(json.loads((app / 'deployed.prev.json').read_text())['release'], v1.sha256)
         with tarfile.open(app / 'backups/latest.tar') as tar:  # v1's data, taken while nothing ran
             backed = tar.extractfile('./accounts/a.sqlite3').read().decode()
         self.assertEqual(backed, 'v1\n')
@@ -187,11 +197,11 @@ class Setup(unittest.TestCase):
             self.deploy(broken, health_wait_s=3)
         app = self.agent.app
         self.assertIn(v1.sha256, self.get())  # the previous binary serves again
-        self.assertEqual((app / 'server').read_bytes(), v1.elf.read_bytes())
+        self.assertEqual(running(app).read_bytes(), v1.elf.read_bytes())
         # The data the broken binary touched is replaced by the backup, then the restored v1 opens it.
         self.assertEqual((app / 'data/accounts/a.sqlite3').read_text(), 'v1\nv1\n')
         self.assertTrue((app / 'app.json').is_file())
-        self.assertEqual(json.loads((app / 'deployed.json').read_text())['sha256'], v1.sha256)
+        self.assertEqual(json.loads((app / 'deployed.json').read_text())['release'], v1.sha256)
 
     def test_no_keyring_is_refused_before_anything_is_touched(self):
         v1 = self.plan('v1')
@@ -199,7 +209,7 @@ class Setup(unittest.TestCase):
         (self.agent.app / 'keys/keyring.json').unlink()
         with self.assertRaisesRegex(app_host.SetupFailed, 'keyring'):
             self.deploy(self.plan('v2', schema=2), generate_keyring=False)
-        self.assertEqual((self.agent.app / 'server').read_bytes(), v1.elf.read_bytes())
+        self.assertEqual(running(self.agent.app).read_bytes(), v1.elf.read_bytes())
         self.assertTrue((self.agent.app / 'app.json').is_file())  # still published, still v1
         self.assertIn(v1.sha256, self.get())
 
@@ -236,7 +246,7 @@ class Setup(unittest.TestCase):
         with self.assertRaisesRegex(app_host.SetupFailed, rf'restored: {v1.sha256}'):
             self.deploy(self.plan('broken', schema=2), health_wait_s=3)
         self.assertIn(v1.sha256, self.get())
-        self.assertEqual((app / 'server').read_bytes(), v1.elf.read_bytes())
+        self.assertEqual(running(app).read_bytes(), v1.elf.read_bytes())
         self.assertNotIn('v2', (app / 'data/accounts/a.sqlite3').read_text())
         self.assertTrue((app / 'app.json').is_file())
         self.assertFalse((app / 'switching').exists())
@@ -323,7 +333,7 @@ class Setup(unittest.TestCase):
         again = self.deploy(v2)  # a version that changed only its client
         app = self.agent.app
         self.assertTrue(again['unchanged'])
-        self.assertEqual(json.loads((app / 'deployed.prev.json').read_text())['sha256'], v1.sha256)
+        self.assertEqual(json.loads((app / 'deployed.prev.json').read_text())['release'], v1.sha256)
         self.assertEqual(sorted(p.name for p in (app / 'releases').iterdir()), sorted([v1.sha256, v2.sha256]))
         self.assertEqual((app / 'backups/latest.tar').read_bytes(), backup)
         self.assertIn(v2.sha256, self.get())
@@ -396,12 +406,11 @@ class Contract(unittest.TestCase):
 
 
 TOKEN = 'A' * 26 + '2' * 26
-# The installed server's `invite <account>` stand-in: the token for exactly the expected account and environment.
-FAKE_INVITE = '''#!/bin/sh
-test "$1" = invite || exit 2
+# The current release's `invite <account>` stand-in: the token for the expected environment, the account recorded.
+FAKE_INVITE = '''set -eu
 test "$DATA_DIR" = "$HOME/workspace/.chariot-app/data" && test "$CHARIOT_DEPLOYMENT_SHA256" = "@SHA@" || exit 9
-printf '%s' "$2" > "$HOME/asked"
-case "$2" in
+printf '%s' "$1" > "$HOME/asked"
+case "$1" in
   enrolled) echo "rose server: no invite: already_enrolled" >&2; exit 1 ;;
   other) echo "rose server: no invite: invalid_name" >&2; exit 1 ;;
   *) echo @TOKEN@ ;;
@@ -418,10 +427,10 @@ class Invite(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.agent = LocalAgent(Path(tmp.name))
         self.sha = 'ab' * 32
-        self.agent.app.mkdir(parents=True)
-        server = self.agent.app / 'server'
-        server.write_text(FAKE_INVITE.replace('@SHA@', self.sha).replace('@TOKEN@', TOKEN))
-        server.chmod(0o700)
+        release = self.agent.app / 'releases' / self.sha
+        release.mkdir(parents=True)
+        (self.agent.app / 'current').write_text(self.sha)
+        (release / 'invite').write_text(FAKE_INVITE.replace('@SHA@', self.sha).replace('@TOKEN@', TOKEN))
 
     def invite(self, account):
         return app_host.invite(self.agent, self.sha, account, bin_dir=str(self.agent.bin))
@@ -437,10 +446,14 @@ class Invite(unittest.TestCase):
             with self.subTest(account=account), self.assertRaises(app_host.InviteRefused) as caught:
                 self.invite(account)
             self.assertEqual(caught.exception.word, word)
-        (self.agent.app / 'server').unlink()
+        (self.agent.app / 'releases' / self.sha / 'invite').unlink()
         with self.assertRaises(app_host.InviteRefused) as caught:
-            self.invite('enrolled')
-        self.assertEqual(caught.exception.word, 'not_set_up')
+            self.invite('me')
+        self.assertEqual(caught.exception.word, 'unsupported')  # a backend with no creator invites
+        (self.agent.app / 'current').write_text('cd' * 32)
+        with self.assertRaises(app_host.InviteRefused) as caught:
+            self.invite('me')
+        self.assertEqual(caught.exception.word, 'not_set_up')  # another release runs there now
 
     def test_an_account_rose_signin_refuses_never_reaches_the_agent(self):
         for account in ('', 'a:b', 'x' * 129, 'a\nb', '\u00e9' * 65, None, 7):

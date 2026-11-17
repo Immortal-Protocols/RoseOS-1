@@ -27,7 +27,11 @@ from . import template
 
 FILE = 'rose-app.json'
 APP_V1, CLIENT_SERVER_V1 = 'app-v1', 'client-server-v1'
+# §7.7a: the building agent sets the backend up in the app's own agent container, in a stack it chooses; backend/
+# keeps its source with the project (any language, any files), and the builder neither compiles nor runs it.
+CLIENT_BACKEND_V1 = 'client-backend-v1'
 SERVER_TOP = frozenset({FILE, 'contract', 'server'})
+BACKEND_TOP = frozenset({FILE, 'contract', 'backend'})
 MAX_FILE = 16 * 1024
 MAX_CRATES = 32
 ADMISSIONS = ('invite', 'open')  # rose-signin-v1 D7: creator invites by default, open sign-up when declared
@@ -92,8 +96,12 @@ def read(snapshot: Path) -> Profile:
         raise invalid('only schemaVersion, profile and server are allowed')
     if type(data.get('schemaVersion')) is not int or data['schemaVersion'] != 1:
         raise invalid('schemaVersion must be 1')
+    if data.get('profile') == CLIENT_BACKEND_V1:
+        if set(data) - {'schemaVersion', 'profile'}:
+            raise invalid(f'a {CLIENT_BACKEND_V1} app declares only schemaVersion and profile (its backend is its own)')
+        return Profile(CLIENT_BACKEND_V1)
     if data.get('profile') != CLIENT_SERVER_V1:
-        raise invalid(f'profile must be "{CLIENT_SERVER_V1}" (a plain app has no {FILE})')
+        raise invalid(f'profile must be "{CLIENT_BACKEND_V1}" or "{CLIENT_SERVER_V1}" (a plain app has no {FILE})')
     server = data.get('server', {})
     if not isinstance(server, dict) or set(server) - {'crates', 'shared', 'admission'}:
         raise invalid('server allows only crates, shared and admission')
@@ -121,11 +129,28 @@ def check(snapshot: Path, package: str, bound: str | None = None) -> Profile:
     """Check the snapshot against its declared profile. `bound` is the profile a delivered version already has."""
     snapshot = Path(snapshot)
     profile = read(snapshot)
-    if bound == CLIENT_SERVER_V1 and profile.name == APP_V1:
-        raise ProfileRefused(f'This app has a server, and its users\' data lives there; {FILE} and server/ must '
-                             'stay.', 'profile_dropped')
+    if bound in (CLIENT_SERVER_V1, CLIENT_BACKEND_V1) and profile.name == APP_V1:
+        raise ProfileRefused(f'This app has a server, and its users\' data lives there; {FILE} must stay.',
+                             'profile_dropped')
+    if bound in (CLIENT_SERVER_V1, CLIENT_BACKEND_V1) and profile.name != bound:
+        raise ProfileRefused(f'This app\'s backend is {bound}; it stays that kind.', 'profile_changed')
     if profile.name == APP_V1:
         template.check(snapshot, package)
+        return profile
+    if profile.name == CLIENT_BACKEND_V1:
+        try:  # links, modes and sizes cover backend/ and contract/ too
+            template.check(snapshot, package, extra_top=BACKEND_TOP, opaque_top=frozenset({'backend'}))
+        except template.TemplateRefused as refused:
+            raise ProfileRefused(str(refused), 'template_refused', dependency=refused.dependency) from None
+        contract = snapshot / 'contract'
+        if not contract.is_dir() or contract.is_symlink():
+            raise ProfileRefused('An app with a backend needs a contract/ folder (the API its client is built from).',
+                                 'layout_invalid')
+        backend = snapshot / 'backend'
+        if os.path.lexists(backend) and (backend.is_symlink() or not backend.is_dir()):
+            raise ProfileRefused('backend/ must be a folder.', 'layout_invalid')
+        _reserved(snapshot, package)
+        _internet(snapshot)
         return profile
     try:  # links, modes, sizes and forbidden suffixes cover server/ and contract/ too
         template.check(snapshot, package, extra_top=SERVER_TOP)

@@ -2899,6 +2899,77 @@ the generated server's job, through a versioned API and the stable base URL.
 
 ### 7.7a Backend in the Chariot agent container (in source, off unless `agentHost` is configured; no live target yet)
 
+**The settled architecture (Nathan, 2026-11-17).** The building agent chooses
+the backend's stack and installs and builds it itself, in the app's own Chariot
+agent container:
+- It is language-agnostic. Python is supported and Rust is recommended where
+  it fits; neither is required.
+- There is no extra VM, no imposed per-app toolchain, and no local Rust or
+  bubblewrap build of the backend.
+- The builder compiles no backend. It switches to the agent's release with
+  the backup, health check and rollback below.
+
+**Agent-built backends (`client-backend-v1`).**
+- **The writer's files.**
+  - `rose-app.json` is `{"schemaVersion": 1, "profile": "client-backend-v1"}`.
+  - `contract/api.json` is the API. The builder generates the Java client
+    from it, as before: RoseApi, RoseTypes, sign-in, RoseInvite and
+    `RoseServer.URL`.
+  - `backend/` holds the backend's own source, in any language. It is kept in
+    the project for later revisions, never compiled or checked by the
+    builder, and never part of the APK. The APK's file-name rules (Java only,
+    no scripts) don't apply there; links, modes and sizes still do.
+- **The one tool.** The writer stays exactly as isolated as before: no
+  network, no credentials, its own shell only in the project source. For
+  this profile it gets one host-run tool, `agent_container {command,
+  stdin?}`:
+  - The bridge offers it only when the builder opens the session with
+    `containerTool` (codex-voice-bridge.mjs, app-build.mjs
+    `AGENT_CONTAINER_TOOL`).
+  - The Builder answers each call (`generator.CodexGenerator._tool`). It
+    runs `/chariot/bin/sh -c COMMAND` in the project's own recorded agent
+    container, through the owner's `agentHost` Chariot CLI and its HOME
+    (`AgentHosting.exec`).
+  - The model never chooses the container, and never sees or holds the CLI's
+    certificate or token.
+  - The first call records the container from the owner-listed pool and
+    makes the release folder, so a client-only app takes no agent.
+- **The release.** The agent builds this attempt's release in place, in
+  `$HOME/workspace/.chariot-app/releases/<release id>`. The id is a sha256
+  of the project, job and attempt. The release is never moved, so absolute
+  paths inside it stay valid.
+  - It must contain `start`: a POSIX sh script run by `/chariot/bin/sh
+    ./start` from that folder, ending by exec-ing one foreground server.
+  - That server listens on `127.0.0.1:$PORT` and answers `/health` with 200.
+    Its data lives only under `$DATA_DIR`, migrated forward in place.
+  - An optional `invite <account>` prints one opaque token (printable ASCII,
+    no whitespace, at most 512 characters). A backend with no creator
+    invites ships none, and the route then answers `invites_unsupported`.
+- **The switch** is the same procedure as below, over release folders.
+  - The launcher's `start` is a fixed shim. It sets `PORT`,
+    `ROSE_LISTEN_HOST`, `DATA_DIR`, `CHARIOT_SEALING_KEY_FILE` when a keyring
+    exists, and `ROSE_RELEASE` / `CHARIOT_DEPLOYMENT_SHA256` (the release
+    id), then runs the release named by `current`.
+  - Health is a 200 from `/health`.
+  - `deployed.json` names the release. Its `dataSchema` is null for an
+    agent-built backend, which migrates its own data.
+  - A release without `start` is refused before anything is touched.
+- **The job.**
+  - The writer runs and builds the release.
+  - The builder generates and builds the client, then signs it.
+  - It switches to the release (`AgentHosting.deploy_release`).
+  - It delivers the version with `{release}` and its contract
+    (`ledger.CLIENT_BACKEND`; no ELF, lock, crates or manifest).
+  - The version gets `versions[].hosting`, and creator invites run the
+    release's `invite`.
+  - A failed switch delivers nothing, and an undelivered release is reverted.
+- **Turning it on:** `agentHost` alone. `clientServer` (the builder-built Rust
+  path below) is optional and no longer needed.
+- **Tests:** `test_app_agent_backend`, plus the node app-build tests.
+
+The builder-built path (`client-server-v1`) and the remaining text of this
+section are kept for apps already on it.
+
 Nathan's direction (2026-11-16) puts each generated app's backend in the
 existing Chariot agent container. Rose's existing Codex obtains it with the
 Chariot CLI, then installs, configures and runs the server over SSH. That
