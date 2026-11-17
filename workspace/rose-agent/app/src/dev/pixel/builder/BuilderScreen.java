@@ -201,7 +201,7 @@ public abstract class BuilderScreen extends Activity {
    button(line, x -> showProject(p.projectId));
   }
   button("New app", x -> showCreate(null, null));
-  if (demo) button(connectLabel(), x -> { api = null; demo = false; if (connect()) showLibrary(); else showPair(null); });
+  if (demo) button(connectLabel(), x -> { api = null; demo = false; if (connect()) showConnected(); else showPair(null); });
  }
 
  /** prefill keeps the owner's words after a refusal; refusal is the builder's own sentence, shown as plain text. */

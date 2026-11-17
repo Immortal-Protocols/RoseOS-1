@@ -148,6 +148,8 @@ final class HttpsBuilderApi implements BuilderApi {
      }
      answered(host);
      return;
+    } catch (CantSign e) {
+     throw new Unreachable("pair again", true);
     } catch (IOException e) {
      if (e.getMessage() != null && e.getMessage().startsWith("the download is longer")) throw e;
     } finally { if (h != null) h.disconnect(); }
@@ -206,6 +208,8 @@ final class HttpsBuilderApi implements BuilderApi {
      last = new Answer(BuilderWire.refusal(code, text));
      if (last.refusal.kind == BuilderWire.Kind.RETRY_SIGNED) { resign = true; break; }
      throw last;
+    } catch (CantSign e) {
+     throw new Unreachable("pair again", true);
     } catch (IOException e) {
      // Not reachable at this address; the next one may be.
     } finally { if (h != null) h.disconnect(); }
@@ -220,9 +224,13 @@ final class HttpsBuilderApi implements BuilderApi {
   HttpsURLConnection h = open(tls, host, endpoint.port(), path);
   h.setRequestMethod(method);
   try { for (Map.Entry<String, String> e : endpoint.headers(method, path).entrySet()) h.setRequestProperty(e.getKey(), e.getValue()); }
-  catch (java.security.GeneralSecurityException e) { throw new IOException("signing failed"); }
+  catch (java.security.GeneralSecurityException e) { h.disconnect(); throw new CantSign(); }
   return h;
  }
+
+ /** This phone can't sign for its pairing (its key is gone or no longer the paired one): no address helps, so the
+  *  owner is asked to pair again rather than told the builder is unreachable. */
+ static final class CantSign extends IOException { CantSign() { super("can't sign for this pairing"); } }
 
  private synchronized List<String> order() { return new ArrayList<>(hosts); }
  private synchronized void answered(String host) { if (!hosts.get(0).equals(host)) { hosts.remove(host); hosts.add(0, host); } }
