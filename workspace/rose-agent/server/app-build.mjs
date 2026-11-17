@@ -270,6 +270,16 @@ export function supportsAppBuildVersion(value) {
  return major>0||minor>167||(minor===167&&patch>=1);
 }
 
+/** The value with every null-valued key removed, at any depth: Codex's config/read reports each published field of
+ * a profile, null when unset (description, workspace_roots, filesystem.glob_scan_max_depth, other network fields), and
+ * null is unset. Only nulls go: any other value, extra key or difference still differs. */
+const isObject=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+export function withoutNulls(v){
+ if(Array.isArray(v))return v.map(withoutNulls);
+ if(!isObject(v))return v;
+ return Object.fromEntries(Object.entries(v).filter(([,x])=>x!==null).map(([k,x])=>[k,withoutNulls(x)]));
+}
+
 function canonical(v){
  if(v===null||typeof v!=='object')return JSON.stringify(v);
  if(Array.isArray(v))return '['+v.map(canonical).join(',')+']';
@@ -279,7 +289,6 @@ function canonical(v){
 // Settings that decide the writer's isolation. A selected config profile (`profile` + `[profiles.<name>]`) can
 // carry any of them; none may come from there.
 const ISOLATION_KEYS=['sandbox_mode','sandbox_workspace_write','default_permissions','permissions'];
-const isObject=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 
 /** The effective configuration must select exactly this profile, as defined here: no legacy sandbox (which takes
  * precedence over profiles) at the top level or in a selected config profile, and no other layer adding to it
@@ -292,7 +301,7 @@ export function checkAppBuildProfile(config) {
   if(!isObject(selected)||ISOLATION_KEYS.some(k=>selected[k]!=null))throw Error('app_build_isolation_unavailable');
  }
  if(config.default_permissions!==APP_BUILD_PROFILE)throw Error('app_build_isolation_unavailable');
- if(canonical(config.permissions?.[APP_BUILD_PROFILE])!==canonical(appBuildProfile))throw Error('app_build_isolation_unavailable');
+ if(canonical(withoutNulls(config.permissions?.[APP_BUILD_PROFILE]))!==canonical(appBuildProfile))throw Error('app_build_isolation_unavailable');
 }
 
 /** The thread/start response must report this profile active (activePermissionProfile, nullable in 0.167.1), with

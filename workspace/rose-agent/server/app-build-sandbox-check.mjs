@@ -3,7 +3,7 @@
 // exactly the writer's permission profile (the same -c overrides the bridge passes Codex, from app-build.mjs),
 // through Codex's own sandbox command, in a project source folder as its workspace. No model, writer or network.
 //
-//   node app-build-sandbox-check.mjs --source DIR [--protected DIR]... [--codex BIN] [--subcommand "sandbox macos"]
+//   node app-build-sandbox-check.mjs --source DIR [--protected DIR]... [--codex BIN] [--subcommand sandbox]
 //
 // --source:    a project source folder (where the writer's turn runs: the builder's root/projects/<id>/source).
 // --protected: folders the writer must not read, such as ROSE_CONFIG_DIR, the builder root's keys/ or the owner's
@@ -26,7 +26,7 @@ export function profileArgs() {  // the bridge's own overrides, without app-serv
 }
 
 function parse(argv) {
- const out = {protected: [], codex: process.env.PIXEL_CODEX_BIN || 'codex', subcommand: 'sandbox macos'};
+ const out = {protected: [], codex: process.env.PIXEL_CODEX_BIN || 'codex', subcommand: 'sandbox'};
  for (let i = 0; i < argv.length; i++) {
   const [key, value] = [argv[i], argv[i + 1]];
   if (value === undefined) throw Error(`${key} needs a value`);

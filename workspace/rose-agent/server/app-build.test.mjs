@@ -398,6 +398,18 @@ test('the profile check and the version gate refuse anything else',()=>{
   {...PROFILED,profile:'dev',profiles:{dev:{model:'x',sandbox_mode:null}}},
   {...PROFILED,profiles:{other:{sandbox_mode:'danger-full-access'}}}])
   assert.doesNotThrow(()=>checkAppBuildProfile(config),JSON.stringify(config));
+ // Codex 0.167.1's config/read reports every published field of the profile, null when unset: the same profile.
+ const published={...appBuildProfile,description:null,workspace_roots:null,
+  filesystem:{...appBuildProfile.filesystem,glob_scan_max_depth:null},network:{...appBuildProfile.network,proxy:null,mode:null}};
+ assert.doesNotThrow(()=>checkAppBuildProfile({...PROFILED,permissions:{[APP_BUILD_PROFILE]:published}}));
+ // Only nulls are dropped: any other extra or changed value is still refused.
+ for(const changed of [{...published,description:'x'},{...published,workspace_roots:['/']},
+  {...published,filesystem:{...published.filesystem,glob_scan_max_depth:3}},
+  {...published,filesystem:{...published.filesystem,'/Users':'read'}},
+  {...published,filesystem:{...published.filesystem,':tmpdir':null}},
+  {...published,network:{...published.network,enabled:null}},{...published,network:{...published.network,proxy:'http://x'}}])
+  assert.throws(()=>checkAppBuildProfile({...PROFILED,permissions:{[APP_BUILD_PROFILE]:changed}}),
+   /app_build_isolation_unavailable/,JSON.stringify(changed));
  for(const v of ['codex-cli 0.167.1','codex-cli 0.168.0\n','codex-cli 1.0.0'])assert.equal(supportsAppBuildVersion(v),true,v);
  for(const v of ['codex-cli 0.167.0','codex-cli 0.167.1-alpha.2','codex-cli 0.166.9','unknown',''])assert.equal(supportsAppBuildVersion(v),false,v);
 });
