@@ -102,6 +102,9 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
   controls.addView(arrange,new LinearLayout.LayoutParams(-2,dp(HIT_DP)));
   controls.addView(regenerate,margins(new LinearLayout.LayoutParams(-2,dp(HIT_DP)),8,0,0,0));
   controls.addView(undo,margins(new LinearLayout.LayoutParams(-2,dp(HIT_DP)),8,0,0,0));
+  // Project 1: the app builder inside Rose Agent, over the Agent's own link to its Rose server. The owner's words in
+  // the field, if any, open "New app" prefilled; nothing is built until they confirm there.
+  controls.addView(button("Build an app",this::buildApp),margins(new LinearLayout.LayoutParams(-2,dp(HIT_DP)),8,0,0,0));
   column.addView(controls,margins(new LinearLayout.LayoutParams(-1,dp(HIT_DP)),0,8,0,0));
 
   status=text("",13,muted);status.setSingleLine(true);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -419,6 +422,12 @@ final class WorkspacePage extends FrameLayout implements WorkspaceHub.Listener {
  private void hideKeyboard(){InputMethodManager imm=activity.getSystemService(InputMethodManager.class);if(imm!=null)imm.hideSoftInputFromWindow(field.getWindowToken(),0);}
  private int dp(float v){return activity.dp(v);}
  private TextView text(String s,float size,int color){TextView t=new TextView(activity);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);return t;}
+ private void buildApp(){
+  Intent i=new Intent(activity,dev.pixel.builder.BuilderActivity.class);
+  String words=field.getText().toString().trim();
+  if(!words.isEmpty())i.putExtra(dev.pixel.builder.BuilderScreen.EXTRA_DESCRIPTION,words);
+  try{activity.startActivity(i);}catch(android.content.ActivityNotFoundException e){android.widget.Toast.makeText(activity,"The app builder isn't available",android.widget.Toast.LENGTH_LONG).show();}
+ }
  private Button button(String s,Runnable run){
   Button b=new Button(activity);b.setText(s);b.setAllCaps(false);b.setTextSize(14);b.setTextColor(RoseThemeNow.c(0xfff4ede0));
   b.setMinHeight(dp(HIT_DP));b.setMinimumHeight(dp(HIT_DP));b.setPadding(dp(14),0,dp(14),0);b.setBackground(pill(0x2effffff,0));

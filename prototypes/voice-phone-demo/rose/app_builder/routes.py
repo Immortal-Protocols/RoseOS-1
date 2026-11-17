@@ -14,7 +14,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from .service import Builder, Refused
+from .service import Builder, Refused, Unavailable
 
 BODY_MAX = 16 * 1024
 PREFIX = '/builder/v1'
@@ -62,6 +62,9 @@ def add_routes(app: FastAPI, remote: Any, builder: Builder, peer: Callable[[Any]
             result = await asyncio.to_thread(fn, device.id, *args, *([data] if with_body else []))
         except Refused as refused:
             return reply({'error': str(refused), **refused.details}, 400)
+        except Unavailable as unavailable:
+            return reply({'error': str(unavailable), 'reason': unavailable.reason,
+                          'retryable': unavailable.retryable}, 409)
         if result is None:
             return error('not found', 404)
         return reply(result)
@@ -89,6 +92,10 @@ def add_routes(app: FastAPI, remote: Any, builder: Builder, peer: Callable[[Any]
     @app.get(PREFIX + '/jobs/{job_id}')
     async def job(job_id: str, request: Request):
         return await call(request, lambda device: builder.job(job_id), with_body=False)
+
+    @app.post(PREFIX + '/projects/{project_id}/invite')
+    async def invite(project_id: str, request: Request):
+        return await call(request, lambda device, data: builder.invite(device, project_id, data))
 
     @app.post(PREFIX + '/installs')
     async def install(request: Request):

@@ -201,6 +201,21 @@ final class BuilderWire {
   return new Refusal(Kind.UNREACHABLE, error, null);
  }
 
+ /** At most this much of a description handed over from the Agent workspace is kept (the builder bounds what it accepts). */
+ static final int MAX_HANDOFF = 4000;
+
+ /** The owner's words handed over from the workspace for "New app": trimmed and bounded, or null when there are none. */
+ static String handoff(String text) {
+  if (text == null) return null;
+  String t = text.trim();
+  if (t.isEmpty()) return null;
+  return t.length() > MAX_HANDOFF ? t.substring(0, MAX_HANDOFF) : t;
+ }
+
+ /** The library's own route answered 404 without the builder's {"error"}: the server has no builder API mounted
+  * (app building isn't turned on there). The builder's own refusals always carry an error. */
+ static boolean notEnabled(Refusal r) { return r.kind == Kind.REFUSED && "not found".equals(r.message); }
+
  // ---- field helpers ---------------------------------------------------------------------------------------------
 
  static Map<String, Object> response(String body) throws Malformed {

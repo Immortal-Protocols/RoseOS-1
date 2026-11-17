@@ -1350,9 +1350,11 @@ Rose conversation server. It reads one strict JSON config file:
   or listeners are constructed; it is never silently disabled. Job resolution
   still verifies artifact digests, structure and prior-version locks. No
   downloads or store population are performed by the host.
-- **Native host endpoint.** The host passes its one ledger and that same
-  ledger's `native_host_endpoint` reader to `Builder(server_url=...)` (§7.7).
-  A client-server job reads its project's current recorded endpoint when it
+- **Backend endpoint.** The host passes its one ledger and that same
+  ledger's `backend_endpoint` reader to `Builder(server_url=...)`. It returns
+  the recorded agent container's app URL (§7.7a), else a recorded native
+  host's endpoint (§7.7). A client-server job reads its project's current
+  recorded endpoint when it
   generates `RoseServer.URL`; a missing record yields `null`. An explicitly
   replaced record affects later builds, not previously generated clients.
   This adds no configuration field, record writer, owner route or provisioning
@@ -1474,6 +1476,114 @@ test, and no model was called.
    35.0.0 and JDK 21 with recorded hashes), or a separate builder is
    authorized. A separate builder is a provisioning decision; no new paid
    infrastructure is assumed.
+   **Qualifying a Linux host for the server build.**
+   `python -m rose.app_builder.qualify --config builder.json` checks a
+   candidate host with the builder's own code, and names what's missing; it
+   never weakens anything. It checks, in order:
+   1. the config, which must set `clientServer`;
+   2. Linux x86-64, as a user other than root;
+   3. the facility checks the server runs at start;
+   4. a confinement probe through the configured bubblewrap, which must find
+      no network, `/etc` and home hidden, a read-only folder read-only and
+      its job folder writable;
+   5. one throwaway client-server job through the real `Builder`, which must
+      produce a static `x86_64-unknown-linux-musl` server whose manifest
+      `server_manifest.check` accepts.
+
+   Inputs the config's `clientServer` needs:
+   - **`rustToolchain`:** an unpacked toolchain tree, not rustup's proxy,
+     with `bin/cargo`, `bin/rustc` and the musl target's
+     `lib/rustlib/x86_64-unknown-linux-musl/lib`, and no links. Its version
+     is not yet pinned.
+   - **`rustToolchainSha256`:** `toolchain_digest(tree)`, supplied by the
+     owner.
+   - **`bubblewrap`:** non-setuid, supporting `--disable-userns`, on a
+     kernel that allows unprivileged user and network namespaces, including
+     loopback setup.
+   - **A musl C compiler** (`musl-gcc`) under `/usr/bin`, because `rusqlite`
+     builds its bundled SQLite.
+   - **`crateStore`:** `index.json` plus `<sha256>.crate` files for the 51
+     registry crates in `rose-app-runtime-signin/Cargo.lock`.
+   - **`runtimeRoot`:** `rose-app-runtime`, `rose-app-runtime-signin` and
+     `rose-signin` at the pinned sign-in revision.
+
+   **Preparation recipe.** Each step is marked by what this session actually
+   ran on 2026-11-17, in a disposable Linux x86-64 container.
+
+   1. **Rust toolchain tree. VERIFIED.**
+      - Fetch the official standalone archives and check them against their
+        published `.sha256` files:
+        `https://static.rust-lang.org/dist/rust-1.97.0-x86_64-unknown-linux-gnu.tar.xz`
+        and
+        `…/rust-std-1.97.0-x86_64-unknown-linux-musl.tar.xz`.
+      - Unpack both, then install into the tree's final, canonical path, not
+        inside a home directory:
+        `<rust-1.97.0>/install.sh --prefix=<TREE>
+        --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
+        --disable-ldconfig`, then
+        `<rust-std-1.97.0-x86_64-unknown-linux-musl>/install.sh
+        --prefix=<TREE> --disable-ldconfig`.
+      - The result was 812 MB, with no links and no setuid or setgid file.
+        `PinnedRustTools.available()` accepted it.
+      - 1.97.0 is the version this run used. Choosing the pin is the owner's
+        decision.
+   2. **Digest. VERIFIED.** `python -m rose.app_builder.prepare digest
+      <TREE>` gives `rustToolchainSha256`.
+      - The installer writes `<TREE>` into `lib/rustlib/install.log` and the
+        `manifest-*` files, so the digest belongs to that path.
+      - Install at the final path and digest it there; never copy the tree.
+      - At this run's path the digest was `299bae99…6fbf`, so another path
+        gives another digest.
+   3. **Crate store. VERIFIED.**
+      - Fetch the crates into a dedicated download cache:
+        `CARGO_HOME=<dedicated empty dir> <TREE>/bin/cargo fetch --locked
+        --manifest-path workspace/rose-app-runtime-signin/Cargo.toml`.
+      - Build the store:
+        `python -m rose.app_builder.prepare crate-store --lock
+        workspace/rose-app-runtime-signin/Cargo.lock --from
+        <CARGO_HOME>/registry/cache/<index dir> --out <STORE>`.
+      - It writes the 51 crates, each checked against the lock's own
+        checksum, and reads the store back as the builder will.
+   4. **Runtime root. VERIFIED.** `python -m rose.app_builder.prepare
+      runtime-root --repo <clean checkout> --out <RUNTIME>` copies the three
+      path crates (`Cargo.toml`, `src/`). It refuses uncommitted changes, and
+      refuses a `rose-signin` that differs from its tree at `23062a04`.
+      - The checkout's history must contain
+        `23062a04899f1d5f48a441a7ef00332146ef1072`. A shallow clone is
+        refused with that instruction: use a full clone, or fetch that
+        commit first.
+      - Both writers (`crate-store` and `runtime-root`) are all-or-nothing:
+        they write a sibling folder and move it into place only when it is
+        complete.
+   5. **Facility check. VERIFIED.** Steps 1–4 with `/usr/bin/bwrap` pass
+      `host.client_server_facilities`, the server's own start-up check.
+   6. **musl C compiler. Required. Compiler and fixture evidence only,
+      UNCONFINED.**
+      - Without a musl C compiler, the build fails: "The crate
+        libsqlite3-sys's build script failed".
+      - With Ubuntu `musl-tools` 1.2.4 (`/usr/bin/musl-gcc`), one fixture job
+        through the real `Builder` and real code generator produced a static
+        `x86_64-unknown-linux-musl` server of 3,203,624 bytes, and
+        `server_manifest.check` accepted its manifest.
+      - That run replaced the confinement with a pass-through, because the
+        container runs as root. It shows the inputs and compiler suffice. It
+        is **not** qualification, and **not** proof that anything can be
+        delivered.
+      - No build will be repeated with isolation bypassed.
+   7. **Confinement and `qualify` as a whole. NOT TESTED.**
+      `python -m rose.app_builder.qualify --config builder.json` must run as
+      a non-root user, on a host whose kernel allows bubblewrap's
+      unprivileged user and network namespaces, including loopback setup.
+      No such host has been run. dot-cloud fails the loopback step, and an
+      attempt here as an unprivileged user also failed.
+
+   Verified so far (2026-11-17): no host qualifies yet.
+   - CI builds real servers only for the GNU target, with the runner's
+     unpinned cargo and a test-only pass-through isolation.
+   - Local Worker's dot-cloud Linux host fails the network-namespace
+     loopback setup (`NETLINK_ROUTE … Operation not permitted`), and it has no
+     Rust or `musl-gcc`.
+   - The Mac can't run bubblewrap.
 3. **Build isolation on that host (Server Worker).** Source now runs the
    writer under the `rose_app_build` permission profile (§4A). It denies reads
    outside the project source and the minimal runtime, allows writes only in
@@ -2548,11 +2658,13 @@ the server does.
     - The same record again changes nothing. A different one is refused
       unless `replaces` names the current record exactly, so a replaced host
       or a changed domain is an explicit change, never a silent move.
-    - A host id or endpoint another project holds is refused, so no two
-      projects' records name the same host or server. Where a domain
+    - A host id or endpoint another project holds is refused, and so is an
+      endpoint another project holds as its agent container URL (§7.7a), so
+      no two projects' records name the same host or server. Where a domain
       actually routes is Chariot's to decide.
-    - `native_host_endpoint(project)` is what a host passes as the Builder's
-      `server_url`, and the build checks the value again. Versions already
+    - The host passes `backend_endpoint(project)` as the Builder's
+      `server_url`. That is the agent container's URL when one is recorded,
+      else this endpoint, and the build checks the value again. Versions already
       built keep the endpoint they baked until they are rebuilt.
   - **The writer** (`app_builder/owner_records.py`; source, run by no one
     yet) is the one source path for owner tooling. It records, or shows, a
@@ -2785,7 +2897,92 @@ Still open for the Chariot owner (App Core's proposal in brackets):
 Older APKs on phones keep working against a newer server version. That is
 the generated server's job, through a versioned API and the stable base URL.
 
-### 7.7a Backend in the Chariot agent container (PROPOSAL: not implemented, not approved)
+### 7.7a Backend in the Chariot agent container (in source, off unless `agentHost` is configured; no live target yet)
+
+**The settled architecture (Nathan, 2026-11-17).** The building agent chooses
+the backend's stack and installs and builds it itself, in the app's own Chariot
+agent container:
+- It is language-agnostic. Python is supported and Rust is recommended where
+  it fits; neither is required.
+- There is no extra VM, no imposed per-app toolchain, and no local Rust or
+  bubblewrap build of the backend.
+- The builder compiles no backend. It switches to the agent's release with
+  the backup, health check and rollback below.
+
+**Agent-built backends (`client-backend-v1`).**
+- **The writer's files.**
+  - `rose-app.json` is `{"schemaVersion": 1, "profile": "client-backend-v1"}`.
+  - `contract/api.json` is the API. The builder generates the Java client
+    from it, as before: RoseApi, RoseTypes, sign-in, RoseInvite and
+    `RoseServer.URL`.
+  - `backend/` holds the backend's own source, in any language. It is kept in
+    the project for later revisions, never compiled or checked by the
+    builder, and never part of the APK. The APK's file-name rules (Java only,
+    no scripts) don't apply there; links, modes and sizes still do.
+- **The one tool.** The writer stays exactly as isolated as before: no
+  network, no credentials, its own shell only in the project source. For
+  this profile it gets one host-run tool, `agent_container {command,
+  stdin?}`:
+  - The bridge offers it only when the builder opens the session with
+    `containerTool` (codex-voice-bridge.mjs, app-build.mjs
+    `AGENT_CONTAINER_TOOL`).
+  - The Builder answers each call (`generator.CodexGenerator._tool`). It
+    runs `/chariot/bin/sh -c COMMAND` in the project's own recorded agent
+    container, through the owner's `agentHost` Chariot CLI and its HOME
+    (`AgentHosting.exec`).
+  - The model never chooses the container, and never sees or holds the CLI's
+    certificate or token.
+  - The first call records the container from the owner-listed pool and
+    makes the release folder, so a client-only app takes no agent.
+  - Before any of the agent's commands run, the agent is checked to be the
+    recorded one and to hold this app or nothing. A pool agent holding
+    another app's server or data is never recorded for this one.
+  - Each call stops, and its `chariot ssh` is killed, on a cancel or at the
+    writer's deadline.
+  - The tool is offered only to projects that are new or already
+    `client-backend-v1`.
+- **The release.** The agent builds this attempt's release in place, in
+  `$HOME/workspace/.chariot-app/releases/<release id>`. The id is a sha256
+  of the project, job and attempt. The release is never moved, so absolute
+  paths inside it stay valid.
+  - It must contain `start`: a POSIX sh script run by `/chariot/bin/sh
+    ./start` from that folder, ending by exec-ing one foreground server.
+  - That server listens on `127.0.0.1:$PORT` and answers `/health` with 200,
+    with `$ROSE_RELEASE` in the body. Its data lives only under `$DATA_DIR`,
+    migrated forward in place.
+  - An optional `invite <account>` prints one opaque token (printable ASCII,
+    no whitespace, at most 512 characters). A backend with no creator
+    invites ships none, and the route then answers `invites_unsupported`.
+- **The switch** is the same procedure as below, over release folders.
+  - The launcher's `start` is a fixed shim. It sets `PORT`,
+    `ROSE_LISTEN_HOST`, `DATA_DIR`, `CHARIOT_SEALING_KEY_FILE` when a keyring
+    exists, and `ROSE_RELEASE` / `CHARIOT_DEPLOYMENT_SHA256` (the release
+    id), then runs the release named by `current`.
+  - Health is a 200 from `/health` whose body names the release, so a
+    process left on the port never passes for it. A port that already
+    answers before the launch is refused (`port-busy`).
+  - Old releases are pruned only after the switch has succeeded, whatever
+    modes their files have, so pruning never fails a switch. Preparing a
+    release also removes attempts that were never switched to; only the
+    current and previous releases stay.
+  - `deployed.json` names the release. Its `dataSchema` is null for an
+    agent-built backend, which migrates its own data.
+  - A release without `start` is refused before anything is touched.
+- **The job.**
+  - The writer runs and builds the release.
+  - The builder generates and builds the client, then signs it.
+  - It switches to the release (`AgentHosting.deploy_release`).
+  - It delivers the version with `{release}` and its contract
+    (`ledger.CLIENT_BACKEND`; no ELF, lock, crates or manifest).
+  - The version gets `versions[].hosting`, and creator invites run the
+    release's `invite`.
+  - A failed switch delivers nothing, and an undelivered release is reverted.
+- **Turning it on:** `agentHost` alone. `clientServer` (the builder-built Rust
+  path below) is optional and no longer needed.
+- **Tests:** `test_app_agent_backend`, plus the node app-build tests.
+
+The builder-built path (`client-server-v1`) and the remaining text of this
+section are kept for apps already on it.
 
 Nathan's direction (2026-11-16) puts each generated app's backend in the
 existing Chariot agent container. Rose's existing Codex obtains it with the
@@ -2799,56 +2996,229 @@ not part of it.
   writes untrusted-request code and must not hold Chariot credentials.
 - The voice worker keeps its shell disabled.
 
-The proposal is a separate backend-setup turn, a new bridge purpose
-`app_host`, in the same per-job bridge. It runs after the builder has a
-built and signed version with its server ELF and manifest. It needs, only
-for that turn:
-- **Tools:** the shell tool.
-- **Network:** the Chariot API (`app.chariots.sh`) and SSH gateway
-  (`ssh.chariots.sh`) only. Codex permission profiles have no per-host
-  network list, so the host limit comes from the Mac (Local Worker).
-- **Reads:** that version's server ELF and manifest, the `chariot` binary and
-  its skill.
-- **Writes:** a dedicated `HOME` with `~/.chariot`, logged in by Local Worker
-  (the CLI writes its SSH certificate and `known_hosts` there), plus a scratch
-  directory.
-- **Denied:** `ROSE_CONFIG_DIR`, project signing keys and other projects.
-- **No printing:** credentials or keys.
+**Who runs the setup.** The builder itself, in the one Rose server's build
+worker (`rose/app_builder/app_host.py`). It runs fixed scripts over the existing
+Chariot CLI (`chariot ssh AGENT -- /chariot/bin/sh -s`, script on stdin). No
+model turn is involved, so no Codex process gains a shell, network or
+credentials. The `app_host` bridge purpose proposed earlier is not needed.
+Which binary, data and keys are touched is the builder's code, not a model's
+choice, and the data-safety rules below are enforced by that code.
 
-**What the setup must keep** (from §7.7, now enforced inside the container):
-- Before replacing the binary, back up every regular, non-symlinked
-  `*.sqlite3` under the app's data directory (`auth.sqlite3`,
-  `shared.sqlite3`, `accounts/*.sqlite3`), and keep the previous ELF.
-- Never run an older schema on newer data. The server itself refuses with
-  `NewerSchema`, and the setup doesn't retry around it.
-- Start the server with `PORT`, `DATA_DIR` and a sealing keyring
-  (`CHARIOT_SEALING_KEY_FILE`, D9). Without the keyring the server stays not
-  ready (503). Where the keyring comes from inside a container is a decision:
-  App Core proposes generating it once into the persistent data area,
-  mode 0400.
-- Readiness is a 200 from `/health` with the expected `revision_sha256`.
+**Turning it on** (builder config, beside `clientServer`, which it requires):
+```
+"agentHost": {"chariot": "/abs/path/chariot", "home": "/abs/path/chariot-home",
+              "agents": ["<agent name>", ...], "generateKeyring": false, "port": 8090}
+```
+- `chariot`: the Chariot CLI.
+- `home`: the `HOME` where its owner ran `chariot login`. Only `HOME` is
+  passed; the CLI keeps its certificate there. The builder never reads it.
+- `agents`: 1 to 16 agents the owner has authorized for apps, one app each.
+  This list is the whole pool. A project is given the first listed agent not
+  already holding another project's app, by the identity that agent reports
+  (`CHARIOT_APP_ID`, `CHARIOT_APP_URL`). No agent is discovered, listed or
+  created.
+- `generateKeyring` (D9): whether the setup may write a new sealing keyring
+  (`rose-signin-keyring/v1`, one 32-byte key, mode 0400) into an agent that
+  has none. With `false`, an agent without one is refused before anything in
+  it is touched.
+- `port`: the loopback port the server binds and `app.json` names. The
+  default is 8090; 8088 and 42617 are refused.
+
+**The job.** For a client-server version whose server is built for
+`server_manifest.TARGET` (musl):
+1. Before the client is generated, `ensure` records the project's agent
+   container (`record_agent_container`, below), so its URL is baked. A hosted
+   build without a record is refused.
+2. After the APK is signed and placed, and before the version is delivered,
+   `deploy` sets the server up. A failure fails the job (`toolchain`,
+   retryable) and delivers nothing.
+
+A server for another target is not delivered while `agentHost` is set.
+
+**The setup** (`deploy`, following `chariot/docs/agent-app-hosting.md` at
+30349c92):
+1. **Probe.** The agent reports `CHARIOT_APP_ID` and `CHARIOT_APP_URL`. It must
+   be the recorded agent, with every applet the scripts use in `/chariot/bin`.
+2. **State.** The deployed record (`deployed.json`: ELF sha256, data
+   schema, version, project) is read. The agent must hold this project's
+   app or nothing:
+   - another project's record is refused;
+   - a server, a start script or data the builder did not set up is
+     refused, and left untouched;
+   - an older `data_schema` than the deployed one is refused, so older code
+     never runs on newer data;
+   - a deployed release whose version was never delivered (the job failed
+     or stopped after its setup) is reverted first (see below).
+3. **Prepare.** An incoming folder is made under
+   `$HOME/workspace/.chariot-app`.
+4. **Transfer.** The server ELF and its start script go as a tar on stdin.
+5. **Switch.** Every tool is called by its `/chariot/bin` path, which is not
+   on PATH, and only with options BusyBox's applets take (its `flock` takes
+   `-s -x -u -n` only). In order:
+   - The keyring is checked first. Without one, and without
+     `generateKeyring`, nothing is touched.
+   - If an earlier switch was cut off (its `switching` marker is left), that
+     is undone before anything else: the deployed release is started again,
+     after `latest.tar` is put back if the marker says another binary may
+     have run. If the data cannot be put back, nothing is started and the
+     marker stays.
+   - A server byte-identical to the deployed one (a version that changed
+     only its client) is just started and published if needed: no backup,
+     no new previous release, and nothing to undo.
+   - `app.json` is removed and the server stopped. A server runs while
+     Chariot's launcher holds `run.lock`; it gets TERM, then KILL, and only
+     while the lock is held, so a stale `server.pid` is never signalled.
+   - The data directory is archived to `backups/taking.tar`. Only once that
+     is whole does it become `latest.tar`; the archive before it is kept as
+     `previous.tar`.
+   - The `switching` marker (written before the stop, stage `stopped`) moves
+     to stage `installing`. The release is kept as `releases/<sha256>/` and
+     made the running pair, and it is started with
+     Chariot's own launcher (`launch_agent_app.sh`, sha256 pinned in source).
+   - It must answer `/health` 200 with the new `revision_sha256` within
+     60 s.
+   - Then `deployed.json` is written (the one before it kept as
+     `deployed.prev.json`), the marker removed, and `app.json`
+     (`chariot-agent-app/v1`, the port, `/health`) published. Releases other
+     than these two are pruned.
+6. **On any failure after the stop** (an EXIT trap), the app goes back to
+   `deployed.json`'s release. When the marker says another binary got as
+   far as running, its data comes from `latest.tar` first. That data is
+   unpacked whole before it replaces anything, and the data it replaces is
+   moved to `backups/replaced`. It is relaunched and published, and the job
+   fails.
+7. **Commit point.** The job stops at a cancel only before the setup. Once
+   the server is set up, the version is delivered even if a cancel came
+   meanwhile, so the agent and the library never disagree. If it is not
+   delivered after all (an error), the setup is reverted:
+   - the data goes back to `latest.tar`, and what the undone server wrote
+     is kept as `backups/replaced`;
+   - the release before it is started and published again;
+   - if the revert fails after the stop, the deployed release is started
+     again.
+   - One setup, revert or invite runs at a time. An invite during a setup is
+     refused as `server_unavailable`, retryable.
+8. **Check against the baked URL.** The URL the client baked is checked
+   against the record at setup time, so a version is never delivered for a
+   container other than the one it was built for.
+
+**The start script** exports `PORT`, `ROSE_LISTEN_HOST=127.0.0.1` (the
+generated server accepts only `127.0.0.1` or `0.0.0.0`, default `0.0.0.0`),
+`DATA_DIR`, `CHARIOT_SEALING_KEY_FILE`, `CHARIOT_REVISION_SHA256` and
+`CHARIOT_DEPLOYMENT_SHA256`. `CHARIOT_APP_ID` is the container's own. The
+script then runs `exec ./server`.
+
+**Tests:** `test_app_host_agent`. A fake agent runs the real scripts in a
+local `sh` with the applets linked into a temporary `/chariot/bin` and a fake
+health server. It covers:
+- first setup, update and rollback;
+- refusal without a keyring, of an older schema, of another agent, and of a
+  missing applet;
+- BusyBox-only `flock` options and an empty PATH;
+- a switch killed mid-way, then a failing attempt;
+- a switch killed during its backup;
+- data that cannot be put back;
+- a failed backup, twice;
+- the same server again;
+- a revert that fails;
+- an invite during a setup;
+- another app's agent, or leftovers not set up by the builder;
+- reverting an undelivered release;
+- a stale pid;
+- delivery as the commit point;
+- the pinned launcher;
+- the pool;
+- the job: URL baked, setup before delivery, a failed setup delivering
+  nothing.
+
+`test_app_host_level2` covers the config.
 
 **The client URL.** `RoseApi.serverUrl()` is baked into the APK, so the
 container's public `https` endpoint must be known before the client build.
 The order is: obtain the container and its endpoint, build and sign, then set
 up the server.
 
-**Open contract (Chariot Engineer).** As of 2026-11-17, Saba's and Chariot's
-reports say no public container app endpoint exists:
-- the service is internal `:8088`;
-- SSH is certificate-only and rejects forwarding and SFTP, so `scp` (which
-  uses SFTP) is not a supported transfer;
-- idle agents hibernate (48 h by default) and their processes stop.
+**Recorded in source: the agent container whose URL is baked.**
+- **The record.** `Ledger.record_agent_container(project, agent_id, app_url)`
+  stores the agent id (32 lower-case hex) and the app URL Chariot returns
+  for that agent (`CHARIOT_APP_URL`). It is recorded only from owner tooling,
+  and the URL is never derived from the id.
+- **The rules match the native-host record:**
+  - the same record again is a no-op;
+  - a different record needs `replaces` naming the current one;
+  - an agent or URL another project holds is refused. This holds across both
+    records: one project's native endpoint can't be another project's
+    container URL, so no two projects bake the same server;
+  - the URL is in its one https spelling, with no trailing `/` and no
+    `:443`.
+- **What a build bakes.** `Ledger.backend_endpoint` returns the container's
+  URL, ahead of a native host. The builder's `server_url` uses it, so a
+  client-server build writes it into `RoseServer.URL`. Versions already built
+  keep the URL they baked.
+- **Recording it:**
+  ```
+  python -m rose.app_builder.owner_records agent-container --ledger DIR
+    --project ID --agent-id HEX --app-url URL
+    [--replaces-agent-id HEX --replaces-app-url URL]
+  ```
+  With `agentHost` the builder records it itself; this command is for an owner
+  recording one by hand. The command contacts nothing.
+- **Status.** The record tracks Chariot's proposed contract
+  (`https://agent-<agent UUID hex>.apps.chariots.sh`, not yet confirmed).
+  It checks only the id format and the https spelling, not that domain.
+- **Tests:** `test_app_ledger_level2.AgentContainer`,
+  `test_app_owner_records`, and `test_app_host.NativeHosts`, which includes a
+  job baking the container URL.
 
-Needed before any implementation:
-1. the gateway from a public `https` URL to an authorized pod and a declared
-   port, and the port the server binds;
-2. a verified file-transfer method for the ELF;
-3. whether the data area persists across restart and hibernation;
-4. how the server is restarted after hibernation or a pod restart (the
-   activity contract);
-5. which container is the app's, and that the account is authorized to use
-   it (credits included).
+**Builder API v1 additions** (agreed with Home/App, #881; recorded in
+`rose/tests/fixtures/builder-hosting-v1.json`):
+- **Backend status: `versions[].hosting`.** It sits beside `server`, not
+  inside it: a phone reads the server summary with its exact keys.
+  - Shape: `{"state": "set_up", "appUrl", "setUpAt"}`, with `setUpAt` in unix
+    ms. It appears only on the delivered version whose server is the one set
+    up in the agent container. That server answered its health check there
+    before the version was delivered.
+  - It is not a claim that the server is running now.
+  - The record is cleared when a setup starts and written only after the
+    version is delivered. A server replaced by a version that is never
+    delivered is therefore never claimed for an older one.
+- **Creator admission: `POST /builder/v1/projects/{id}/invite`.** Signed by the
+  paired device; the body is `{"schemaVersion": 1, "account"}`. Admission stays
+  `invite`.
+  - The owner types `account`. It must pass rose-signin `valid_name`, and it
+    reaches the server exactly as typed, single-quoted in the script.
+  - The builder runs the set-up server's `invite <account>` in the agent with
+    the start script's `DATA_DIR` and the deployment's sha256.
+  - **200:** `{projectId, versionCode, account, invite, expiresInS: 604800}`,
+    no-store. The token (`[A-Z2-7]{52}`) is read only from a successful run
+    and is never stored, logged or put in a job. Each call issues a fresh
+    single-use invite.
+  - **Refusals:**
+    - 400, `reason: invalid_account`;
+    - 409 `{error, reason, retryable}`, with `reason` one of `not_hosted`,
+      `already_enrolled` or `server_unavailable` (retryable);
+    - 404 for an unknown project.
+- **The hand-off: `<pkg>.rose.RoseInvite`** (generated client).
+  `RoseInvite.take(activity)` returns `{account, invite}` once, from the
+  launching intent's extras `rose.signin.account` and `rose.signin.invite`, and
+  removes them. Nothing is stored and `toString` is redacted. The writer is
+  told to pre-fill the sign-up screen from it and keep the fields editable.
+  - When the app is already open, the hand-off can arrive in `onNewIntent`
+    instead of `onCreate`; `RoseInvite.take(intent)` reads it there.
+- **Who may ask for an invite:** any device paired with this Rose server,
+  since pairing is the owner's own act. An invite admits exactly the account
+  it names, once, for 7 days.
+
+**What it still needs to run for real** (inputs, not source work):
+1. **The gateway domain.** `CHARIOT_AGENT_APP_DOMAIN=apps.chariots.sh` live on
+   Chariot (Saba). Until then `CHARIOT_APP_URL` has no public route.
+2. **An authorized agent with credits.** The `agents` list and a logged-in
+   `home` (Local Worker, once Nathan funds the account).
+3. **The applet set.** The probe refuses any agent whose `/chariot/bin`
+   lacks one of `app_host.APPLETS`; Chariot's doc confirms only some of them.
+4. **D9.** Whether `generateKeyring` may be `true`.
+5. **A qualified Linux build host** for the musl server (§5.2 recipe step 7,
+   confinement), which `agentHost` builds need.
 
 **Separate, not a gate on this work:** Saba's report of unenforced network
 policy and node service-account scope is tracked by Chariot and Saba. Any IAM,
