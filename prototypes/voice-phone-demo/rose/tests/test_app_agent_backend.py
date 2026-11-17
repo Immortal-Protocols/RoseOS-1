@@ -48,7 +48,8 @@ class AgentBuiltRelease(unittest.TestCase):
 
     def deploy(self, p, **kw):
         return app_host.deploy(p, self.agent, enabled=True, bin_dir=str(self.agent.bin), stop_wait_s=5,
-                               health_wait_s=kw.pop('health_wait_s', 20), generate_keyring=True, **kw)
+                               health_wait_s=kw.pop('health_wait_s', 20),
+                               generate_keyring=kw.pop('generate_keyring', True), **kw)
 
     def get(self):
         import socket
@@ -138,6 +139,14 @@ class AgentBuiltRelease(unittest.TestCase):
                                                                       'dataSchema': None, 'versionCode': 1}))
             with self.assertRaisesRegex(app_host.SetupFailed, 'another app'):
                 app_host._check_owner(app_host._state(self.agent, str(self.agent.bin)), other)
+
+    def test_an_agent_built_backend_needs_no_keyring(self):
+        """D9 gates only builder-built servers: with generateKeyring off, a fresh agent still serves a backend
+        that seals nothing, and no keyring is written or exported."""
+        v1 = self.build('a1')
+        self.assertEqual(self.deploy(v1, generate_keyring=False)['deployed'], v1.sha256)
+        self.assertFalse((self.agent.app / 'keys/keyring.json').exists())
+        self.assertIn(v1.sha256, self.get())
 
     def test_a_release_without_its_start_touches_nothing(self):
         v1 = self.build('a1')
