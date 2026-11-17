@@ -79,6 +79,27 @@ public final class SignInTest {
         expect(SignIn.offer(project(version(1, true), version(2, false)), installed(2)) == SignIn.Offer.UPDATE_FIRST, "a newer, unhosted install: install the hosted one");
         expect(SignIn.offer(project(version(1, false), version(2, true)), installed(2)) == SignIn.Offer.OFFER, "the hosted version installed: offered");
         expect(SignIn.offer(null, installed(1)) == SignIn.Offer.NONE, "no project: nothing");
+
+        // ---- An app under the same package name with another signer never gets an invite (App Core review #1) ----
+        String other = "f" + SHA.substring(1);
+        expect(SignIn.offer(project(version(1, true)), new InstallPlan.Installed("app.rose.gen.pp1", other, 1)) == SignIn.Offer.NOT_THIS_APP, "another signer: not offered");
+        expect(SignIn.offer(project(version(1, true)), new InstallPlan.Installed("app.rose.gen.pp1", null, 1)) == SignIn.Offer.NOT_THIS_APP, "no signer read: not offered");
+        BuilderApi.Project unpinned = new BuilderApi.Project("p1", "Notes", "app.rose.gen.pp1", null, Arrays.asList(version(1, true)), null);
+        expect(SignIn.offer(unpinned, installed(1)) == SignIn.Offer.NOT_THIS_APP, "no pinned signer yet: not offered");
+        expect(SignIn.offer(project(version(1, true)), new InstallPlan.Installed("app.rose.gen.pp1", SHA.toUpperCase(), 1)) == SignIn.Offer.OFFER, "signers compare without case");
+        expect(SignIn.offerLine(SignIn.Offer.NOT_THIS_APP, "Notes").contains("wasn't signed by your builder"), "not-this-app wording");
+
+        // ---- Re-checked just before the invite leaves: exact package, pinned signer, the invite's version ----
+        BuilderApi.Invite forP1 = new BuilderApi.Invite("p1", 1, "nate", TOKEN, 604800);
+        expect(SignIn.mayHandOver("app.rose.gen.pp1", SHA, installed(1), forP1), "exactly this app: handed over");
+        expect(!SignIn.mayHandOver("app.rose.gen.pp1", SHA, new InstallPlan.Installed("app.rose.gen.pp1", other, 1), forP1), "signer changed since: dropped");
+        expect(!SignIn.mayHandOver("app.rose.gen.pp1", SHA, installed(2), forP1), "version changed since: dropped");
+        expect(!SignIn.mayHandOver("app.rose.gen.pp1", SHA, null, forP1), "uninstalled since: dropped");
+        expect(!SignIn.mayHandOver("app.rose.gen.pp2", SHA, new InstallPlan.Installed("app.rose.gen.pp2", SHA, 1), forP1), "another project's package: dropped");
+        expect(!SignIn.mayHandOver("app.rose.gen.pp1", null, installed(1), forP1), "no pinned signer: dropped");
+        expect(!SignIn.mayHandOver("app.rose.gen.pp1", SHA, new InstallPlan.Installed("app.rose.gen.pp1x", SHA, 1), forP1), "installed record for another package: dropped");
+        expect(!SignIn.mayHandOver("app.rose.gen.pp1", SHA, installed(1), null), "no invite: nothing");
+        expect(SignIn.notHandedOver("Notes").contains("Nothing was signed in"), "the dropped invite is said plainly");
         expect(SignIn.offerLine(SignIn.Offer.INSTALL_FIRST, "Notes").equals("Install Notes to sign in to it."), "install-first wording");
         expect(SignIn.offerLine(SignIn.Offer.OFFER, "Notes") == null && SignIn.offerLine(SignIn.Offer.NONE, "Notes") == null, "no line when offered or not applicable");
 

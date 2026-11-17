@@ -348,8 +348,8 @@ public abstract class BuilderScreen extends Activity {
    String account = BuilderWire.account(name.getText().toString());
    if (account == null) { toast("Type an account name: up to " + BuilderWire.MAX_ACCOUNT_BYTES + " bytes, with no ':'"); return; }
    act(() -> api.invite(p.projectId, account), invite -> {
-    boolean opened = EnrollHandoff.start(this, p.packageName, invite);
-    toast(opened ? SignIn.handedOver(p.name) : SignIn.cantOpen(p.name));
+    boolean opened = EnrollHandoff.start(this, p, invite);
+    toast(opened ? SignIn.handedOver(p.name) : SignIn.notHandedOver(p.name));
     showProject(p.projectId);
    }, e -> {
     if (pairAgain(e)) return;
