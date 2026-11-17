@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import signal
+import sys
 import socket
 import subprocess
 import tarfile
@@ -25,7 +26,7 @@ APP_URL = f'https://agent-{AGENT_HEX}.apps.example.org'
 
 # The app server stand-in: /health is 200 with this binary's revision once ready; it records each start in its
 # data folder, so a test can see which binary ran on which data.
-FAKE_SERVER = '''#!/usr/bin/env python3
+FAKE_SERVER = '''#!@PYTHON@
 import http.server, json, os, sys
 data = os.environ["DATA_DIR"]
 os.makedirs(os.path.join(data, "accounts"), exist_ok=True)
@@ -48,6 +49,14 @@ http.server.HTTPServer((host, int(os.environ["PORT"])), H).serve_forever()
 '''
 
 
+BUSYBOX_FLOCK = '''#!/bin/sh
+for a in "$@"; do
+  case "$a" in -[sxnu]) ;; -*) echo "flock: unrecognized option" >&2; exit 1 ;; *) break ;; esac
+done
+exec @FLOCK@ "$@"
+'''
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -64,7 +73,12 @@ class LocalAgent(app_host.Channel):
         for applet in app_host.APPLETS:
             if applet not in missing:
                 (self.bin / applet).symlink_to(shutil.which(applet))
-        self.env = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
+        if 'flock' not in missing:  # BusyBox's flock: -s -x -u -n and nothing else (flock.c's "sxnu")
+            (self.bin / 'flock').unlink()
+            (self.bin / 'flock').write_text(BUSYBOX_FLOCK.replace('@FLOCK@', shutil.which('flock')))
+            (self.bin / 'flock').chmod(0o755)
+        # Like the agent: /chariot/bin is not on PATH, and nothing else is either.
+        self.env = {'HOME': str(self.home), 'PATH': '/nonexistent', 'LANG': 'C.UTF-8',
                     'CHARIOT_APP_ID': app_id, 'CHARIOT_APP_URL': app_url}
         self.scripts = []
 
@@ -104,13 +118,13 @@ class Setup(unittest.TestCase):
 
     def plan(self, name, schema=1):
         elf = self.root / f'{name}.server'
-        elf.write_text(FAKE_SERVER.replace('@NAME@', name))
+        elf.write_text(FAKE_SERVER.replace('@NAME@', name).replace('@PYTHON@', sys.executable))
         sha = hashlib.sha256(elf.read_bytes()).hexdigest()
         return app_host.Plan('p1', 1, AGENT_HEX, APP_URL, elf, sha, schema, self.port)
 
     def deploy(self, p, agent=None, **kw):
         return app_host.deploy(p, agent or self.agent, enabled=True, bin_dir=str((agent or self.agent).bin),
-                               health_wait_s=kw.pop('health_wait_s', 20), stop_wait_s=5,
+                               health_wait_s=kw.pop('health_wait_s', 20), stop_wait_s=kw.pop('stop_wait_s', 5),
                                generate_keyring=kw.pop('generate_keyring', True), **kw)
 
     def get(self, path='/health'):
@@ -149,16 +163,21 @@ class Setup(unittest.TestCase):
         app = self.agent.app
         self.assertEqual((out['deployed'], out['previous']), (v2.sha256, v1.sha256))
         self.assertIn(v2.sha256, self.get())
-        self.assertEqual((app / 'server.prev').read_bytes(), v1.elf.read_bytes())
-        self.assertIn(f'CHARIOT_REVISION_SHA256={v1.sha256}', (app / 'start.prev').read_text())  # its own start
+        self.assertEqual((app / 'releases' / v1.sha256 / 'server').read_bytes(), v1.elf.read_bytes())
+        self.assertIn(f'CHARIOT_REVISION_SHA256={v1.sha256}',  # its own start
+                      (app / 'releases' / v1.sha256 / 'start').read_text())
+        self.assertEqual(json.loads((app / 'deployed.prev.json').read_text())['sha256'], v1.sha256)
         with tarfile.open(app / 'backups/latest.tar') as tar:  # v1's data, taken while nothing ran
             backed = tar.extractfile('./accounts/a.sqlite3').read().decode()
         self.assertEqual(backed, 'v1\n')
         self.assertEqual((app / 'data/accounts/a.sqlite3').read_text(), 'v1\nv2\n')
         self.assertEqual((app / 'keys/keyring.json').read_bytes(), key)  # never replaced once there
-        self.deploy(self.plan('v3', schema=2))
+        v3 = self.plan('v3', schema=2)
+        self.deploy(v3)
         self.assertTrue((app / 'backups/previous.tar').is_file())  # two backups kept, no more
         self.assertEqual(sorted(p.name for p in (app / 'backups').iterdir()), ['latest.tar', 'previous.tar'])
+        self.assertEqual(sorted(p.name for p in (app / 'releases').iterdir()), sorted([v2.sha256, v3.sha256]))
+        self.assertFalse((app / 'switching').exists())
 
     def test_a_server_that_never_gets_healthy_is_rolled_back_to_the_last_good_state(self):
         v1 = self.plan('v1')
@@ -194,6 +213,86 @@ class Setup(unittest.TestCase):
         bare = LocalAgent(self.root / 'bare', missing=('flock',))
         with self.assertRaisesRegex(app_host.SetupFailed, 'missing=flock'):
             self.deploy(self.plan('v3', schema=5), agent=bare)
+
+
+    def test_an_interrupted_switch_is_undone_before_anything_else(self):
+        """The review's case: a switch cut off after the new binary started (SSH dropped, builder stopped), then a
+        failing attempt. The last good binary and its data come back; nothing the unverified binary did stays."""
+        v1 = self.plan('v1')
+        self.deploy(v1)
+        cut = self.agent.script
+
+        def dropped(text):
+            if "failed=health\nhealthy" in text:  # the switch: killed outright once its binary started
+                self.agent.script = cut
+                text = text.replace("failed=health\nhealthy", "kill -KILL $$\nhealthy", 1)
+            return cut(text)
+        self.agent.script = dropped
+        with self.assertRaises(app_host.SetupFailed):
+            self.deploy(self.plan('v2', schema=2))
+        app = self.agent.app
+        self.assertTrue((app / 'switching').exists())
+        self.assertFalse((app / 'app.json').exists())
+        with self.assertRaisesRegex(app_host.SetupFailed, rf'restored: {v1.sha256}'):
+            self.deploy(self.plan('broken', schema=2), health_wait_s=3)
+        self.assertIn(v1.sha256, self.get())
+        self.assertEqual((app / 'server').read_bytes(), v1.elf.read_bytes())
+        self.assertNotIn('v2', (app / 'data/accounts/a.sqlite3').read_text())
+        self.assertTrue((app / 'app.json').is_file())
+        self.assertFalse((app / 'switching').exists())
+        self.assertEqual(self.deploy(self.plan('v2', schema=2))['previous'], v1.sha256)  # and on it goes
+
+    def test_a_failed_backup_leaves_the_app_serving_and_both_backups_whole(self):
+        v1 = self.plan('v1')
+        self.deploy(v1)
+        self.deploy(self.plan('v1b'))
+        real, tar = shutil.which('tar'), self.agent.bin / 'tar'
+        tar.unlink()
+        tar.write_text(f'#!/bin/sh\ncase "$*" in *-cf*) exit 1 ;; esac\nexec {real} "$@"\n')
+        tar.chmod(0o755)
+        for _ in range(2):
+            with self.assertRaisesRegex(app_host.SetupFailed, r'\(backup\)'):
+                self.deploy(self.plan('v2', schema=2))
+            self.assertIn(self.plan('v1b').sha256, self.get())
+            self.assertTrue((self.agent.app / 'app.json').is_file())
+        for name in ('latest.tar', 'previous.tar'):
+            with tarfile.open(self.agent.app / 'backups' / name) as archive:
+                archive.getmembers()
+
+    def test_another_apps_agent_is_never_set_up_over(self):
+        self.deploy(self.plan('v1'))
+        theirs = app_host.Plan('p2', 1, AGENT_HEX, APP_URL, self.plan('x').elf, self.plan('x').sha256, 9, self.port)
+        with self.assertRaisesRegex(app_host.SetupFailed, 'another app'):
+            self.deploy(theirs)
+        for leftover in ('server', 'data/notes.sqlite3'):
+            with self.subTest(leftover=leftover):
+                agent = LocalAgent(self.root / leftover.replace('/', '-'))
+                (agent.app / 'data').mkdir(parents=True)
+                (agent.app / leftover).write_text('not ours')
+                with self.assertRaisesRegex(app_host.SetupFailed, 'did not set up'):
+                    self.deploy(self.plan('v1'), agent=agent)
+                self.assertEqual((agent.app / leftover).read_text(), 'not ours')
+
+    def test_an_undelivered_release_is_reverted_before_the_next_setup(self):
+        v1, v2, v3 = self.plan('v1'), self.plan('v2', schema=2), self.plan('v3', schema=2)
+        self.deploy(v1)
+        self.deploy(v2)  # set up, but (say) its delivery never happened
+        out = self.deploy(v3, undelivered=lambda sha: sha == v2.sha256)
+        app = self.agent.app
+        self.assertEqual(out['previous'], v1.sha256)
+        self.assertEqual((app / 'data/accounts/a.sqlite3').read_text(), 'v1\nv1\nv3\n')  # v2's writes undone
+        with tarfile.open(app / 'backups/reverted.tar') as tar:  # and kept aside
+            self.assertIn('v2', tar.extractfile('./accounts/a.sqlite3').read().decode())
+        self.assertEqual(sorted(p.name for p in (app / 'releases').iterdir()), sorted([v1.sha256, v3.sha256]))
+        self.assertIn(v3.sha256, self.get())
+
+    def test_a_stale_pid_file_is_never_signalled(self):
+        bystander = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(bystander.kill)
+        self.agent.app.mkdir(parents=True)
+        (self.agent.app / 'server.pid').write_text(f'{bystander.pid}\n')
+        self.deploy(self.plan('v1'))
+        self.assertIsNone(bystander.poll())  # no server held the lock, so nothing was killed
 
 
 class Contract(unittest.TestCase):
@@ -359,10 +458,15 @@ class InTheJob(Base):
                 raise app_host.InviteRefused('unreachable')
             return TOKEN
 
-        def deploy(self, project, code, elf, manifest):
+        def revert(self, project, code, elf, manifest):
+            self.calls.append(('revert', project, code))
+
+        def deploy(self, project, code, elf, manifest, app_url=None):
             self.calls.append(('deploy', project, code, Path(elf).is_file(), manifest['elf']['sha256'],
-                               self.ledger.versions(project)))
-            if self.fail:
+                               self.ledger.versions(project), app_url))
+            if self.fail == 'cancel':  # the owner cancels while the server is being set up
+                self.ledger.cancel(self.ledger.projects()[0]['activeJob']['jobId'])
+            elif self.fail:
                 raise app_host.SetupFailed('switch', self.fail)
             return {'deployed': manifest['elf']['sha256']}
 
@@ -391,6 +495,7 @@ class InTheJob(Base):
         self.assertEqual(deploy[:4], ('deploy', project, 1, True))
         self.assertEqual(deploy[4], b.ledger.server(project, 1)['sha256'])
         self.assertEqual(deploy[5], [])  # nothing delivered yet while its server was set up
+        self.assertEqual(deploy[6], APP_URL)  # the URL its client baked, checked against the record at setup
 
     def test_the_library_says_which_version_is_set_up_and_the_creator_can_be_invited(self):
         b, project, job, _ = self.job()
@@ -428,6 +533,19 @@ class InTheJob(Base):
                          ('failed', 'toolchain', True), job)
         self.assertIn('could not be set up in its Chariot agent container (switch)', job['failure']['summary'])
         self.assertEqual(b.ledger.versions(project), [])
+
+    def test_once_its_server_is_set_up_a_cancel_no_longer_stops_the_delivery(self):
+        b, project, job, _ = self.job(fail='cancel')
+        self.assertEqual(job['state'], 'ready', job)  # the agent runs it, so it is delivered: the two never differ
+        self.assertEqual([v['versionCode'] for v in b.ledger.versions(project)], [1])
+        self.assertNotIn('revert', [c[0] for c in b.hosting.calls])
+
+    def test_a_set_up_server_whose_version_is_not_delivered_is_reverted(self):
+        with mock.patch.object(L.Ledger, 'deliver', side_effect=L.LedgerError('refused')):
+            b, project, job, _ = self.job()
+        self.assertEqual(job['state'], 'failed', job)
+        self.assertEqual(b.hosting.calls[-1], ('revert', project, 1))
+        self.assertIsNone(b.ledger.server_setup(project))
 
     def test_a_server_for_another_target_is_not_delivered(self):
         b, project, job, _ = self.job(target='x86_64-unknown-linux-gnu')

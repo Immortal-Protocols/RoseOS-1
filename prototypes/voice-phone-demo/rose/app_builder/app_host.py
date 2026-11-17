@@ -1,7 +1,7 @@
 """Set up a delivered version's server in its Chariot agent container over SSH (docs/APP-BUILDER.md §7.7a), as
 Chariot's contract describes it (ProtocolsBackend ``chariot/docs/agent-app-hosting.md`` at 8dc39b86). Source only:
-nothing here runs unless an owner enables it (``enabled`` below) and hands it a channel to an authorized agent;
-whether the builder or a Codex turn calls it is the owner's capability decision, not made here.
+nothing here runs unless an owner configures ``agentHost`` (``enabled`` below) with an authorized agent; the
+builder's own job runs it, no model turn.
 
 The procedure, all over SSH exec with stdin (no SFTP, SCP or forwarding):
 
@@ -10,14 +10,13 @@ The procedure, all over SSH exec with stdin (no SFTP, SCP or forwarding):
 2. ``state``: the deployed record left by the last setup (``deployed.json``: ELF sha256, data_schema, version). A
    lower ``data_schema`` than the deployed one is refused (the server refuses newer data anyway).
 3. ``upload``: the server ELF and its ``start`` script, as a tar on stdin, into a fresh ``incoming`` folder.
-4. ``switch``, one script: first the sealing keyring (refused before anything is touched when it is absent, unless
-   the owner enables ``generate_keyring``, which writes it once, 0400, into the persistent area); then unpublish (remove ``app.json``); stop the running server and wait for its ``run.lock``;
-   back up the whole data folder (every SQLite database with its journal files) into ``backups/latest.tar``
-   while nothing runs, the backup before it kept as ``backups/previous.tar``; keep the previous binary and its start script as ``server.prev`` and ``start.prev``; move the new
-   one in; start it with Chariot's published launcher; wait for ``/health`` on loopback to answer 200
-   with this binary's revision; then publish ``app.json`` and write ``deployed.json``. If health does not come,
-   the new server is stopped and the previous binary and the backed-up data are restored and started again, so the
-   app returns to its last good state; the step then fails.
+4. ``switch``, one script (SWITCH below; docs/APP-BUILDER.md §7.7a): the keyring first; an earlier switch that was
+   cut off undone; unpublish; stop (only a server holding ``run.lock``); back up the data whole into
+   ``backups/latest.tar`` (the one before kept as ``previous.tar``); keep the release as ``releases/<sha256>``;
+   start it with Chariot's launcher; health; publish and record. Any failure after the stop goes back to the
+   deployed release (and, once another binary ran, its backed-up data).
+5. ``revert``: a release whose version was never delivered goes back to the one before it, with the data from just
+   before its switch.
 
 The server listens on 127.0.0.1 only (``ROSE_LISTEN_HOST``), never on the pod's address. Nothing here allocates,
 wakes or pays for a container, logs in, or reads Chariot credentials; ``ChariotSsh`` runs the operator's
@@ -100,7 +99,7 @@ class ChariotSsh(Channel):
     chariot: Path
     agent: str
     home: Path
-    timeout_s: float = 300.0
+    timeout_s: float = 1200.0  # above the switch's own worst case (two stops and two health waits)
 
     def _run(self, remote: list[str], stdin: bytes) -> Result:
         env = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
@@ -196,11 +195,17 @@ test -d "$HOME/workspace" && test -w "$HOME/workspace" || { echo "missing=worksp
 test -n "${CHARIOT_APP_ID:-}" && test -n "${CHARIOT_APP_URL:-}" || { echo "missing=identity"; exit 3; }
 printf 'app_id=%s\\napp_url=%s\\n' "$CHARIOT_APP_ID" "$CHARIOT_APP_URL"
 '''
-STATE = '''set -eu
+STATE = r'''set -eu
 app="$HOME/workspace/.chariot-app"
 umask 077
-@BIN@/mkdir -p "$app/data" "$app/backups" "$app/keys"
-if test -f "$app/deployed.json"; then @BIN@/cat "$app/deployed.json"; fi
+@BIN@/mkdir -p "$app/data" "$app/backups" "$app/keys" "$app/releases"
+cd "$app"
+occupied=no
+if test -e server || test -e start; then occupied=yes; fi
+for f in data/* data/.[!.]*; do if test -e "$f"; then occupied=yes; fi; done
+echo "occupied=$occupied"
+if test -f switching; then printf 'switching=%s\n' "$(@BIN@/cat switching)"; fi
+if test -f deployed.json; then printf 'deployed=%s\n' "$(@BIN@/cat deployed.json)"; fi
 '''
 PREPARE = '''set -eu
 app="$HOME/workspace/.chariot-app"
@@ -208,84 +213,162 @@ umask 077
 @BIN@/rm -rf "$app/@INCOMING@"
 @BIN@/mkdir "$app/@INCOMING@"
 '''
-SWITCH = r'''set -eu
+# Shared by SWITCH and REVERT. Every tool is called by its /chariot/bin path (that folder is not on PATH), and only
+# with options BusyBox's applets take (its flock: -s -x -u -n only). The launcher holds run.lock for as long as the
+# server runs (its fd 9 is inherited through ./start's exec), so "locked" means a server is running.
+COMMON = r'''set -eu
 app="$HOME/workspace/.chariot-app"
 umask 077
 cd "$app"
+B=@BIN@
+locked() { ! $B/flock -n run.lock $B/sh -c : ; }
 stop() {
-  if test -f server.pid; then kill -TERM "$(@BIN@/cat server.pid)" 2>/dev/null || true; fi
-  if ! @BIN@/flock -w @STOP_WAIT@ run.lock true; then
-    if test -f server.pid; then kill -KILL "$(@BIN@/cat server.pid)" 2>/dev/null || true; fi
-    @BIN@/flock -w 10 run.lock true || { echo "failed=stop"; exit 5; }
+  if locked; then
+    if test -f server.pid; then kill -TERM "$($B/cat server.pid)" 2>/dev/null || true; fi
+    i=0; while locked && test "$i" -lt @STOP_WAIT@; do $B/sleep 1; i=$((i + 1)); done
+    if locked; then
+      if test -f server.pid; then kill -KILL "$($B/cat server.pid)" 2>/dev/null || true; fi
+      i=0; while locked && test "$i" -lt 10; do $B/sleep 1; i=$((i + 1)); done
+      if locked; then failed=stop; return 1; fi
+    fi
   fi
-  @BIN@/rm -f server.pid
+  $B/rm -f server.pid
 }
 healthy() {
   i=0
   while test "$i" -lt @HEALTH_WAIT@; do
     reply=$(printf 'GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' |
-      @BIN@/timeout 5 @BIN@/nc -w 3 127.0.0.1 @PORT@ 2>/dev/null || true)
+      $B/timeout 3 $B/nc -w 2 127.0.0.1 @PORT@ 2>/dev/null || true)
     case "$reply" in "HTTP/1."?" 200 "*"$1"*) return 0 ;; esac
-    @BIN@/sleep 1
+    $B/sleep 1
     i=$((i + 1))
   done
   return 1
 }
-launch() { @BIN@/sh -s <<'LAUNCH'
+launch() { $B/sh -s <<'LAUNCH'
 @LAUNCHER@
 LAUNCH
 }
 publish() {
   printf '%s' '@DESCRIPTOR@' > app.json.tmp
-  @BIN@/mv -f app.json.tmp app.json
+  $B/mv -f app.json.tmp app.json
 }
+# The ELF sha256 a deployed record names (deployed.json by default), or nothing.
+sha_of() {
+  test -f "${1:-deployed.json}" || return 0
+  s=$($B/cat "${1:-deployed.json}"); s=${s#*'"sha256":"'}; s=${s%%'"'*}
+  case "$s" in *[!0-9a-f]* | '') return 0 ;; esac
+  if test "${#s}" -eq 64; then printf '%s' "$s"; fi
+}
+# A release as the running pair, written beside and moved into place.
+activate() {
+  $B/cat "releases/$1/server" > server.tmp
+  $B/cat "releases/$1/start" > start.tmp
+  $B/chmod 0700 server.tmp start.tmp
+  $B/mv -f server.tmp server
+  $B/mv -f start.tmp start
+}
+# The data as backups/latest.tar holds it; the data folder is replaced only once the archive unpacked whole.
+restore_data() {
+  $B/rm -rf data.restoring
+  $B/mkdir data.restoring
+  $B/tar -C data.restoring -xf backups/latest.tar
+  $B/rm -rf data
+  $B/mv data.restoring data
+}
+# Back to the deployed release (deployed.json): its data from before an interrupted or failed switch when the
+# switching marker says one got as far as starting another binary, then started and published again.
+recover() {
+  stop || true
+  if test -f switching; then restore_data; fi
+  good=$(sha_of)
+  if test -n "$good" && test -f "releases/$good/server" && test -f "releases/$good/start"; then
+    activate "$good"
+    launch
+    if healthy "$good"; then publish; echo "restored=$good"; else echo "restored=not-healthy"; fi
+  else
+    $B/rm -f server start
+    echo "restored=nothing-deployed"
+  fi
+  $B/rm -f switching
+}
+'''
+SWITCH = COMMON + r'''phase=start
+failed=interrupted
+on_exit() {
+  code=$?
+  trap - EXIT
+  set +e
+  if test "$phase" = done; then exit "$code"; fi
+  echo "failed=$failed"
+  if test "$phase" != start; then recover; fi
+  exit 4
+}
+trap on_exit EXIT
 # Before anything is touched: the keyring the server needs (D9), never replaced once there.
 if test ! -f keys/keyring.json; then
-  test "@GENERATE_KEYRING@" = yes || { echo "failed=keyring"; exit 6; }
-  key=$(@BIN@/head -c 32 /dev/urandom | @BIN@/base64)
+  if test "@GENERATE_KEYRING@" != yes; then echo "failed=keyring"; phase=done; exit 6; fi
+  key=$($B/head -c 32 /dev/urandom | $B/base64)
   printf '{"format":"rose-signin-keyring/v1","current":1,"keys":[{"version":1,"key":"%s"}]}' "$key" > keys/keyring.tmp
-  @BIN@/chmod 0400 keys/keyring.tmp
-  @BIN@/mv -f keys/keyring.tmp keys/keyring.json
+  $B/chmod 0400 keys/keyring.tmp
+  $B/mv -f keys/keyring.tmp keys/keyring.json
 fi
-# Unpublish, stop, then back up the data and keep the previous binary while nothing runs.
-@BIN@/rm -f app.json app.json.tmp
+phase=switch
+# An earlier switch was cut off (SSH dropped, the builder stopped): back to the deployed release and its data first.
+if test -f switching; then echo "recovered=interrupted"; recover; fi
+# Unpublish and stop; then back up the data while nothing runs. The new archive becomes latest.tar only once it
+# is whole, and the one before it is kept as previous.tar.
+$B/rm -f app.json app.json.tmp
+failed=stop
 stop
-if test -f backups/latest.tar; then @BIN@/mv -f backups/latest.tar backups/previous.tar; fi
-@BIN@/tar -C data -cf backups/latest.tar .
-had_prev=no
-if test -f server && test -f start; then
-  @BIN@/mv -f server server.prev
-  @BIN@/mv -f start start.prev
-  had_prev=yes
-fi
-@BIN@/mv -f "@INCOMING@/server" server
-@BIN@/mv -f "@INCOMING@/start" start
-@BIN@/chmod 0700 server start
-@BIN@/rm -rf "@INCOMING@"
+failed=backup
+$B/tar -C data -cf backups/taking.tar .
+if test -f backups/latest.tar; then $B/mv -f backups/latest.tar backups/previous.tar; fi
+$B/mv -f backups/taking.tar backups/latest.tar
+# From here a crash leaves the marker: the next run puts latest.tar and the deployed release back first.
+printf '%s %s' '@PROJECT@' '@SHA@' > switching
+failed=install
+$B/rm -rf "releases/@SHA@"
+$B/mv "@INCOMING@" "releases/@SHA@"
+activate '@SHA@'
 launch
-if healthy "@SHA@"; then
-  publish
-  printf '%s' '@DEPLOYED@' > deployed.json.tmp
-  @BIN@/mv -f deployed.json.tmp deployed.json
-  echo "deployed=@SHA@"
-  exit 0
+failed=health
+healthy '@SHA@'
+publish
+if test -f deployed.json; then
+  $B/cat deployed.json > deployed.prev.tmp
+  $B/mv -f deployed.prev.tmp deployed.prev.json
 fi
-# The new server never became healthy: back to the last good state, binary and data both.
-echo "failed=health"
-stop
-@BIN@/rm -rf data
-@BIN@/mkdir data
-@BIN@/tar -C data -xf backups/latest.tar
-if test "$had_prev" = yes; then
-  @BIN@/mv -f server.prev server
-  @BIN@/mv -f start.prev start
+printf '%s' '@DEPLOYED@' > deployed.tmp
+$B/mv -f deployed.tmp deployed.json
+$B/rm -f switching
+phase=done
+prev=$(sha_of deployed.prev.json)
+for d in releases/*; do
+  n=${d#releases/}
+  if test "$n" != '@SHA@' && test "$n" != "$prev"; then $B/rm -rf "$d"; fi
+done
+echo "deployed=@SHA@"
+'''
+# Undo a setup whose version was never delivered (the job failed or stopped after it): only while @SHA@ is the
+# deployed release. Its data goes back to latest.tar (taken just before it was switched in; what it wrote since is
+# kept as backups/reverted.tar), and the release before it, if any, is started and published again.
+REVERT = COMMON + r'''if test "$(sha_of)" != '@SHA@'; then echo "reverted=not-current"; exit 0; fi
+$B/rm -f app.json app.json.tmp
+stop || { echo "failed=stop"; exit 5; }
+$B/tar -C data -cf backups/reverted.tmp . && $B/mv -f backups/reverted.tmp backups/reverted.tar
+restore_data
+prev=$(sha_of deployed.prev.json)
+if test -n "$prev" && test -f "releases/$prev/server"; then
+  activate "$prev"
+  $B/mv -f deployed.prev.json deployed.json
   launch
-  if healthy "@PREV@"; then publish; echo "restored=@PREV@"; else echo "restored=binary-and-data-not-healthy"; fi
+  if healthy "$prev"; then publish; echo "reverted=$prev"; else echo "reverted=not-healthy"; fi
 else
-  @BIN@/rm -f server start
-  echo "restored=data-no-previous-server"
+  $B/rm -f server start deployed.json deployed.prev.json
+  echo "reverted=nothing"
 fi
-exit 4
+$B/rm -rf "releases/@SHA@"
 '''
 
 
@@ -296,49 +379,106 @@ def _check(result: Result, step: str) -> str:
     return result.stdout
 
 
-def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring: bool = False,
-           bin_dir: str = BIN, health_wait_s: int = HEALTH_WAIT_S, stop_wait_s: int = STOP_WAIT_S) -> dict:
-    """Run the setup for ``p`` on ``channel``. Off unless ``enabled``: the owner's decision (§7.7a)."""
-    if not enabled:
-        raise SetupFailed('disabled', 'agent-container setup is not enabled on this builder')
+def _state(channel: Channel, bin_dir: str) -> dict:
+    out = _check(channel.script(_sh(STATE, bin_dir)), 'state')
+    lines = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+    deployed = None
+    if 'deployed' in lines:
+        try:
+            deployed = json.loads(lines['deployed'])
+            if not (isinstance(deployed, dict) and isinstance(deployed.get('dataSchema'), int)
+                    and isinstance(deployed.get('project'), str)
+                    and re.fullmatch(r'[0-9a-f]{64}', str(deployed.get('sha256', '')))):
+                raise ValueError
+        except ValueError:
+            raise SetupFailed('state', 'the deployed record on the agent is not readable') from None
+    switching = lines.get('switching', '').split(' ')[0] or None
+    return {'deployed': deployed, 'occupied': lines.get('occupied') == 'yes', 'switching': switching}
+
+
+def _check_owner(state: dict, project: str) -> None:
+    """The agent holds this project's app, or nothing: never another app's server or data."""
+    deployed = state['deployed']
+    if deployed is not None and deployed['project'] != project:
+        raise SetupFailed('state', 'this agent holds another app; it is not set up over')
+    if state['switching'] is not None and state['switching'] != project:
+        raise SetupFailed('state', 'this agent was being set up for another app')
+    if deployed is None and state['switching'] is None and state['occupied']:
+        raise SetupFailed('state', 'this agent already has an app server or data the builder did not set up; '
+                                   'it is not set up over')
+
+
+def _script(text: str, p: Plan, bin_dir: str, *, sha: str, health_wait_s: int, stop_wait_s: int, **extra) -> str:
+    descriptor = json.dumps({'format': 'chariot-agent-app/v1', 'port': p.port, 'health_path': '/health'},
+                            separators=(',', ':'))
+    out = (text.replace('@LAUNCHER@', LAUNCHER.replace('/chariot/bin', bin_dir)).replace('@SHA@', sha)
+           .replace('@PORT@', str(p.port)).replace('@DESCRIPTOR@', descriptor)
+           .replace('@HEALTH_WAIT@', str(int(health_wait_s))).replace('@STOP_WAIT@', str(int(stop_wait_s))))
+    for key, value in extra.items():
+        out = out.replace(f'@{key}@', value)
+    return _sh(out, bin_dir)
+
+
+def _identity_matches(channel: Channel, p: Plan, bin_dir: str) -> None:
     out = _check(channel.script(_sh(PROBE.replace('@APPLETS@', ' '.join(APPLETS)), bin_dir)), 'probe')
     seen = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
     if seen.get('app_url') != p.app_url or seen.get('app_id', '').replace('-', '').lower() != p.agent_id:
         raise SetupFailed('probe', 'this agent is not the project\'s recorded agent container')
-    state = _check(channel.script(_sh(STATE, bin_dir)), 'state').strip()
-    previous = None
-    if state:
-        try:
-            previous = json.loads(state)
-            if not (isinstance(previous, dict) and isinstance(previous.get('dataSchema'), int)
-                    and re.fullmatch(r'[0-9a-f]{64}', str(previous.get('sha256', '')))):
-                raise ValueError
-        except ValueError:
-            raise SetupFailed('state', 'the deployed record on the agent is not readable') from None
-        if previous['dataSchema'] > p.data_schema:
-            raise SetupFailed('state', 'this version\'s data schema is older than the deployed one')
+
+
+def deploy(p: Plan, channel: Channel, *, enabled: bool = False, generate_keyring: bool = False,
+           bin_dir: str = BIN, health_wait_s: int = HEALTH_WAIT_S, stop_wait_s: int = STOP_WAIT_S,
+           undelivered=lambda sha: False) -> dict:
+    """Run the setup for ``p`` on ``channel``. Off unless ``enabled``: the owner's decision (§7.7a). When the agent's
+    deployed release is one ``undelivered(sha)`` says was never delivered, it is reverted first."""
+    if not enabled:
+        raise SetupFailed('disabled', 'agent-container setup is not enabled on this builder')
+    if not re.fullmatch(r'[A-Za-z0-9]{1,64}', p.project) or not re.fullmatch(r'[0-9a-f]{64}', p.sha256):
+        raise SetupFailed('plan', 'the project or server digest is not in its recorded form')
+    _identity_matches(channel, p, bin_dir)
+    state = _state(channel, bin_dir)
+    _check_owner(state, p.project)
+    previous = state['deployed']
+    if previous is not None and previous['sha256'] != p.sha256 and undelivered(previous['sha256']):
+        revert(p, channel, previous['sha256'], bin_dir=bin_dir, health_wait_s=health_wait_s, stop_wait_s=stop_wait_s)
+        state = _state(channel, bin_dir)
+        _check_owner(state, p.project)
+        previous = state['deployed']
+    if previous is not None and previous['dataSchema'] > p.data_schema:
+        raise SetupFailed('state', 'this version\'s data schema is older than the deployed one')
     incoming = f'incoming-{p.sha256}'
     _check(channel.script(_sh(PREPARE.replace('@INCOMING@', incoming), bin_dir)), 'upload')
-    _check(channel.receive(bundle(p), incoming), 'upload')
-    descriptor = json.dumps({'format': 'chariot-agent-app/v1', 'port': p.port, 'health_path': '/health'},
-                            separators=(',', ':'))
+    try:
+        tar = bundle(p)
+    except OSError as exc:
+        raise SetupFailed('upload', f'the server could not be read ({type(exc).__name__})') from None
+    _check(channel.receive(tar, incoming), 'upload')
     deployed = json.dumps({'sha256': p.sha256, 'dataSchema': p.data_schema, 'versionCode': p.version_code,
                            'project': p.project}, separators=(',', ':'), sort_keys=True)
-    launcher = LAUNCHER.replace('/chariot/bin', bin_dir)
-    script = (SWITCH.replace('@LAUNCHER@', launcher).replace('@INCOMING@', incoming).replace('@SHA@', p.sha256)
-              .replace('@PREV@', (previous or {}).get('sha256', 'none')).replace('@PORT@', str(p.port))
-              .replace('@DESCRIPTOR@', descriptor).replace('@DEPLOYED@', deployed)
-              .replace('@GENERATE_KEYRING@', 'yes' if generate_keyring else 'no')
-              .replace('@HEALTH_WAIT@', str(int(health_wait_s))).replace('@STOP_WAIT@', str(int(stop_wait_s))))
-    result = channel.script(_sh(script, bin_dir))
+    result = channel.script(_script(SWITCH, p, bin_dir, sha=p.sha256, health_wait_s=health_wait_s,
+                                    stop_wait_s=stop_wait_s, INCOMING=incoming, DEPLOYED=deployed, PROJECT=p.project,
+                                    GENERATE_KEYRING='yes' if generate_keyring else 'no'))
     lines = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
     if result.code != 0 or lines.get('deployed') != p.sha256:
-        why = lines.get('failed', 'unknown')
-        raise SetupFailed('switch', f'the new server did not become healthy ({why}); restored: '
-                                    f'{lines.get("restored", "nothing to restore")}')
+        raise SetupFailed('switch', f'the new server was not set up ({lines.get("failed", "unknown")}); restored: '
+                                    f'{lines.get("restored", "nothing was changed")}')
     return {'deployed': p.sha256, 'appUrl': p.app_url, 'dataSchema': p.data_schema,
             'previous': (previous or {}).get('sha256')}
 
+
+def revert(p: Plan, channel: Channel, sha: str, *, bin_dir: str = BIN, health_wait_s: int = HEALTH_WAIT_S,
+           stop_wait_s: int = STOP_WAIT_S) -> str:
+    """Undo the setup of ``sha`` (a version never delivered): see REVERT. Returns what is running afterwards."""
+    if not re.fullmatch(r'[0-9a-f]{64}', sha):
+        raise SetupFailed('revert', 'the server digest is not in its recorded form')
+    _identity_matches(channel, p, bin_dir)
+    _check_owner(_state(channel, bin_dir), p.project)
+    result = channel.script(_script(REVERT, p, bin_dir, sha=sha, health_wait_s=health_wait_s,
+                                    stop_wait_s=stop_wait_s))
+    lines = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+    if result.code != 0 or 'reverted' not in lines:
+        raise SetupFailed('revert', f'the undelivered server could not be undone ({lines.get("failed", "unknown")})')
+    return lines['reverted']
 
 
 AGENT_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
@@ -398,15 +538,38 @@ class AgentHosting:
             raise SetupFailed('probe', 'the recorded agent container is not one of the configured agents')
         return self._names[agent_id]
 
-    def deploy(self, project: str, version_code: int, elf: Path, manifest: dict) -> dict:
+    def _plan(self, project: str, version_code: int, elf: Path, manifest: dict, app_url: str | None) -> Plan:
         container = self.ledger.agent_container(project)
         if container is None:
             raise SetupFailed('plan', 'no agent container is recorded for this project')
-        schema = server_delivery.data_schema(manifest['schema'], manifest['signin']['revision'])
-        p = Plan(project, version_code, container['agentId'], container['appUrl'], Path(elf),
-                 manifest['elf']['sha256'], schema, self.config.port)
-        return deploy(p, self.channel(self.name_for(container['agentId'])), enabled=True,
-                      generate_keyring=self.config.generate_keyring)
+        if app_url is not None and container['appUrl'] != app_url:
+            raise SetupFailed('plan', 'the agent container changed after the app\'s client was built')
+        try:
+            schema = server_delivery.data_schema(manifest['schema'], manifest['signin']['revision'])
+            sha = manifest['elf']['sha256']
+        except (server_delivery.Refused, KeyError, TypeError) as exc:
+            raise SetupFailed('plan', f'the server manifest cannot be used ({type(exc).__name__})') from None
+        return Plan(project, version_code, container['agentId'], container['appUrl'], Path(elf), sha, schema,
+                    self.config.port)
+
+    def _undelivered(self, project: str):
+        delivered = set()
+        for v in self.ledger.versions(project):
+            server = self.ledger.server(project, v['versionCode'])
+            if server is not None:
+                delivered.add(server['sha256'])
+        return lambda sha: sha not in delivered
+
+    def deploy(self, project: str, version_code: int, elf: Path, manifest: dict, app_url: str | None = None) -> dict:
+        """Set the version's server up; a release the agent runs that was never delivered is reverted first."""
+        p = self._plan(project, version_code, elf, manifest, app_url)
+        return deploy(p, self.channel(self.name_for(p.agent_id)), enabled=True,
+                      generate_keyring=self.config.generate_keyring, undelivered=self._undelivered(project))
+
+    def revert(self, project: str, version_code: int, elf: Path, manifest: dict) -> str:
+        """Undo this version's setup after its delivery did not happen (see ``revert``)."""
+        p = self._plan(project, version_code, elf, manifest, None)
+        return revert(p, self.channel(self.name_for(p.agent_id)), p.sha256)
 
     def invite(self, project: str, sha256: str, account: str) -> str:
         """An invite from the project's server in its recorded agent container (see ``invite``)."""

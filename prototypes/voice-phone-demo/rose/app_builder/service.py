@@ -427,6 +427,7 @@ class Builder:
         source = self.root / 'projects' / project_id / 'source'
         work = self.root / 'jobs' / job_id / f'attempt-{job["attempt"]}'
         cancelled = lambda: self.ledger.cancel_requested(job_id) or self.stopping.is_set()
+        undo = None  # a set-up server whose version is not (yet) delivered
         try:
             self._step(job, 'preparing', 'source', 'Preparing the project source.')
             self._prepare(source, project, job)
@@ -495,19 +496,27 @@ class Builder:
                     server_records['manifest'] = server_manifest.encode(manifest)
                     if self.hosting is not None:  # §7.7a: its server runs before any phone can get the app
                         self._step(job, 'signing', 'hosting', 'Setting up the app\'s server.')
-                        hosted = self._host(project_id, code, artifacts / f'{built.sha256}.server', manifest)
+                        if self.ledger.cancel_requested(job_id):  # the last point a cancel stops it
+                            raise toolchain.StepFailed('cancelled', 'Cancelled.')
+                        target = (project_id, code, artifacts / f'{built.sha256}.server', manifest)
+                        hosted = self._host(*target, level2['url'])
+                        undo = target  # set up: undone if the version is not delivered after all
                 elif self.hosting is not None:
                     raise toolchain.StepFailed('toolchain', 'This app\'s server was not built for its host, so the app '
                                                'was not delivered.')
+            # Once its server is set up, delivery is the commit point: a cancel no longer stops it.
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
-                                       _note(note, job['request']), libraries, _api_report(work), **server_records):
+                                       _note(note, job['request']), libraries, _api_report(work),
+                                       committed=hosted is not None, **server_records):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
+            undo = None  # delivered: its server stays
             if hosted is not None:  # §7.7a: the library says this version's server is the one set up
                 try:
                     self.ledger.record_server_setup(project_id, code, *hosted)
                 except (LedgerError, sqlite3.Error):
                     pass  # delivered all the same; the library then claims no setup rather than a wrong one
         except toolchain.StepFailed as failed:
+            self._undo_hosting(undo)
             self._safe_reset(source, project_id)
             category, summary, retryable = failed.category, failed.summary, failed.retryable
             if category == 'cancelled' and not self.ledger.cancel_requested(job_id):
@@ -515,6 +524,7 @@ class Builder:
                 category, summary, retryable = 'internal', 'Stopped by a server shutdown; outcome unknown.', True
             self._record_failure(job_id, category, summary, retryable, failed.log)
         except Exception as error:  # never leave a job running; the summary carries no paths or tool output
+            self._undo_hosting(undo)
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
 
@@ -559,7 +569,8 @@ class Builder:
                or any(part in ('', '.', '..') for part in k[len(prefix):].split('/')) for k, v in client_files.items()):
             raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote outside its own '
                                        'folder.')
-        client_files[prefix + ROSE_SERVER] = rose_server_java(package, self._hosted_url(project_id))
+        url = self._hosted_url(project_id)
+        client_files[prefix + ROSE_SERVER] = rose_server_java(package, url)
         # The client's tree: the writer's checked app without the server's parts, plus the builder's own files.
         client = work / 'client'
         shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot))
@@ -583,15 +594,25 @@ class Builder:
             if declared and declared.group(1) != package and not declared.group(1).startswith(package + '.'):
                 packages.add(declared.group(1))  # the sign-in core keeps its own package
         return {'client_source': client, 'builder_files': frozenset(client_files), 'packages': frozenset(packages),
-                'server': built,
+                'server': built, 'url': url,
                 'locks': locks, 'contract': canonical.decode('utf-8')}
 
-    def _host(self, project_id: str, code: int, elf: Path, manifest: dict) -> tuple[str, float]:
+    def _undo_hosting(self, undo) -> None:
+        """A version whose server was set up but which was not delivered: put the agent back (best effort; a later
+        setup reverts it anyway, as the agent's release is not a delivered one)."""
+        if undo is None or self.hosting is None:
+            return
+        try:
+            self.hosting.revert(*undo)
+        except Exception:
+            pass
+
+    def _host(self, project_id: str, code: int, elf: Path, manifest: dict, url: str) -> tuple[str, float]:
         """Set the version's server up; returns ``(app URL, when)`` once it answered its health check."""
         from .app_host import SetupFailed
         self.ledger.clear_server_setup(project_id)  # whatever runs there from now on is not an older version's
         try:
-            self.hosting.deploy(project_id, code, elf, manifest)
+            self.hosting.deploy(project_id, code, elf, manifest, url)
             return self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()
         except SetupFailed as failed:
             raise toolchain.StepFailed('toolchain', f'The app\'s server could not be set up in its Chariot agent '

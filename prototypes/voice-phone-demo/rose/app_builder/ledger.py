@@ -402,11 +402,12 @@ class Ledger:
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
                 dependencies=(), api_report: dict | None = None, profile: str | None = None, server=None,
                 migrations=(), crates=(), cargo_lock: str | None = None, contract: str | None = None,
-                manifest: bytes | None = None):
+                manifest: bytes | None = None, committed: bool = False):
         """Record the delivered version and, in the same transaction, the libraries it was built with (its lock).
         A client-server version (profile CLIENT_SERVER) also records its server ELF, its migration lock, the crates
         its server was built with and its Cargo.lock, and binds the project's profile; once bound, a version without
-        its server is refused. Nothing is half recorded."""
+        its server is refused. Nothing is half recorded. ``committed``: the version's server is already set up in
+        its agent container, so a cancel asked for since no longer stops the delivery."""
         if profile not in (None, CLIENT_SERVER):
             raise LedgerError('unknown profile')
         if profile == CLIENT_SERVER:
@@ -436,7 +437,7 @@ class Ledger:
                               'manifest')
         with self.lock:
             job = self.job(job_id)
-            if job['state'] not in ACTIVE or self.cancel_requested(job_id):
+            if job['state'] not in ACTIVE or (self.cancel_requested(job_id) and not committed):
                 return False
             if profile is None and self._profile(job['projectId']) == CLIENT_SERVER:
                 raise LedgerError('this project has a server; a version without it is refused')

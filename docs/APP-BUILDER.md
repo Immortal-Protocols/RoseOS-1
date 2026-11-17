@@ -2954,29 +2954,56 @@ A server for another target is not delivered while `agentHost` is set.
 30349c92):
 1. **Probe.** The agent reports `CHARIOT_APP_ID` and `CHARIOT_APP_URL`. It must
    be the recorded agent, with every applet the scripts use in `/chariot/bin`.
-2. **State.** The deployed record (`deployed.json`) is read. An older
-   `data_schema` than the one deployed is refused, so older code never runs on
-   newer data.
+2. **State.** The deployed record (`deployed.json`: ELF sha256, data
+   schema, version, project) is read. The agent must hold this project's
+   app or nothing:
+   - another project's record is refused;
+   - a server, a start script or data the builder did not set up is
+     refused, and left untouched;
+   - an older `data_schema` than the deployed one is refused, so older code
+     never runs on newer data;
+   - a deployed release whose version was never delivered (the job failed
+     or stopped after its setup) is reverted first (see below).
 3. **Prepare.** An incoming folder is made under
    `$HOME/workspace/.chariot-app`.
 4. **Transfer.** The server ELF and its start script go as a tar on stdin.
-   The sha256 of each is checked inside the agent.
-5. **Switch:**
-   - the keyring is checked first;
-   - `app.json` is removed and the running server stopped (TERM, then wait on
-     `run.lock`, then KILL);
-   - the data directory is archived to `backups/latest.tar`, and the previous
-     archive is kept as `previous.tar`;
-   - the previous `server` and `start` are kept as `server.prev` and
-     `start.prev`;
-   - the new pair is moved in and started with Chariot's own launcher
-     (`launch_agent_app.sh`, sha256 pinned in source);
-   - it must answer `/health` 200 with the new `revision_sha256` within 60 s;
-   - then `app.json` (`chariot-agent-app/v1`, the port, `/health`) is
-     published and `deployed.json` written.
-6. **On failure** the new server is stopped. The data is restored from
-   `latest.tar`, and the previous server and start script are put back,
-   relaunched and published again. The job fails.
+5. **Switch.** Every tool is called by its `/chariot/bin` path, which is not
+   on PATH, and only with options BusyBox's applets take (its `flock` takes
+   `-s -x -u -n` only). In order:
+   - The keyring is checked first. Without one, and without
+     `generateKeyring`, nothing is touched.
+   - If an earlier switch was cut off (its `switching` marker is left), that
+     is undone before anything else: `latest.tar` and the deployed release
+     are put back and started again.
+   - `app.json` is removed and the server stopped. A server runs while
+     Chariot's launcher holds `run.lock`; it gets TERM, then KILL, and only
+     while the lock is held, so a stale `server.pid` is never signalled.
+   - The data directory is archived to `backups/taking.tar`. Only once that
+     is whole does it become `latest.tar`; the archive before it is kept as
+     `previous.tar`.
+   - The `switching` marker is written, the release is kept as
+     `releases/<sha256>/` and made the running pair, and it is started with
+     Chariot's own launcher (`launch_agent_app.sh`, sha256 pinned in source).
+   - It must answer `/health` 200 with the new `revision_sha256` within
+     60 s.
+   - Then `app.json` (`chariot-agent-app/v1`, the port, `/health`) is
+     published, `deployed.json` written (the one before it kept as
+     `deployed.prev.json`) and the marker removed. Releases other than these
+     two are pruned.
+6. **On any failure after the stop** (an EXIT trap), the app goes back to
+   `deployed.json`'s release. When the marker says another binary got as
+   far as running, its data comes from `latest.tar` first. It is relaunched
+   and published, and the job fails.
+7. **Commit point.** The job stops at a cancel only before the setup. Once
+   the server is set up, the version is delivered even if a cancel came
+   meanwhile, so the agent and the library never disagree. If it is not
+   delivered after all (an error), the setup is reverted:
+   - the data goes back to `latest.tar`, and what the undone server wrote
+     is kept as `backups/reverted.tar`;
+   - the release before it is started and published again.
+8. **Check against the baked URL.** The URL the client baked is checked
+   against the record at setup time, so a version is never delivered for a
+   container other than the one it was built for.
 
 **The start script** exports `PORT`, `ROSE_LISTEN_HOST=127.0.0.1` (the
 generated server accepts only `127.0.0.1` or `0.0.0.0`, default `0.0.0.0`),
@@ -2990,6 +3017,13 @@ health server. It covers:
 - first setup, update and rollback;
 - refusal without a keyring, of an older schema, of another agent, and of a
   missing applet;
+- BusyBox-only `flock` options and an empty PATH;
+- a switch killed mid-way, then a failing attempt;
+- a failed backup, twice;
+- another app's agent, or leftovers not set up by the builder;
+- reverting an undelivered release;
+- a stale pid;
+- delivery as the commit point;
 - the pinned launcher;
 - the pool;
 - the job: URL baked, setup before delivery, a failed setup delivering
