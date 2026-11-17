@@ -30,6 +30,9 @@ public final class RoseServerLink {
    this.serverName = serverName; this.hosts = hosts; this.port = port; this.pin = pin; this.deviceId = deviceId;
   }
 
+  /** The same pairing: the same server certificate and the same phone identity (addresses may change). */
+  public boolean samePairing(Link other) { return other != null && pin.equals(other.pin) && deviceId.equals(other.deviceId); }
+
   /** TLS that accepts only this server's certificate. */
   public SSLSocketFactory tls() throws GeneralSecurityException {
    try { return LocalRoseConnection.pinned(pin); }

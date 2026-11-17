@@ -9,10 +9,13 @@ import dev.pixel.voice.RoseServerLink;
  * isn't paired, it sends the owner to the Agent's pairing screen and offers the labelled demo.
  */
 public final class BuilderActivity extends BuilderScreen {
+ /** The Agent pairing the real builder was opened on; a re-pair while this screen lives replaces it on return. */
+ private RoseServerLink.Link link;
+
  @Override BuilderApi connectReal() {
   AgentEndpoint e = AgentEndpoint.current(this);
   if (e == null) return null;
-  try { return new HttpsBuilderApi(e); } catch (java.security.GeneralSecurityException x) { return null; }
+  try { BuilderApi a = new HttpsBuilderApi(e); link = e.link; return a; } catch (java.security.GeneralSecurityException x) { return null; }
  }
 
  @Override void showPair(String error) {
@@ -35,9 +38,15 @@ public final class BuilderActivity extends BuilderScreen {
 
  @Override String connectLabel() { return "Use your Rose server"; }
 
- /** Back from pairing Rose Agent: the real builder, with the owner's words if they brought any, without asking again. */
+ /** Back from pairing Rose Agent: the real builder, with the owner's words if they brought any, without asking again.
+  *  If the Agent was paired again (another server or a new phone identity) while this screen lived, its old link can
+  *  only fail closed, so the builder starts over on the current pairing. */
  @Override protected void onResume() {
   super.onResume();
-  if (api == null && !demo && connect()) showConnected();
+  if (demo) return;
+  boolean repaired = api != null && link != null && !link.samePairing(RoseServerLink.paired(this));
+  if (repaired) { api = null; link = null; }
+  if (api == null && connect()) showConnected();
+  else if (repaired) showPair(null);
  }
 }
