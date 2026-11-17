@@ -45,6 +45,9 @@ public final class HttpsBuilderApiTest {
         asksToPairAgain("retry", api -> api.retry("j1"));
         asksToPairAgain("download", api -> api.download("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", 10,
             File.createTempFile("artifact", ".apk")));
+        // A request whose body may have reached the server never goes to a second address; one that never left may.
+        expect(!HttpsBuilderApi.mayTryNextHost(true), "a sent body stays at its address");
+        expect(HttpsBuilderApi.mayTryNextHost(false), "an unsent request tries the next address");
         try { new HttpsBuilderApi(new Fake(Collections.<String>emptyList())); throw new AssertionError("accepted no address"); }
         catch (GeneralSecurityException e) { checks++; }
         System.out.println("HttpsBuilderApiTest: " + checks + " checks passed");

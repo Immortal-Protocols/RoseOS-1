@@ -185,7 +185,12 @@ final class HttpsBuilderApi implements BuilderApi {
  private String get(String path) throws Unreachable, Answer { return send("GET", path, null); }
  private String post(String path, String body) throws Unreachable, Answer { return send("POST", path, body); }
 
- /** One request: each host in order; a non-final signature refusal is signed afresh once. */
+ /** Whether a failed request may go on to the next address. Once a request's body is written, the server may have
+  *  acted on it, so it never goes to a second address (as WorkspaceTaskTransport): a retry that landed would otherwise
+  *  be refused as a duplicate and shown as an error. The owner sees "can't reach", and the next poll shows the truth. */
+ static boolean mayTryNextHost(boolean bodySent) { return !bodySent; }
+
+ /** One request: each host in order, until one has its body; a non-final signature refusal is signed afresh once. */
  private String send(String method, String path, String body) throws Unreachable, Answer {
   byte[] bytes = body == null ? null : body.getBytes(StandardCharsets.UTF_8);
   Answer last = null;
@@ -193,13 +198,16 @@ final class HttpsBuilderApi implements BuilderApi {
    boolean resign = false;
    for (String host : order()) {
     HttpsURLConnection h = null;
+    boolean sent = false;
     try {
      h = connect(host, method, path);
      if (bytes != null) {
       h.setDoOutput(true);
       h.setRequestProperty("Content-Type", "application/json");
       h.setFixedLengthStreamingMode(bytes.length);
-      try (OutputStream out = h.getOutputStream()) { out.write(bytes); }
+      OutputStream out = h.getOutputStream();
+      sent = true; // from here the server may receive it, even if writing fails part way
+      try (OutputStream o = out) { o.write(bytes); }
      }
      int code = h.getResponseCode();
      String text = read(code / 100 == 2 ? h.getInputStream() : h.getErrorStream(), MAX_JSON);
@@ -211,7 +219,8 @@ final class HttpsBuilderApi implements BuilderApi {
     } catch (CantSign e) {
      throw new Unreachable("pair again", true);
     } catch (IOException e) {
-     // Not reachable at this address; the next one may be.
+     // Not reachable at this address; the next one may be, unless this one may already have the request.
+     if (!mayTryNextHost(sent)) throw new Unreachable("unavailable");
     } finally { if (h != null) h.disconnect(); }
    }
    if (!resign) break;
