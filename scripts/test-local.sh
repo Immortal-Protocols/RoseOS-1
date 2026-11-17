@@ -407,6 +407,12 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/builder/Json.java \
  workspace/rose-agent/app/src/dev/pixel/builder/FakeBuilderApi.java workspace/rose-agent/app/tests/builder/FakeBuilderApiTest.java
 java -cp "$JAVA_TESTS/FakeBuilderApi" dev.pixel.builder.FakeBuilderApiTest
+# Project 1, one server: builder API v1 exactly as rose.app --app-builder serves it, against App Core's recorded fixture.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BuilderFixture" \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuildJob.java workspace/rose-agent/app/src/dev/pixel/builder/InstallPlan.java workspace/rose-agent/app/src/dev/pixel/builder/Json.java workspace/rose-agent/app/src/dev/pixel/builder/BuilderWire.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/BuilderApi.java workspace/rose-agent/app/src/dev/pixel/builder/ShareState.java workspace/rose-agent/app/src/dev/pixel/builder/ApiReport.java workspace/rose-agent/app/src/dev/pixel/builder/ServerSummary.java \
+ workspace/rose-agent/app/src/dev/pixel/builder/ShareMessage.java workspace/rose-agent/app/tests/builder/BuilderFixtureTest.java
+java -cp "$JAVA_TESTS/BuilderFixture" dev.pixel.builder.BuilderFixtureTest prototypes/voice-phone-demo/rose/tests/fixtures/builder-library-v1.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
