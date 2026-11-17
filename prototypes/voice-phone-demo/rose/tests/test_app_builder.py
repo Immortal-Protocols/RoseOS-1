@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from rose.app_builder import ledger as L, template, toolchain
-from rose.app_builder.service import Builder, Refused
+from rose.app_builder.service import _git, Builder, Refused
 
 SDK = Path(os.environ.get('ANDROID_SDK_ROOT', '/nonexistent'))
 JAVA_HOME = Path(os.environ['JAVA_HOME']) if os.environ.get('JAVA_HOME') else None
@@ -333,6 +333,80 @@ class BuildTest(Base):
         out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
         b.run_next()
         self.assertEqual(b.job(out['jobId'])['failure']['category'], 'compile')
+
+    @staticmethod
+    def breaking(fix_on=None, on_repair=None):
+        """A writer whose first source does not compile; with fix_on, its repair turn number fix_on puts it right."""
+        calls = []
+
+        def generate(source, kind, request, cancelled):
+            calls.append((kind, request))
+            main = next(source.glob('src/**/MainActivity.java'))
+            if not calls[1:]:
+                generate.original = main.read_text()
+            if on_repair and kind == 'repair':
+                on_repair()
+            if fix_on is not None and len(calls) - 1 >= fix_on:
+                main.write_text(generate.original)
+            else:
+                main.write_text(generate.original.replace('{', '{ int broken = noSuchThing;', 1))  # passes policy, not javac
+            return f'note {len(calls)}'
+        generate.calls = calls
+        return generate
+
+    def test_a_build_error_goes_back_to_the_writer_once_and_the_same_job_is_delivered(self):
+        gen = self.breaking(fix_on=1)
+        b = self.builder(gen)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        job = b.job(out['jobId'])
+        self.assertEqual(job['state'], 'ready', job)
+        self.assertEqual([k for k, _ in gen.calls], ['create', 'repair'])
+        repair = gen.calls[1][1]
+        self.assertIn('MainActivity.java', repair)  # the tool's own output, its paths relative
+        self.assertNotIn(str(self.root), repair)  # never the builder's folders
+        self.assertEqual([v['versionCode'] for v in b.projects()[0]['versions']], [1])  # one version, signed once
+        log = _git(self.root / 'projects' / out['projectId'] / 'source', 'log', '--format=%s')
+        self.assertIn('repair 1', log)
+
+    def test_repairs_stop_at_the_limit_and_nothing_is_delivered(self):
+        gen = self.breaking()
+        b = self.builder(gen)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        job = b.job(out['jobId'])
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'compile'), job)
+        self.assertEqual([k for k, _ in gen.calls], ['create', 'repair', 'repair'])  # REPAIRS = 2, then no more
+        self.assertEqual(b.projects()[0]['versions'], [])
+        none = self.breaking()
+        b2 = Builder(self.root / 'no-repairs', b.tools, none, backup=fake_backup, repairs=0)
+        self.addCleanup(b2.ledger.close)
+        b2.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b2.run_next()
+        self.assertEqual([k for k, _ in none.calls], ['create'])
+
+    def test_a_cancel_during_a_repair_stops_the_job(self):
+        b = None
+        gen = self.breaking(fix_on=1, on_repair=lambda: b.ledger.cancel(b.projects()[0]['activeJob']['jobId']))
+        b = self.builder(gen)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        job = b.job(out['jobId'])
+        self.assertEqual(job['state'], 'cancelled', job)
+        self.assertEqual(b.projects()[0]['versions'], [])
+
+    def test_a_policy_refusal_is_never_sent_back_as_a_repair(self):
+        calls = []
+
+        def hostile(source, kind, request, cancelled):
+            calls.append(kind)
+            m = source / 'AndroidManifest.xml'
+            m.write_text(m.read_text().replace('package="', 'package="evil.'))
+        b = self.builder(hostile)
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'x'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['failure']['category'], 'compile')
+        self.assertEqual(calls, ['create'])
 
     def test_no_key_creation_signs_nothing(self):
         b = self.builder(self.label_generator('x'), key_creation=False)

@@ -248,6 +248,30 @@ def client_tree_ignore(snapshot: Path, top_names=appprofile.SERVER_TOP):
     return lambda d, names: [n for n in names if Path(d) == top and n in top_names]
 
 
+REPAIRS = 2  # repairs of the writer's own build errors in one job, after its first turn
+REPAIR_TEXT_MAX = 4000
+_ABSOLUTE_PATH = re.compile(r'(?<![\w.~-])/(?:[\w.@+~-]+/)*[\w.@+~-]+')
+_REDACTED_FOLDER = re.compile(r'<[\w.@+~-]+>/')  # toolchain.run's redaction of the folder it built in
+
+
+def _repairable(failed: toolchain.StepFailed) -> bool:
+    """A failure the writer can fix by editing its own source: a build tool (aapt, javac, d8, the server compiler)
+    rejected what it wrote, with that tool's output. Policy refusals (an identity, package or profile the builder will
+    not take) carry no tool output and are never retried, nor is any other category (dependency, toolchain, signing,
+    hosting, timeout, cancelled, internal)."""
+    return failed.category == 'compile' and bool((failed.log or '').strip())
+
+
+def _repair_text(failed: toolchain.StepFailed, folders) -> str:
+    """What the writer is told about its build error: the failure and the tool's own output, with the builder's
+    folders made relative and every other absolute path removed, bounded. Build output never holds signing material:
+    signing happens only after a build passes."""
+    text = f'{failed.summary}\n{(failed.log or "")[-REPAIR_TEXT_MAX * 2:]}'
+    for folder in sorted({str(f) for f in folders}, key=len, reverse=True):
+        text = text.replace(folder + '/', '').replace(folder, '.')
+    return _ABSOLUTE_PATH.sub('<path>', _REDACTED_FOLDER.sub('', text))[-REPAIR_TEXT_MAX:]
+
+
 class BackendSession:
     """The building agent's backend for one job attempt (§7.7a, client-backend-v1): the release folder it builds
     in, in the project's own agent container, and the one tool it has there. The container is recorded and the
@@ -269,7 +293,7 @@ class BackendSession:
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
                  resolver=None, *, codegen=None, server_isolation=None, rust_tools=None, crate_source=None,
-                 server_crates=None, server_crate_deps=None, server_url=None, hosting=None):
+                 server_crates=None, server_crate_deps=None, server_url=None, hosting=None, repairs: int = REPAIRS):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound, so no app is delivered whose key could be
@@ -302,6 +326,9 @@ class Builder:
         self.server_crates, self.server_crate_deps = dict(server_crates or {}), dict(server_crate_deps or {})
         self.server_url = server_url
         self.hosting = hosting
+        # A build tool's rejection of the writer's own source goes back to the writer as a repair turn, at most this
+        # many times in a job, before anything is signed: the same project, job and version code.
+        self.repairs = max(0, int(repairs))
         self.wake = threading.Event()
         self.unrecorded: set[str] = set()  # failures the ledger could not write; retried before the next job
         self.stopping = threading.Event()
@@ -464,46 +491,21 @@ class Builder:
                     and self.ledger.profile(project_id) in ('app-v1', CLIENT_BACKEND):
                 release = hashlib.sha256(f'{project_id}:{job_id}:{job["attempt"]}'.encode()).hexdigest()
                 backend = BackendSession(self.hosting, project_id, release)
-                note = self.generate(source, kind, request, cancelled, backend=backend)
-            else:
-                note = self.generate(source, kind, request, cancelled)
-            if cancelled():
-                raise toolchain.StepFailed('cancelled', 'Cancelled.')
-            # From here on only the snapshot is read: checked, recorded and built are the same files. The live
-            # source is never opened by path here, since something the writer left running may still change it.
-            snapshot = work.parent / f'snapshot-{job["attempt"]}'
-            try:  # before git touches anything the generator wrote
-                _snapshot(source, snapshot)
-                profile = appprofile.check(snapshot, package, bound=self.ledger.profile(project_id))
-            except template.TemplateRefused as refused:  # ProfileRefused too
-                raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
-            _git(source, 'add', '-A', work_tree=snapshot)
-            if _git(source, 'status', '--porcelain', work_tree=snapshot):
-                _git(source, 'commit', '-q', '-m', f'{job["kind"]} {job_id} attempt {job["attempt"]}',
-                     work_tree=snapshot)
-            revision = _git(source, 'rev-parse', 'HEAD')
-            code = self.ledger.allocate_version(job_id)
-            name = f'{code}'
-            self._step(job, 'building', 'compiling', 'Building the app.')
-            if work.exists():
-                shutil.rmtree(work)
-            libraries = self._libraries(snapshot, work, project_id, package)
-            level2 = agent = None
-            if profile.name == CLIENT_SERVER:
-                level2 = self._client_server(snapshot, work, project, profile, cancelled)
-                unsigned, log = toolchain.build(level2['client_source'], work, package, code, name, self.tools,
-                                                cancelled, libraries, builder_files=level2['builder_files'],
-                                                builder_packages=level2['packages'])
-            elif profile.name == CLIENT_BACKEND:
-                if backend is None:
-                    raise toolchain.StepFailed('toolchain', 'This builder has no agent container set up for app '
-                                               'backends, so the app was not built.')
-                agent = self._client_backend(snapshot, work, project)
-                unsigned, log = toolchain.build(agent['client_source'], work, package, code, name, self.tools,
-                                                cancelled, libraries, builder_files=agent['builder_files'],
-                                                builder_packages=agent['packages'])
-            else:  # a plain app's build is called exactly as before Level 2
-                unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
+            repairs = 0
+            while True:  # one writer turn and build, then at most self.repairs repairs of the writer's own build errors
+                try:
+                    (note, snapshot, profile, revision, code, name, libraries, level2, agent, unsigned,
+                     log) = self._write_and_build(job, project, source, work, kind, request, cancelled, backend,
+                                                  repairs)
+                    break
+                except toolchain.StepFailed as failed:
+                    if not _repairable(failed) or repairs >= self.repairs or cancelled():
+                        raise
+                    repairs += 1
+                    self._step(job, 'building', 'repairing',
+                               f'Fixing a build error ({repairs} of {self.repairs}).')
+                    kind, request = 'repair', _repair_text(failed, (work / 'client', work, work.parent, source,
+                                                                    self.root))
             self._step(job, 'testing', 'verifying', 'Checking the built app.', log)
             self._step(job, 'signing', 'signing', 'Signing the app.')
             keys = self.root / 'keys' / project_id
@@ -656,6 +658,54 @@ class Builder:
                 self.hosting.revert(*undo)
         except Exception:
             pass
+
+    def _write_and_build(self, job, project, source: Path, work: Path, kind: str, request: str, cancelled, backend,
+                         repairs: int):
+        """One writer turn (or a repair of the writer's own build error), then the checks and the unsigned build of
+        exactly what it wrote. Raises StepFailed; nothing here signs, delivers or uses a version up."""
+        job_id, project_id, package = job['jobId'], job['projectId'], project['packageName']
+        if backend is not None:
+            note = self.generate(source, kind, request, cancelled, backend=backend)
+        else:
+            note = self.generate(source, kind, request, cancelled)
+        if cancelled():
+            raise toolchain.StepFailed('cancelled', 'Cancelled.')
+        # From here on only the snapshot is read: checked, recorded and built are the same files. The live
+        # source is never opened by path here, since something the writer left running may still change it.
+        snapshot = work.parent / f'snapshot-{job["attempt"]}'
+        try:  # before git touches anything the generator wrote
+            _snapshot(source, snapshot)
+            profile = appprofile.check(snapshot, package, bound=self.ledger.profile(project_id))
+        except template.TemplateRefused as refused:  # ProfileRefused too
+            raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
+        _git(source, 'add', '-A', work_tree=snapshot)
+        if _git(source, 'status', '--porcelain', work_tree=snapshot):
+            _git(source, 'commit', '-q', '-m', f'{job["kind"]} {job_id} attempt {job["attempt"]}'
+                 + (f' repair {repairs}' if repairs else ''), work_tree=snapshot)
+        revision = _git(source, 'rev-parse', 'HEAD')
+        code = self.ledger.allocate_version(job_id)
+        name = f'{code}'
+        self._step(job, 'building', 'compiling', 'Building the app.')
+        if work.exists():
+            shutil.rmtree(work)
+        libraries = self._libraries(snapshot, work, project_id, package)
+        level2 = agent = None
+        if profile.name == CLIENT_SERVER:
+            level2 = self._client_server(snapshot, work, project, profile, cancelled)
+            unsigned, log = toolchain.build(level2['client_source'], work, package, code, name, self.tools,
+                                            cancelled, libraries, builder_files=level2['builder_files'],
+                                            builder_packages=level2['packages'])
+        elif profile.name == CLIENT_BACKEND:
+            if backend is None:
+                raise toolchain.StepFailed('toolchain', 'This builder has no agent container set up for app '
+                                           'backends, so the app was not built.')
+            agent = self._client_backend(snapshot, work, project)
+            unsigned, log = toolchain.build(agent['client_source'], work, package, code, name, self.tools,
+                                            cancelled, libraries, builder_files=agent['builder_files'],
+                                            builder_packages=agent['packages'])
+        else:  # a plain app's build is called exactly as before Level 2
+            unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
+        return note, snapshot, profile, revision, code, name, libraries, level2, agent, unsigned, log
 
     def _host_release(self, project_id: str, code: int, release: str, url: str) -> tuple[str, float]:
         """Switch to the building agent's release; returns ``(app URL, when)`` once it answered its health check."""
