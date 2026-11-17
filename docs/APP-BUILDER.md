@@ -3101,6 +3101,11 @@ up the server.
   launching intent's extras `rose.signin.account` and `rose.signin.invite`, and
   removes them. Nothing is stored and `toString` is redacted. The writer is
   told to pre-fill the sign-up screen from it and keep the fields editable.
+  - When the app is already open, the hand-off can arrive in `onNewIntent`
+    instead of `onCreate`; `RoseInvite.take(intent)` reads it there.
+- **Who may ask for an invite:** any device paired with this Rose server,
+  since pairing is the owner's own act. An invite admits exactly the account
+  it names, once, for 7 days.
 
 **What it still needs to run for real** (inputs, not source work):
 1. **The gateway domain.** `CHARIOT_AGENT_APP_DOMAIN=apps.chariots.sh` live on

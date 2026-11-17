@@ -160,7 +160,6 @@ class Routes(unittest.TestCase):
         for sha in ('0' * 64, '..%2F..%2Fetc%2Fpasswd', 'A' * 64):
             self.assertEqual(self.signed('GET', f'/builder/v1/artifacts/{sha}').status_code, 404, sha)
 
-    @unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK')
     def test_the_invite_route_answers_once_and_refuses_in_words(self):
         """POST projects/<id>/invite (§7.7a): the builder's answer, no-store; a refusal as {error, reason,
         retryable}, recorded in fixtures/builder-hosting-v1.json for the Agent; unsigned is refused."""
@@ -198,6 +197,7 @@ class Routes(unittest.TestCase):
             HOSTING_WIRE.write_text(json.dumps({**recorded, 'refusals': refusals}, indent=1, sort_keys=True) + '\n')
         self.assertEqual(json.loads(HOSTING_WIRE.read_text())['refusals'], refusals)
 
+    @unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK')
     def test_signed_download_of_a_built_version(self):
         out = self.signed('POST', '/builder/v1/projects',
                           {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'Notes'}).json()

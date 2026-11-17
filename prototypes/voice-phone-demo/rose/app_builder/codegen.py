@@ -1186,9 +1186,15 @@ public final class RoseInvite {
 
     private RoseInvite(String account, String invite) { this.account = account; this.invite = invite; }
 
-    /** The account and invite the launching intent carries, once; null when it carries none (or not both). */
+    /** The account and invite the activity's launching intent carries, once; null when it carries none (or not
+     *  both). Call it from onCreate. */
     public static RoseInvite take(android.app.Activity activity) {
-        android.content.Intent intent = activity.getIntent();
+        return take(activity.getIntent());
+    }
+
+    /** The same for an intent delivered to a running activity: call it from onNewIntent with that intent (when the
+     *  app is already open, the builder's hand-off may arrive there instead of in onCreate). */
+    public static RoseInvite take(android.content.Intent intent) {
         if (intent == null) return null;
         String account, invite;
         try {

@@ -88,8 +88,8 @@ runs, is reachable or syncs; whether it is hosted is not yours to know.
   signed_out or session_invalid; show sign-in then. Build the sign-in screens with
   new RoseSignin(transport, session): enroll(account, passphrase, invite, null), where invite is the code
   the user was given (null with "admission": "open"); prefill account and invite on the sign-up screen from
-  RoseInvite.take(activity) when it is not null (the builder's sign-in hands them over once) and keep them
-  editable; enroll gives an Enrollment whose otpauthUri the user opens with
+  RoseInvite.take(activity) in onCreate, and RoseInvite.take(intent) in onNewIntent, when it is not null (the
+  builder's sign-in hands them over once) and keep them editable; enroll gives an Enrollment whose otpauthUri the user opens with
   RoseSession.openAuthenticator(activity, uri), scans from RoseSession.qr(uri, 8) (a Bitmap to show, for an
   authenticator on another device) or copies, and whose recoveryCodes to show once; then
   confirm(account, enrollment.handle, code) with the code from their authenticator, and signIn(account, code,

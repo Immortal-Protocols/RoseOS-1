@@ -47,6 +47,7 @@ class Unavailable(Exception):
 
 INVITE_REASONS = {  # the agent's word -> (the wire's reason, retryable, the sentence)
     'already_enrolled': ('already_enrolled', False, 'That account is already signed up to this app.'),
+    'invalid_name': ('invalid_account', False, 'That account name cannot be used in this app.'),
     'not_set_up': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
     'not_hosted': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
 }
