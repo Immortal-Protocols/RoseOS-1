@@ -156,12 +156,15 @@ class OneServer(ServerCase):
             self.app.Server(self.parse('--app-builder', str(self.config)))
 
     def test_main_exits_2_on_a_builder_it_cannot_construct(self):
-        self.config.write_text(json.dumps({**builder_data('/'), 'root': str(self.root / 'config/builder')}))
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as cm:
-            self.app.main(['--ui-only', '--app-builder', str(self.config)])
-        self.assertEqual(cm.exception.code, 2)
-        self.assertIn('app builder refused', out.getvalue())
+        (self.root / 'a-file').write_text('not a directory')
+        for root in (self.root / 'config/builder', self.root / 'a-file'):  # overlaps the config; cannot be created
+            self.config.write_text(json.dumps({**builder_data('/'), 'root': str(root)}))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as cm:
+                self.app.main(['--ui-only', '--app-builder', str(self.config)])
+            self.assertEqual(cm.exception.code, 2, root)
+            self.assertEqual(out.getvalue().count('\n'), 1, out.getvalue())
+            self.assertIn('[rose] app builder refused', out.getvalue())
 
     def test_the_agents_pairing_reaches_builder_api_v1_beside_voice(self):
         server = self.make_server()
@@ -177,6 +180,7 @@ class OneServer(ServerCase):
 
     def test_the_worker_runs_with_the_server_and_stops_with_it(self):
         server = self.make_server()
+        client = self.client(server)
         server.start(mock.MagicMock())
         worker = server._builder_worker
         self.assertTrue(worker.is_alive())
@@ -184,6 +188,9 @@ class OneServer(ServerCase):
         worker.join(10)
         self.assertFalse(worker.is_alive())
         self.assertTrue(server.app_builder.stopping.is_set())
+        # The listener outlives shutdown() until serve_all stops it: the library still answers in JSON.
+        r = self.signed(client, 'GET', '/builder/v1/projects')
+        self.assertEqual((r.status_code, r.json()['schemaVersion']), (200, 1))
 
     def test_the_standalone_hosts_ledger_root_is_served_unchanged(self):
         """A root first used by the standalone host keeps its projects when the one server serves it."""

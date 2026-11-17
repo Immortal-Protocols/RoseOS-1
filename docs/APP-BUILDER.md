@@ -1288,7 +1288,8 @@ already pairs with. There is no separate builder server, pairing or device.
   writer?, backup?, libraryStore?, clientServer?}`. Both configs are parsed
   by one rule (`host.parse_builder_config`, `host.parse_config`).
 - **Refusals before anything is served.** The server refuses to start (exit 2)
-  on any of these: an unreadable or unknown-field config; `--no-remote`;
+  with one line on any of these: an unreadable or unknown-field config;
+  `--no-remote`; a root that can't be created or opened;
   a library store or Level 2 facility that doesn't check out; a root that is a
   symbolic link; or a root that is, contains or is inside the server's own
   configuration (`ROSE_CONFIG_DIR`, with pairing, TLS and provider state).
@@ -1296,8 +1297,11 @@ already pairs with. There is no separate builder server, pairing or device.
   `/builder/v1` (§3) beside `/hello` and the voice websockets. It answers the
   same paired devices with the same `rose-auth-v1` signatures, and Rose
   Agent's existing device key is enough. The single build worker starts with
-  the server and stops at shutdown after its current step. The ledger keeps
-  every job.
+  the server. At shutdown it stops, and a running step is cancelled: that job is
+  recorded failed and retryable ("Stopped by a server shutdown"), and the Agent
+  can retry it after restart. The ledger stays open until the process exits,
+  because the listener still answers `/builder/v1` until it stops. The entry
+  point in the Agent is the Workspace page's "Build an app" button (Home).
 - **Data.** `host.build_builder` builds the same builder, writer, key backup
   and Level 2 facilities as the standalone host. Pointing `root` at the
   directory a standalone host used serves its projects, versions, signing keys

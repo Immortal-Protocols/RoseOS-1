@@ -893,10 +893,11 @@ class Server:
         if getattr(self, "workspace_model", None) is not None: self.workspace_model.close()
         if getattr(self, 'app_builder', None) is not None:
             from .app_builder.host import stop_worker
-            with contextlib.suppress(Exception):  # stops after the running step; the ledger keeps every job
-                stop_worker(self.app_builder, self._builder_worker)
+            # Stopping cancels a running step: that job is recorded failed, retryable ("Stopped by a server
+            # shutdown"). The ledger stays open until the process exits, as on the standalone host, because the
+            # signed listener still answers /builder/v1 until serve_all stops it after this shutdown.
             with contextlib.suppress(Exception):
-                self.app_builder.ledger.close()
+                stop_worker(self.app_builder, self._builder_worker)
         for obj, method in ((self.listener, "stop"), (self.conductor, "stop"),
                             (self.keepalive, "stop"), (self.transport, "stop"), (self.runtime, "stop")):
             if obj is not None and hasattr(obj, method):
@@ -1614,10 +1615,13 @@ def main(argv: list[str] | None = None) -> None:
     try:
         server = Server(args)
     except Exception as exc:
+        import sqlite3
         from .app_builder.host import ConfigError
-        if not isinstance(exc, ConfigError):
+        if args.app_builder_config is None or not isinstance(exc, (ConfigError, OSError, sqlite3.Error)):
             raise
-        print(f"[rose] app builder refused: {exc}", flush=True)  # nothing is served with a broken builder opt-in
+        # Nothing is served with a broken builder opt-in; like the standalone host, one line naming the error.
+        detail = str(exc) if isinstance(exc, ConfigError) else type(exc).__name__
+        print(f"[rose] app builder refused: {detail}", flush=True)
         raise SystemExit(2) from None
     remote = (Remote(port=args.remote_port, **({'hosts': lambda: args.pair_host} if args.pair_host else {}))
               if args.remote else None)
