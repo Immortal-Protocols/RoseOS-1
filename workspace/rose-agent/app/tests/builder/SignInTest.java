@@ -16,6 +16,7 @@ public final class SignInTest {
 
     static final String SHA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     static final String TOKEN = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRST"; // 52, rose-signin base32
+    static final String LONG; static { StringBuilder b = new StringBuilder(); for (int i = 0; i < 512; i++) b.append((char) (0x21 + i % 94)); LONG = b.toString(); }
     static final String URL = "https://agent-0123456789abcdef0123456789abcdef.apps.chariots.sh";
 
     static Map<String, Object> hosting(Object state, Object url, Object at) {
@@ -117,10 +118,14 @@ public final class SignInTest {
         BuilderApi.Invite inv = BuilderWire.invite(invite("p1", 2, "nate", TOKEN, 604800), "p1", "nate");
         expect(inv.projectId.equals("p1") && inv.versionCode == 2 && inv.account.equals("nate") && inv.token.equals(TOKEN) && inv.expiresInS == 604800, "a 200 reads");
         expect(!inv.toString().contains(TOKEN) && inv.toString().contains("redacted"), "toString never shows the token");
+        // Language-agnostic backends make their own opaque tokens: 1 to 512 printable ASCII, no whitespace.
+        for (String ok : new String[]{"a", "opaque-Token_123.~!", TOKEN.toLowerCase(), LONG})
+            expect(BuilderWire.invite(invite("p1", 2, "nate", ok.replace("\\", "\\\\").replace("\"", "\\\""), 604800), "p1", "nate").token.equals(ok), "an opaque token reads: " + ok.length());
         String[] bad = {
             invite("p2", 2, "nate", TOKEN, 604800), invite("p1", 2, "other", TOKEN, 604800),
-            invite("p1", 2, "nate", TOKEN.toLowerCase(), 604800), invite("p1", 2, "nate", TOKEN.substring(1), 604800),
-            invite("p1", 2, "nate", TOKEN + "=", 604800), invite("p1", 0, "nate", TOKEN, 604800), invite("p1", 2, "nate", TOKEN, 0),
+            invite("p1", 2, "nate", "abc def", 604800), invite("p1", 2, "nate", "abc\\tdef", 604800),
+            invite("p1", 2, "nate", "caf\u00e9", 604800), invite("p1", 2, "nate", LONG + "x", 604800),
+            invite("p1", 0, "nate", TOKEN, 604800), invite("p1", 2, "nate", TOKEN, 0),
             invite("p1", "\"2\"", "nate", TOKEN, 604800), invite("p1", 2, "nate", TOKEN, 1.5),
             "{\"schemaVersion\":2,\"projectId\":\"p1\",\"versionCode\":2,\"account\":\"nate\",\"invite\":\"" + TOKEN + "\",\"expiresInS\":1}",
             "{\"schemaVersion\":1,\"projectId\":\"p1\",\"versionCode\":2,\"account\":\"nate\",\"expiresInS\":1}",
@@ -146,6 +151,7 @@ public final class SignInTest {
         expect(SignIn.refused(new BuilderApi.InviteRefused("not_hosted", false), "Notes").equals("Notes's backend isn't set up yet."), "not hosted");
         expect(SignIn.refused(new BuilderApi.InviteRefused("server_unavailable", true), "Notes").endsWith("Try again in a little while."), "retryable says so");
         expect(SignIn.refused(new BuilderApi.InviteRefused("open_admission", false), "Notes").contains("needs no invite"), "open admission");
+        expect(SignIn.refused(new BuilderApi.InviteRefused("invites_unsupported", false), "Notes").equals("Notes's backend has no sign-in invites. Open Notes to sign up."), "a backend without invites");
         expect(SignIn.refused(new BuilderApi.InviteRefused("already_enrolled", false), "Notes").contains("already set up"), "already enrolled");
         expect(SignIn.refused(new BuilderApi.InviteRefused("brand_new", false), "Notes").contains("(brand_new)"), "an unknown word is shown plainly");
         expect(SignIn.refused(null, "Notes").contains("(refused)"), "no refusal");

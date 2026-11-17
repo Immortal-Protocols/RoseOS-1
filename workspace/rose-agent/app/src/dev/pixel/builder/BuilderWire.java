@@ -56,8 +56,9 @@ final class BuilderWire {
   return Json.write(m);
  }
 
- /** The invite token: rose-signin base32, exactly 52 characters (A-Z, 2-7, no padding). */
- static final java.util.regex.Pattern INVITE_TOKEN = java.util.regex.Pattern.compile("[A-Z2-7]{52}");
+ /** The invite token, as the app's own backend makes it (its release's `invite <account>`): opaque, 1 to 512 printable
+  *  ASCII characters with no whitespace. A rose-signin backend's 52-character base32 token is one such. */
+ static final java.util.regex.Pattern INVITE_TOKEN = java.util.regex.Pattern.compile("[\\x21-\\x7E]{1,512}");
 
  /** POST projects/<id>/invite 200: {projectId, versionCode, account, invite, expiresInS}, for exactly the project
   *  and account asked for. A token of any other shape, or for another project or account, is malformed and never
