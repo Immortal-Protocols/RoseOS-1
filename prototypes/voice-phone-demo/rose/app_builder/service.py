@@ -614,10 +614,11 @@ class Builder:
         """Set the version's server up; returns ``((app URL, when), changed)`` once it answered its health check,
         ``changed`` False when the server was byte-identical to the one already set up."""
         from .app_host import SetupFailed
-        self.ledger.clear_server_setup(project_id)  # whatever runs there from now on is not an older version's
         try:
             out = self.hosting.deploy(project_id, code, elf, manifest, url)
             changed = not (isinstance(out, dict) and out.get('unchanged'))
+            if changed:  # another server runs there now: no older version is claimed set up until this one is delivered
+                self.ledger.clear_server_setup(project_id)
             return (self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()), changed
         except SetupFailed as failed:
             raise toolchain.StepFailed('toolchain', f'The app\'s server could not be set up in its Chariot agent '

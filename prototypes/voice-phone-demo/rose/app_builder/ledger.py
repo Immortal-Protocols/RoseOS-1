@@ -89,8 +89,9 @@ CREATE TABLE IF NOT EXISTS project_agent_containers (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), agent_id TEXT NOT NULL UNIQUE,
   app_url TEXT NOT NULL UNIQUE, recorded REAL NOT NULL);
 -- The version whose server the builder last set up in the project's agent container (§7.7a) and then delivered:
--- its server answered its health check there before the version was delivered. Cleared when a setup starts, so a
--- server replaced by a version that is never delivered is never claimed for an older one. Not a claim it runs now.
+-- its server answered its health check there before the version was delivered. Cleared once another server replaces
+-- it (a failed setup rolls back to it, so it stays), so a server replaced by a version that is never delivered is
+-- never claimed for an older one. Not a claim it runs now.
 CREATE TABLE IF NOT EXISTS project_server_setups (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), version_code INTEGER NOT NULL,
   app_url TEXT NOT NULL, set_up REAL NOT NULL);
@@ -715,7 +716,7 @@ class Ledger:
                 raise LedgerError('that agent or app URL belongs to another project') from None
 
     def clear_server_setup(self, project: str) -> None:
-        """A setup of the project's server is starting: no delivered version is claimed set up until one is."""
+        """Another server replaced the project's set-up one: no delivered version is claimed set up until one is."""
         with self.lock, self._immediate():
             self.db.execute('DELETE FROM project_server_setups WHERE project_id=?', (project,))
 

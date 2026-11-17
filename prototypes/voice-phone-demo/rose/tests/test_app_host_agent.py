@@ -281,7 +281,10 @@ class Setup(unittest.TestCase):
         app = self.agent.app
         self.assertEqual(out['previous'], v1.sha256)
         self.assertEqual((app / 'data/accounts/a.sqlite3').read_text(), 'v1\nv1\nv3\n')  # v2's writes undone
-        self.assertIn('v2', (app / 'backups/replaced/accounts/a.sqlite3').read_text())  # and kept aside
+        self.assertIn('v2', (app / 'backups/reverted/accounts/a.sqlite3').read_text())  # and kept aside
+        with self.assertRaises(app_host.SetupFailed):  # a later failed setup restores into its own slot, not this one
+            self.deploy(self.plan('broken', schema=2), health_wait_s=3)
+        self.assertIn('v2', (app / 'backups/reverted/accounts/a.sqlite3').read_text())
         self.assertEqual(sorted(p.name for p in (app / 'releases').iterdir()), sorted([v1.sha256, v3.sha256]))
         self.assertIn(v3.sha256, self.get())
 

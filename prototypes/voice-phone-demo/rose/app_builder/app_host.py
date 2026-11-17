@@ -270,15 +270,16 @@ activate() {
   $B/mv -f start.tmp start
 }
 # The data as backups/latest.tar holds it. Each step fails explicitly, whatever errexit says: the data folder is
-# replaced only once the archive unpacked whole, and the data it replaces is moved (not copied) to backups/replaced.
+# replaced only once the archive unpacked whole, and the data it replaces is moved (not copied) to the folder $1
+# (recover: backups/replaced; REVERT: backups/reverted, which nothing else ever replaces).
 restore_data() {
-  $B/rm -rf data.restoring backups/replaced.tmp || return 1
+  $B/rm -rf data.restoring "$1.tmp" || return 1
   $B/mkdir data.restoring || return 1
   if ! $B/tar -C data.restoring -xf backups/latest.tar; then $B/rm -rf data.restoring; return 1; fi
-  $B/mv data backups/replaced.tmp || { $B/rm -rf data.restoring; return 1; }
-  if ! $B/mv data.restoring data; then $B/mv backups/replaced.tmp data; return 1; fi
-  $B/rm -rf backups/replaced
-  $B/mv backups/replaced.tmp backups/replaced || true
+  $B/mv data "$1.tmp" || { $B/rm -rf data.restoring; return 1; }
+  if ! $B/mv data.restoring data; then $B/mv "$1.tmp" data; return 1; fi
+  $B/rm -rf "$1"
+  $B/mv "$1.tmp" "$1" || true
 }
 # The marker a switch leaves while it runs: "<project> <sha> <stage>", stage "stopped" (the deployed release was
 # stopped; the data is untouched) or "installing" (another binary may have run on the data since latest.tar).
@@ -292,7 +293,7 @@ stage_of() {
 recover() {
   stop || true
   if test "$(stage_of)" = installing; then
-    if ! restore_data; then echo "restored=data-not-restored"; return 0; fi
+    if ! restore_data backups/replaced; then echo "restored=data-not-restored"; return 0; fi
   fi
   good=$(sha_of)
   if test -n "$good" && test -f "releases/$good/server" && test -f "releases/$good/start"; then
@@ -379,7 +380,7 @@ if healthy '@SHA@'; then publish; echo "deployed=@SHA@"; else echo "failed=healt
 '''
 # Undo a setup whose version was never delivered (the job failed or stopped after it): only while @SHA@ is the
 # deployed release and the one before it is another. Its data goes back to latest.tar (taken just before it was
-# switched in; what it wrote since is kept as backups/replaced), and the release before it, if any, is started and
+# switched in; what it wrote since is kept as backups/reverted), and the release before it, if any, is started and
 # published again. A failure after the stop starts the deployed release again on whatever data is in place.
 REVERT = COMMON + r'''phase=start
 failed=revert
@@ -407,7 +408,7 @@ failed=stop
 stop
 phase=stopped
 failed=restore
-restore_data
+restore_data backups/reverted
 if test -n "$prev" && test -f "releases/$prev/server"; then
   activate "$prev"
   $B/mv -f deployed.prev.json deployed.json
