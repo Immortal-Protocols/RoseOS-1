@@ -2,10 +2,13 @@
 device. No network, port or phone: FastAPI's test client against build_remote_app."""
 import base64
 import hashlib
+import json
+import os
 import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
 from rose.app_builder import toolchain
-from rose.app_builder.service import Builder
+from rose.app_builder.service import Builder, Refused, Unavailable
 from rose.remote import Remote, build_remote_app
 from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
 
@@ -158,6 +161,43 @@ class Routes(unittest.TestCase):
             self.assertEqual(self.signed('GET', f'/builder/v1/artifacts/{sha}').status_code, 404, sha)
 
     @unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK')
+    def test_the_invite_route_answers_once_and_refuses_in_words(self):
+        """POST projects/<id>/invite (§7.7a): the builder's answer, no-store; a refusal as {error, reason,
+        retryable}, recorded in fixtures/builder-hosting-v1.json for the Agent; unsigned is refused."""
+        from rose.tests.test_app_host_agent import HOSTING_WIRE, TOKEN
+        path = '/builder/v1/projects/p1/invite'
+        body = {'schemaVersion': 1, 'account': 'me'}
+        self.assertEqual(self.client.post(path, json=body).status_code, 401)
+        answer = {'projectId': 'p1', 'versionCode': 2, 'account': 'me', 'invite': TOKEN, 'expiresInS': 604800}
+        with mock.patch.object(self.builder, 'invite', lambda device, project, data: answer):
+            r = self.signed('POST', path, body)
+        self.assertEqual((r.status_code, r.json(), r.headers['cache-control']),
+                         (200, {'schemaVersion': 1, **answer}, 'no-store'))
+        refusals = {}
+        for name, raised, status in (
+                ('invalid_account', Refused('account must be 1 to 128 bytes of text with no ":" or control character',
+                                            reason='invalid_account'), 400),
+                ('not_hosted', Unavailable('This app\'s server is not set up in its agent container.', 'not_hosted',
+                                           False), 409),
+                ('already_enrolled', Unavailable('That account is already signed up to this app.', 'already_enrolled',
+                                                 False), 409),
+                ('server_unavailable', Unavailable('This app\'s server could not issue an invite now; try again.',
+                                                   'server_unavailable', True), 409)):
+            def refuse(device, project, data, raised=raised):
+                raise raised
+            with mock.patch.object(self.builder, 'invite', refuse):
+                r = self.signed('POST', path, body)
+            self.assertEqual(r.status_code, status, name)
+            refusals[name] = {'status': status, 'body': r.json()}
+        self.assertEqual(refusals['server_unavailable']['body']['retryable'], True)
+        r = self.signed('POST', '/builder/v1/projects/' + 'f' * 16 + '/invite', body)
+        self.assertEqual(r.status_code, 404)  # the real builder: an unknown project
+        refusals['not_found'] = {'status': 404, 'body': r.json()}
+        if os.environ.get('ROSE_WRITE_WIRE_FIXTURE') == '1':
+            recorded = json.loads(HOSTING_WIRE.read_text()) if HOSTING_WIRE.exists() else {}
+            HOSTING_WIRE.write_text(json.dumps({**recorded, 'refusals': refusals}, indent=1, sort_keys=True) + '\n')
+        self.assertEqual(json.loads(HOSTING_WIRE.read_text())['refusals'], refusals)
+
     def test_signed_download_of_a_built_version(self):
         out = self.signed('POST', '/builder/v1/projects',
                           {'schemaVersion': 1, 'clientRequestId': 'r', 'description': 'Notes'}).json()

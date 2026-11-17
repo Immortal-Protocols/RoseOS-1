@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import threading
@@ -33,6 +34,22 @@ class Refused(ValueError):
     def __init__(self, message: str, **details):
         super().__init__(message)
         self.details = details
+
+
+class Unavailable(Exception):
+    """A valid request the builder cannot do now (HTTP 409): ``reason`` is one word, ``retryable`` whether asking
+    again later can work."""
+
+    def __init__(self, message: str, reason: str, retryable: bool):
+        super().__init__(message)
+        self.reason, self.retryable = reason, retryable
+
+
+INVITE_REASONS = {  # the agent's word -> (the wire's reason, retryable, the sentence)
+    'already_enrolled': ('already_enrolled', False, 'That account is already signed up to this app.'),
+    'not_set_up': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
+    'not_hosted': ('not_hosted', False, 'This app\'s server is not set up in its agent container.'),
+}
 
 
 def _body(body, keys: dict) -> dict:
@@ -319,6 +336,34 @@ class Builder:
         path = self.root / 'artifacts' / f'{sha256}.apk'
         return path if self.ledger.artifact(sha256) and path.is_file() else None
 
+    def invite(self, device: str, project_id: str, body):
+        """One single-use invite for the creator (§7.7a): the project's server, as set up in its agent container,
+        runs its ``invite <account>``. The token is returned once and never stored or logged; asking again issues a
+        new one. None for an unknown project."""
+        from .app_host import InviteRefused, valid_account
+        if self.ledger.project(project_id) is None:
+            return None
+        if not isinstance(body, dict) or type(body.get('schemaVersion')) is not int or body['schemaVersion'] != 1:
+            raise Refused('schemaVersion must be 1')
+        if set(body) - {'schemaVersion', 'account'}:
+            raise Refused('unknown field ' + sorted(set(body) - {'schemaVersion', 'account'})[0])
+        account = body.get('account')
+        if not valid_account(account):
+            raise Refused('account must be 1 to 128 bytes of text with no ":" or control character',
+                          reason='invalid_account')
+        setup = self.ledger.server_setup(project_id)
+        server = None if setup is None else self.ledger.server(project_id, setup['versionCode'])
+        if self.hosting is None or server is None:
+            raise Unavailable(INVITE_REASONS['not_hosted'][2], 'not_hosted', False)
+        try:
+            token = self.hosting.invite(project_id, server['sha256'], account)
+        except InviteRefused as refused:
+            reason, retryable, message = INVITE_REASONS.get(refused.word, (
+                'server_unavailable', True, 'This app\'s server could not issue an invite now; try again.'))
+            raise Unavailable(message, reason, retryable) from None
+        return {'projectId': project_id, 'versionCode': setup['versionCode'], 'account': account, 'invite': token,
+                'expiresInS': 7 * 24 * 3600}
+
     def install(self, device: str, body) -> dict:
         # versionCode: the version this receipt is about (the one attempted). signerSha256: what the phone has for
         # the package afterwards, null when nothing is installed. detail: Android's status message, may be empty.
@@ -438,7 +483,7 @@ class Builder:
             if idsig.exists():
                 _place(idsig, artifacts / f'{receipt["sha256"]}.apk.idsig')
             _place(signed, artifacts / f'{receipt["sha256"]}.apk')  # durable before the version row exists
-            server_records = {}
+            server_records, hosted = {}, None
             if level2 is not None:
                 built = level2['server']
                 _place(built.elf, artifacts / f'{built.sha256}.server')  # the ELF, by its digest (§7.7)
@@ -450,13 +495,18 @@ class Builder:
                     server_records['manifest'] = server_manifest.encode(manifest)
                     if self.hosting is not None:  # §7.7a: its server runs before any phone can get the app
                         self._step(job, 'signing', 'hosting', 'Setting up the app\'s server.')
-                        self._host(project_id, code, artifacts / f'{built.sha256}.server', manifest)
+                        hosted = self._host(project_id, code, artifacts / f'{built.sha256}.server', manifest)
                 elif self.hosting is not None:
                     raise toolchain.StepFailed('toolchain', 'This app\'s server was not built for its host, so the app '
                                                'was not delivered.')
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
                                        _note(note, job['request']), libraries, _api_report(work), **server_records):
                 raise toolchain.StepFailed('cancelled', 'Cancelled.')
+            if hosted is not None:  # §7.7a: the library says this version's server is the one set up
+                try:
+                    self.ledger.record_server_setup(project_id, code, *hosted)
+                except (LedgerError, sqlite3.Error):
+                    pass  # delivered all the same; the library then claims no setup rather than a wrong one
         except toolchain.StepFailed as failed:
             self._safe_reset(source, project_id)
             category, summary, retryable = failed.category, failed.summary, failed.retryable
@@ -536,10 +586,13 @@ class Builder:
                 'server': built,
                 'locks': locks, 'contract': canonical.decode('utf-8')}
 
-    def _host(self, project_id: str, code: int, elf: Path, manifest: dict) -> None:
+    def _host(self, project_id: str, code: int, elf: Path, manifest: dict) -> tuple[str, float]:
+        """Set the version's server up; returns ``(app URL, when)`` once it answered its health check."""
         from .app_host import SetupFailed
+        self.ledger.clear_server_setup(project_id)  # whatever runs there from now on is not an older version's
         try:
             self.hosting.deploy(project_id, code, elf, manifest)
+            return self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()
         except SetupFailed as failed:
             raise toolchain.StepFailed('toolchain', f'The app\'s server could not be set up in its Chariot agent '
                                        f'container ({failed.step}), so the app was not delivered.', retryable=True,

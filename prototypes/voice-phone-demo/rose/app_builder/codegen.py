@@ -25,6 +25,7 @@ which codegen never writes, and the writer's code,
   ``Transport``, and ``RoseApi.Error``;
 - ``RoseJson.java``: a small strict JSON reader and writer, so the client needs nothing beyond the platform;
 - ``RoseSignin.java``: the ``rose-signin-v1`` client (enroll, confirm, sign in, recover, sign out);
+- ``RoseInvite.java``: the creator's account and invite from the intent the builder starts the app with, once;
 - ``RoseSession.java``: the bearer token in no-backup storage, and opening an ``otpauth://`` URI with
   ``ACTION_VIEW`` (sharing the app's identity on API 34+, §7.5) or drawing it as a QR code;
 - ``RoseQr.java``: the QR encoder that drawing uses (a port of rose.qr, tested to give the same modules);
@@ -1171,6 +1172,41 @@ public final class RoseSignin {
 }
 '''
 
+ROSE_INVITE = r'''package {pkg}.rose;
+
+/**
+ * The creator's invite handed over by the Rose builder (docs/APP-BUILDER.md §7.7a). When the builder's "Sign in"
+ * starts this app, the launching intent carries the account and its single-use invite. take() returns them once and
+ * removes them from that intent; nothing is stored or logged, and toString() is redacted. Typing them in still works.
+ */
+public final class RoseInvite {
+    public static final String EXTRA_ACCOUNT = "rose.signin.account";
+    public static final String EXTRA_INVITE = "rose.signin.invite";
+    public final String account, invite;
+
+    private RoseInvite(String account, String invite) { this.account = account; this.invite = invite; }
+
+    /** The account and invite the launching intent carries, once; null when it carries none (or not both). */
+    public static RoseInvite take(android.app.Activity activity) {
+        android.content.Intent intent = activity.getIntent();
+        if (intent == null) return null;
+        String account, invite;
+        try {
+            account = intent.getStringExtra(EXTRA_ACCOUNT);
+            invite = intent.getStringExtra(EXTRA_INVITE);
+        } catch (RuntimeException e) {
+            return null;  // extras that cannot be read are no invite
+        }
+        intent.removeExtra(EXTRA_ACCOUNT);
+        intent.removeExtra(EXTRA_INVITE);
+        if (account == null || account.isEmpty() || invite == null || !invite.matches("[A-Z2-7]{52}")) return null;
+        return new RoseInvite(account, invite);
+    }
+
+    @Override public String toString() { return "RoseInvite(<redacted>)"; }
+}
+'''
+
 ROSE_SESSION = r'''package {pkg}.rose;
 
 /**
@@ -1639,6 +1675,7 @@ def client_files(contract: Contract, package: str) -> dict[str, str]:
             base + 'RoseApi.java': fill(ROSE_API).replace('{methods}', _java_methods(contract, package)),
             base + f'{TYPES_CLASS}.java': '\n'.join(types),
             base + 'RoseSignin.java': fill(ROSE_SIGNIN),
+            base + 'RoseInvite.java': fill(ROSE_INVITE),
             base + 'RoseSession.java': fill(ROSE_SESSION),
             base + 'RoseQr.java': fill(ROSE_QR),
             base + 'RoseSigninCore.java': core.decode('utf-8')}

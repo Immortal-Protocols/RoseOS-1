@@ -223,10 +223,77 @@ class Contract(unittest.TestCase):
                 app_host.plan(None, Path('/x'), 'p', port=port)
 
 
+TOKEN = 'A' * 26 + '2' * 26
+# The installed server's `invite <account>` stand-in: the token for exactly the expected account and environment.
+FAKE_INVITE = '''#!/bin/sh
+test "$1" = invite || exit 2
+test "$DATA_DIR" = "$HOME/workspace/.chariot-app/data" && test "$CHARIOT_DEPLOYMENT_SHA256" = "@SHA@" || exit 9
+printf '%s' "$2" > "$HOME/asked"
+case "$2" in
+  enrolled) echo "rose server: no invite: already_enrolled" >&2; exit 1 ;;
+  other) echo "rose server: no invite: invalid_name" >&2; exit 1 ;;
+  *) echo @TOKEN@ ;;
+esac
+'''
+
+
+class Invite(unittest.TestCase):
+    """The creator's invite from the server set up in the agent: the account passed exactly, the token only from a
+    success, a refusal as its one word, and nothing run for an account rose-signin would refuse."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.agent = LocalAgent(Path(tmp.name))
+        self.sha = 'ab' * 32
+        self.agent.app.mkdir(parents=True)
+        server = self.agent.app / 'server'
+        server.write_text(FAKE_INVITE.replace('@SHA@', self.sha).replace('@TOKEN@', TOKEN))
+        server.chmod(0o700)
+
+    def invite(self, account):
+        return app_host.invite(self.agent, self.sha, account, bin_dir=str(self.agent.bin))
+
+    def test_the_account_reaches_the_server_exactly_and_the_token_comes_back_once(self):
+        for account in ('o\'neil $(x) "q" `y` \\ ;&|*', 'me', '\u00e9t\u00e9 \U0001F600'):
+            with self.subTest(account=account):
+                self.assertEqual(self.invite(account), TOKEN)
+                self.assertEqual((self.agent.home / 'asked').read_text(encoding='utf-8'), account)
+
+    def test_refusals_are_one_word_and_carry_no_output(self):
+        for account, word in (('enrolled', 'already_enrolled'), ('other', 'invalid_name')):
+            with self.subTest(account=account), self.assertRaises(app_host.InviteRefused) as caught:
+                self.invite(account)
+            self.assertEqual(caught.exception.word, word)
+        (self.agent.app / 'server').unlink()
+        with self.assertRaises(app_host.InviteRefused) as caught:
+            self.invite('enrolled')
+        self.assertEqual(caught.exception.word, 'not_set_up')
+
+    def test_an_account_rose_signin_refuses_never_reaches_the_agent(self):
+        for account in ('', 'a:b', 'x' * 129, 'a\nb', '\u00e9' * 65, None, 7):
+            with self.subTest(account=account), self.assertRaises(app_host.InviteRefused):
+                self.invite(account)
+        self.assertEqual(self.agent.scripts, [])
+
+    def test_output_that_is_not_a_token_is_not_returned(self):
+        class Noisy(app_host.Channel):
+            def script(self, text):
+                return app_host.Result(0, 'not a token\n', '')
+        with self.assertRaises(app_host.InviteRefused) as caught:
+            app_host.invite(Noisy(), self.sha, 'me')
+        self.assertEqual(caught.exception.word, 'bad_output')
+
+
 from unittest import mock  # noqa: E402
 
-from rose.app_builder import ledger as L, server_build, server_manifest  # noqa: E402
+from rose.app_builder import ledger as L, server_build, server_manifest, service  # noqa: E402
 from rose.tests.test_app_builder import HAS_SDK  # noqa: E402
+from rose.tests.test_app_builder_one_server import shape  # noqa: E402
+
+# The hosting additions to builder API v1 (§7.7a) for the Agent's tests: a hosted version's library entry, the invite
+# answer, and the invite refusals (test_builder_routes). Regenerate with ROSE_WRITE_WIRE_FIXTURE=1 after an agreed change.
+HOSTING_WIRE = Path(__file__).resolve().parent / 'fixtures/builder-hosting-v1.json'
 from rose.tests.test_app_level2_pipeline import BUILDER_CRATES, Base, Codegen, client_server_app  # noqa: E402
 from rose.tests.test_app_server_manifest import tiny_elf  # noqa: E402
 
@@ -284,6 +351,14 @@ class InTheJob(Base):
             if self.ledger.agent_container(project) is None:
                 self.ledger.record_agent_container(project, AGENT_HEX, APP_URL)
 
+        def invite(self, project, sha256, account):
+            self.calls.append(('invite', project, sha256, account))
+            if account == 'enrolled':
+                raise app_host.InviteRefused('already_enrolled')
+            if account == 'asleep':
+                raise app_host.InviteRefused('unreachable')
+            return TOKEN
+
         def deploy(self, project, code, elf, manifest):
             self.calls.append(('deploy', project, code, Path(elf).is_file(), manifest['elf']['sha256'],
                                self.ledger.versions(project)))
@@ -317,6 +392,36 @@ class InTheJob(Base):
         self.assertEqual(deploy[4], b.ledger.server(project, 1)['sha256'])
         self.assertEqual(deploy[5], [])  # nothing delivered yet while its server was set up
 
+    def test_the_library_says_which_version_is_set_up_and_the_creator_can_be_invited(self):
+        b, project, job, _ = self.job()
+        (version,) = b.ledger.versions(project)
+        hosting = version['hosting']
+        self.assertEqual((hosting['state'], hosting['appUrl']), ('set_up', APP_URL))
+        self.assertIsInstance(hosting['setUpAt'], int)
+        self.assertNotIn('hosting', version['server'])  # beside the server summary, which keeps its exact keys
+        out = b.invite('d', project, {'schemaVersion': 1, 'account': 'me'})
+        live = {'schemaVersion': 1, 'version': version, 'invite': {'schemaVersion': 1, **out}}
+        if os.environ.get('ROSE_WRITE_WIRE_FIXTURE') == '1':
+            recorded = json.loads(HOSTING_WIRE.read_text()) if HOSTING_WIRE.exists() else {}
+            HOSTING_WIRE.write_text(json.dumps({**recorded, **live}, indent=1, sort_keys=True) + '\n')
+        recorded = json.loads(HOSTING_WIRE.read_text())
+        self.assertEqual(shape(live), shape({k: recorded[k] for k in live}))
+        self.assertEqual(recorded['version']['hosting']['state'], 'set_up')
+        self.assertEqual(out, {'projectId': project, 'versionCode': 1, 'account': 'me', 'invite': TOKEN,
+                               'expiresInS': 604800})
+        self.assertEqual(b.hosting.calls[-1], ('invite', project, b.ledger.server(project, 1)['sha256'], 'me'))
+        self.assertNotIn(TOKEN, json.dumps([b.ledger.versions(project), b.ledger.projects(), b.job(job['jobId'])]))
+        for account, reason, retryable in (('enrolled', 'already_enrolled', False), ('asleep', 'server_unavailable',
+                                                                                         True)):
+            with self.subTest(account=account), self.assertRaises(service.Unavailable) as caught:
+                b.invite('d', project, {'schemaVersion': 1, 'account': account})
+            self.assertEqual((caught.exception.reason, caught.exception.retryable), (reason, retryable))
+        for body in ({'schemaVersion': 1, 'account': 'a:b'}, {'schemaVersion': 1}, {'account': 'me'},
+                     {'schemaVersion': 1, 'account': 'me', 'extra': 1}):
+            with self.subTest(body=body), self.assertRaises(service.Refused):
+                b.invite('d', project, body)
+        self.assertIsNone(b.invite('d', 'f' * 32, {'schemaVersion': 1, 'account': 'me'}))
+
     def test_a_failed_setup_delivers_nothing_and_can_be_retried(self):
         b, project, job, _ = self.job(fail='never healthy')
         self.assertEqual((job['state'], job['failure']['category'], job['failure']['retryable']),
@@ -328,6 +433,9 @@ class InTheJob(Base):
         b, project, job, _ = self.job(target='x86_64-unknown-linux-gnu')
         self.assertEqual(job['state'], 'failed', job)
         self.assertEqual(b.ledger.versions(project), [])
+        with self.assertRaises(service.Unavailable) as caught:
+            b.invite('d', project, {'schemaVersion': 1, 'account': 'me'})
+        self.assertEqual(caught.exception.reason, 'not_hosted')
 
 
 if __name__ == '__main__':

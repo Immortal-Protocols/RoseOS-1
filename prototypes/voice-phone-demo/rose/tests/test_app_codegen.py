@@ -67,6 +67,9 @@ def require(env: str, tool: str):
         raise unittest.SkipTest(f'{tool} is not installed')
 
 
+ANDROID_ONLY = {'RoseSession.java', 'RoseInvite.java'}  # compiled only against android.jar
+
+
 def android_jar() -> Path | None:
     for root in (os.environ.get('ANDROID_SDK_ROOT'), REPO / '.tools/android-sdk', '/opt/roseos/android-sdk'):
         if root and (Path(root) / 'platforms/android-35/android.jar').is_file():
@@ -281,7 +284,7 @@ class Client(unittest.TestCase):
 
     def test_files_are_in_the_reserved_folder(self):
         self.assertEqual(sorted(self.files), [self.base + n for n in (
-            'RoseApi.java', 'RoseJson.java', 'RoseQr.java', 'RoseSession.java', 'RoseSignin.java',
+            'RoseApi.java', 'RoseInvite.java', 'RoseJson.java', 'RoseQr.java', 'RoseSession.java', 'RoseSignin.java',
             'RoseSigninCore.java', 'RoseTypes.java')])
         self.assertTrue(all(f'package {PACKAGE}.rose;' in v for k, v in self.files.items()
                             if not k.endswith('RoseSigninCore.java')))
@@ -323,7 +326,7 @@ class Client(unittest.TestCase):
         write_tree(tmp, self.files)
         write_tree(tmp, {self.base + V.ROSE_SERVER: V.rose_server_java(PACKAGE, url)})  # the builder's own file
         write_tree(tmp, extra)
-        sources = [str(p) for p in tmp.rglob('*.java') if android or p.name != 'RoseSession.java']
+        sources = [str(p) for p in tmp.rglob('*.java') if android or p.name not in ANDROID_ONLY]
         out = tmp / 'classes'
         cmd = ['javac', '--release', '17', '-Xlint:all', '-Werror', '-d', str(out)]
         if android:
@@ -422,7 +425,7 @@ class Parity(unittest.TestCase):
             write_tree(java, {'test/Check.java': JAVA_HARNESS})
             out = java / 'classes'
             javac = subprocess.run(['javac', '--release', '17', '-d', str(out)] +
-                                   [str(p) for p in java.rglob('*.java') if p.name != 'RoseSession.java'],
+                                   [str(p) for p in java.rglob('*.java') if p.name not in ANDROID_ONLY],
                                    capture_output=True, text=True, timeout=300)
             self.assertEqual(javac.returncode, 0, javac.stderr)
             request = subprocess.run(['java', '-cp', str(out), 'Check', 'request'], capture_output=True, text=True,

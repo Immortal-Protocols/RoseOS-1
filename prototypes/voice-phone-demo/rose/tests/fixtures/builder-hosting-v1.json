@@ -1,0 +1,94 @@
+{
+ "invite": {
+  "account": "me",
+  "expiresInS": 604800,
+  "invite": "AAAAAAAAAAAAAAAAAAAAAAAAAA22222222222222222222222222",
+  "projectId": "2babd1f5b49a4058",
+  "schemaVersion": 1,
+  "versionCode": 1
+ },
+ "refusals": {
+  "already_enrolled": {
+   "body": {
+    "error": "That account is already signed up to this app.",
+    "reason": "already_enrolled",
+    "retryable": false,
+    "schemaVersion": 1
+   },
+   "status": 409
+  },
+  "invalid_account": {
+   "body": {
+    "error": "account must be 1 to 128 bytes of text with no \":\" or control character",
+    "reason": "invalid_account",
+    "schemaVersion": 1
+   },
+   "status": 400
+  },
+  "not_found": {
+   "body": {
+    "error": "not found",
+    "schemaVersion": 1
+   },
+   "status": 404
+  },
+  "not_hosted": {
+   "body": {
+    "error": "This app's server is not set up in its agent container.",
+    "reason": "not_hosted",
+    "retryable": false,
+    "schemaVersion": 1
+   },
+   "status": 409
+  },
+  "server_unavailable": {
+   "body": {
+    "error": "This app's server could not issue an invite now; try again.",
+    "reason": "server_unavailable",
+    "retryable": true,
+    "schemaVersion": 1
+   },
+   "status": 409
+  }
+ },
+ "schemaVersion": 1,
+ "version": {
+  "apiReport": {
+   "advisory": true,
+   "counts": {
+    "guarded": 0,
+    "notGuardedHere": 0,
+    "unverified": 0
+   },
+   "deviceProof": false,
+   "highestLevel": null,
+   "minSdk": 26,
+   "note": "Advisory only: detection in the built app, not device compatibility proof. Nothing here shows that the app works on a phone, and nothing here blocks a build or an install.",
+   "schemaVersion": 1,
+   "status": "complete",
+   "truncated": 0,
+   "unlistedCount": 0
+  },
+  "apk": {
+   "sha256": "5b3d4feaaa82916514650c82891549c536f6db557788740713a7269bc285570a",
+   "size": 12681
+  },
+  "createdAt": 1794883211.5772276,
+  "hosting": {
+   "appUrl": "https://agent-0f1e2d3c4b5a69788796a5b4c3d2e1f0.apps.example.org",
+   "setUpAt": 1794883211576,
+   "state": "set_up"
+  },
+  "jobId": "557b903f466b1f52",
+  "notes": "Notes",
+  "server": {
+   "api": 1,
+   "minClientVersionCode": 1,
+   "schemaVersion": 1,
+   "status": "ok"
+  },
+  "sourceRevision": "6ad9cef84b1bc193aff8d11d5bb549e2175c3211",
+  "versionCode": 1,
+  "versionName": "1"
+ }
+}

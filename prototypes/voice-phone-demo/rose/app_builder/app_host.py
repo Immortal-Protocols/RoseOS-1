@@ -28,6 +28,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import unicodedata
 import subprocess
 import tarfile
 from dataclasses import dataclass
@@ -406,3 +407,62 @@ class AgentHosting:
                  manifest['elf']['sha256'], schema, self.config.port)
         return deploy(p, self.channel(self.name_for(container['agentId'])), enabled=True,
                       generate_keyring=self.config.generate_keyring)
+
+    def invite(self, project: str, sha256: str, account: str) -> str:
+        """An invite from the project's server in its recorded agent container (see ``invite``)."""
+        container = self.ledger.agent_container(project)
+        if container is None:
+            raise InviteRefused('not_hosted')
+        try:
+            name = self.name_for(container['agentId'])
+        except SetupFailed:
+            raise InviteRefused('unreachable') from None
+        return invite(self.channel(name), sha256, account)
+
+
+INVITE = '''set -eu
+app="$HOME/workspace/.chariot-app"
+cd "$app" 2>/dev/null && test -x ./server || { echo "failed=not_set_up" >&2; exit 5; }
+export DATA_DIR="$app/data"
+export CHARIOT_DEPLOYMENT_SHA256=@SHA@
+export CHARIOT_REVISION_SHA256=@SHA@
+exec ./server invite @ACCOUNT@
+'''
+INVITE_TOKEN = re.compile(r'[A-Z2-7]{52}')  # rose-signin base32, no padding
+INVITE_REFUSAL = re.compile(r'(?:no invite: |failed=)([a-z_]+)')
+
+
+class InviteRefused(Exception):
+    """The agent's server issued no invite: ``word`` is its one-word reason (never the account or a token)."""
+
+    def __init__(self, word: str):
+        super().__init__(word)
+        self.word = word
+
+
+def valid_account(account) -> bool:
+    """rose-signin's ``valid_name``: 1 to 128 UTF-8 bytes, no ``:`` and no control character."""
+    return (isinstance(account, str) and 0 < len(account.encode('utf-8', 'surrogatepass')) <= 128
+            and not any(c == ':' or unicodedata.category(c) == 'Cc' for c in account)
+            and not any(0xD800 <= ord(c) <= 0xDFFF for c in account))
+
+
+def invite(channel: Channel, sha256: str, account: str, *, bin_dir: str = BIN) -> str:
+    """One single-use invite for ``account`` from the server set up in the agent (its ``invite <account>``,
+    §7.4): the token, returned once. Its stdout is the token, so it is read only on success and never put in an
+    error, a log or a record."""
+    if not valid_account(account) or not re.fullmatch(r'[0-9a-f]{64}', sha256):
+        raise InviteRefused('invalid_name')
+    quoted = "'" + account.replace("'", "'\\''") + "'"
+    script = _sh(INVITE, bin_dir).replace('@SHA@', sha256).replace('@ACCOUNT@', quoted)
+    try:
+        done = channel.script(script)
+    except SetupFailed:
+        raise InviteRefused('unreachable') from None
+    if done.code == 0:
+        token = done.stdout.strip()
+        if INVITE_TOKEN.fullmatch(token):
+            return token
+        raise InviteRefused('bad_output')
+    found = INVITE_REFUSAL.search(done.stderr)
+    raise InviteRefused(found.group(1) if found else 'failed')

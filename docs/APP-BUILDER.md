@@ -3034,6 +3034,40 @@ up the server.
   `test_app_owner_records`, and `test_app_host.NativeHosts`, which includes a
   job baking the container URL.
 
+**Builder API v1 additions** (agreed with Home/App, #881; recorded in
+`rose/tests/fixtures/builder-hosting-v1.json`):
+- **Backend status: `versions[].hosting`.** It sits beside `server`, not
+  inside it: a phone reads the server summary with its exact keys.
+  - Shape: `{"state": "set_up", "appUrl", "setUpAt"}`, with `setUpAt` in unix
+    ms. It appears only on the delivered version whose server is the one set
+    up in the agent container. That server answered its health check there
+    before the version was delivered.
+  - It is not a claim that the server is running now.
+  - The record is cleared when a setup starts and written only after the
+    version is delivered. A server replaced by a version that is never
+    delivered is therefore never claimed for an older one.
+- **Creator admission: `POST /builder/v1/projects/{id}/invite`.** Signed by the
+  paired device; the body is `{"schemaVersion": 1, "account"}`. Admission stays
+  `invite`.
+  - The owner types `account`. It must pass rose-signin `valid_name`, and it
+    reaches the server exactly as typed, single-quoted in the script.
+  - The builder runs the set-up server's `invite <account>` in the agent with
+    the start script's `DATA_DIR` and the deployment's sha256.
+  - **200:** `{projectId, versionCode, account, invite, expiresInS: 604800}`,
+    no-store. The token (`[A-Z2-7]{52}`) is read only from a successful run
+    and is never stored, logged or put in a job. Each call issues a fresh
+    single-use invite.
+  - **Refusals:**
+    - 400, `reason: invalid_account`;
+    - 409 `{error, reason, retryable}`, with `reason` one of `not_hosted`,
+      `already_enrolled` or `server_unavailable` (retryable);
+    - 404 for an unknown project.
+- **The hand-off: `<pkg>.rose.RoseInvite`** (generated client).
+  `RoseInvite.take(activity)` returns `{account, invite}` once, from the
+  launching intent's extras `rose.signin.account` and `rose.signin.invite`, and
+  removes them. Nothing is stored and `toString` is redacted. The writer is
+  told to pre-fill the sign-up screen from it and keep the fields editable.
+
 **What it still needs to run for real** (inputs, not source work):
 1. **The gateway domain.** `CHARIOT_AGENT_APP_DOMAIN=apps.chariots.sh` live on
    Chariot (Saba). Until then `CHARIOT_APP_URL` has no public route.

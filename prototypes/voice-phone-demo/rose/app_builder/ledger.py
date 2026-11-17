@@ -88,6 +88,12 @@ CREATE TABLE IF NOT EXISTS project_native_hosts (
 CREATE TABLE IF NOT EXISTS project_agent_containers (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), agent_id TEXT NOT NULL UNIQUE,
   app_url TEXT NOT NULL UNIQUE, recorded REAL NOT NULL);
+-- The version whose server the builder last set up in the project's agent container (§7.7a) and then delivered:
+-- its server answered its health check there before the version was delivered. Cleared when a setup starts, so a
+-- server replaced by a version that is never delivered is never claimed for an older one. Not a claim it runs now.
+CREATE TABLE IF NOT EXISTS project_server_setups (
+  project_id TEXT PRIMARY KEY REFERENCES projects(project_id), version_code INTEGER NOT NULL,
+  app_url TEXT NOT NULL, set_up REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -707,6 +713,28 @@ class Ledger:
             except sqlite3.IntegrityError:
                 raise LedgerError('that agent or app URL belongs to another project') from None
 
+    def clear_server_setup(self, project: str) -> None:
+        """A setup of the project's server is starting: no delivered version is claimed set up until one is."""
+        with self.lock, self._immediate():
+            self.db.execute('DELETE FROM project_server_setups WHERE project_id=?', (project,))
+
+    def server_setup(self, project: str) -> dict | None:
+        """The delivered version whose server was last set up in the project's agent container, or None."""
+        with self.lock:
+            row = self.db.execute('SELECT version_code, app_url, set_up FROM project_server_setups WHERE project_id=?',
+                                  (project,)).fetchone()
+        return None if row is None else {'versionCode': row[0], 'appUrl': row[1], 'setUpAt': row[2]}
+
+    def record_server_setup(self, project: str, version_code: int, app_url: str, at: float) -> None:
+        """The delivered ``version_code``'s server answered its health check at ``app_url``'s container at ``at``."""
+        _check_endpoint(app_url, 'an agent app URL')
+        with self.lock, self._immediate():
+            if self.db.execute('SELECT 1 FROM versions WHERE project_id=? AND version_code=?',
+                               (project, version_code)).fetchone() is None:
+                raise LedgerError('that version was not delivered')
+            self.db.execute('INSERT OR REPLACE INTO project_server_setups VALUES (?,?,?,?)',
+                            (project, version_code, app_url, at))
+
     def _baked_elsewhere(self, project: str, url: str) -> bool:
         """Whether another project's native host endpoint or agent container URL is ``url``: either one can be what
         that project's builds bake, so no two projects may hold the same server across the two records."""
@@ -744,9 +772,16 @@ class Ledger:
                                's.project_id=v.project_id AND s.version_code=v.version_code WHERE v.project_id=? '
                                'ORDER BY v.version_code', (project,)).fetchall()
         servers = server_summary.summaries([(r[0], r[10] is not None, r[9]) for r in rows])
+        setup = self.db.execute('SELECT version_code, app_url, set_up FROM project_server_setups WHERE project_id=?',
+                                (project,)).fetchone()
+        # §7.7a: `hosting` beside `server`, only on the version whose server is the one set up (setUpAt in unix ms);
+        # beside, not inside, so phones that read `server` with its exact keys read it unchanged.
+        hosting = {} if setup is None or setup[0] not in servers else {
+            setup[0]: {'state': 'set_up', 'appUrl': setup[1], 'setUpAt': int(setup[2] * 1000)}}
         return [{'versionCode': r[0], 'versionName': r[1], 'createdAt': r[2], 'jobId': r[3], 'sourceRevision': r[4],
                  'apk': {'sha256': r[5], 'size': r[6]}, 'notes': r[7], 'apiReport': wire_summary(r[8])}
-                | ({'server': servers[r[0]]} if r[0] in servers else {}) for r in rows]
+                | ({'server': servers[r[0]]} if r[0] in servers else {})
+                | ({'hosting': hosting[r[0]]} if r[0] in hosting else {}) for r in rows]
 
     def projects(self) -> list[dict]:
         with self.lock:
