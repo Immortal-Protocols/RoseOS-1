@@ -1476,6 +1476,114 @@ test, and no model was called.
    35.0.0 and JDK 21 with recorded hashes), or a separate builder is
    authorized. A separate builder is a provisioning decision; no new paid
    infrastructure is assumed.
+   **Qualifying a Linux host for the server build.**
+   `python -m rose.app_builder.qualify --config builder.json` checks a
+   candidate host with the builder's own code, and names what's missing; it
+   never weakens anything. It checks, in order:
+   1. the config, which must set `clientServer`;
+   2. Linux x86-64, as a user other than root;
+   3. the facility checks the server runs at start;
+   4. a confinement probe through the configured bubblewrap, which must find
+      no network, `/etc` and home hidden, a read-only folder read-only and
+      its job folder writable;
+   5. one throwaway client-server job through the real `Builder`, which must
+      produce a static `x86_64-unknown-linux-musl` server whose manifest
+      `server_manifest.check` accepts.
+
+   Inputs the config's `clientServer` needs:
+   - **`rustToolchain`:** an unpacked toolchain tree, not rustup's proxy,
+     with `bin/cargo`, `bin/rustc` and the musl target's
+     `lib/rustlib/x86_64-unknown-linux-musl/lib`, and no links. Its version
+     is not yet pinned.
+   - **`rustToolchainSha256`:** `toolchain_digest(tree)`, supplied by the
+     owner.
+   - **`bubblewrap`:** non-setuid, supporting `--disable-userns`, on a
+     kernel that allows unprivileged user and network namespaces, including
+     loopback setup.
+   - **A musl C compiler** (`musl-gcc`) under `/usr/bin`, because `rusqlite`
+     builds its bundled SQLite.
+   - **`crateStore`:** `index.json` plus `<sha256>.crate` files for the 51
+     registry crates in `rose-app-runtime-signin/Cargo.lock`.
+   - **`runtimeRoot`:** `rose-app-runtime`, `rose-app-runtime-signin` and
+     `rose-signin` at the pinned sign-in revision.
+
+   **Preparation recipe.** Each step is marked by what this session actually
+   ran on 2026-11-17, in a disposable Linux x86-64 container.
+
+   1. **Rust toolchain tree. VERIFIED.**
+      - Fetch the official standalone archives and check them against their
+        published `.sha256` files:
+        `https://static.rust-lang.org/dist/rust-1.97.0-x86_64-unknown-linux-gnu.tar.xz`
+        and
+        `…/rust-std-1.97.0-x86_64-unknown-linux-musl.tar.xz`.
+      - Unpack both, then install into the tree's final, canonical path, not
+        inside a home directory:
+        `<rust-1.97.0>/install.sh --prefix=<TREE>
+        --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
+        --disable-ldconfig`, then
+        `<rust-std-1.97.0-x86_64-unknown-linux-musl>/install.sh
+        --prefix=<TREE> --disable-ldconfig`.
+      - The result was 812 MB, with no links and no setuid or setgid file.
+        `PinnedRustTools.available()` accepted it.
+      - 1.97.0 is the version this run used. Choosing the pin is the owner's
+        decision.
+   2. **Digest. VERIFIED.** `python -m rose.app_builder.prepare digest
+      <TREE>` gives `rustToolchainSha256`.
+      - The installer writes `<TREE>` into `lib/rustlib/install.log` and the
+        `manifest-*` files, so the digest belongs to that path.
+      - Install at the final path and digest it there; never copy the tree.
+      - At this run's path the digest was `299bae99…6fbf`, so another path
+        gives another digest.
+   3. **Crate store. VERIFIED.**
+      - Fetch the crates into a dedicated download cache:
+        `CARGO_HOME=<dedicated empty dir> <TREE>/bin/cargo fetch --locked
+        --manifest-path workspace/rose-app-runtime-signin/Cargo.toml`.
+      - Build the store:
+        `python -m rose.app_builder.prepare crate-store --lock
+        workspace/rose-app-runtime-signin/Cargo.lock --from
+        <CARGO_HOME>/registry/cache/<index dir> --out <STORE>`.
+      - It writes the 51 crates, each checked against the lock's own
+        checksum, and reads the store back as the builder will.
+   4. **Runtime root. VERIFIED.** `python -m rose.app_builder.prepare
+      runtime-root --repo <clean checkout> --out <RUNTIME>` copies the three
+      path crates (`Cargo.toml`, `src/`). It refuses uncommitted changes, and
+      refuses a `rose-signin` that differs from its tree at `23062a04`.
+      - The checkout's history must contain
+        `23062a04899f1d5f48a441a7ef00332146ef1072`. A shallow clone is
+        refused with that instruction: use a full clone, or fetch that
+        commit first.
+      - Both writers (`crate-store` and `runtime-root`) are all-or-nothing:
+        they write a sibling folder and move it into place only when it is
+        complete.
+   5. **Facility check. VERIFIED.** Steps 1–4 with `/usr/bin/bwrap` pass
+      `host.client_server_facilities`, the server's own start-up check.
+   6. **musl C compiler. Required. Compiler and fixture evidence only,
+      UNCONFINED.**
+      - Without a musl C compiler, the build fails: "The crate
+        libsqlite3-sys's build script failed".
+      - With Ubuntu `musl-tools` 1.2.4 (`/usr/bin/musl-gcc`), one fixture job
+        through the real `Builder` and real code generator produced a static
+        `x86_64-unknown-linux-musl` server of 3,203,624 bytes, and
+        `server_manifest.check` accepted its manifest.
+      - That run replaced the confinement with a pass-through, because the
+        container runs as root. It shows the inputs and compiler suffice. It
+        is **not** qualification, and **not** proof that anything can be
+        delivered.
+      - No build will be repeated with isolation bypassed.
+   7. **Confinement and `qualify` as a whole. NOT TESTED.**
+      `python -m rose.app_builder.qualify --config builder.json` must run as
+      a non-root user, on a host whose kernel allows bubblewrap's
+      unprivileged user and network namespaces, including loopback setup.
+      No such host has been run. dot-cloud fails the loopback step, and an
+      attempt here as an unprivileged user also failed.
+
+   Verified so far (2026-11-17): no host qualifies yet.
+   - CI builds real servers only for the GNU target, with the runner's
+     unpinned cargo and a test-only pass-through isolation.
+   - Local Worker's dot-cloud Linux host fails the network-namespace
+     loopback setup (`NETLINK_ROUTE … Operation not permitted`), and it has no
+     Rust or `musl-gcc`.
+   - The Mac can't run bubblewrap.
 3. **Build isolation on that host (Server Worker).** Source now runs the
    writer under the `rose_app_build` permission profile (§4A). It denies reads
    outside the project source and the minimal runtime, allows writes only in
