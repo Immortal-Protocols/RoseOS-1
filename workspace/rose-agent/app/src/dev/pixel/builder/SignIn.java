@@ -60,6 +60,7 @@ final class SignIn {
   switch (word == null ? "" : word) {
    case "invalid_account": return "That account name can't be used: up to 128 bytes, with no ':' or control characters.";
    case "not_hosted": return app + "'s backend isn't set up yet." + again;
+   case "invites_unsupported": return app + "'s backend has no sign-in invites. Open " + app + " to sign up.";
    case "open_admission": return app + " lets anyone sign up, so it needs no invite. Open " + app + " and create your account there.";
    case "already_enrolled": return "That account is already set up in " + app + ". Open " + app + " and sign in.";
    case "server_unavailable": return app + "'s backend can't make an invite right now." + (again.isEmpty() ? " Try again later." : again);

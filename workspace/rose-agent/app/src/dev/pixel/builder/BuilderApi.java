@@ -118,7 +118,7 @@ interface BuilderApi {
   }
   @Override public String toString() { return "Invite(" + account + ", <redacted>)"; }
  }
- /** The builder didn't issue an invite: its reason word (invalid_account, not_hosted, open_admission, already_enrolled,
+ /** The builder didn't issue an invite: its reason word (invalid_account, not_hosted, invites_unsupported, already_enrolled,
   * server_unavailable, not_found, or another it may add) and whether asking again may help. */
  final class InviteRefused extends Exception {
   final String word; final boolean retryable;
