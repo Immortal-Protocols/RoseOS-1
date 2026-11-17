@@ -1548,15 +1548,28 @@ test, and no model was called.
       runtime-root --repo <clean checkout> --out <RUNTIME>` copies the three
       path crates (`Cargo.toml`, `src/`). It refuses uncommitted changes, and
       refuses a `rose-signin` that differs from its tree at `23062a04`.
+      - The checkout's history must contain
+        `23062a04899f1d5f48a441a7ef00332146ef1072`. A shallow clone is
+        refused with that instruction: use a full clone, or fetch that
+        commit first.
+      - Both writers (`crate-store` and `runtime-root`) are all-or-nothing:
+        they write a sibling folder and move it into place only when it is
+        complete.
    5. **Facility check. VERIFIED.** Steps 1–4 with `/usr/bin/bwrap` pass
       `host.client_server_facilities`, the server's own start-up check.
-   6. **musl C compiler. VERIFIED, required.** Without one, the build fails:
-      "The crate libsqlite3-sys's build script failed". With Ubuntu
-      `musl-tools` 1.2.4 (`/usr/bin/musl-gcc`), one job through the real
-      `Builder` and real code generator produced a static
-      `x86_64-unknown-linux-musl` server of 3,203,624 bytes, and
-      `server_manifest.check` accepted its manifest. This run used a
-      pass-through isolation, because the container runs as root.
+   6. **musl C compiler. Required. Compiler and fixture evidence only,
+      UNCONFINED.**
+      - Without a musl C compiler, the build fails: "The crate
+        libsqlite3-sys's build script failed".
+      - With Ubuntu `musl-tools` 1.2.4 (`/usr/bin/musl-gcc`), one fixture job
+        through the real `Builder` and real code generator produced a static
+        `x86_64-unknown-linux-musl` server of 3,203,624 bytes, and
+        `server_manifest.check` accepted its manifest.
+      - That run replaced the confinement with a pass-through, because the
+        container runs as root. It shows the inputs and compiler suffice. It
+        is **not** qualification, and **not** proof that anything can be
+        delivered.
+      - No build will be repeated with isolation bypassed.
    7. **Confinement and `qualify` as a whole. NOT TESTED.**
       `python -m rose.app_builder.qualify --config builder.json` must run as
       a non-root user, on a host whose kernel allows bubblewrap's

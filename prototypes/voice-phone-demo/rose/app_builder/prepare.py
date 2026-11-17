@@ -21,8 +21,10 @@ Each prints one JSON line; exit 0 ok, 1 refused, 2 usage.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -68,10 +70,36 @@ def registry_packages(locks: list[Path]) -> dict[str, str]:
     return out
 
 
-def crate_store(locks: list[Path], source: Path, out: Path) -> dict:
-    wanted = registry_packages(locks)
+def _empty_target(out: Path) -> None:
+    """OUT must not exist, or be an empty directory, so nothing already there is mixed in or replaced."""
+    if out.is_symlink() or (out.exists() and not out.is_dir()):
+        raise Refused(f'{out} is not a directory')
     if out.exists() and any(out.iterdir()):
         raise Refused(f'{out} is not empty')
+
+
+@contextlib.contextmanager
+def _staged(out: Path):
+    """Write into a fresh sibling folder, and move it to OUT only once it is complete: a refusal or an I/O error
+    leaves OUT exactly as it was."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(os.path.realpath(out.parent)) / f'.{out.name}.partial-{os.getpid()}'
+    if os.path.lexists(stage):
+        raise Refused(f'{stage} is left from an earlier run; remove it')
+    stage.mkdir(mode=0o755)
+    try:
+        yield stage
+        if out.exists():
+            out.rmdir()  # empty, checked before anything was written
+        stage.rename(out)
+    finally:
+        if os.path.lexists(stage):
+            shutil.rmtree(stage, ignore_errors=True)
+
+
+def crate_store(locks: list[Path], source: Path, out: Path) -> dict:
+    wanted = registry_packages(locks)
+    _empty_target(out)
     files = {}
     for key, checksum in sorted(wanted.items()):
         name, version = key.split('@', 1)
@@ -83,43 +111,54 @@ def crate_store(locks: list[Path], source: Path, out: Path) -> dict:
         if hashlib.sha256(data).hexdigest() != checksum:
             raise Refused(f'{path.name} is not the crate the lock records (SHA-256 differs)')
         files[checksum] = data
-    out.mkdir(parents=True, exist_ok=True)
-    for checksum, data in files.items():
-        (out / f'{checksum}.crate').write_bytes(data)
-    (out / 'index.json').write_text(json.dumps({'schemaVersion': crates.SCHEMA_VERSION, 'crates': wanted},
-                                               indent=1, sort_keys=True) + '\n')
-    loaded = crates.RecordedCrates(out).crates()  # read back exactly as the builder will
-    if len(loaded) != len(wanted):
-        raise Refused('the written store does not read back whole')
+    with _staged(out) as stage:
+        for checksum, data in files.items():
+            (stage / f'{checksum}.crate').write_bytes(data)
+        (stage / 'index.json').write_text(json.dumps({'schemaVersion': crates.SCHEMA_VERSION, 'crates': wanted},
+                                                     indent=1, sort_keys=True) + '\n')
+        try:
+            loaded = crates.RecordedCrates(stage).crates()  # read back exactly as the builder will
+        except ValueError as exc:
+            raise Refused(f'the written store does not read back: {exc}') from None
+        if len(loaded) != len(wanted):
+            raise Refused('the written store does not read back whole')
     return {'crates': len(loaded), 'store': str(out)}
 
 
 def _git(repo: Path, *args: str) -> str:
-    done = subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True, timeout=120)
+    try:
+        done = subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Refused(f'git could not run ({type(exc).__name__})') from None
     if done.returncode != 0:
         raise Refused(f'git {" ".join(args)} failed: {done.stderr.strip()[:200]}')
     return done.stdout.strip()
 
 
 def runtime_root(repo: Path, out: Path) -> dict:
-    if out.exists() and any(out.iterdir()):
-        raise Refused(f'{out} is not empty')
+    _empty_target(out)
     folders = [f'workspace/{name}' for name in PATH_CRATES]
+    for name in PATH_CRATES:  # all present before anything is copied
+        for required in ('Cargo.toml', 'src/lib.rs'):
+            if not (Path(repo) / 'workspace' / name / required).is_file():
+                raise Refused(f'{name} has no {required}')
     if _git(repo, 'status', '--porcelain', '--', *folders):
         raise Refused('the checkout has uncommitted changes in ' + ', '.join(folders))
     pinned = server_manifest.SIGNIN_REVISION
-    if _git(repo, 'rev-parse', f'HEAD:workspace/rose-signin') != _git(repo, 'rev-parse',
-                                                                    f'{pinned}:workspace/rose-signin'):
+    try:
+        pinned_tree = _git(repo, 'rev-parse', f'{pinned}:workspace/rose-signin')
+    except Refused:
+        raise Refused(f'the checkout does not hold the pinned sign-in revision {pinned} (a shallow clone?): use a '
+                      f'full clone, or fetch that commit into it, then run this again') from None
+    if _git(repo, 'rev-parse', 'HEAD:workspace/rose-signin') != pinned_tree:
         raise Refused(f'workspace/rose-signin is not the tree at the pinned sign-in revision {pinned}')
     head = _git(repo, 'rev-parse', 'HEAD')
-    for name in PATH_CRATES:
-        src = Path(repo) / 'workspace' / name
-        for required in ('Cargo.toml', 'src/lib.rs'):
-            if not (src / required).is_file():
-                raise Refused(f'{name} has no {required}')
-        (out / name).mkdir(parents=True)
-        shutil.copy2(src / 'Cargo.toml', out / name / 'Cargo.toml')
-        shutil.copytree(src / 'src', out / name / 'src', symlinks=False)
+    with _staged(out) as stage:
+        for name in PATH_CRATES:
+            src = Path(repo) / 'workspace' / name
+            (stage / name).mkdir()
+            shutil.copy2(src / 'Cargo.toml', stage / name / 'Cargo.toml')
+            shutil.copytree(src / 'src', stage / name / 'src', symlinks=False)
     return {'revision': head, 'signin': pinned, 'crates': list(PATH_CRATES), 'root': str(out)}
 
 
@@ -145,6 +184,9 @@ def main(argv=None, out=sys.stdout) -> int:
             result = runtime_root(args.repo, args.out)
     except Refused as exc:
         print(json.dumps({'status': 'refused', 'message': str(exc)}), file=out)
+        return 1
+    except OSError as exc:  # a disk, permission or path error: nothing was moved into place
+        print(json.dumps({'status': 'refused', 'message': f'{type(exc).__name__}: {exc}'}), file=out)
         return 1
     print(json.dumps({'status': 'ok', **result}, sort_keys=True), file=out)
     return 0

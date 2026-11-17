@@ -74,6 +74,23 @@ class CrateStore(unittest.TestCase):
         with self.assertRaisesRegex(prepare.Refused, 'not empty'):
             prepare.crate_store([self.lock], self.cache, used)
 
+    def test_a_failed_write_leaves_nothing_and_an_out_file_is_refused(self):
+        out = self.tmp / 'store'
+        with mock.patch.object(Path, 'write_text', side_effect=OSError(28, 'No space left on device')), \
+                self.assertRaises(OSError):
+            prepare.crate_store([self.lock], self.cache, out)
+        self.assertFalse(out.exists())
+        self.assertEqual([p.name for p in self.tmp.iterdir() if p.name.startswith('.store')], [])  # no stage left
+        target = self.tmp / 'a-file'
+        target.write_text('x')
+        with self.assertRaisesRegex(prepare.Refused, 'not a directory'):
+            prepare.crate_store([self.lock], self.cache, target)
+        report = io.StringIO()
+        with mock.patch.object(Path, 'write_text', side_effect=OSError(28, 'No space left on device')):
+            code = prepare.main(['crate-store', '--lock', str(self.lock), '--from', str(self.cache), '--out',
+                                 str(self.tmp / 'store2')], report)
+        self.assertEqual((code, json.loads(report.getvalue())['status']), (1, 'refused'))  # one JSON line
+
     def test_locks_that_disagree_or_name_nothing_are_refused(self):
         other = self.tmp / 'Other.lock'
         other.write_text(lock(('aa', '1.0.0', b'different')))
@@ -113,6 +130,20 @@ class RuntimeRoot(unittest.TestCase):
             self.assertTrue((out / name / 'Cargo.toml').is_file())
             self.assertTrue((out / name / 'src/lib.rs').is_file())
             self.assertFalse((out / name / 'tests').exists())
+
+    def test_a_missing_crate_copies_nothing(self):
+        (self.repo / 'workspace/rose-signin/src/lib.rs').unlink()
+        self.git('-c', 'user.email=t@example.org', '-c', 'user.name=t', 'commit', '-qam', 'drop lib')
+        out = self.repo.parent / 'root'
+        with mock.patch.object(server_manifest, 'SIGNIN_REVISION', self.pin), \
+                self.assertRaisesRegex(prepare.Refused, 'rose-signin has no src/lib.rs'):
+            prepare.runtime_root(self.repo, out)
+        self.assertFalse(out.exists())
+
+    def test_a_checkout_without_the_pinned_revision_says_how_to_get_it(self):
+        with mock.patch.object(server_manifest, 'SIGNIN_REVISION', 'f' * 40), \
+                self.assertRaisesRegex(prepare.Refused, 'does not hold the pinned sign-in revision .*full clone'):
+            prepare.runtime_root(self.repo, self.repo.parent / 'root')
 
     def test_uncommitted_or_moved_signin_is_refused(self):
         with mock.patch.object(server_manifest, 'SIGNIN_REVISION', self.pin):

@@ -59,10 +59,24 @@ INTERNET = '<uses-permission android:name="android.permission.INTERNET"/>'
 REQUEST = {'schemaVersion': 1, 'clientRequestId': 'qualify', 'description': 'a notes app (host qualification)'}
 PROBE_TIMEOUT_S = 60
 # Run inside the confinement: every line is what it found. Nothing it tries leaves the job folder.
-PROBE = r'''
-import json, os, socket, sys
+# Shared by the probe and its tests: a folder's visible contents, apart from the empty folders bubblewrap creates
+# on the way to its own mounts (job, shown). A home of '/' is covered by the /etc and /root findings.
+EXPOSED = r'''
+import os
+
+
+def exposed(folder, mounts):
+    folder = folder.rstrip("/")
+    if not folder or not os.path.isdir(folder):
+        return False
+    leads = {m[len(folder) + 1:].split("/")[0] for m in mounts if m.startswith(folder + "/")}
+    return any(entry not in leads for entry in os.listdir(folder))
+'''
+PROBE = EXPOSED + r'''
+import json, socket, sys
 job, shown, home = sys.argv[1], sys.argv[2], sys.argv[3]
 found = {}
+
 # A network namespace has only loopback; any other interface means the build could reach a network.
 names = sorted(name for _, name in socket.if_nameindex())
 found["interfaces"] = "loopback only" if names in ([], ["lo"]) else ",".join(names)
@@ -71,7 +85,7 @@ try:
 except OSError:
     found["network"] = "none"
 found["etc"] = "visible" if os.path.exists("/etc/passwd") else "hidden"
-found["home"] = "visible" if os.path.exists(home) or os.path.isdir("/root") else "hidden"
+found["home"] = "visible" if exposed(home, (job, shown)) or exposed("/root", (job, shown)) else "hidden"
 try:
     open(os.path.join(shown, ".qualify-write"), "w").close(); found["readonly"] = "writable"
 except OSError:

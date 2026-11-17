@@ -92,6 +92,21 @@ class Checks(unittest.TestCase):
             with self.subTest(missing=key), self.assertRaisesRegex(qualify.Failed, f'{key} not checked'):
                 qualify.judge({k: v for k, v in qualify.CONFINED.items() if k != key})
 
+    def test_home_counts_as_visible_only_with_contents_beyond_bubblewraps_mount_points(self):
+        ns = {}
+        exec(qualify.EXPOSED, ns)
+        exposed = ns['exposed']
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / 'home'
+            job = home / 'tmp/probe/job'
+            job.mkdir(parents=True)  # what bwrap creates on the way to a mount under home: only that path
+            self.assertFalse(exposed(str(home), (str(job), str(home / 'tmp/probe/shown'))))
+            self.assertFalse(exposed('/', ()))  # a home of '/' is the /etc and /root findings' to judge
+            self.assertFalse(exposed(str(Path(tmp) / 'absent'), ()))
+            (home / 'secret').write_text('x')
+            self.assertTrue(exposed(str(home), (str(job),)))
+            self.assertTrue(exposed(str(home), ()))
+
     def test_a_refused_or_unsupported_confinement_names_the_cause(self):
         with self.assertRaisesRegex(qualify.Failed, 'Operation not permitted'):
             qualify.check_confinement({'server_isolation': Refusing()})
