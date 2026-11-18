@@ -173,7 +173,8 @@ object BaselineControls : Controls {
         val pressed by interaction.collectIsPressedAsState()
         val (fill, content, edge) = when (p.kind) {
             ButtonKind.Primary -> Triple(c.accent, c.onAccent, null)
-            ButtonKind.Secondary -> Triple(c.surfaceVariant, c.onSurfaceVariant, null)
+            // Outlined, so it stays visible on any surface, an Inset panel's surfaceVariant included.
+            ButtonKind.Secondary -> Triple(c.surface, c.onSurface, c.outline)
             ButtonKind.Quiet -> Triple(Color.Transparent, c.accent, null)
             ButtonKind.Danger -> Triple(Color.Transparent, c.danger, c.danger)
         }

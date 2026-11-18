@@ -149,6 +149,7 @@ private object PaperControls : Controls {
                 .clickable(interaction, indication = null, enabled = p.enabled, role = Role.Button, onClick = p.onClick)
                 .alpha(if (p.enabled) 1f else 0.4f),
             contentAlignment = Alignment.Center,
+            propagateMinConstraints = true, // the drawn button takes the size the caller asked for (e.g. full width)
         ) {
             Row(
                 Modifier.offset(x = 3.dp - lift, y = 3.dp - lift)
