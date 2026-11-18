@@ -57,15 +57,6 @@ class Command:
 
 
 @dataclass(frozen=True)
-class ClientServerConfig:
-    rust_toolchain: Path
-    rust_toolchain_sha256: str
-    bubblewrap: Path
-    crate_store: Path
-    runtime_root: Path
-
-
-@dataclass(frozen=True)
 class BuilderConfig:
     """The builder alone, served by the Rose server's own signed listener (``rose.app --app-builder``)."""
     root: Path
@@ -77,7 +68,6 @@ class BuilderConfig:
     backup: Command | None = None
     require_key_backup: bool = True
     library_store: Path | None = None
-    client_server: ClientServerConfig | None = None
     agent_host: object | None = None  # app_host.AgentHostConfig (§7.7a)
 
 
@@ -97,7 +87,6 @@ class HostConfig:
     backup: Command | None = None
     require_key_backup: bool = True
     library_store: Path | None = None
-    client_server: ClientServerConfig | None = None
     agent_host: object | None = None
 
 
@@ -155,6 +144,8 @@ def _builder_fields(data: dict) -> dict:
     require_key_backup = data.get('requireKeyBackup', True)
     if type(require_key_backup) is not bool:
         raise ConfigError('requireKeyBackup must be true or false')
+    # Kept as an inert config key so an existing server can start and preserve its ledger.
+    # No legacy paths are opened, checked or executed. Remove clientServer after migration.
     return dict(
         root=_path(data['root'], 'root'), sdk=_path(data['sdk'], 'sdk'),
         java_home=None if data.get('javaHome') is None else _path(data['javaHome'], 'javaHome'),
@@ -162,8 +153,7 @@ def _builder_fields(data: dict) -> dict:
         writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
         require_key_backup=require_key_backup,
         library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'),
-        client_server=_client_server_config(data.get('clientServer')),
-        agent_host=_agent_host_config(data.get('agentHost'), data.get('clientServer')))
+        agent_host=_agent_host_config(data.get('agentHost')))
 
 
 def parse_builder_config(data) -> BuilderConfig:
@@ -200,10 +190,8 @@ def separate(a: Path, b: Path) -> bool:
     return not (a == b or a in b.parents or b in a.parents)
 
 
-def _agent_host_config(value, client_server):
-    """``agentHost`` (§7.7a): {chariot, home, agents[], generateKeyring?, port?}. It needs no ``clientServer``: the
-    building agent sets an app's backend up in its own agent container (client-backend-v1), and the builder builds no
-    server; with ``clientServer`` too, builder-built (client-server-v1) servers are set up there as well."""
+def _agent_host_config(value):
+    """The existing Chariot agent connection; the building agent chooses and builds its backend there."""
     if value is None:
         return None
     from .app_host import AGENT_NAME, APP_PORT, RESERVED_PORTS, AgentHostConfig
@@ -222,74 +210,6 @@ def _agent_host_config(value, client_server):
         raise ConfigError('agentHost.port must be an unprivileged port other than 8088 and 42617')
     return AgentHostConfig(_path(value['chariot'], 'agentHost.chariot'), _path(value['home'], 'agentHost.home'),
                            tuple(agents), generate, port)
-
-
-def _client_server_config(value) -> ClientServerConfig | None:
-    if value is None:
-        return None
-    keys = {'rustToolchain', 'rustToolchainSha256', 'bubblewrap', 'crateStore', 'runtimeRoot'}
-    if not isinstance(value, dict) or set(value) != keys:
-        raise ConfigError('clientServer must contain rustToolchain, rustToolchainSha256, bubblewrap, crateStore '
-                          'and runtimeRoot')
-    digest = value['rustToolchainSha256']
-    if not isinstance(digest, str) or not dependencies.SHA256.fullmatch(digest):
-        raise ConfigError('clientServer.rustToolchainSha256 must be an owner-supplied lowercase SHA-256')
-    return ClientServerConfig(
-        _path(value['rustToolchain'], 'clientServer.rustToolchain'), digest,
-        _path(value['bubblewrap'], 'clientServer.bubblewrap'),
-        _path(value['crateStore'], 'clientServer.crateStore'),
-        _path(value['runtimeRoot'], 'clientServer.runtimeRoot'))
-
-
-def _facility_path(path: Path, name: str, *, directory: bool = True) -> Path:
-    """Owner-supplied facilities use the canonical absolute paths isolation preserves."""
-    try:
-        if (not path.is_absolute() or path.resolve(strict=True) != path or
-                not (path.is_dir() if directory else path.is_file())):
-            raise ValueError
-    except (OSError, ValueError, RuntimeError):
-        raise ConfigError(f'clientServer.{name} must be an existing canonical absolute '
-                          + ('directory' if directory else 'file')) from None
-    return path
-
-
-def client_server_facilities(config: ClientServerConfig | None, timeout_s: float) -> dict:
-    """Compose existing Level 2 inputs, without executing tools or supplying any defaults/pins.
-
-    Full crate digest/archive/manifest/dependency validation remains the server build's job. The host checks
-    configured facilities before constructing a writer or listener; it never silently drops a broken opt-in.
-    """
-    if config is None:
-        return {}
-    from . import codegen, crates, server_build
-    from .providers.host import BubblewrapIsolation, PinnedRustTools
-
-    rust = _facility_path(config.rust_toolchain, 'rustToolchain')
-    tools = PinnedRustTools(rust, expected_sha256=config.rust_toolchain_sha256, timeout_s=timeout_s)
-    if missing := tools.available():
-        raise ConfigError('clientServer.rustToolchain: ' + missing)
-    bwrap = _facility_path(config.bubblewrap, 'bubblewrap', directory=False)
-    if not os.access(bwrap, os.X_OK):
-        raise ConfigError('clientServer.bubblewrap must be executable')
-    store = _facility_path(config.crate_store, 'crateStore')
-    _facility_path(store / 'index.json', 'crateStore/index.json', directory=False)
-    source = crates.RecordedCrates(store)
-    try:
-        catalog = source.crates()
-    except (OSError, ValueError, RecursionError):
-        raise ConfigError('clientServer.crateStore must contain a readable recorded crate index') from None
-    for crate in catalog:
-        _facility_path(crate.path, 'crateStore/' + crate.path.name, directory=False)
-    root = _facility_path(config.runtime_root, 'runtimeRoot')
-    paths = {}
-    for name in (*server_build.BUILDER_CRATES, 'rose-signin'):
-        folder = _facility_path(root / name, 'runtimeRoot/' + name)
-        _facility_path(folder / 'Cargo.toml', 'runtimeRoot/' + name + '/Cargo.toml', directory=False)
-        _facility_path(folder / 'src/lib.rs', 'runtimeRoot/' + name + '/src/lib.rs', directory=False)
-        paths[name] = folder
-    return dict(codegen=codegen, rust_tools=tools, server_isolation=BubblewrapIsolation(bwrap), crate_source=source,
-                server_crates={name: paths[name] for name in server_build.BUILDER_CRATES},
-                server_crate_deps={'rose-signin': paths['rose-signin']})
 
 
 def _read(path: Path):
@@ -435,7 +355,7 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
     ``private`` (the standalone host's pairing directory) are then created 0700, refusing a symbolic link, and the
     root must be separate from each of them and from ``apart_from`` (the Rose server's own configuration)."""
     resolver = library_store(config.library_store)
-    level2 = client_server_facilities(config.client_server, config.build_timeout_s)
+    client_codegen = None
     for other in apart_from:
         if not separate(config.root.resolve(), Path(other).resolve()):
             raise ConfigError("the builder root must be separate from the server's own configuration")
@@ -452,7 +372,6 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
             from .generator import CodexGenerator
             generate = CodexGenerator(timeout_s=config.writer.timeout_s, command=list(config.writer.argv),
                                       libraries=resolver.available if resolver is not None else None,
-                                      client_server=config.client_server is not None,
                                       backend=config.agent_host is not None)
         else:
             generate = no_writer
@@ -466,10 +385,10 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
         from . import codegen
         from .app_host import AgentHosting
         hosting = AgentHosting(config.agent_host, ledger)
-        level2.setdefault('codegen', codegen)  # the API client an agent-built backend's app is built with
+        client_codegen = codegen  # the API client an agent-built backend's app is built with
     return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
                    require_key_backup=config.require_key_backup,
-                   server_url=ledger.backend_endpoint, hosting=hosting, **level2)
+                   server_url=ledger.backend_endpoint, hosting=hosting, codegen=client_codegen)
 
 
 def build_host(config: HostConfig, generate=None, backup=None) -> Host:

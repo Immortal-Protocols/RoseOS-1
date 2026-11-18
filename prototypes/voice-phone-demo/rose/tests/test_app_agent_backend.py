@@ -298,7 +298,7 @@ class InTheJob(unittest.TestCase):
 
     def job(self, fail=None, uses_tool=True):
         from rose.app_builder import codegen
-        from rose.tests.test_app_level2_pipeline import Base
+        from rose.tests.app_backend_fixture import Base
         base = Base('run_job')
         base.setUp()
         self.addCleanup(base.doCleanups)
@@ -325,6 +325,32 @@ class InTheJob(unittest.TestCase):
         out = b.invite('d', project, {'schemaVersion': 1, 'account': 'me'})
         self.assertEqual(out['invite'], TOKEN)
         self.assertEqual(b.hosting.calls[-1], ('invite', project, release, 'me'))
+        from rose.tests.test_app_builder_one_server import shape
+        from rose.tests.test_app_host_agent import HOSTING_WIRE
+        recorded = json.loads(HOSTING_WIRE.read_text())
+        self.assertEqual(shape(version['hosting']), shape(recorded['version']['hosting']))
+        self.assertEqual(shape(version['server']), shape(recorded['version']['server']))
+        self.assertEqual(shape({'schemaVersion': 1, **out}), shape(recorded['invite']))
+        self.assertNotIn(TOKEN, json.dumps(b.ledger.projects()))
+
+    def test_cancel_after_switch_commits_the_release_and_client_together(self):
+        original = L.Ledger.deliver
+        def cancelled(ledger, job, *args, **kwargs):
+            ledger.cancel(job)
+            return original(ledger, job, *args, **kwargs)
+        with mock.patch.object(L.Ledger, 'deliver', cancelled):
+            b, project, job = self.job()
+        self.assertEqual(job['state'], 'ready', job)
+        self.assertFalse(any(c[0] == 'revert_release' for c in b.hosting.calls))
+
+    def test_failed_delivery_reverts_the_switched_release(self):
+        with mock.patch.object(L.Ledger, 'deliver', side_effect=L.LedgerError('fixture failure')):
+            b, project, job = self.job()
+        self.assertEqual(job['state'], 'failed', job)
+        self.assertEqual(b.ledger.versions(project), [])
+        self.assertEqual(b.hosting.calls[-1][0], 'revert_release')
+        self.assertEqual(b.hosting.calls[-1][1:3], (project, 1))
+        self.assertIsNone(b.ledger.server_setup(project))
 
     def test_a_failed_switch_delivers_nothing(self):
         b, project, job = self.job(fail='never healthy')
@@ -334,7 +360,7 @@ class InTheJob(unittest.TestCase):
 
     def test_without_an_agent_container_no_backend_app_is_built(self):
         from rose.app_builder import codegen
-        from rose.tests.test_app_level2_pipeline import Base
+        from rose.tests.app_backend_fixture import Base
         base = Base('run_job')
         base.setUp()
         self.addCleanup(base.doCleanups)

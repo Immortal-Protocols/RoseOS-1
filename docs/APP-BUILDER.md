@@ -1,5 +1,15 @@
 # App builder (Project 1) and workspace composer routing (Project 2)
 
+> **Backend policy, 2026-11-18:** New backend builds use only the existing
+> Chariot agent container (`client-backend-v1`). The builder-managed Rust
+> compiler, prescribed Cargo files, crate store and host qualification are
+> retired. `clientServer` is an inert compatibility key. See
+> [backend migration and runtime handoff](APP-BACKEND-MIGRATION.md) for the
+> current path, retained records, deployed-usage evidence and legacy revisions.
+> Rust build/provisioning instructions and old proof claims below are historical
+> context, not current run instructions or evidence of zero deployed users.
+
+
 Source of truth for App Core's side of the November 13 "Next round" plan:
 Project 1 Levels 1–2 integration (phone request → existing Rose server/Codex →
 durable build job → signed APK → install → revise → same-identity update), and
@@ -2908,7 +2918,7 @@ the generated server's job, through a versioned API and the stable base URL.
 **The settled architecture (Nathan, 2026-11-17).** The building agent chooses
 the backend's stack and installs and builds it itself, in the app's own Chariot
 agent container:
-- It is language-agnostic. Python is supported and Rust is recommended where
+- It is language-agnostic. Python is supported and Rust is an author choice where
   it fits; neither is required.
 - There is no extra VM, no imposed per-app toolchain, and no local Rust or
   bubblewrap build of the backend.
@@ -2984,11 +2994,12 @@ agent container:
     release's `invite`.
   - A failed switch delivers nothing, and an undelivered release is reverted.
 - **Turning it on:** `agentHost` alone. `clientServer` (the builder-built Rust
-  path below) is optional and no longer needed.
+  path below) is retired and ignored.
 - **Tests:** `test_app_agent_backend`, plus the node app-build tests.
 
-The builder-built path (`client-server-v1`) and the remaining text of this
-section are kept for apps already on it.
+The remaining builder-built text in this section is historical compatibility
+context. Existing apps migrate as described in APP-BACKEND-MIGRATION.md;
+new Rust binary builds are no longer offered.
 
 Nathan's direction (2026-11-16) puts each generated app's backend in the
 existing Chariot agent container. Rose's existing Codex obtains it with the
