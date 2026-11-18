@@ -351,24 +351,33 @@ def build(tree: Path, work: Path, package: str, version_code: int, version_name:
     argv = [str(dist / 'bin/gradle'), '--offline', '--no-daemon', '--console=plain', '--init-script',
             str(box / INIT), '-p', str(project), TASK]
     redact = (project, work, jdk, dist, sdk, cache)
-    log = _run(gradle, tools, argv, env, box, (jdk, dist, sdk, cache), redact, cancelled)
     own, verify_home = work / 'gradle-output.apk', work / 'verify-home'
-    for path in (own, work / 'unsigned.apk', work / 'dex', verify_home):
-        _discard(path)
-    verify_home.mkdir(mode=0o700)
-    _refuse_signed(own, _take_output(box, own, log))
+    try:
+        log = _run(gradle, tools, argv, env, box, (jdk, dist, sdk, cache), redact, cancelled)
+        for path in (own, work / 'unsigned.apk', work / 'dex', verify_home):
+            _discard(path)
+        verify_home.mkdir(mode=0o700)
+        name = _take_output(box, own, log)
+    finally:  # the job's Gradle home, intermediates and outputs: hundreds of MB that nothing reads again
+        shutil.rmtree(box, ignore_errors=True)
+    _refuse_signed(own, name)
     unsigned = _align(own, work, gradle.bt, tools, verify_home, cancelled, redact)
     try:
         badging = toolchain.verify_apk(unsigned, package, version_code, version_name, tools, work, verify_home,
                                        cancelled, redact, bt=gradle.bt)
     except StepFailed as failed:
-        if failed.category != 'internal':
+        if failed.category == 'internal':
+            failed = StepFailed('compile', 'The app\'s build files change its package, versionCode or versionName; '
+                                'the builder sets those, so leave them to it.')
+        if failed.category != 'compile':
             raise
-        raise StepFailed('compile', 'The app\'s build files change its package, versionCode or versionName; the '
-                         'builder sets those, so leave them to it.') from None
-    _extract_dex(unsigned, work / 'dex')
+        # The writer's own build files decide these in a Gradle project, so the refusal goes back to it (a repair).
+        raise StepFailed('compile', failed.summary, log=failed.summary) from None
     min_sdk = toolchain.sdk_levels(badging)[0]
-    report = toolchain.api_report(work, package, tools, verify_home, cancelled, redact, min_sdk=min_sdk)
+    # Advisory only, and not for a Gradle build: its dex is mostly AndroidX and Kotlin (dexdump of a Compose app is
+    # hundreds of MB of text), so the report would be about libraries, slowly. The older layout keeps it.
+    from .apilevel import unavailable
+    report = unavailable('not made for Gradle builds (their dex is mostly AndroidX and Kotlin libraries)', min_sdk)
     toolchain._private(work / 'api-report.json', json.dumps(report, sort_keys=True))
     from .apilevel import summary
     return unsigned, '\n'.join(x for x in (log, summary(report)) if x)
@@ -625,13 +634,3 @@ def _align(apk: Path, work: Path, bt: Path, tools: toolchain.Tools, home: Path, 
             raise StepFailed('compile', 'The app\'s APK could not be aligned.', log=again.log[-MAX_LOG:]) from None
     return unsigned
 
-
-def _extract_dex(apk: Path, target: Path) -> None:
-    """The APK's top-level classes*.dex into ``target``, for the API level report."""
-    target.mkdir(mode=0o700)
-    with zipfile.ZipFile(apk) as z:
-        for name in z.namelist():
-            if re.fullmatch(r'classes\d*\.dex', name):
-                fd = os.open(target / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                with z.open(name) as src, os.fdopen(fd, 'wb') as dst:
-                    shutil.copyfileobj(src, dst)

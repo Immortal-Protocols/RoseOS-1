@@ -405,6 +405,9 @@ def verify_apk(apk: Path, package: str, version_code: int, version_name: str, to
                          'a developer connection, so it is not delivered.')
     if re.search(r'^\s*E: \S*:', tree, re.M):  # an element form the identity checks above do not know
         raise StepFailed('compile', 'Manifest elements may not use a namespace.')
+    unknown = sorted(set(manifest_children(tree)) - set(template.MANIFEST_CHILDREN) - {'uses-sdk'})
+    if unknown:  # what a merged manifest may hold at the top: the source rule (template.py), on the binary
+        raise StepFailed('compile', f'The app\'s manifest may not contain <{unknown[0]}>.')
     problem = declared_permission_problem(tree, package)
     if problem:
         raise StepFailed('compile', problem)
@@ -416,6 +419,23 @@ def verify_apk(apk: Path, package: str, version_code: int, version_name: str, to
         raise StepFailed('compile', f'The app\'s targetSdk must be a released API level of at least '
                          f'{gradle_stack.MIN_TARGET_SDK}; current Android does not install older targets.')
     return badging
+
+
+def manifest_children(tree: str) -> list[str]:
+    """The element names directly inside <manifest> in ``aapt dump xmltree``: one indentation step below it."""
+    lines = tree.splitlines()
+    top = next((i for i, line in enumerate(lines) if re.match(r'\s*E: manifest\b', line)), None)
+    if top is None:
+        return []
+    depth = len(lines[top]) - len(lines[top].lstrip())
+    names = []
+    for line in lines[top + 1:]:
+        found = re.match(r'(\s*)E: (\S+)', line)
+        if found and len(found.group(1)) <= depth:
+            break
+        if found and len(found.group(1)) == depth + 2:
+            names.append(found.group(2))
+    return names
 
 
 def sdk_levels(badging: str) -> tuple[int | None, int | None]:
