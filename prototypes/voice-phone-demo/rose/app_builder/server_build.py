@@ -36,6 +36,7 @@ from pathlib import Path
 
 from . import crates as crate_set
 from . import server_manifest
+from .isolation import BuildFailed, Isolation  # re-exported: their home before rose.app_builder.isolation
 from .toolchain import StepFailed, run
 
 TARGET = 'x86_64-unknown-linux-musl'  # §7.7: a static x86-64 musl ELF
@@ -51,14 +52,6 @@ MAX_ASSET_BYTES = 64 * 1024 * 1024  # all of them together, embedded in the bina
 MAX_COPIED_PATH = 1024  # bytes of a path under server/src or server/assets, so the build's copy always fits
 GENERATED = re.compile(r'rose/(?:[a-z][a-z0-9_]{0,63}/){0,4}[a-z][a-z0-9_]{0,63}\.rs')
 TRIPLE = re.compile(r'[a-z0-9_]+(?:-[a-z0-9_.]+){1,3}')
-
-
-class BuildFailed(StepFailed):
-    """A server build that stopped; ``reason`` is a stable token next to the job's failure category."""
-
-    def __init__(self, category: str, reason: str, summary: str, log: str = '', retryable: bool = False):
-        super().__init__(category, summary, retryable=retryable, log=log)
-        self.reason = reason
 
 
 @dataclass
@@ -90,29 +83,6 @@ class RustTools:
         if not (Path(self.toolchain) / 'lib/rustlib' / self.target / 'lib').is_dir():
             return f'The builder\'s Rust toolchain has no standard library for {self.target}.'
         return None
-
-
-class Isolation:
-    """Runs one build command so that it can write only ``writable``, read only ``readonly`` (and the system's own
-    libraries and linker), and reach no network, with no cargo configuration in any folder above ``writable``. The
-    builder host provides it (docs/APP-BUILDER.md §5, blocker 3).
-
-    The failure contract: a build that fails because of the isolation (it could not start, or the kernel refused a
-    namespace or a mount) is the host's, never the app's. ``command`` raising, or its program missing, stops the
-    build as ``build_isolation_unavailable``; ``failed`` saying a non-zero exit was its own stops it as
-    ``build_isolation_failed``. Either is category ``toolchain``. A failure no one claims and that shows no compiler
-    error in the app's own code is also ``toolchain``: the app's code is blamed only on rustc's own word."""
-
-    def command(self, argv: list[str], env: dict[str, str], *, writable: Path,
-                readonly: tuple[Path, ...]) -> tuple[list[str], dict[str, str]]:
-        """The command and environment to run in place of ``argv`` and ``env``."""
-        raise NotImplementedError
-
-    def failed(self, returncode: int, output: str) -> bool:
-        """Whether a run that exited with ``returncode`` (negative: killed by that signal) and printed ``output``
-        failed in the isolation itself rather than in the command it ran. The provider knows its own messages and
-        exit statuses; the default claims nothing."""
-        return False
 
 
 @dataclass(frozen=True)

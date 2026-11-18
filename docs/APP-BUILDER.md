@@ -86,8 +86,12 @@ directory beside it in `repo.git`), outside
    zipalign) in a job-owned output directory with a scrubbed environment.
    After the build, the binary manifest is checked again for debuggable and
    shared-uid attributes, by attribute id. `versionCode` comes from the project ledger and is injected at
-   packaging. Generated code is compiled, never executed on the host. No
-   generated scripts, Gradle builds or annotation processors run.
+   packaging. In the older flat layout, generated code is compiled, never
+   executed on the host: no generated scripts, Gradle builds or annotation
+   processors run. An ordinary Gradle project (§2.4) does run its own build
+   scripts, so it builds only inside the build isolation, offline, with no view
+   of keys, the ledger or other projects, and its APK is checked the same way
+   afterwards.
 6. **Sign.** `scripts/sign-apk.py` runs outside the generation sandbox with the
    project's key and `--expected-cert-sha256` set to the project's signer, so
    a revision can never change identity.
@@ -464,6 +468,93 @@ a test fail:
 - app fields not known;
 - unlisted members silently dropped, or flooding the findings.
 
+### 2.4 Ordinary Gradle projects (Kotlin, Compose; in source, off unless `gradle` is configured)
+
+An app can be an ordinary Android Gradle project: `settings.gradle.kts` (or
+`.gradle`) at the top and the application module in `app/`
+(`app/build.gradle.kts`, `app/src/main/AndroidManifest.xml`, Kotlin or Java
+under `app/src/main/java` or `kotlin`, `res/`, `assets/`), with Kotlin, AndroidX
+and Jetpack Compose. It goes through the same job, signing, delivery and phone
+install and update as every other app. The phone needs no change.
+
+**Which path builds a snapshot.** `settings.gradle(.kts)` at the top means
+Gradle (`rose.app_builder.gradle`); anything else is the older flat layout and
+builds exactly as before (§2 step 5). When `gradle` is configured, a new app
+starts from a minimal Kotlin + Compose skeleton (`gradle.skeleton`: one
+activity, Material 3, the builder's identity in `app/build.gradle.kts`).
+Templates and themes are Home/App's and are not part of the builder.
+
+**Pinned stack** (`app_builder/gradle_stack.py`, the one place every version
+and digest is named): Gradle 9.9.1, Android Gradle Plugin 9.5.1 (which compiles
+Kotlin itself), Kotlin 2.4.21 with the Compose compiler plugin, Compose BOM
+2026.09.00, compileSdk 37 (`platforms;android-37.0`), build tools 36.0.0 (AGP's
+default), JDK 21 (Temurin), plus a short list of AndroidX and Kotlin libraries
+(activity, core, lifecycle, navigation, DataStore, Media3, coroutines,
+serialization). The writer's turn names all of them, since builds are offline.
+A project may use only those plugins and libraries, from `google()`,
+`mavenCentral()` and `gradlePluginPortal()`. Adding one is a reviewed change to
+`gradle_stack.py` followed by reprovisioning.
+
+**Identity and signing stay the builder's.**
+- The builder's own init script (`gradle.init_script`) sets the application id
+  to the ledger's package and the version code and name to the ledger's
+  version, whatever the build files say. Only the release variant is built.
+- Gradle produces an unsigned APK. An APK the project's build signed itself is
+  refused, never signed over.
+- The project's single universal APK is checked on the binary like every other
+  build (`toolchain.verify_apk`):
+  - package, version code and name, and no splits;
+  - not debuggable or testOnly;
+  - no shared uid, key sets or other identity elements;
+  - permissions only under its own package;
+  - the manifest's top-level elements limited to the allow-list;
+  - minSdk at most 29 and targetSdk at least 24;
+  - 16 KB page alignment.
+- Only then is it signed with the project's own key (`toolchain.sign`), so an
+  update keeps the same package and signer and a higher version code.
+
+**Isolation.** Gradle runs the project's own build scripts, so it never runs
+outside `gradle.isolation` (`app_builder/isolation.py`):
+- **Linux:** `bubblewrap`. The root is empty and read-only, with no network,
+  `/etc`, `/tmp` or home. The pinned JDK, Gradle, SDK and dependency cache are
+  mounted read-only, and the job's build folder is the only writable one.
+- **macOS:** `seatbelt`, which uses `sandbox-exec`. It allows by default, then
+  denies network beyond localhost, every write outside the build folder, reads
+  of the builder root, the home folder, the Rose configuration and the user's
+  temporary folders, and the keychain services.
+- Keys, the ledger, artifacts and other projects are never visible.
+- The APK is copied out of the writable folder before it is checked and signed.
+- The job's Gradle home and build outputs are removed afterwards.
+
+**Errors.** Kotlin, Java, resource and manifest-merger errors, and the build
+files' own errors, are `compile` failures with the extracted diagnostics. They
+go back to the writer as a repair turn (§4A). A plugin or library the cache
+doesn't hold is `dependency`.
+
+**Existing apps keep updating.** An app delivered in the older layout keeps that
+layout and its rules until a revise converts it to a Gradle project. Its package,
+data and signing key stay the same, so the next version updates in place. A
+client-server (builder-built Rust server) app keeps the older layout; that path
+is being retired separately.
+
+**Provisioning (runtime, Local Worker).**
+`python -m rose.app_builder.gradle_prepare stack --out DIR` downloads the pinned
+archives and checks their SHA-256. It installs the SDK packages, each with its
+`package.xml`, seeds the read-only dependency cache by building a builder-owned
+catalog project online, and prints the builder config `gradle` object:
+`{jdk, distribution, sdk, dependencyCache, isolation, bubblewrap?,
+buildTimeoutS?}`. `scripts/setup-android-gradle.sh` is the CI wrapper.
+
+**Verified here:** the Gradle path builds, signs and updates on Linux under
+bubblewrap, as a non-root user (CI job `gradle` and the container this was
+written in).
+
+**Not verified:**
+- the Seatbelt isolation on the Mac, which needs qualification there;
+- installing on a device or emulator. API 34 and current Android are the
+  validation targets, not a cutoff; the APKs are checked against them on the
+  binary only.
+
 ## 3. Builder API v1 (agreed with Home/App, 2026-11-13)
 
 All requests use the paired device's `rose-auth-v1` signature, under the
@@ -513,10 +604,12 @@ updatedAt, failure?}`
   sets `startedAt` to the time of the retry.
 - **failure:** `{category: toolchain | dependency | compile | test | signing |
   timeout | cancelled | internal, summary, retryable}`.
-  - `dependency`: a library or language the builder can't provide. That
-    covers Kotlin, Gradle, an AAR, a JAR or AAR file in the source, an
-    undeclared or unavailable library, a library that fails its checks, or
-    an import of a missing package.
+  - `dependency`: a library or plugin the builder can't provide. In a Gradle
+    project (§2.4): a plugin or library, or a version of one, that the
+    offline dependency cache doesn't hold, or native code (no NDK). In the
+    older flat layout: Kotlin, Gradle, an AAR, a JAR or AAR file in the
+    source, an undeclared or unavailable library, a library that fails its
+    checks, or an import of a missing package.
   - `compile`: anything else in the generated source.
   - `test`: reserved; no tests run yet.
 - **Concurrency:** a project has at most one queued or running job. Revise and
@@ -732,11 +825,19 @@ Home/App's, and are not implemented here.
 
 ### 3.4 Baseline
 
-minSdk 26, targetSdk 35, framework APIs, plus declared pure-Java JAR libraries
-from the builder's offline library store (**Libraries**, §2). There is no native
-code, so builds are ABI-independent. Anything needing AndroidX, Kotlin, Compose,
-an AAR or a library the store doesn't have fails with category `dependency` and
-an honest summary. It is never silently dropped.
+- **Gradle projects (§2.4):** Kotlin or Java with AndroidX and Jetpack Compose
+  from the pinned stack (`app_builder/gradle_stack.py`): compileSdk 37, the
+  skeleton's minSdk 26 and targetSdk 37. A built APK must have minSdk at most 29
+  (Rose Agent itself needs API 29, so no phone that runs Rose is left out) and
+  targetSdk at least 24. AndroidX's own small native libraries ship for every
+  ABI; there is no NDK, so the app has no native code of its own.
+- **Older flat layout:** minSdk 26, targetSdk 35, framework APIs, plus declared
+  pure-Java JAR libraries from the builder's offline library store
+  (**Libraries**, §2). There is no native code, so builds are ABI-independent.
+  Anything needing AndroidX, Kotlin, Compose or an AAR fails with category
+  `dependency` there; such an app can move to a Gradle project in a revise.
+- Either way, a library or plugin the builder doesn't have fails with category
+  `dependency` and an honest summary. It is never silently dropped.
 
 ### 3.5 Install receipt
 
@@ -782,13 +883,15 @@ refused only for technical reasons:
     and so controlling access to, another project's or another app's
     permissions. It is isolation between projects and puts no limit on what
     the app may request or do;
-  - Java must be in the app's package;
-  - no git metadata, links or special files.
-- **Toolchain facts:** Java at source level 17 against Android's own core
+  - in the older flat layout, Java must be in the app's package; in a Gradle
+    project only the builder's own `<package>.rose` package is reserved;
+  - no git metadata (a Gradle project may keep its `.gitignore`), links or
+    special files; no key files, prebuilt binaries or native code.
+- **Toolchain facts:** a Gradle project builds with the pinned Gradle, AGP,
+  Kotlin and Compose stack, offline, inside the build isolation (§2.4). The
+  older flat layout builds Java at source level 17 against Android's own core
   library (§2.2), the framework and any declared pure-Java JAR libraries the
-  offline store provides. There's no
-  Gradle, Kotlin or native toolchain. Any other library is a `dependency`
-  failure.
+  offline store provides. Any other library is a `dependency` failure.
 - **Isolation:** each project has its own source, git history and signing key.
   The writer runs in its own process group, and the build reads only a
   snapshot.

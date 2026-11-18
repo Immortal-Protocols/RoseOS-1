@@ -187,10 +187,10 @@ class Policy(Trees):
         self.refused(writable=self.root)  # contains the bwrap executable
 
     def test_system_alias_cannot_expose_private_tree(self):
-        from rose.app_builder.providers import host
+        from rose.app_builder import isolation  # BubblewrapIsolation's home (providers.host re-exports it)
         private = self.root / 'private-system-alias'
         private.symlink_to(self.vendor, target_is_directory=True)
-        with mock.patch.object(host, '_RUNTIME', (private,)):
+        with mock.patch.object(isolation, '_RUNTIME', (private,)):
             self.refused(readonly=(self.tools,))
 
     def test_host_loader_cannot_run_code_before_confinement(self):

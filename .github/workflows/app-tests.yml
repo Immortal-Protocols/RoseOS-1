@@ -105,6 +105,7 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/rose-verify.py'
       - 'scripts/setup-android-sdk.sh'
+      - 'scripts/setup-android-gradle.sh'
       - 'scripts/setup-zxing.sh'
       - 'scripts/systemui-component-update.py'
       - 'scripts/tests/test_alpha_apk_diagnostic.py'
@@ -221,6 +222,7 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/rose-verify.py'
       - 'scripts/setup-android-sdk.sh'
+      - 'scripts/setup-android-gradle.sh'
       - 'scripts/setup-zxing.sh'
       - 'scripts/systemui-component-update.py'
       - 'scripts/tests/test_alpha_apk_diagnostic.py'
@@ -305,3 +307,40 @@ jobs:
             skips="$(grep -E " \.\.\. skipped '" <<<"$out" | grep -v "^RAW_TEMPLATE with jinja2 .* skipped 'jinja2 not installed'$" || true)"
             if [[ -n "$skips" ]]; then printf '%s\n' "$skips"; echo "$t skipped cases" >&2; exit 1; fi
           done
+  # Ordinary Gradle projects (docs/APP-BUILDER.md §2.4), in their own job so the offline job's time budget and
+  # its earlier steps don't decide whether they run. The stack is the one gradle_stack.py pins, fetched and
+  # SHA-256-checked by gradle_prepare; the network is used only to provision it. Every Gradle build in the tests
+  # runs inside bubblewrap with no network, as the runner's non-root user, and is signed with throwaway keys.
+  gradle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Tool versions
+        run: |
+          python3 --version
+          java -version
+      - name: Pinned Android SDK and Gradle stack (JDK, Gradle, SDK packages, offline dependency cache)
+        run: |
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="$RUNNER_TEMP/android-sdk" ROSE_GRADLE_STACK="$RUNNER_TEMP/gradle-stack"
+          bash scripts/setup-android-sdk.sh
+          bash scripts/setup-android-gradle.sh
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ROSE_GRADLE_STACK=$ROSE_GRADLE_STACK" >> "$GITHUB_ENV"
+      - name: Build isolation (bubblewrap with unprivileged user namespaces)
+        run: |
+          set -euo pipefail
+          command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
+          # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; bubblewrap needs them. This
+          # changes the disposable runner only.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          /usr/bin/bwrap --unshare-user --unshare-net --ro-bind / / true
+      - name: Ordinary Gradle projects build, sign and update in isolation, offline
+        run: |
+          set -euo pipefail
+          export ROSE_REQUIRE_GRADLE_BUILD=1 ROSE_REQUIRE_APP_BUILD=1 ROSE_TEST_LINUX_ISOLATION=1
+          cd prototypes/voice-phone-demo
+          python3 -m unittest rose.tests.test_app_isolation rose.tests.test_app_gradle rose.tests.test_app_gradle_prepare rose.tests.test_app_gradle_builder rose.tests.test_app_host_provider

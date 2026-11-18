@@ -26,7 +26,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import template
+from . import gradle_stack, template
 
 REPO = Path(__file__).resolve().parents[4]
 SIGN_APK = REPO / 'scripts/sign-apk.py'
@@ -369,23 +369,7 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
             z.write(dex, dex.name)
     unsigned = work / 'unsigned.apk'
     run([tools.bt / 'zipalign', '-f', '4', unaligned, unsigned], work, home, tools, cancelled, 'compile', hidden)
-    badging = run([tools.bt / 'aapt', 'dump', 'badging', unsigned], work, home, tools, cancelled, 'compile', hidden)
-    found = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']*)'(.*)$", badging, re.M)
-    if not found or found.groups()[:3] != (package, str(version_code), version_name) or 'split=' in found.group(4):
-        raise StepFailed('internal', 'The built APK does not carry the identity the builder set.')
-    # Checked again on the built binary, by attribute id, whatever namespace prefix the source used.
-    tree = run([tools.bt / 'aapt', 'dump', 'xmltree', unsigned, 'AndroidManifest.xml'], work, home, tools, cancelled,
-               'compile', hidden)
-    # sharedUserId, debuggable, sharedUserLabel, versionCodeMajor; and identity elements by name.
-    if ('application-debuggable' in badging or re.search(r'\((0x0101000b|0x0101000f|0x01010261|0x01010576|0x0101054c)\)', tree)
-            or re.search(r'E: (key-sets|upgrade-key-set|original-package|adopt-permissions)\b', tree)):
-        raise StepFailed('compile', 'The app tries to set its own identity, debuggability or update keys, '
-                         'which is not allowed.')
-    if re.search(r'^\s*E: \S*:', tree, re.M):  # an element form the identity checks above do not know
-        raise StepFailed('compile', 'Manifest elements may not use a namespace.')
-    problem = declared_permission_problem(tree, package)
-    if problem:
-        raise StepFailed('compile', problem)
+    verify_apk(unsigned, package, version_code, version_name, tools, work, home, cancelled, hidden)
     report = api_report(work, package, tools, home, cancelled, hidden)  # advisory: never fails the build
     _private(work / 'api-report.json', json.dumps(report, sort_keys=True))
     from .apilevel import summary
@@ -393,23 +377,77 @@ def build(source: Path, work: Path, package: str, version_code: int, version_nam
     return unsigned, '\n'.join(x for x in log if x)
 
 
-def api_report(work: Path, package: str, tools: Tools, home: Path, cancelled, hidden=()) -> dict:
+def verify_apk(apk: Path, package: str, version_code: int, version_name: str, tools: Tools, work: Path, home: Path,
+               cancelled, hidden=(), bt: Path | None = None) -> str:
+    """The identity checks on a built, unsigned APK's binary, whatever built it (this module's own steps or an
+    ordinary Gradle project's, rose.app_builder.gradle): the badging carries exactly this package, versionCode and
+    versionName and no split; the manifest, read by attribute id whatever namespace prefix the source used, sets no
+    shared user id, debuggability, test-only flag, versionCodeMajor or update keys and no namespaced element; every
+    declared permission is the app's own; and the SDK levels install on every phone Rose runs on
+    (rose.app_builder.gradle_stack.MAX_MIN_SDK, MIN_TARGET_SDK). ``bt`` is the build tools whose aapt reads it (the
+    legacy ones by default). Returns the badging text; raises StepFailed (``internal`` for an identity the builder
+    did not set, else ``compile``, with no tool log: these are refusals, not build errors)."""
+    bt = Path(bt) if bt is not None else tools.bt
+    badging = run([bt / 'aapt', 'dump', 'badging', apk], work, home, tools, cancelled, 'compile', hidden)
+    found = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']*)'(.*)$", badging, re.M)
+    if not found or found.groups()[:3] != (package, str(version_code), version_name) or 'split=' in found.group(4):
+        raise StepFailed('internal', 'The built APK does not carry the identity the builder set.')
+    # Checked again on the built binary, by attribute id, whatever namespace prefix the source used.
+    tree = run([bt / 'aapt', 'dump', 'xmltree', apk, 'AndroidManifest.xml'], work, home, tools, cancelled,
+               'compile', hidden)
+    # sharedUserId, debuggable, sharedUserLabel, versionCodeMajor; and identity elements by name.
+    if ('application-debuggable' in badging or re.search(r'\((0x0101000b|0x0101000f|0x01010261|0x01010576|0x0101054c)\)', tree)
+            or re.search(r'E: (key-sets|upgrade-key-set|original-package|adopt-permissions)\b', tree)):
+        raise StepFailed('compile', 'The app tries to set its own identity, debuggability or update keys, '
+                         'which is not allowed.')
+    if re.search(r'\(0x01010272\)', tree):  # android:testOnly: installable only over a developer connection
+        raise StepFailed('compile', 'The app is marked test-only (android:testOnly), which phones install only from '
+                         'a developer connection, so it is not delivered.')
+    if re.search(r'^\s*E: \S*:', tree, re.M):  # an element form the identity checks above do not know
+        raise StepFailed('compile', 'Manifest elements may not use a namespace.')
+    problem = declared_permission_problem(tree, package)
+    if problem:
+        raise StepFailed('compile', problem)
+    min_sdk, target_sdk = sdk_levels(badging)
+    if min_sdk is None or min_sdk > gradle_stack.MAX_MIN_SDK:
+        raise StepFailed('compile', f'The app\'s minSdk must be a released API level of at most '
+                         f'{gradle_stack.MAX_MIN_SDK}, so it installs on every phone Rose runs on.')
+    if target_sdk is None or target_sdk < gradle_stack.MIN_TARGET_SDK:
+        raise StepFailed('compile', f'The app\'s targetSdk must be a released API level of at least '
+                         f'{gradle_stack.MIN_TARGET_SDK}; current Android does not install older targets.')
+    return badging
+
+
+def sdk_levels(badging: str) -> tuple[int | None, int | None]:
+    """minSdk and targetSdk from ``aapt dump badging``, as Android reads them: no minSdk is 1, no targetSdk is the
+    minSdk, and a preview codename (not a number) is None."""
+    def level(name, default):
+        found = re.search(rf"^{name}:'([^']*)'", badging, re.M)
+        if not found:
+            return default
+        return int(found.group(1)) if re.fullmatch(r'[1-9]\d{0,3}', found.group(1)) else None
+    min_sdk = level('sdkVersion', 1)
+    return min_sdk, level('targetSdkVersion', min_sdk)
+
+
+def api_report(work: Path, package: str, tools: Tools, home: Path, cancelled, hidden=(),
+               min_sdk: int = template.MIN_SDK) -> dict:
     """The advisory API level report of the built dex (rose.app_builder.apilevel). Whatever goes wrong, it says
     ``unavailable`` and the build goes on; only a cancel stops it."""
     from . import apilevel
     database, dexdump = tools.sdk / apilevel.DATABASE, tools.bt / 'dexdump'
     if not database.is_file() or not dexdump.exists():
-        return apilevel.unavailable('the pinned API database or dexdump is missing', template.MIN_SDK)
+        return apilevel.unavailable('the pinned API database or dexdump is missing', min_sdk)
     try:
         dumps = [run([dexdump, '-d', dex], work, home, tools, cancelled, 'internal', hidden)
                  for dex in sorted((work / 'dex').glob('classes*.dex'))]
-        return apilevel.analyse(dumps, apilevel.database(database), package, template.MIN_SDK)
+        return apilevel.analyse(dumps, apilevel.database(database), package, min_sdk)
     except StepFailed as failed:
         if failed.category == 'cancelled':
             raise
-        return apilevel.unavailable(f'dexdump did not finish ({failed.category})', template.MIN_SDK)
+        return apilevel.unavailable(f'dexdump did not finish ({failed.category})', min_sdk)
     except Exception as error:
-        return apilevel.unavailable(f'the analysis stopped ({type(error).__name__})', template.MIN_SDK)
+        return apilevel.unavailable(f'the analysis stopped ({type(error).__name__})', min_sdk)
 
 
 def declared_permission_problem(tree: str, package: str) -> str | None:
