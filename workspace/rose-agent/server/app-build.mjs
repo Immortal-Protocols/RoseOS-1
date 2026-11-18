@@ -245,7 +245,7 @@ export function appBuildToolResult(result) {
 export const APP_BUILD_PROFILE = 'rose_app_build';
 export const appBuildProfile = Object.freeze({
  extends:':workspace',
- filesystem:Object.freeze({':root':'deny',':minimal':'read',':tmpdir':'deny',':slash_tmp':'deny',
+ filesystem:Object.freeze({':root':'deny',':minimal':'read',':tmpdir':'deny',':slash_tmp':'deny','/private/var/tmp':'deny',
   ':workspace_roots':Object.freeze({'.':'write'})}),
  network:Object.freeze({enabled:false}),
 });

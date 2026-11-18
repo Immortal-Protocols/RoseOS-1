@@ -6,11 +6,12 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from rose.life import Diary
 from rose.life_world import WorldStore, WorldLife, Conflict
-from rose.life_profile import backup,export,import_profile
+from rose.life_profile import backup,export,import_profile,migrate_host
 
 class World(unittest.TestCase):
     def setUp(self):
@@ -96,6 +97,49 @@ class World(unittest.TestCase):
         dest=WorldStore(self.root/'destination');dest.acquire()
         try:self.assertEqual(dest.context()['meta']['agent_id'],manifest['agent_id'])
         finally:dest.release()
+
+    def test_machine_binding_survives_hostname_change_but_not_machine_change(self):
+        identity=self.store.host_id()
+        with patch('rose.life_world.platform.node',return_value='different-network-name'):
+            self.assertEqual(self.store.host_id(),identity)
+        self.store.release()
+        with patch.object(WorldStore,'machine_id',return_value='other-machine'):
+            with self.assertRaises(Conflict):self.store.acquire()
+        self.store.acquire()
+
+    def test_matching_legacy_host_upgrades_without_changing_world(self):
+        before=self.store.context()['world'];self.store.release()
+        with self.store._db() as db:
+            db.execute('UPDATE life_authority SET host=? WHERE id=1',(self.store.legacy_host_id(),))
+        self.store.acquire()
+        with self.store._db() as db:
+            self.assertEqual(db.execute('SELECT host FROM life_authority').fetchone()[0],self.store.host_id())
+        self.assertEqual(before,self.store.context()['world'])
+
+    def test_changed_legacy_hostname_requires_explicit_exact_offline_migration(self):
+        agent=self.store.context()['meta']['agent_id'];before=self.store.context()['world']
+        with self.assertRaises(BlockingIOError):migrate_host(self.store.directory,agent,'original-network-name')
+        self.store.release()
+        with self.store._db() as db:
+            db.execute('UPDATE life_authority SET host=? WHERE id=1',
+                       (self.store.legacy_host_id('original-network-name'),))
+        with self.assertRaises(Conflict):self.store.acquire()
+        for accepted,hostname in [('wrong-agent','original-network-name'),(agent,'wrong-hostname')]:
+            with self.assertRaises(ValueError):migrate_host(self.store.directory,accepted,hostname)
+        backup(self.store.directory,self.root/'hostname-copy')
+        with self.assertRaises(ValueError):migrate_host(self.root/'hostname-copy',agent,'original-network-name')
+        migrate_host(self.store.directory,agent,'original-network-name')
+        self.store.acquire()
+        self.assertEqual(before,self.store.context()['world'])
+        self.assertEqual(agent,self.store.context()['meta']['agent_id'])
+
+    def test_hostname_migration_never_reactivates_exported_profile(self):
+        agent=self.store.context()['meta']['agent_id'];self.store.release()
+        with self.store._db() as db:
+            db.execute("UPDATE life_authority SET host=?,state='exported' WHERE id=1",
+                       (self.store.legacy_host_id('original-network-name'),))
+        with self.assertRaises(ValueError):migrate_host(self.store.directory,agent,'original-network-name')
+        with self.assertRaises(Conflict):self.store.acquire()
 
     def test_legacy_migration_identity_and_notes_are_preserved(self):
         old=Diary(self.root/'old');old.interest('music',1)

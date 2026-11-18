@@ -107,13 +107,50 @@ class VoiceComputer(unittest.TestCase):
     def test_mutation_consumes_frame_and_completion_needs_new_observation(self):
         s=self.task();shot,_=self.call(s,'computer_screenshot')
         a={'frameId':shot['frame_id'],'x':4,'y':5}
-        out,_=self.call(s,'computer_click',**a);self.assertTrue(out['ok'])
+        out,reply=self.call(s,'computer_click',**a);self.assertTrue(out['ok'])
+        self.assertEqual(reply['contentItems'][1]['type'],'inputImage')
+        self.assertNotEqual(out['observation']['frame_id'],a['frameId'])
+        out,_=self.call(s,'complete_task',status='succeeded',summary='Observed the requested result')
+        self.assertTrue(out['ok'])  # a click's attached image is a new observation
         out,_=self.call(s,'computer_click',**a);self.assertFalse(out['ok'])
         out,_=self.call(s,'complete_task',status='succeeded',summary='Finished');self.assertFalse(out['ok'])
         self.call(s,'computer_screenshot')
         out,_=self.call(s,'complete_task',status='succeeded',summary='Observed the requested result');self.assertTrue(out['ok'])
         self.assertEqual(sum(a=='computer_click' for a,_ in self.phone.link.calls),1)
         self.assertEqual(s.outcome['status'],'succeeded')
+
+    def test_out_of_frame_click_returns_fresh_image_for_corrected_click(self):
+        s=self.task();shot,_=self.call(s,'computer_screenshot')
+
+        def phone_reply(action, args):
+            if action == 'computer_screenshot':
+                return {'status':'ok','frameId':f'new-{len(self.phone.link.calls)}',
+                        'width':32,'height':20,'imageBase64':self.phone.link.jpeg}
+            if args['x'] >= 32:
+                return {'status':'out_of_frame','actionExecuted':False}
+            return {'status':'action_accepted'}
+
+        self.phone.link.reply=phone_reply
+        missed,reply=self.call(s,'computer_click',frameId=shot['frame_id'],x=50,y=5)
+        self.assertFalse(missed['ok']);self.assertEqual(missed['action_status'],'out_of_frame')
+        self.assertEqual(reply['contentItems'][1]['type'],'inputImage')
+        fresh=missed['observation']
+        self.assertEqual((fresh['result']['width'],fresh['result']['height']),(32,20))
+        self.assertEqual([action for action,_ in self.phone.link.calls],
+                         ['computer_screenshot','computer_click','computer_screenshot'])
+        corrected,_=self.call(s,'computer_click',frameId=fresh['frame_id'],x=12,y=5)
+        self.assertTrue(corrected['ok'])
+        self.assertEqual([args['x'] for action,args in self.phone.link.calls if action=='computer_click'],[50,12])
+
+    def test_uncertain_click_with_failed_capture_does_not_retry_input(self):
+        s=self.task();shot,_=self.call(s,'computer_screenshot')
+        self.phone.link.reply=lambda action,args: {'status':'timeout'}
+        out,reply=self.call(s,'computer_click',frameId=shot['frame_id'],x=4,y=5)
+        self.assertFalse(out['ok']);self.assertFalse(out['observation']['ok'])
+        self.assertEqual(len(reply['contentItems']),1)
+        self.assertIsNone(s.view.frame_id)
+        self.assertEqual([action for action,_ in self.phone.link.calls],
+                         ['computer_screenshot','computer_click','computer_screenshot'])
 
     def test_attached_image_keeps_pixel_coordinate_dimensions(self):
         s=self.task();out=io.BytesIO();Image.new('RGB',(1280,800),'white').save(out,format='JPEG')

@@ -120,10 +120,10 @@ test('app_build config keeps research isolation, turns web search off and keeps 
   assert.throws(()=>appBuildConfig(bad),/isolation/);
  // The writer's profile: minimal runtime read, the job's source writable, everything else and the network denied.
  assert.deepEqual(appBuildProfile,{extends:':workspace',filesystem:{':root':'deny',':minimal':'read',':tmpdir':'deny',
-  ':slash_tmp':'deny',':workspace_roots':{'.':'write'}},network:{enabled:false}});
+  ':slash_tmp':'deny','/private/var/tmp':'deny',':workspace_roots':{'.':'write'}},network:{enabled:false}});
  assert.deepEqual(appBuildLaunchArgs(),['--strict-config','-c','default_permissions="rose_app_build"','-c',
   'permissions.rose_app_build={"extends" = ":workspace", "filesystem" = {":root" = "deny", ":minimal" = "read", '
-  +'":tmpdir" = "deny", ":slash_tmp" = "deny", ":workspace_roots" = {"." = "write"}}, "network" = {"enabled" = false}}']);
+  +'":tmpdir" = "deny", ":slash_tmp" = "deny", "/private/var/tmp" = "deny", ":workspace_roots" = {"." = "write"}}, "network" = {"enabled" = false}}']);
  assert.equal(APP_BUILD_ITEMS.includes('webSearch'),false);
  assert.equal(APP_BUILD_ITEMS.includes('dynamicToolCall'),false);
  assert.equal(APP_BUILD_ITEMS.includes('mcpToolCall'),false);

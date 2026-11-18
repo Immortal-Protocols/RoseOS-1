@@ -10,7 +10,8 @@ It serves, from one JSON config file:
 
 The writer is ``CodexGenerator`` launched with the configured command (on a host, one that runs it as a separate OS
 user). With no writer configured, jobs fail honestly. Each project's signing key is backed up by the configured
-backup command before its first delivery (``CommandBackup``); without one, nothing is delivered. Key creation stays
+backup command before its first delivery (``CommandBackup``), unless the owner explicitly sets
+``requireKeyBackup:false`` to accept local key persistence only. Key creation stays
 off unless the config turns it on. Usage: ``python -m rose.app_builder.host --config /path/to/host.json``.
 """
 from __future__ import annotations
@@ -36,7 +37,7 @@ from .service import Builder
 SCHEMA_VERSION = 1
 # The builder's own settings: the same in the standalone host's config and in the builder config the Rose server
 # reads with ``--app-builder`` (docs/APP-BUILDER.md §6), which has no listener of its own.
-BUILDER_KEYS = {'schemaVersion', 'root', 'sdk', 'javaHome', 'buildTimeoutS', 'keyCreation', 'writer', 'backup',
+BUILDER_KEYS = {'schemaVersion', 'root', 'sdk', 'javaHome', 'buildTimeoutS', 'keyCreation', 'writer', 'backup', 'requireKeyBackup',
                 'libraryStore', 'clientServer', 'agentHost'}
 BUILDER_REQUIRED = {'schemaVersion', 'root', 'sdk'}
 KEYS = BUILDER_KEYS | {'remoteDir', 'name', 'port', 'adminPort', 'hosts'}
@@ -74,6 +75,7 @@ class BuilderConfig:
     key_creation: bool = False
     writer: Command | None = None
     backup: Command | None = None
+    require_key_backup: bool = True
     library_store: Path | None = None
     client_server: ClientServerConfig | None = None
     agent_host: object | None = None  # app_host.AgentHostConfig (§7.7a)
@@ -93,6 +95,7 @@ class HostConfig:
     key_creation: bool = False
     writer: Command | None = None
     backup: Command | None = None
+    require_key_backup: bool = True
     library_store: Path | None = None
     client_server: ClientServerConfig | None = None
     agent_host: object | None = None
@@ -149,11 +152,15 @@ def _builder_fields(data: dict) -> dict:
     key_creation = data.get('keyCreation', False)
     if type(key_creation) is not bool:
         raise ConfigError('keyCreation must be true or false')
+    require_key_backup = data.get('requireKeyBackup', True)
+    if type(require_key_backup) is not bool:
+        raise ConfigError('requireKeyBackup must be true or false')
     return dict(
         root=_path(data['root'], 'root'), sdk=_path(data['sdk'], 'sdk'),
         java_home=None if data.get('javaHome') is None else _path(data['javaHome'], 'javaHome'),
         build_timeout_s=_seconds(data.get('buildTimeoutS'), 'buildTimeoutS', 600.0), key_creation=key_creation,
         writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
+        require_key_backup=require_key_backup,
         library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'),
         client_server=_client_server_config(data.get('clientServer')),
         agent_host=_agent_host_config(data.get('agentHost'), data.get('clientServer')))
@@ -461,6 +468,7 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
         hosting = AgentHosting(config.agent_host, ledger)
         level2.setdefault('codegen', codegen)  # the API client an agent-built backend's app is built with
     return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
+                   require_key_backup=config.require_key_backup,
                    server_url=ledger.backend_endpoint, hosting=hosting, **level2)
 
 

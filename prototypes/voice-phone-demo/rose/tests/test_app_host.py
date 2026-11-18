@@ -34,6 +34,16 @@ class Config(unittest.TestCase):
         self.assertEqual((c.port, c.admin_port, c.hosts), (8766, 8767, ('100.64.0.9',)))
         self.assertIsNone(c.library_store)
 
+    def test_local_key_only_mode_is_explicit_and_reaches_builder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = {k: v for k, v in config_data(tmp, requireKeyBackup=False).items()
+                    if k in host.BUILDER_KEYS}
+            config = host.parse_builder_config(data)
+            self.assertFalse(config.require_key_backup)
+            builder = host.build_builder(config, generate=label)
+            self.addCleanup(builder.ledger.close)
+            self.assertFalse(builder.require_key_backup)
+
     def test_refusals(self):
         good = config_data('/srv/x')
         bad = [None, [], {**good, 'schemaVersion': 2}, {**good, 'extra': 1},
@@ -43,7 +53,7 @@ class Config(unittest.TestCase):
                {**good, 'hosts': []}, {**good, 'hosts': ['a b']}, {**good, 'hosts': ['192.168.1.5']},
                {**good, 'hosts': ['builder.example.com']}, {**good, 'name': ''},
                {**good, 'root': '//srv/x/remote'}, {**good, 'root': good['remoteDir'] + '/../remote'},
-               {**good, 'keyCreation': 'yes'}, {**good, 'buildTimeoutS': 0},
+               {**good, 'keyCreation': 'yes'}, {**good, 'requireKeyBackup': 'no'}, {**good, 'buildTimeoutS': 0},
                *({**good, 'libraryStore': value} for value in ('relative', '', True, [], {})),
                {**good, 'writer': {'argv': ['node', 'bridge.mjs']}}, {**good, 'writer': {'argv': []}},
                {**good, 'backup': {'argv': ['/bin/backup'], 'extra': 1}}, {**good, 'backup': ['/bin/backup']}]
@@ -471,6 +481,27 @@ class BackupBeforeFirstDelivery(unittest.TestCase):
         self.assertEqual((job['state'], job['failure']['category']), ('failed', 'signing'), job)
         project = b.projects()[0]
         self.assertEqual((project['versions'], project['signerSha256']), ([], None))
+
+    def test_owner_can_deliver_without_backup_and_preserve_update_identity(self):
+        b = self.builder(None)
+        b.require_key_backup = False
+        out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'local', 'description': 'a stopwatch'})
+        b.run_next()
+        self.assertEqual(b.job(out['jobId'])['state'], 'ready', b.job(out['jobId']))
+        project = b.projects()[0]
+        identity = project['packageName'], project['signerSha256']
+        self.assertIsNone(b.ledger.key_backup(out['projectId']))
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'update', 'request': 'add laps'})
+        b.run_next()
+        self.assertEqual(b.job(rev['jobId'])['state'], 'ready', b.job(rev['jobId']))
+        project = b.projects()[0]
+        self.assertEqual((project['packageName'], project['signerSha256']), identity)
+        (b.root / 'keys' / out['projectId'] / 'config.json').unlink()
+        rev = b.revise('d', out['projectId'], {'schemaVersion': 1, 'clientRequestId': 'lost-key', 'request': 'add timer'})
+        b.run_next()
+        job = b.job(rev['jobId'])
+        self.assertEqual((job['state'], job['failure']['category']), ('failed', 'signing'))
+        self.assertIn('key is missing', job['failure']['summary'])
 
     def test_a_failed_backup_blocks_delivery_until_it_succeeds_once(self):
         state = {'ok': False}
