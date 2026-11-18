@@ -165,6 +165,21 @@ is stable.
 
 All versions live in `gradle/libs.versions.toml`.
 
+**Dependencies must build in Rose's builder.** Rose's builder (App Core) builds apps offline. It resolves plugins and
+libraries only from its read-only cache, seeded from `rose/app_builder/gradle_stack.py`. That cache holds:
+- Compose BOM 2026.09.00: ui, foundation, animation, material3, tooling-preview;
+- activity-compose, core-ktx;
+- lifecycle and viewmodel compose, navigation-compose, datastore-preferences;
+- media3 exoplayer and ui-compose;
+- coroutines, kotlinx serialization.
+
+A template or theme may use those freely in `implementation`/`api`. Ask Home/App Product before adding any other
+release dependency, so it can be added to the cache first. Test-only dependencies (Robolectric, Espresso, ui-test) are
+not built there and need no ask. The other build rules:
+- repositories stay `google()`, `mavenCentral()` and `gradlePluginPortal()`;
+- no binary files besides the wrapper jar (no other `.jar`, `.aar`, `.so` or `.dex`);
+- no signing configs or splits: the builder sets the app's identity and signs it.
+
 ## Not here (other owners)
 
 - App Core owns ordinary Gradle/Kotlin/Compose support in Rose's builder (build, sign, install, update).
