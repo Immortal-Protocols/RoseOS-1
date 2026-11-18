@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
-import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Codex} from './codex.mjs';
@@ -95,7 +95,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
 });`;
 
 function fixture(){
- const dir=mkdtempSync(join(tmpdir(),'rose-app-build-'));
+ const dir=realpathSync(mkdtempSync(join(tmpdir(),'rose-app-build-')));
  const source=join(dir,'projects','p1','source');mkdirSync(source,{recursive:true});
  const cli=join(dir,'codex.cjs'),record=join(dir,'record.jsonl');
  writeFileSync(cli,FAKE,{mode:0o700});writeFileSync(record,'');
