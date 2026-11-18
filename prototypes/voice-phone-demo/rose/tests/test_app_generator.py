@@ -11,7 +11,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from rose.app_builder import toolchain
+from rose.app_builder import gradle_stack, toolchain
 from rose.app_builder.generator import CodexGenerator, prompt
 from rose.app_builder.service import Builder
 from rose.app_builder.toolchain import StepFailed
@@ -103,9 +103,35 @@ class Generator(unittest.TestCase):
             text = prompt(kind, 'the request', ['com.example:lib:1.0', 'org.x:y:2'])
             self.assertIn('com.example:lib:1.0, org.x:y:2', text)
             self.assertIn('dependencies.json', text)
+            self.assertIn('for an app in the older flat layout only', text)  # a Gradle project uses the stack's
             self.assertTrue(text.endswith('the request'))
         with self.assertRaises(StepFailed):
             prompt('delete', 'x')
+
+    def test_prompt_names_the_gradle_stack_when_given(self):
+        stack = gradle_stack.summary()
+        for kind in ('create', 'revise', 'repair'):
+            self.assertNotIn('Gradle', prompt(kind, 'x'))  # a host without the stack names none
+            text = prompt(kind, 'the request', ['com.example:lib:1.0'], client_server=True, stack=stack)
+            self.assertIn(stack, text)
+            self.assertIn('com.example:lib:1.0', text)
+            self.assertIn('client-server', text)
+            self.assertTrue(text.endswith('the request'))  # the request or build output still comes last
+            self.assertLess(text.index(stack), text.index('the request'))
+        with self.assertRaises(TypeError):
+            prompt('create', 'x', (), False, None, stack)  # keyword only
+
+    def test_the_gradle_flag_puts_the_stack_in_every_turn(self):
+        g = self.gen(after_submit=DONE)
+        self.run_gen(g)
+        self.assertNotIn('Gradle', self.clients[0].calls[1][2]['text'])  # off by default
+        self.assertTrue(CodexGenerator(connect=lambda on_event: None, gradle=True).gradle)
+        g = self.gen(after_submit=DONE)
+        g.gradle = True  # as a host with a provisioned Gradle stack constructs it
+        self.run_gen(g, kind='revise')
+        text = self.clients[1].calls[1][2]['text']
+        self.assertIn(gradle_stack.summary(), text)
+        self.assertIn('Build a tip calculator.', text)
 
     def test_unfinished_or_failed_turns_fail(self):
         for events in (({'event': 'done', 'turn': {'status': 'interrupted'}},),

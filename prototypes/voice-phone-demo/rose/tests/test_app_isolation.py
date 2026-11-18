@@ -80,7 +80,8 @@ class MovedNames(unittest.TestCase):
 
     def test_the_module_imports_no_builder(self):
         code = ('import sys, rose.app_builder.isolation; '
-                'bad = [m for m in sys.modules if m.endswith(("server_build", "providers.host", "service", "gradle"))]; '
+                'names = ("server_build", "providers.host", "service", "gradle"); '
+                'bad = [m for m in sys.modules if m.endswith(names)]; '
                 'assert not bad, bad')
         done = subprocess.run([sys.executable, '-c', code], cwd=HERE, capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)

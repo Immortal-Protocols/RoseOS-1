@@ -1,6 +1,7 @@
 """The Codex writer's fixed policy (workspace/rose-agent/server/app-build.mjs) against the builder it describes: every
-rule and name its client-server section gives is the one the builder checks or its generated code has, read here
-from the builder itself, so the two cannot drift apart unnoticed (docs/APP-BUILDER.md §7.6)."""
+rule and name its Gradle project and client-server sections give is the one the builder checks, its pinned stack
+(gradle_stack) or skeleton has, or its generated code has, read here from the builder itself, so the two cannot drift
+apart unnoticed (docs/APP-BUILDER.md §7.6)."""
 import json
 import re
 import shutil
@@ -8,7 +9,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from rose.app_builder import appprofile, codegen, contract, generator, migrations, server_build, service, template
+from rose.app_builder import (appprofile, codegen, contract, generator, gradle, gradle_stack, migrations, server_build,
+                              service, template)
 
 REPO = Path(__file__).resolve().parents[4]
 POLICY_MODULE = REPO / 'workspace/rose-agent/server/app-build.mjs'
@@ -54,6 +56,79 @@ class WriterPolicy(unittest.TestCase):
         self.assertIn('This builder builds client-server apps', generator.prompt('create', 'x', client_server=True))
         for kind in ('create', 'revise'):
             self.assertNotIn('client-server', generator.prompt(kind, 'x'))  # a host without the parts says nothing
+
+    def test_the_gradle_project_is_the_skeletons_and_the_stacks(self):
+        self.says('The app is an ordinary Android Gradle project', 'settings.gradle.kts, build.gradle.kts and '
+                  'gradle.properties at the top', 'app/build.gradle.kts and app/src/main/ with AndroidManifest.xml, '
+                  'java/ or kotlin/, res/ and assets/', 'Write Kotlin with Jetpack Compose, and Material 3 where it fits',
+                  f'Keep compileSdk and targetSdk at the turn\'s compileSdk ({gradle_stack.COMPILE_SDK}); minSdk is at '
+                  f'most {gradle_stack.MAX_MIN_SDK} (the skeleton\'s {gradle_stack.MIN_SDK} suits most apps)',
+                  'Keep namespace and applicationId exactly as the skeleton has them',
+                  'google() and mavenCentral(), and for plugins also gradlePluginPortal()',
+                  f'Every file is at most {template.MAX_FILE // (1024 * 1024)} MB')
+        self.assertEqual(gradle_stack.TARGET_SDK, gradle_stack.COMPILE_SDK)
+        self.assertEqual(gradle_stack.APP_MODULE, 'app')
+        package = 'app.rose.gen.p7'
+        files = gradle.skeleton(package, 'Notes')
+        for name in ('settings.gradle.kts', 'build.gradle.kts', 'gradle.properties', 'app/build.gradle.kts',
+                     'app/src/main/AndroidManifest.xml', 'app/src/main/java/app/rose/gen/p7/MainActivity.kt'):
+            self.assertIn(name, files)
+        app = files['app/build.gradle.kts']
+        for line in (f'namespace = "{package}"', f'applicationId = "{package}"', f'compileSdk = {gradle_stack.COMPILE_SDK}',
+                     f'minSdk = {gradle_stack.MIN_SDK}', f'targetSdk = {gradle_stack.TARGET_SDK}'):
+            self.assertIn(line, app)
+        self.assertNotIn('signingConfig', app)
+        self.assertNotIn('package=', files['app/src/main/AndroidManifest.xml'])  # the namespace is the package
+        self.assertIn('google(); mavenCentral(); gradlePluginPortal()', files['settings.gradle.kts'])
+        self.assertIn('repositories { google(); mavenCentral() }', files['settings.gradle.kts'])
+        # The Android Gradle Plugin compiles Kotlin itself: the policy and the stack say so, and no plugin offers it.
+        self.says('apply no Kotlin Android plugin')
+        self.assertNotIn('org.jetbrains.kotlin.android', gradle_stack.PLUGINS)
+
+    def test_the_gradle_refusals_are_the_checks(self):
+        listed = re.search(r'prebuilt files \((.*?)\)', self.policy).group(1)
+        self.assertEqual(set(re.split(r', | or ', listed)), {*gradle.LIBRARY_SUFFIXES, *gradle.BINARY_SUFFIXES})
+        state = re.search(r'build output \((.*?)\)', self.policy).group(1)
+        self.assertEqual(set(re.split(r', ', state)), {*(d + '/' for d in gradle.BUILD_STATE), '*.iml'})
+        self.says('Never add the Gradle wrapper (gradlew, gradlew.bat, gradle/wrapper/)', 'key or keystore files',
+                  'native code (C or C++, CMake or ndk-build: the stack has no NDK)')
+        self.assertTrue(gradle.WRAPPER_JAR.startswith('gradle/wrapper/'))  # tolerated by the check, never written
+        self.assertTrue({'.jks', '.keystore', '.p12'} <= set(gradle.KEY_SUFFIXES))
+        self.assertTrue({'.c', '.cpp', '.h'} <= set(gradle.NATIVE_SUFFIXES))
+        self.assertIn('cmakelists.txt', gradle.NATIVE_NAMES)
+
+    def test_identity_is_the_hosts(self):
+        self.says('The host owns the app\'s identity and signs the built APK itself, outside the build',
+                  'Never set or change applicationId, applicationIdSuffix, versionCode, versionName, signingConfigs, '
+                  'sharedUserId, splits or bundles, and never make a build debuggable or testOnly',
+                  'host owns the <package>.rose package: never create that folder or package',
+                  f'it writes it as {appprofile.client_root(True)}<package path>/rose/')
+        self.assertEqual(appprofile.client_root(True), 'app/src/main/java/')
+        self.assertEqual(appprofile.client_root(False), 'src/')
+        self.says('or src/<package>/rose/ in the older layout')
+
+    def test_the_older_layout_keeps_its_rules_and_may_convert(self):
+        self.says('An app in the older flat layout (AndroidManifest.xml, src/ and res/ at the top, and no '
+                  'settings.gradle.kts) keeps that layout\'s rules and may stay that way',
+                  'In a revise, when this turn names the Gradle stack, you may instead convert it into a Gradle project',
+                  'set namespace and applicationId to its manifest package',
+                  'Its package, the owner\'s data and its signing stay the same, so phones update it in place',
+                  'The older layout\'s rules: write only AndroidManifest.xml, src/, res/, assets/, README.md and '
+                  'dependencies.json', 'Java 17 source level', 'Resources follow aapt v1 rules')
+        self.assertEqual(template.ALLOWED_TOP, {'AndroidManifest.xml', 'src', 'res', 'assets', 'README.md',
+                                                'dependencies.json'})
+        self.assertFalse(gradle.is_gradle_project(Path('/nonexistent')))
+
+    def test_the_turn_names_the_stack(self):
+        stack = gradle_stack.summary()
+        self.says('exactly the stack this turn names', 'request no Java toolchain but the turn\'s JDK')
+        for kind in ('create', 'revise', 'repair'):
+            text = generator.prompt(kind, 'x', stack=stack)
+            self.assertIn(stack, text)
+            for named in (f'Gradle {gradle_stack.GRADLE}', f'compileSdk {gradle_stack.COMPILE_SDK}',
+                          f'JDK {gradle_stack.JDK_FEATURE}', *gradle_stack.PLUGINS):
+                self.assertIn(named, text)
+            self.assertNotIn('Gradle', generator.prompt(kind, 'x'))  # a host without the stack names none
 
     def test_the_layout_is_the_profiles(self):
         self.assertEqual(appprofile.SERVER_TOP, {'rose-app.json', 'contract', 'server'})

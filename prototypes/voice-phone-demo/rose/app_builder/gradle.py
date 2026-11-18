@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gradle_stack, template, toolchain
+from .isolation import BuildFailed
 from .toolchain import StepFailed
 
 SETTINGS = ('settings.gradle.kts', 'settings.gradle')
@@ -355,8 +356,7 @@ def build(tree: Path, work: Path, package: str, version_code: int, version_name:
     for path in (own, work / 'unsigned.apk', work / 'dex', verify_home):
         _discard(path)
     verify_home.mkdir(mode=0o700)
-    _take_output(box, own, log)
-    _refuse_signed(own, log)
+    _refuse_signed(own, _take_output(box, own, log))
     unsigned = _align(own, work, gradle.bt, tools, verify_home, cancelled, redact)
     try:
         badging = toolchain.verify_apk(unsigned, package, version_code, version_name, tools, work, verify_home,
@@ -426,7 +426,6 @@ def _run(gradle: GradleTools, tools: toolchain.Tools, argv, env, box: Path, read
     """Gradle in the isolation, as server_build runs cargo: the provider's own refusal stands, any other failure to
     prepare or start it is ``build_isolation_unavailable``, a failure it claims is ``build_isolation_failed``; a
     cancel or timeout passes through; anything else is the project's build failing (classify)."""
-    from .server_build import BuildFailed  # rose.app_builder.isolation's, re-exported until server_build goes
     try:
         command, wrapped = gradle.isolation.command(argv, dict(env), writable=box, readonly=tuple(readonly))
     except StepFailed:
@@ -543,60 +542,68 @@ def _open_beneath(root: Path, relative: str) -> int:
     return file_fd
 
 
-def _take_output(box: Path, target: Path, log: str) -> None:
-    """Copy the build's one release APK to ``target``: output-metadata.json must list exactly one element, with no
-    filters, whose outputFile is a plain name of a regular file beside it."""
+def _take_output(box: Path, target: Path, log: str) -> str:
+    """Copy the build's one release APK to ``target`` and return its name: output-metadata.json must list exactly one
+    element, of type SINGLE with no filters, whose outputFile is a plain name of a regular file beside it. A refusal's
+    log says what the build made instead, so the writer can fix its build files."""
     folder = f'project/{OUTPUT}'
     one = 'Rose installs one APK: the release build must make a single APK, with no ABI or density splits.'
     try:
         with os.fdopen(_open_beneath(box, f'{folder}/output-metadata.json'), 'rb') as f:
-            metadata = json.loads(f.read(MAX_METADATA + 1)[:MAX_METADATA + 1].decode('utf-8'))
+            metadata = json.loads(f.read(MAX_METADATA + 1)[:MAX_METADATA].decode('utf-8'))
     except (OSError, ValueError):
-        raise StepFailed('compile', 'The app\'s build did not make a release APK (:app:assembleRelease wrote no '
-                         'output-metadata.json).', log=diagnostics(log)) from None
+        raise StepFailed('compile', f'The app\'s build did not make a release APK ({TASK} wrote no '
+                         f'{OUTPUT}/output-metadata.json).', log=diagnostics(log)) from None
     elements = metadata.get('elements') if isinstance(metadata, dict) else None
-    if not isinstance(elements, list) or len(elements) != 1 or not isinstance(elements[0], dict):
-        raise StepFailed('compile', one, log=diagnostics(log))
-    element = elements[0]
-    name = element.get('outputFile')
-    if (element.get('filters') or element.get('type', 'SINGLE') != 'SINGLE' or not isinstance(name, str)
-            or not re.fullmatch(r'[\w.+-]+\.apk', name) or name.startswith('.')):
-        raise StepFailed('compile', one, log=diagnostics(log))
+    if not isinstance(elements, list) or not all(isinstance(e, dict) for e in elements):
+        raise StepFailed('compile', one, log=f'{OUTPUT}/output-metadata.json lists no APK elements.')
+    made = '\n'.join(f'{e.get("outputFile")!s:.200} (type {e.get("type")!s:.40}, filters '
+                     f'{json.dumps(e.get("filters"))[:200]})' for e in elements[:20])
+    evidence = f'{OUTPUT}/output-metadata.json lists {len(elements)} APK(s):\n{made}'
+    if len(elements) != 1:
+        raise StepFailed('compile', one, log=evidence)
+    name = elements[0].get('outputFile')
+    if (elements[0].get('filters') or elements[0].get('type', 'SINGLE') != 'SINGLE' or not isinstance(name, str)
+            or not re.fullmatch(r'[\w+-][\w.+-]*\.apk', name)):
+        raise StepFailed('compile', one, log=evidence)
     try:
         with os.fdopen(_open_beneath(box, f'{folder}/{name}'), 'rb') as src, \
                 os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as dst:
             shutil.copyfileobj(src, dst)
     except OSError:
         raise StepFailed('compile', f'The app\'s build listed {name}, which is not a plain file.',
-                         log=diagnostics(log)) from None
+                         log=evidence) from None
+    return name
 
 
-def _refuse_signed(apk: Path, log: str) -> None:
+def _refuse_signed(apk: Path, name: str) -> None:
     """The build's APK must be unsigned: no v1 signature files and no APK Signing Block. The builder signs it with
     the project's own key afterwards and never signs over another signature."""
     signed = ('The app\'s build signs it; remove the signingConfig from the release build. The builder signs every '
               'app with the project\'s own key.')
+    invalid = StepFailed('compile', 'The app\'s build did not make a valid APK.', log=f'{name} is not a valid APK.')
     try:
         with zipfile.ZipFile(apk) as z:
             names = z.namelist()
     except (zipfile.BadZipFile, OSError, ValueError):
-        raise StepFailed('compile', 'The app\'s build did not make a valid APK.', log=diagnostics(log)) from None
-    if any(re.fullmatch(r'META-INF/[^/]+\.(?:SF|RSA|DSA|EC)', n, re.I) for n in names):
-        raise StepFailed('compile', signed, log=diagnostics(log))
+        raise invalid from None
+    v1 = [n for n in names if re.fullmatch(r'META-INF/[^/]+\.(?:SF|RSA|DSA|EC)', n, re.I)]
+    if v1:
+        raise StepFailed('compile', signed, log=f'{name} holds signature files ({", ".join(v1[:5])[:400]}).')
     with open(apk, 'rb') as f:
         f.seek(0, os.SEEK_END)
         size = f.tell()
-        f.seek(max(0, size - 65557))
+        f.seek(max(0, size - 65557))  # the end of central directory record: 22 bytes and a comment of up to 64 KB
         tail = f.read()
         end = tail.rfind(b'PK\x05\x06')
         if end < 0 or end + 22 > len(tail):
-            raise StepFailed('compile', 'The app\'s build did not make a valid APK.', log=diagnostics(log))
+            raise invalid
         central = int.from_bytes(tail[end + 16:end + 20], 'little')
-        if central == 0xFFFFFFFF or central < 16 or central > size:
-            raise StepFailed('compile', 'The app\'s build did not make an APK Rose can install.', log=diagnostics(log))
+        if central == 0xFFFFFFFF or central < 16 or central > size:  # Zip64, or no room for a block before it
+            raise invalid
         f.seek(central - 16)
         if f.read(16) == APK_SIG_BLOCK:
-            raise StepFailed('compile', signed, log=diagnostics(log))
+            raise StepFailed('compile', signed, log=f'{name} carries an APK Signing Block (it is already signed).')
 
 
 def _align(apk: Path, work: Path, bt: Path, tools: toolchain.Tools, home: Path, cancelled, redact) -> Path:
@@ -625,5 +632,6 @@ def _extract_dex(apk: Path, target: Path) -> None:
     with zipfile.ZipFile(apk) as z:
         for name in z.namelist():
             if re.fullmatch(r'classes\d*\.dex', name):
-                with z.open(name) as src, open(target / name, 'xb') as dst:
+                fd = os.open(target / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with z.open(name) as src, os.fdopen(fd, 'wb') as dst:
                     shutil.copyfileobj(src, dst)
