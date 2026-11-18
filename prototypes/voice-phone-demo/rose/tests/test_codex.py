@@ -1279,6 +1279,11 @@ class StdioBridge(unittest.TestCase):
                 self.assertNotIn('tool_cancelled',[e['event'] for e in received])  # an accepted result is never reported lost
                 self.assertNotIn('PRIVATE_REASONING_FIXTURE',json.dumps(received))
                 self.assertTrue(any(e['event']=='delta' for e in received))
+                client.request('submit','a',text='unknown-tool')
+                while True:
+                    event=events.get(timeout=5)
+                    self.assertNotEqual(event['event'],'tool')
+                    if event['event']=='done':break
                 # An interrupt answers a pending call fail() and reports which call, so rose.app can tell the model
                 # later that a phone action still finished (F07 late outcome).
                 client.request('submit','a',text='tool')

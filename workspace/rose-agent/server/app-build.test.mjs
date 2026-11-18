@@ -11,6 +11,7 @@ import {appBuildPolicy,appBuildConfig,appBuildCwd,appBuildLaunchArgs,appBuildPro
  APP_BUILD_PROFILE,APP_BUILD_ITEMS,APP_BUILD_ITEM_BUDGET,APP_BUILD_CONTAINER_ITEM_BUDGET,appBuildItems,appBuildItemBudget,
  appBuildContainerOptions,agentContainerCallProblem,appBuildToolResult,AGENT_CONTAINER_TOOL} from './app-build.mjs';
 import {researchConfig} from './life-research.mjs';
+import {voiceSessionProfile} from './session-permissions.mjs';
 
 // A stand-in for `codex app-server`: records argv and requests, and plays a scenario from ROSE_TEST_SCENARIO.
 const FAKE=`#!${process.execPath}
@@ -51,17 +52,21 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
    if(scenario==='merged')result.config.permissions.rose_app_build.filesystem['~/Documents']='read';
    if(scenario==='network')result.config.permissions.rose_app_build.network.enabled=true;
   }
+  if(args[i+1]==='default_permissions="rose_voice"'){
+   result.config.default_permissions='rose_voice';
+   result.config.permissions={rose_voice:${JSON.stringify(voiceSessionProfile)}};
+  }
   if(scenario==='legacy')result.config.sandbox_mode='workspace-write';
  }
  if(m.method==='permissionProfile/list'){
-  const entry={id:'rose_app_build',allowed:scenario!=='not_allowed'};
+  const entry={id:args.includes('default_permissions="rose_voice"')?'rose_voice':'rose_app_build',allowed:scenario!=='not_allowed'};
   result=scenario==='unlisted'?{data:[{id:':workspace',allowed:true}]}:
    scenario==='paged'&&!m.params.cursor?{data:[{id:':read-only',allowed:true}],nextCursor:'2'}:{data:[entry]};
  }
  if(m.method==='thread/start')result={thread:{id:'build'},model:'gpt-6.1-terra',serviceTier:'priority',
   ...(m.params.permissions&&scenario!=='no_active'?{activePermissionProfile:{id:scenario==='wrong_profile'?':workspace':m.params.permissions,
-   extends:scenario==='wrong_parent'?':danger-full-access':':workspace'}}:{}),
-  runtimeWorkspaceRoots:scenario==='extra_root'?[m.params.cwd,'/']:[m.params.cwd]};
+   extends:scenario==='wrong_parent'?':danger-full-access':m.params.permissions==='rose_app_build'?':workspace':null}}:{}),
+  runtimeWorkspaceRoots:scenario==='extra_root'?[m.params.cwd,'/']:m.params.runtimeWorkspaceRoots};
  if(m.method==='mcpServerStatus/list')result={data:[{runtimeStatus:'disabled',tools:{},resources:[],resourceTemplates:[]}]};
  if(m.method==='turn/interrupt'){out({id:m.id,result:{}});out({method:'turn/completed',params:{threadId:'build',turn:{id:'t1',status:'interrupted'}}});return;}
  if(m.method==='turn/start'){
@@ -166,7 +171,7 @@ test('the policy source is one template literal with nothing interpolated',()=>{
  assert.equal(appBuildPolicy,literal);
 });
 
-test('a real child launch: workspace-write in the project, no network per turn, research launches unchanged',async()=>{
+test('a real child launch: only the app writer gets a workspace grant and a shell',async()=>{
  const f=fixture();
  try{
   for(const runtime of [{appBuild:true},{publicResearch:true},{characterLife:true},{}]){
@@ -176,13 +181,13 @@ test('a real child launch: workspace-write in the project, no network per turn, 
     try{await c.init();await c.submit('Build a tip calculator.',{model:c.selectedModel,serviceTier:c.serviceTier});}
     finally{await c.closeConfirmed();}
    });
-   const rows=f.rows(),args=rows[0].args,isolated=runtime.appBuild||runtime.publicResearch||runtime.characterLife;
+   const rows=f.rows(),args=rows[0].args;
    const start=rows.find(r=>r.method==='thread/start').params,turn=rows.find(r=>r.method==='turn/start').params;
    assert.equal(rows[0].cwd,f.source);
-   assert.equal(args.includes('mcp_servers.node_repl.enabled=false'),!!isolated);
-   assert.equal(args.includes('project_doc_max_bytes=0'),!!isolated);
-   assert.equal(args.includes('features.shell_tool=false'),!!(runtime.publicResearch||runtime.characterLife));
-   assert.equal(args.includes('features.memories=false'),!!isolated);
+   assert.ok(args.includes('mcp_servers.node_repl.enabled=false'));
+   assert.ok(args.includes('project_doc_max_bytes=0'));
+   assert.equal(args.includes('features.shell_tool=false'),!runtime.appBuild);
+   assert.ok(args.includes('features.memories=false'));
    assert.equal(start.ephemeral,true);
    assert.equal(start.cwd,f.source);
    if(runtime.appBuild){
@@ -202,15 +207,16 @@ test('a real child launch: workspace-write in the project, no network per turn, 
     assert.ok(methods.indexOf('permissionProfile/list')<methods.indexOf('turn/start'));
     assert.equal(rows.find(r=>r.method==='permissionProfile/list').params.cwd,f.source);
    }else{
-    assert.equal(start.sandbox,'read-only');
-    assert.equal('permissions' in start,false);
-    assert.equal('runtimeWorkspaceRoots' in start,false);
+    assert.equal(start.sandbox,undefined);
+    assert.equal(start.permissions,'rose_voice');
+    assert.deepEqual(start.runtimeWorkspaceRoots,[]);
+    assert.deepEqual(start.environments,[]);
+    assert.equal(turn.permissions,'rose_voice');
+    assert.deepEqual(turn.environments,[]);
     assert.equal('sandboxPolicy' in turn,false);
-    assert.equal(args.includes('--strict-config'),false);
-    if(runtime.publicResearch){assert.deepEqual(start.environments,[]);assert.equal(start.config.web_search,'live');}
-    if(runtime.characterLife){assert.deepEqual(start.environments,[]);assert.equal(start.config.web_search,'disabled');
-     assert.equal(start.config['features.shell_tool'],false);}
-    if(isolated)assert.equal(start.config['sandbox_workspace_write.network_access'],undefined);
+    assert.ok(args.includes('--strict-config'));
+    assert.equal(start.config.web_search,runtime.publicResearch?'live':'disabled');
+    assert.equal(start.config['features.shell_tool'],false);
    }
   }
  }finally{rmSync(f.dir,{recursive:true,force:true});}

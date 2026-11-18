@@ -36,13 +36,15 @@ async function handle(m) {
   if(appBuild && (!Array.isArray(m.tools)||m.tools.length||!appBuildCwd(m.cwd)))throw Error('App build cannot have tools');
   const container=appBuild?appBuildContainerOptions(m):null;
   if(appBuild)m={...m,instructions:appBuildPolicy,tools:container.containerTool?[AGENT_CONTAINER_TOOL]:[]};  // never the caller's
+  const registeredTools=new Set(m.tools.map(tool=>tool.name));
   const toolTimeoutMs=container?.containerTool?container.toolTimeoutMs:60000;
   const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,threadId:c.thread,...event});};
   const c=new Codex(m.cwd, '', null, {externalPhone:true,publicResearch:research,characterLife:character,appBuild,model:m.model,
    developerInstructions:research?lifeResearchPolicy:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
    handleToolCall:params=>{
     // app_build forwards only a well-formed agent_container call of a container session, and passes back text only.
-    const refused=appBuild&&agentContainerCallProblem(params,container.containerTool);
+    const refused=!registeredTools.has(params.tool)?'unknown_tool':
+     appBuild&&agentContainerCallProblem(params,container.containerTool);
     if(refused)return Promise.resolve({success:false,contentItems:[{type:'inputText',text:JSON.stringify({status:'error',reason:refused})}]});
     return new Promise(resolve=>{
     const callId=String(++nextCall);
@@ -133,7 +135,7 @@ createInterface({input:process.stdin}).on('line',line=>{
  // Do not serialize input: tool responses and interrupts must pass a pending submit.
  Promise.resolve().then(()=>handle(m)).then(result=>{
   if(m.id!==undefined)send({id:m.id,result:result??{}});
- }).catch(error=>{if(m.id!==undefined)send({id:m.id,error:['chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch','research_isolation_unavailable','research_stop_unconfirmed'].includes(error.code)?error.code:'codex_request_failed'});});
+ }).catch(error=>{if(m.id!==undefined)send({id:m.id,error:['chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch','voice_isolation_unavailable','research_isolation_unavailable','research_stop_unconfirmed'].includes(error.code)?error.code:'codex_request_failed'});});
 });
 process.stdin.on('end',async()=>{
  for(const session of sessions.keys())cancelCalls(session);

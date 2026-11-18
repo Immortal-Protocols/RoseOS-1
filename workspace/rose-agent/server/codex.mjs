@@ -12,19 +12,16 @@ import {calculatorCapability} from './calculator-capability.mjs';
 import {BasetenGateway,BASETEN_MODEL,BASETEN_PROVIDER} from './baseten/gateway.mjs';
 import {CerebrasGateway,CEREBRAS_MODEL,CEREBRAS_PROVIDER} from './cerebras/gateway.mjs';
 import {EvaluationGateway,EVALUATION_PROVIDER} from './evaluation-gateway.mjs';
-import {researchConfig,verifyResearchMcp,supportsResearchVersion} from './life-research.mjs';
-import {appBuildConfig,appBuildLaunchArgs,verifyAppBuildProfile,checkActiveProfile,supportsAppBuildVersion,APP_BUILD_PROFILE} from './app-build.mjs';
+import {researchConfig,verifyResearchMcp} from './life-research.mjs';
+import {appBuildConfig,appBuildPermissions} from './app-build.mjs';
+import {supportsSessionPermissionsVersion,voiceSessionPermissions} from './session-permissions.mjs';
 export class Codex extends EventEmitter {
  constructor(root,state,apiKeyFile=null,runtime={}){super();this.root=root;this.state=state;this.apiKeyFile=apiKeyFile;this.runtime=runtime;this.authMode=null;this.seq=0;this.pending=new Map();this.active=null;this.thread=null;this.starting=null;this.switchingTurns=new Set();this.endedTurns=new Set();this.provider='openai';this.providerThreads={};this.policyHashes={};this.memoryRevisions={};this.unstartedThread=false;}
  async init(){
   if(this.runtime.externalPhone&&this.apiKeyFile)throw Object.assign(Error('Sign in with ChatGPT is required'),{code:'chatgpt_login_required'});
-  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild){
+  if(this.runtime.externalPhone){
    const version=spawnSync(process.env.PIXEL_CODEX_BIN||'codex',['--version'],{encoding:'utf8',timeout:3000,maxBuffer:4096});
-   if(version.status!==0||!supportsResearchVersion(version.stdout||''))
-    throw Object.assign(Error('Research requires a compatible Codex tool-isolation contract'),{code:'research_isolation_unavailable'});
-   // The writer's read isolation is a permission profile, checked against Codex 0.167.1: never a legacy fallback.
-   if(this.runtime.appBuild&&!supportsAppBuildVersion(version.stdout||''))
-    throw Object.assign(Error('App build requires the Codex permission-profile contract'),{code:'research_isolation_unavailable'});
+   if(version.status!==0||!supportsSessionPermissionsVersion(version.stdout||''))throw this.isolationError();
   }
   // Keep service tools outside macOS-protected Documents for background execution.
   const phoneTools=join(homedir(),'.local/share/rose-agent/phone');
@@ -38,17 +35,14 @@ export class Codex extends EventEmitter {
   for(const file of ['control.py','README.md'])copyFileSync(join(this.root,'rose-agent/launcher-visual',file),join(visualTools,file));
   }
   const providerArgs=[],providerEnv={};let catalogPath=((process.env.PIXEL_VOICE_CONFIG_DIR||(process.env.HOME+"/.config/pixel-voice"))+"/model-catalog.json");
-  if(this.runtime.publicResearch||this.runtime.characterLife)for(const name of ['hooks','memories','apps','plugins','shell_tool','multi_agent','view_image'])
-   providerArgs.push('-c','features.'+name+'=false');
-  // app_build keeps only the sandboxed shell, which writing source needs (app-build.mjs).
-  if(this.runtime.appBuild)for(const name of ['hooks','memories','apps','plugins','multi_agent','view_image'])
-   providerArgs.push('-c','features.'+name+'=false');
-  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild)providerArgs.push('-c','project_doc_max_bytes=0');
-  if(this.runtime.appBuild)providerArgs.push(...appBuildLaunchArgs());  // the writer's permission profile, strict config
-  // This known ambient MCP is excluded before the research app-server starts.
-  // Shared configuration and ordinary voice/desktop launches are unchanged;
-  // effective-config and runtime checks still refuse any other enabled MCP.
-  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild)providerArgs.push('-c','mcp_servers.node_repl.enabled=false');
+  if(this.runtime.externalPhone){
+   for(const name of ['hooks','memories','apps','plugins','multi_agent','view_image'])
+    providerArgs.push('-c',`features.${name}=false`);
+   // Only the app writer needs a shell, and it gets a separate source-only profile.
+   if(!this.runtime.appBuild)providerArgs.push('-c','features.shell_tool=false');
+   providerArgs.push('-c','project_doc_max_bytes=0','-c','mcp_servers.node_repl.enabled=false',
+    ...this.sessionPermissions().launchArgs());
+  }
   if(this.runtime.baseten?.enabled){
    this.baseten=await new BasetenGateway(this.runtime.baseten).listen();
    const catalog=JSON.parse(readFileSync(catalogPath,'utf8'));
@@ -164,6 +158,20 @@ export class Codex extends EventEmitter {
   if(account.account?.type!=='chatgpt')throw Object.assign(Error('Sign in with ChatGPT is required'),{code:'chatgpt_login_required'});
   this.authMode='chatgpt';
  }
+ sessionPermissions(){return this.runtime.appBuild?appBuildPermissions:voiceSessionPermissions;}
+ isolationError(){
+  const {appBuild,publicResearch,characterLife}=this.runtime;
+  const code=appBuild||publicResearch||characterLife?'research_isolation_unavailable':'voice_isolation_unavailable';
+  return Object.assign(Error('Codex session isolation could not be verified'),{code});
+ }
+ async isolatedVoiceConfig(cwd){
+  const {config}=await this.rpc('config/read',{cwd,includeLayers:false});
+  if(this.runtime.appBuild)return appBuildConfig(config);
+  voiceSessionPermissions.checkConfig(config);
+  const isolated=researchConfig(config);
+  if(!this.runtime.publicResearch)isolated.web_search='disabled';
+  return isolated;
+ }
  async initVoiceThread(options){
   await this.verifyVoiceAccount();
   const model='gpt-6.1-terra';
@@ -177,42 +185,25 @@ export class Codex extends EventEmitter {
   const tier=(selected.serviceTiers||[]).find(t=>['fast','priority'].includes(t.id));
   if(!tier)throw Object.assign(Error('Terra Fast mode is unavailable to this account'),{code:'fast_unavailable'});
   this.serviceTier=tier.id;
-  let isolated;
-  const isolation=config=>this.runtime.appBuild?appBuildConfig(config):researchConfig(config);
-  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild){
-   try{isolated=isolation((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)isolated.web_search='disabled';}
-   catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
-  }
-  // The writer's isolation is its permission profile alone: no sandbox field of any kind goes with it (the two
-  // are exclusive, and the base options' danger-full-access must never reach an app build).
-  const {sandbox:_baseSandbox,...unsandboxed}=options;
-  const r=await this.rpc('thread/start',{...(this.runtime.appBuild?unsandboxed:options),model,modelProvider:'openai',ephemeral:true,
-   // The writer names its one workspace root (what `:workspace_roots` expands to) rather than leaving it to the
-   // default, whose meaning when omitted is not defined by the 0.167.1 schema.
-   ...(this.runtime.appBuild?{permissions:APP_BUILD_PROFILE,runtimeWorkspaceRoots:[options.cwd??this.root]}:{sandbox:'read-only'}),
-   serviceTier:this.serviceTier,
-   ...((this.runtime.publicResearch||this.runtime.characterLife)?{environments:[]}:{}),
-   config:isolated??{web_search:'disabled','features.fast_mode':true,'features.shell_tool':false,
-    'features.apps':false,'features.multi_agent':false}});
-  this.thread=r.thread.id;this.selectedModel=r.model;this.actualServiceTier=r.serviceTier;
-  if(this.runtime.appBuild){
-   try{checkActiveProfile(r,options.cwd??this.root);}
-   catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
-  }
+  const {sandbox:_baseSandbox,...threadOptions}=options;
+  const cwd=options.cwd??this.root,permissions=this.sessionPermissions();
+  let isolated,r;
+  try{
+   isolated=await this.isolatedVoiceConfig(cwd);
+   await permissions.verifyListed(this.rpc.bind(this),cwd);
+   r=await this.rpc('thread/start',{...threadOptions,cwd,approvalPolicy:'never',model,modelProvider:'openai',ephemeral:true,
+    permissions:permissions.id,runtimeWorkspaceRoots:permissions.roots(cwd),serviceTier:this.serviceTier,
+    ...(!this.runtime.appBuild?{environments:[]}:{}),config:isolated});
+   permissions.checkActive(r,cwd);
+   const current=await this.isolatedVoiceConfig(cwd);
+   if(JSON.stringify(current)!==JSON.stringify(isolated))throw Error('Effective configuration changed');
+   const names=Object.keys(isolated).filter(k=>k.startsWith('mcp_servers.')).map(k=>k.slice(12,-8));
+   await verifyResearchMcp(this.rpc.bind(this),r.thread.id,names);
+  }catch{throw this.isolationError();}
   if(r.model!==model||!['fast','priority'].includes(r.serviceTier))
    throw Object.assign(Error('Requested Terra Fast mode was not selected'),{code:'model_mode_mismatch'});
-  if(this.runtime.publicResearch||this.runtime.characterLife||this.runtime.appBuild){
-   try{
-    // Recheck after thread creation and before sending a topic. There is no
-    // public atomic MCP deny-all field; live configuration changes are refused.
-    const current=isolation((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);if(this.runtime.characterLife)current.web_search='disabled';
-    if(JSON.stringify(current)!==JSON.stringify(isolated))throw Error('Research config changed');
-    const names=Object.keys(isolated).filter(k=>k.startsWith('mcp_servers.')).map(k=>k.slice(12,-8));
-    await verifyResearchMcp(this.rpc.bind(this),this.thread,names);
-    if(this.runtime.appBuild)await verifyAppBuildProfile(this.rpc.bind(this),options.cwd??this.root);
-   }
-   catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
-  }
+  this.thread=r.thread.id;this.selectedModel=r.model;this.actualServiceTier=r.serviceTier;
+  this.voiceIsolation={cwd,config:JSON.stringify(isolated)};
   return this.thread;
  }
  saveState(){writeFileSync(this.state,JSON.stringify({thread:this.thread,provider:this.provider,providerThreads:this.providerThreads,policyHashes:this.policyHashes,memoryRevisions:this.memoryRevisions}),{mode:0o600});}
@@ -353,5 +344,36 @@ export class Codex extends EventEmitter {
  // origin: the task this new turn is created for. The turn is bound to it once, at creation
  // (turn/started or the turn/start response, whichever arrives first), via 'turnCreated'.
  bindCreatedTurn(turnId){const origin=this.creatingTurnFor;if(origin===undefined||!turnId)return;this.creatingTurnFor=undefined;this.emit('turnCreated',{turnId,origin});}
- async submit(text,route={model:"gpt-6-luna",effort:"medium",serviceTier:"priority"},attachments=[],origin=null){if(this.runtime.externalPhone){await this.verifyVoiceAccount();if(route.model!==this.selectedModel||route.serviceTier!==this.serviceTier)throw Error('Voice model and mode are fixed');}await this.prepareRoute(route);await this.ensureInstructions();const input=[{type:'text',text},...attachments];if(this.active){try{return await this.rpc('turn/steer',{threadId:this.thread,expectedTurnId:this.active,input})}catch(e){if(this.active)throw e;}}this.creatingTurnFor=origin;let r;try{r=await this.rpc('turn/start',{threadId:this.thread,input,model:route.model,effort:route.effort,serviceTierForTurn:route.serviceTier??(route.model==='gpt-6-astra'?'ultrafast':'priority'),...(this.runtime.appBuild?{permissions:APP_BUILD_PROFILE}:{})});}catch(error){this.creatingTurnFor=undefined;throw error;}this.bindCreatedTurn(r.turn.id);if(!this.endedTurns.has(r.turn.id))this.active=r.turn.id;this.unstartedThread=false;return r;}
+ async submit(text,route={model:"gpt-6-luna",effort:"medium",serviceTier:"priority"},attachments=[],origin=null){
+  let execution={};
+  if(this.runtime.externalPhone){
+   await this.verifyVoiceAccount();
+   if(route.model!==this.selectedModel||route.serviceTier!==this.serviceTier)throw Error('Voice model and mode are fixed');
+   execution={permissions:this.sessionPermissions().id};
+   if(!this.runtime.appBuild){
+    try{
+     const {cwd,config}=this.voiceIsolation;
+     if(JSON.stringify(await this.isolatedVoiceConfig(cwd))!==config)throw Error('Effective configuration changed');
+    }catch{throw this.isolationError();}
+    execution={...execution,environments:[],runtimeWorkspaceRoots:[]};
+   }
+  }
+  await this.prepareRoute(route);
+  await this.ensureInstructions();
+  const input=[{type:'text',text},...attachments];
+  if(this.active){
+   try{return await this.rpc('turn/steer',{threadId:this.thread,expectedTurnId:this.active,input});}
+   catch(e){if(this.active)throw e;}
+  }
+  this.creatingTurnFor=origin;
+  let r;
+  try{
+   r=await this.rpc('turn/start',{threadId:this.thread,input,model:route.model,effort:route.effort,
+    serviceTierForTurn:route.serviceTier??(route.model==='gpt-6-astra'?'ultrafast':'priority'),...execution});
+  }catch(error){this.creatingTurnFor=undefined;throw error;}
+  this.bindCreatedTurn(r.turn.id);
+  if(!this.endedTurns.has(r.turn.id))this.active=r.turn.id;
+  this.unstartedThread=false;
+  return r;
+ }
 }

@@ -8,7 +8,7 @@ The Mac and Linux entry point is the same Python `rose.app`, with the same signe
 
 From your own checkout, first preserve local changes. Fetch and integrate [PR #508](https://github.com/Immortal-Protocols/RoseOS-1/pull/508) from `main` once merged (or review `models/terra-fast-transcripts` before then). This work never accessed Nathan's active Mac checkout.
 
-Use Node 22+ and Codex CLI with the app-server API inspected here at **0.163.0**. Authenticate under the backend's own OS account and writable Codex home, using the supported owner-interactive flow:
+Use Node 22+ and a released Codex CLI **0.167.1 or later** with the named permission profile API. Authenticate under the backend's own OS account and writable Codex home, using the supported owner-interactive flow:
 
 ```sh
 codex login                 # choose Sign in with ChatGPT
@@ -21,7 +21,11 @@ The owner completes sign-in. Do not copy authentication files/tokens between hos
 
 The exact model is `gpt-6.1-terra`. Startup requires it in `model/list` and requires an advertised Fast tier (`fast`, or its supported `priority` alias). It sets `features.fast_mode=true`, the thread's `serviceTier`, and each new turn's `serviceTierForTurn`; it rejects a thread response reporting another model or Standard tier. The selected model/tier/authentication are logged. This checks the app-server's selected configuration; actual serving/latency still requires acceptance with the signed-in account.
 
-References: [Codex speed settings](https://learn.chatgpt.com/docs/agent-configuration/speed), [authentication](https://learn.chatgpt.com/docs/auth), [Fast/priority naming](https://openai.com/api-fast-mode/). Local 0.163.0 generated JSON schemas confirm `dynamicTools`, `ephemeral`, `serviceTierForTurn` and managed `refreshToken` support. Phone tools use `item/tool/call` responses, not model-authored shell commands.
+Rose selects the `rose_voice` sandbox for conversations, phone workers, Computer Link workers and character sessions. The profile grants no workspace access, denies reads and writes outside the minimal OS runtime, and disables direct network access for tool processes. The bridge disables native shell, local image views, hooks, memories, apps, plugins, subagents and ambient MCP tools. It checks the effective settings before opening a thread and before sending each new request. If it cannot verify the sandbox, the session refuses to run.
+
+The authenticated Codex process still connects to the model service. Rose supplies phone actions and screenshots through its own task-scoped tools. Computer Link can still act on the visible Mac through the paired phone when the owner taps **Allow Rose**. The app writer uses its own `rose_app_build` profile with a shell confined to the generated app's source.
+
+References: [Codex speed settings](https://learn.chatgpt.com/docs/agent-configuration/speed), [authentication](https://learn.chatgpt.com/docs/auth), [Fast/priority naming](https://openai.com/api-fast-mode/).
 
 ## Start on the Mac
 

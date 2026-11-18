@@ -220,7 +220,8 @@ class CodexConductor:
                 self.computer_tools = self.client.request('computer_catalog', 'conversation')['tools']
             self._open(self.sessions['conversation'], self._policy(), self._conversation_tools())
         except Exception as exc:
-            code = str(exc) if str(exc) in {'chatgpt_login_required', 'model_unavailable', 'fast_unavailable', 'model_mode_mismatch'} else 'codex_start_failed'
+            code = str(exc) if str(exc) in {'chatgpt_login_required', 'model_unavailable', 'fast_unavailable',
+                                           'model_mode_mismatch', 'voice_isolation_unavailable'} else 'codex_start_failed'
             self.log(self.sessions['conversation'], 'failure', reason=code)
             self.bus.emit('error', message=code)
             self._stopped.set()
@@ -811,8 +812,11 @@ class CodexConductor:
         s.busy = False
         if not s.task:
             self._workspace_turn_ended(s, 'failed')
-        code = str(error) if str(error) in {'chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch'} else 'backend_operation_failed'
+        code = str(error) if str(error) in {'chatgpt_login_required','model_unavailable','fast_unavailable',
+                                          'model_mode_mismatch','voice_isolation_unavailable'} else 'backend_operation_failed'
         message = 'Sign in with ChatGPT again on this backend, then restart Rose.' if code == 'chatgpt_login_required' else 'Codex or phone operation failed; check backend setup.'
+        if code == 'voice_isolation_unavailable':
+            message = 'Rose could not verify the Codex sandbox and stopped this session.'
         if isinstance(error, PhoneTaskError):
             code, message = error.code, str(error)
         self.log(s, 'failure', reason=code)

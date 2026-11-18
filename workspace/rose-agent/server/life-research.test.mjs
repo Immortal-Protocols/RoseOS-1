@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {EventEmitter} from 'node:events';
 import {Codex} from './codex.mjs';
+import {voiceSessionProfile} from './session-permissions.mjs';
 import {publicPageReceipt,lifeResearchPolicy,researchConfig,verifyResearchMcp,supportsResearchVersion} from './life-research.mjs';
 
 const opened=url=>({type:'webSearch',action:{type:'openPage',url},status:'completed'});
@@ -24,9 +25,10 @@ test('actual child launch scopes the MCP override and gates all topic submission
   if(m.method==='config/read'){
    const servers={node_repl:{enabled:!args.includes('mcp_servers.node_repl.enabled=false')}};
    if(scenario==='unknown')servers.unexpected={};
-   result={config:{mcp_servers:servers}};
+   result={config:{mcp_servers:servers,default_permissions:'rose_voice',permissions:{rose_voice:${JSON.stringify(voiceSessionProfile)}}}};
   }
-  if(m.method==='thread/start')result={thread:{id:'research'},model:'gpt-6.1-terra',serviceTier:'priority'};
+  if(m.method==='permissionProfile/list')result={data:[{id:'rose_voice',allowed:true}]};
+  if(m.method==='thread/start')result={thread:{id:'research'},model:'gpt-6.1-terra',serviceTier:'priority',activePermissionProfile:{id:'rose_voice'}};
   if(m.method==='mcpServerStatus/list')result={data:[{runtimeStatus:scenario==='connected'?'connected':'disabled',tools:{},resources:[],resourceTemplates:[]}]};
   if(m.method==='turn/start')result={turn:{id:'turn'}};
   console.log(JSON.stringify({id:m.id,result}));
@@ -42,7 +44,7 @@ test('actual child launch scopes the MCP override and gates all topic submission
     }else await assert.rejects(c.init(),{code:'research_isolation_unavailable'});
    }finally{await c.closeConfirmed();}
    const rows=readFileSync(record,'utf8').trim().split('\n').map(JSON.parse),args=rows[0].args;
-   assert.equal(args.includes('mcp_servers.node_repl.enabled=false'),publicResearch);
+   assert.ok(args.includes('mcp_servers.node_repl.enabled=false'));
    const methods=rows.slice(1).map(r=>r.method);
    if(scenario==='unknown')assert.equal(methods.includes('thread/start'),false);
    if(scenario!=='normal')assert.equal(methods.includes('turn/start'),false);
@@ -58,7 +60,7 @@ test('unknown or older native contracts fail closed before research process star
  for(const version of ['codex-cli 0.163.0','codex-cli 0.166.9','unknown','0.167.0'])assert.equal(supportsResearchVersion(version),false);
  for(const version of ['codex-cli 0.167.0-alpha.4\n','codex-cli 0.167.0','codex-cli 1.0.0'])assert.equal(supportsResearchVersion(version),true);
  const source=readFileSync(new URL('./codex.mjs',import.meta.url),'utf8');
- assert.ok(source.indexOf('supportsResearchVersion(version.stdout')<source.indexOf('this.child=spawn('));
+ assert.ok(source.indexOf('supportsSessionPermissionsVersion(version.stdout')<source.indexOf('this.child=spawn('));
 });
 test('only observed completed public page operations produce receipts',()=>{
  assert.deepEqual(publicPageReceipt(opened('https://example.com/source')),
@@ -81,13 +83,15 @@ test('research keeps existing account/model and restricts thread to public web t
   c.rpc=async(method,params)=>{calls.push({method,params});
    if(method==='account/read')return {account:{type:'chatgpt'}};
    if(method==='model/list')return {data:[{id:'gpt-6.1-terra',serviceTiers:[{id:'fast'}]}]};
-   if(method==='config/read')return {config:{mcp_servers:{private_notes:{enabled:false}}}};
+   if(method==='config/read')return {config:{default_permissions:'rose_voice',permissions:{rose_voice:voiceSessionProfile},
+    mcp_servers:{private_notes:{enabled:false}}}};
+   if(method==='permissionProfile/list')return {data:[{id:'rose_voice',allowed:true}]};
    if(method==='mcpServerStatus/list')return {data:[{runtimeStatus:'disabled',tools:{},resources:[],resourceTemplates:[]}]};
-   return {thread:{id:'research'},model:'gpt-6.1-terra',serviceTier:'fast'};
+   return {thread:{id:'research'},model:'gpt-6.1-terra',serviceTier:'fast',activePermissionProfile:{id:'rose_voice'}};
   };
   await c.initVoiceThread({dynamicTools:[]});
   const p=calls.find(c=>c.method==='thread/start').params;
-  assert.equal(p.ephemeral,true);assert.equal(p.sandbox,'read-only');
+  assert.equal(p.ephemeral,true);assert.equal(p.sandbox,undefined);assert.equal(p.permissions,'rose_voice');
   assert.equal(p.config.web_search,publicResearch?'live':'disabled');
   for(const key of ['features.shell_tool','features.apps','features.multi_agent'])assert.equal(p.config[key],false);
   assert.deepEqual(p.dynamicTools,[]);
@@ -127,8 +131,10 @@ test('enabled MCP refuses before thread and changed config refuses before any to
    calls.push(method);
    if(method==='account/read')return {account:{type:'chatgpt'}};
    if(method==='model/list')return {data:[{id:'gpt-6.1-terra',serviceTiers:[{id:'fast'}]}]};
-   if(method==='config/read')return {config:{mcp_servers:{private_notes:{enabled:!changeAfterStart||++reads>1}}}};
-   if(method==='thread/start')return {thread:{id:'research'},model:'gpt-6.1-terra',serviceTier:'fast'};
+   if(method==='config/read')return {config:{default_permissions:'rose_voice',permissions:{rose_voice:voiceSessionProfile},
+    mcp_servers:{private_notes:{enabled:!changeAfterStart||++reads>1}}}};
+   if(method==='permissionProfile/list')return {data:[{id:'rose_voice',allowed:true}]};
+   if(method==='thread/start')return {thread:{id:'research'},model:'gpt-6.1-terra',serviceTier:'fast',activePermissionProfile:{id:'rose_voice'}};
    throw Error('Unexpected RPC');
   };
   await assert.rejects(c.initVoiceThread({}),{code:'research_isolation_unavailable'});

@@ -2,10 +2,9 @@
 // It has no owner history, no phone tools, no web search and no network; it may write only inside the project's
 // source directory (Codex workspace-write sandbox). Its one possible dynamic tool is the bridge's own fixed
 // agent_container (below, §7.7a client-backend-v1): the builder runs that command in the project's recorded Chariot
-// agent container, so the writer itself still gets no network, no shell outside its sandbox and no credentials. It does NOT isolate reads: keeping the writer away from
-// the server's configuration and keys needs a separate OS user or a container (APP-BUILDER.md §5), so this purpose is
-// enabled nowhere until that exists.
+// agent container. The writer's named permission profile below limits filesystem access and denies network access.
 import {researchConfig} from './life-research.mjs';
+import {isObject,privateSessionFilesystem,sessionPermissions} from './session-permissions.mjs';
 
 export const appBuildPolicy = `You write the source of one small Android app in the current directory. The host owns
 the Android build: it compiles, checks, signs and installs the app, and it reports failures back to the owner. You
@@ -245,95 +244,16 @@ export function appBuildToolResult(result) {
 export const APP_BUILD_PROFILE = 'rose_app_build';
 export const appBuildProfile = Object.freeze({
  extends:':workspace',
- filesystem:Object.freeze({':root':'deny',':minimal':'read',':tmpdir':'deny',':slash_tmp':'deny','/private/var/tmp':'deny',
+ filesystem:Object.freeze({...privateSessionFilesystem,
   ':workspace_roots':Object.freeze({'.':'write'})}),
  network:Object.freeze({enabled:false}),
 });
 
-function tomlInline(value) {
- if(typeof value==='string')return JSON.stringify(value);
- if(typeof value==='boolean')return String(value);
- return '{'+Object.entries(value).map(([k,v])=>JSON.stringify(k)+' = '+tomlInline(v)).join(', ')+'}';
-}
-
-/** The app-server arguments that define the profile and make it the default; --strict-config refuses unknown keys. */
-export function appBuildLaunchArgs() {
- return ['--strict-config','-c',`default_permissions=${JSON.stringify(APP_BUILD_PROFILE)}`,
-  '-c',`permissions.${APP_BUILD_PROFILE}=${tomlInline(appBuildProfile)}`];
-}
-
-/** Codex 0.167.1 or later, released: the version whose permission-profile API was checked. Anything else is refused. */
-export function supportsAppBuildVersion(value) {
- const m=/^codex-cli (\d+)\.(\d+)\.(\d+)(-[A-Za-z0-9.-]+)?\s*$/.exec(value);
- if(!m||m[4])return false;  // a pre-release of 0.167.1 is not 0.167.1
- const [major,minor,patch]=m.slice(1,4).map(Number);
- return major>0||minor>167||(minor===167&&patch>=1);
-}
-
-/** The value with every null-valued key removed, at any depth: Codex's config/read reports each published field of
- * a profile, null when unset (description, workspace_roots, filesystem.glob_scan_max_depth, other network fields), and
- * null is unset. Only nulls go: any other value, extra key or difference still differs. */
-const isObject=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
-export function withoutNulls(v){
- if(Array.isArray(v))return v.map(withoutNulls);
- if(!isObject(v))return v;
- return Object.fromEntries(Object.entries(v).filter(([,x])=>x!==null).map(([k,x])=>[k,withoutNulls(x)]));
-}
-
-function canonical(v){
- if(v===null||typeof v!=='object')return JSON.stringify(v);
- if(Array.isArray(v))return '['+v.map(canonical).join(',')+']';
- return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
-}
-
-// Settings that decide the writer's isolation. A selected config profile (`profile` + `[profiles.<name>]`) can
-// carry any of them; none may come from there.
-const ISOLATION_KEYS=['sandbox_mode','sandbox_workspace_write','default_permissions','permissions'];
-
-/** The effective configuration must select exactly this profile, as defined here: no legacy sandbox (which takes
- * precedence over profiles) at the top level or in a selected config profile, and no other layer adding to it
- * (profile entries merge across layers). A field that is absent or null is unset. */
-export function checkAppBuildProfile(config) {
- if(!isObject(config))throw Error('app_build_isolation_unavailable');
- if(config.sandbox_mode!=null||config.sandbox_workspace_write!=null)throw Error('app_build_isolation_unavailable');
- if(config.profile!=null){
-  const selected=typeof config.profile==='string'&&isObject(config.profiles)?config.profiles[config.profile]:undefined;
-  if(!isObject(selected)||ISOLATION_KEYS.some(k=>selected[k]!=null))throw Error('app_build_isolation_unavailable');
- }
- if(config.default_permissions!==APP_BUILD_PROFILE)throw Error('app_build_isolation_unavailable');
- if(canonical(withoutNulls(config.permissions?.[APP_BUILD_PROFILE]))!==canonical(appBuildProfile))throw Error('app_build_isolation_unavailable');
-}
-
-/** The thread/start response must report this profile active (activePermissionProfile, nullable in 0.167.1), with
- * no parent other than the one defined here, and every thread-scoped workspace root (runtimeWorkspaceRoots, which
- * materialize `:workspace_roots`, default []) must be the job's source: `:workspace_roots` is the writer's only
- * writable path, so an extra root would widen it. */
-export function checkActiveProfile(response, cwd) {
- const active=response?.activePermissionProfile;
- if(!isObject(active)||active.id!==APP_BUILD_PROFILE)throw Error('app_build_isolation_unavailable');
- if(active.extends!=null&&active.extends!==appBuildProfile.extends)throw Error('app_build_isolation_unavailable');
- const roots=response.runtimeWorkspaceRoots??[];
- if(!Array.isArray(roots)||roots.some(root=>root!==cwd))throw Error('app_build_isolation_unavailable');
-}
-
-/** permissionProfile/list for the job's cwd: the profile must be listed and allowed (selection, not enforcement). */
-export async function verifyAppBuildProfile(rpc, cwd) {
- let cursor;const seen=new Set();
- for(let page=0;page<16;page++){
-  const result=await rpc('permissionProfile/list',{cwd,limit:100,...(cursor?{cursor}:{})});
-  if(!Array.isArray(result?.data))throw Error('app_build_isolation_unavailable');
-  const entry=result.data.find(p=>p?.id===APP_BUILD_PROFILE);
-  if(entry){
-   if(entry.allowed!==true)throw Error('app_build_isolation_unavailable');
-   return;
-  }
-  if(!result.nextCursor)break;
-  cursor=result.nextCursor;
-  if(typeof cursor!=='string'||cursor.length>4096||seen.has(cursor))throw Error('app_build_isolation_unavailable');
-  seen.add(cursor);
- }
- throw Error('app_build_isolation_unavailable');
-}
+export const appBuildPermissions=sessionPermissions(APP_BUILD_PROFILE,appBuildProfile,cwd=>[cwd],
+ 'app_build_isolation_unavailable');
+export const {launchArgs:appBuildLaunchArgs,checkConfig:checkAppBuildProfile,
+ checkActive:checkActiveProfile,verifyListed:verifyAppBuildProfile}=appBuildPermissions;
+export {supportsSessionPermissionsVersion as supportsAppBuildVersion,withoutNulls} from './session-permissions.mjs';
 
 /** Thread config for app_build: the research isolation (no MCP servers, apps, memories, hooks, plugins, sub-agents,
  * image views or project docs) with web search off and the sandboxed shell kept, because writing source needs it.
