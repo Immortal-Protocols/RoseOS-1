@@ -19,9 +19,13 @@ mapfile -t SOURCES < <(find "$APP/src" "$OUT/generated" -name '*.java' -type f |
 mapfile -t CLASSES < <(find "$OUT/classes" -name '*.class' -type f | sort)
 "$BT/d8" --min-api 30 --lib "$ANDROID_JAR" --output "$OUT/dex" "${CLASSES[@]}"
 cp "$OUT/resources.apk" "$OUT/unaligned.apk"
-(cd "$OUT/dex" && zip -q "$OUT/unaligned.apk" classes*.dex)
+# Dex is stored, not deflated: the OS bundles this APK as a preprocessed import.
+(cd "$OUT/dex" && zip -q -0 "$OUT/unaligned.apk" classes*.dex)
 "$BT/zipalign" -f 4 "$OUT/unaligned.apk" "$OUT/calculator-unsigned.apk"
-"$BT/zipalign" -c 4 "$OUT/calculator-unsigned.apk"
+"$BT/zipalign" -c -p 4 "$OUT/calculator-unsigned.apk"
+if unzip -v "$OUT/calculator-unsigned.apk" | awk '$NF ~ /\.dex$/ && $2 != "Stored" {bad=1} END {exit !bad}'; then
+  echo "Compressed dex in $OUT/calculator-unsigned.apk" >&2; exit 1
+fi
 "$BT/aapt" dump badging "$OUT/calculator-unsigned.apk" > "$OUT/apk-metadata.txt"
 sha256sum "$OUT/calculator-unsigned.apk" > "$OUT/SHA256SUMS"
 "$JAVA" -version 2> "$OUT/java-version.txt"
