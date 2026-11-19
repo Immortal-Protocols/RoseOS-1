@@ -9,6 +9,8 @@ on:
     paths:
       - 'workspace/**'
       - 'prototypes/voice-phone-demo/**'
+      - 'prototypes/rose-hifi/glacier.py'
+      - 'prototypes/rose-keyboard/src/keyboard.js'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
@@ -126,6 +128,8 @@ on:
     paths:
       - 'workspace/**'
       - 'prototypes/voice-phone-demo/**'
+      - 'prototypes/rose-hifi/glacier.py'
+      - 'prototypes/rose-keyboard/src/keyboard.js'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
@@ -271,7 +275,10 @@ jobs:
           git archive e1b702ee3b8a6bf656b5cc59bd765787622ae543 prototypes/voice-phone-demo | tar -x -C "$pr288"
           python3 -m venv "$RUNNER_TEMP/pr288-venv"
           "$RUNNER_TEMP/pr288-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: \
+            -r prototypes/voice-phone-demo/requirements-ci-testclient.txt \
             $(grep -E '^(numpy|pillow|fastapi)==' "$pr288/prototypes/voice-phone-demo/requirements.txt") cryptography
+          "$RUNNER_TEMP/pr288-venv/bin/pip" check
+          "$RUNNER_TEMP/pr288-venv/bin/python" prototypes/voice-phone-demo/rose/tests/test_ci_testclient.py
           "$RUNNER_TEMP/pr288-venv/bin/pip" list --disable-pip-version-check | grep -iE '^(numpy|pillow|fastapi|cryptography) '
           echo "ROSE_PR288_DIR=$pr288/prototypes/voice-phone-demo" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/pr288-venv/bin" >> "$GITHUB_PATH"
@@ -280,7 +287,10 @@ jobs:
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/codex-voice-venv"
           "$RUNNER_TEMP/codex-voice-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: \
+            -r prototypes/voice-phone-demo/requirements-ci-testclient.txt \
             $(grep -E '^(numpy|pillow|fastapi|uvicorn|websockets|soundfile|httpx)==' prototypes/voice-phone-demo/requirements.txt) cryptography
+          "$RUNNER_TEMP/codex-voice-venv/bin/pip" check
+          "$RUNNER_TEMP/codex-voice-venv/bin/python" prototypes/voice-phone-demo/rose/tests/test_ci_testclient.py
           PYTHONPATH="$GITHUB_WORKSPACE/prototypes/voice-phone-demo" \
             "$RUNNER_TEMP/codex-voice-venv/bin/python" -m unittest rose.tests.test_codex rose.tests.test_builder_voice rose.tests.test_computer_link rose.tests.test_tailnet rose.tests.test_vision_phone rose.tests.test_voice_identity rose.tests.test_voice_catalog rose.tests.test_composer rose.tests.test_app_builder rose.tests.test_builder_routes rose.tests.test_workspace_tasks rose.tests.test_app_generator rose.tests.test_app_capabilities rose.tests.test_app_dependencies rose.tests.test_app_java17 rose.tests.test_app_apilevel rose.tests.test_app_api_summary rose.tests.test_app_server_summary rose.tests.test_app_profile rose.tests.test_app_contract rose.tests.test_app_share rose.tests.test_app_migrations rose.tests.test_app_ledger_level2 rose.tests.test_app_owner_records rose.tests.test_app_native_invites rose.tests.test_app_server_delivery rose.tests.test_app_server_manifest rose.tests.test_app_writer_policy rose.tests.test_app_host rose.tests.test_app_builder_one_server rose.tests.test_app_codegen rose.tests.test_app_host_agent rose.tests.test_app_agent_backend rose.tests.test_app_backend_migration rose.tests.test_textnorm rose.tests.test_app_isolation rose.tests.test_app_isolation_bubblewrap rose.tests.test_app_gradle rose.tests.test_app_gradle_prepare rose.tests.test_app_gradle_builder
       - name: App builder build and sign (pinned SDK, throwaway project keys, nothing installed)
