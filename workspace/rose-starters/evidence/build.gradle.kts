@@ -73,6 +73,15 @@ val compareThemeSnapshots by tasks.registering {
         val groups = root.listFiles { f -> f.isDirectory }.orEmpty().sortedBy { it.name }
         if (groups.isEmpty()) throw GradleException("No behaviour snapshots in $root: did ThemeInvarianceTest run?")
         val lines = mutableListOf<String>()
+        // Folder names come from template ids, which a writer controls: escape everything that goes into JSON.
+        fun json(text: String) = "\"" + text.flatMap { c ->
+            when {
+                c == '"' -> listOf('\\', '"')
+                c == '\\' -> listOf('\\', '\\')
+                c < ' ' -> "\\u%04x".format(c.code).toList()
+                else -> listOf(c)
+            }
+        }.joinToString("") + "\""
         val problems = mutableListOf<String>()
         for (template in groups) {
             val byApi = template.listFiles { f -> f.name.endsWith(".txt") }.orEmpty().groupBy { it.name.substringAfter("-api") }
@@ -80,7 +89,8 @@ val compareThemeSnapshots by tasks.registering {
                 val texts = files.sortedBy { it.name }.associate { it.name.substringBefore("-api") to it.readText() }
                 val distinct = texts.values.toSet().size
                 val same = distinct == 1 && texts.size == 3
-                lines += "{\"template\":\"${template.name}\",\"api\":${api.removeSuffix(".txt")},\"themes\":[${texts.keys.joinToString(",") { "\"$it\"" }}],\"identical\":$same}"
+                val apiLevel = api.removeSuffix(".txt").toIntOrNull() ?: throw GradleException("Unexpected snapshot ${template.name}/$api")
+                lines += "{\"template\":${json(template.name)},\"api\":$apiLevel,\"themes\":[${texts.keys.joinToString(",") { json(it) }}],\"identical\":$same}"
                 if (!same) problems += "${template.name} API ${api.removeSuffix(".txt")}: ${texts.size} themes, $distinct distinct snapshots (${texts.keys})"
             }
         }

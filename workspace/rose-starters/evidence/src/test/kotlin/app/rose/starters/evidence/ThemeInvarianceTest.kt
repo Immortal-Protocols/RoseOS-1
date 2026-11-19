@@ -62,6 +62,9 @@ class ThemeInvarianceTest(private val templateName: String, private val themeId:
             rule.waitForIdle()
             out.append("## after $control\n").append(snapshot())
         }
+        // The template's id is the writer's: it names a folder and goes into report.json, so it must be a plain
+        // lowercase id (the same rule as starters.json), never a path or anything JSON would need to escape.
+        assertTrue("$templateName: its id '${template.id}' is not a lowercase id", ID.matches(template.id))
         val dir = File(System.getProperty("rose.evidence.out") ?: "build/evidence", template.id).apply { mkdirs() }
         File(dir, "$themeId-api${Build.VERSION.SDK_INT}.txt").writeText(out.toString())
     }
@@ -119,6 +122,7 @@ class ThemeInvarianceTest(private val templateName: String, private val themeId:
 
     companion object {
         private const val MAX_CLICKS = 12
+        private val ID = Regex("[a-z][a-z0-9-]{0,39}")
         private val THEMES = mapOf("material3" to Material3Theme, "minimal" to MinimalTheme, "skeuomorphic" to SkeuomorphicTheme)
         private val PILOT_TEMPLATES = listOf(
             "app.rose.template.feed.FeedTemplate",
