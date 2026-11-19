@@ -1,0 +1,23 @@
+{
+  "theme": "Winds / Zephyr",
+  "status": "implementation guidance derived from raster, not exact sampled source tokens",
+  "colors": {
+    "background": "#D9EEE6",
+    "surface": "#F2F8F2",
+    "surfaceRaised": "#FFFFFF",
+    "text": "#102D2D",
+    "textSecondary": "#405B57",
+    "accent": "#FFF0A6",
+    "onAccent": "#102D2D",
+    "pressed": "#E7D67D",
+    "selected": "#B8DDD1",
+    "border": "#577A70",
+    "focus": "#245F54",
+    "disabledSurface": "#D7E1DA",
+    "disabledText": "#65766E",
+    "error": "#A52C3B",
+    "micMuted": "#A52C3B",
+    "warning": "#775100",
+    "success": "#276345"
+  }
+}

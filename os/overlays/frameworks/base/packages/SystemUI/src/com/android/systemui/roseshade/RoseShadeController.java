@@ -458,6 +458,16 @@ final class RoseShadeController {
                 mContext.getResources().getDisplayMetrics()));
     }
 
+    /**
+     * A quick-settings tile background: accent when on, tile when off. On a light theme (Winds) the accent and tile
+     * fills are close in luminance, so an on tile also carries a 2dp ring in its accent ink to read as on.
+     */
+    private GradientDrawable tile(boolean on, float radius) {
+        final GradientDrawable d = round(c(on ? RoseTheme.Shade.ACCENT : RoseTheme.Shade.TILE), radius);
+        if (on && RoseTheme.light(mTheme)) d.setStroke(dp(2), c(RoseTheme.Shade.ACCENT_INK));
+        return d;
+    }
+
     private static GradientDrawable round(int color, float radius) {
         final GradientDrawable d = new GradientDrawable();
         d.setColor(color);
@@ -758,7 +768,7 @@ final class RoseShadeController {
             for (RoseQuickSettings.Tile tile : RoseQuickSettings.TILES) {
                 final FrameLayout t = new FrameLayout(mContext);
                 final boolean on = mQuickSettings.isOn(tile);
-                t.setBackground(round(c(on ? RoseTheme.Shade.ACCENT : RoseTheme.Shade.TILE), dp(18)));
+                t.setBackground(tile(on, dp(18)));
                 t.setContentDescription(tile.label + " " + mQuickSettings.stateLabel(tile));
                 final ImageView i = icon(glyphs[tile.ordinal()], c(on ? RoseTheme.Shade.ACCENT_INK
                         : RoseTheme.Shade.TEXT), 24);
@@ -783,7 +793,7 @@ final class RoseShadeController {
                     t.setGravity(Gravity.CENTER_VERTICAL);
                     t.setPadding(dp(14), dp(14), dp(14), dp(14));
                     final boolean on = mQuickSettings.isOn(tile);
-                    t.setBackground(round(c(on ? RoseTheme.Shade.ACCENT : RoseTheme.Shade.TILE), dp(20)));
+                    t.setBackground(tile(on, dp(20)));
                     t.addView(icon(glyphs[tile.ordinal()], c(on ? RoseTheme.Shade.ACCENT_INK
                             : RoseTheme.Shade.TEXT), 24));
                     final LinearLayout labels = new LinearLayout(mContext);

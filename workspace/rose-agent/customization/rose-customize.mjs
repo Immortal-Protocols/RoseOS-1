@@ -19,7 +19,7 @@ Commands:
   columns <auto|0|3..8>                  Home column count (auto = 0)
   wallpaper <variant>                    curated Oxblood variant (see list)
   font <font>                            bundled font (see list)
-  theme <theme>                          Rose theme: oxblood or glacier (see list)
+  theme <theme>                          Rose theme: oxblood, glacier or winds
   glasses-hook [--on|--off] [--tray | --app <package>]
                                          glasses-on hook; give at least one option
   list                                   controls and allowed values from the catalog

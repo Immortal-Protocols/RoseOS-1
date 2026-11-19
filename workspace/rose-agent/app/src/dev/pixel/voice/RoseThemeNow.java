@@ -9,7 +9,7 @@ import android.graphics.BitmapFactory;
  * <p>The choice lives in CustomizationStore (theme), which updates {@link #id} on every read, so a surface built after a
  * change draws it. Surfaces resolve their colours through {@link #c} (artwork colour, RoseTheme.map) and {@link #w}
  * (warning, destructive and muted colours, RoseTheme.warm) when they are built or drawn; Home and Rose rebuild on a
- * theme change. {@link #prepare} also decodes the theme's raster wallpaper (Glacier's field) once; when that fails, the
+ * theme change. {@link #prepare} also decodes the theme's raster wallpaper (its RoseTheme.wallpaperDrawable) once; when that fails, the
  * field falls back to its own geometry in the theme's colours, never to another theme's wallpaper. */
 final class RoseThemeNow {
  private RoseThemeNow() {}
@@ -26,7 +26,10 @@ final class RoseThemeNow {
    try {
     BitmapFactory.Options o = new BitmapFactory.Options();
     o.inScaled = false;
-    Bitmap b = BitmapFactory.decodeResource(ctx.getResources(), R.drawable.rose_glacier_field, o);
+    // Each raster theme ships its wallpaper as its own named drawable (themes/rose-themes.json, copied by
+    // scripts/rose-themes.py); test_rose_themes checks every one exists in this package.
+    int res = ctx.getResources().getIdentifier(RoseTheme.wallpaperDrawable(t), "drawable", ctx.getPackageName());
+    Bitmap b = res == 0 ? null : BitmapFactory.decodeResource(ctx.getResources(), res, o);
     if (b != null) { raster = b; rasterTheme = t; }
    } catch (RuntimeException | OutOfMemoryError unavailable) { raster = null; rasterTheme = null; }
   }
@@ -34,6 +37,14 @@ final class RoseThemeNow {
 
  /** The raster wallpaper of theme, or null (a procedural theme, or not decoded). */
  static Bitmap raster(String theme) { return theme != null && theme.equals(rasterTheme) ? raster : null; }
+
+ /** System bar icons for the current theme: light icons on Oxblood and Glacier (as before), dark icons on a light
+  * theme (Winds), so the clock, battery and navigation stay readable over its pale field. */
+ static void bars(android.view.View decor) {
+  int light = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+  int flags = decor.getSystemUiVisibility() & ~light;
+  decor.setSystemUiVisibility(RoseTheme.light(id) ? flags | light : flags);
+ }
 
  static int c(int argb) { return RoseTheme.map(id, argb); }
  static int w(int argb) { return RoseTheme.warm(id, argb); }
