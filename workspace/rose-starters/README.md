@@ -184,6 +184,18 @@ not built there and need no ask. The other build rules:
 - no binary files besides the wrapper jar (no other `.jar`, `.aar`, `.so` or `.dex`);
 - no signing configs or splits: the builder sets the app's identity and signs it.
 
+## How Rose starts an app from a starter
+
+A create request may name `starter: {"template": id, "theme": id}`, using the ids in `starters.json`. The builder
+then writes the project's first tree with `rose.app_builder.starters.skeleton`. The tree contains:
+- `app/`, whose `MainActivity` is `RoseTheme(<Theme>) { <Template>.App() }`;
+- the vendored `:design`, `:design-testing` and `:examples` modules;
+- the chosen template and theme, as source only;
+- this catalog.
+
+The writer then customizes inside the template. Without a starter, the builder's plain skeleton is unchanged.
+`starters.json` must list exactly the pilots in `matrix/.../Pilots.kt`; `test_app_starters` checks that.
+
 ## Not here (other owners)
 
 - App Core owns ordinary Gradle/Kotlin/Compose support in Rose's builder (build, sign, install, update).

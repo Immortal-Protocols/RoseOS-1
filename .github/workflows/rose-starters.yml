@@ -7,11 +7,15 @@ on:
   pull_request:
     paths:
       - 'workspace/rose-starters/**'
+      - 'prototypes/voice-phone-demo/rose/app_builder/starters.py'
+      - 'prototypes/voice-phone-demo/rose/tests/test_app_starters.py'
       - '.github/workflows/rose-starters.yml'
   push:
     branches: [main]
     paths:
       - 'workspace/rose-starters/**'
+      - 'prototypes/voice-phone-demo/rose/app_builder/starters.py'
+      - 'prototypes/voice-phone-demo/rose/tests/test_app_starters.py'
       - '.github/workflows/rose-starters.yml'
 
 permissions:
@@ -34,6 +38,9 @@ jobs:
           persist-credentials: false
       - name: Use JDK 21
         run: echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+      - name: Rose's starter skeleton (the builder's first tree for a template under a theme)
+        working-directory: .
+        run: PYTHONPATH=prototypes/voice-phone-demo python3 -m unittest -v rose.tests.test_app_starters
       - name: Check (unit tests on API 34 and 37, lint, boundaries) and build the debug apps
         run: ./gradlew --no-daemon check :sample:assembleDebug :matrix:assembleDebug
       - name: Keep test reports and screenshots
