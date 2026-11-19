@@ -1,0 +1,72 @@
+name: Starter pilots (compiled, scripted writer)
+
+# Manual only. It builds Rose starter pilots (every template under every theme, or the ones named) through the app
+# builder's whole job: Gradle inside bubblewrap with no network, the binary checks, and signing with throwaway keys
+# that never leave the runner (rose.app_builder.starter_pilots). It uploads the signed APKs, pilots.json and
+# SHA256SUMS as a short-lived artifact for rose.app_builder.device_check to install and launch on a device.
+#
+# These are compiled starter trees with a scripted writer that changes nothing. They are not apps Rose's writer
+# generated, and every record says so. No secrets, phone, emulator, provider or cloud access: the network is used
+# only to provision the pinned stack, exactly as the App offline tests gradle job does.
+on:
+  workflow_dispatch:
+    inputs:
+      pilots:
+        description: 'Space-separated TEMPLATE:THEME pairs, or "all"'
+        required: false
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: starter-pilots-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Pinned Android SDK and Gradle stack (JDK, Gradle, SDK packages, offline dependency cache)
+        run: |
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="$RUNNER_TEMP/android-sdk" ROSE_GRADLE_STACK="$RUNNER_TEMP/gradle-stack"
+          bash scripts/setup-android-sdk.sh
+          bash scripts/setup-android-gradle.sh
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ROSE_GRADLE_STACK=$ROSE_GRADLE_STACK" >> "$GITHUB_ENV"
+      - name: Build isolation (bubblewrap with unprivileged user namespaces)
+        run: |
+          set -euo pipefail
+          command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
+          # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; bubblewrap needs them. This
+          # changes the disposable runner only.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          /usr/bin/bwrap --unshare-user --unshare-net --ro-bind / / true
+      - name: Build the pilots through the builder
+        env:
+          PILOTS: ${{ inputs.pilots }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$PILOTS" != all ]]; then
+            for pilot in $PILOTS; do
+              [[ "$pilot" =~ ^[a-z][a-z0-9-]{0,39}:[a-z][a-z0-9-]{0,39}$ ]] || { echo "bad pilot: $pilot" >&2; exit 2; }
+              args+=(--pilot "$pilot")
+            done
+          fi
+          cd prototypes/voice-phone-demo
+          python3 -m rose.app_builder.starter_pilots --out "$RUNNER_TEMP/starter-pilots" "${args[@]}"
+          (cd "$RUNNER_TEMP/starter-pilots" && sha256sum -c SHA256SUMS)
+      - name: Upload the pilots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: starter-pilots-${{ github.run_id }}
+          path: ${{ runner.temp }}/starter-pilots
+          if-no-files-found: ignore
+          retention-days: 3

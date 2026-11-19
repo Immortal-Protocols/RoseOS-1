@@ -1770,6 +1770,37 @@ test, and no model was called.
    is a failure of this case, never a pass. A build that compiles and signs
    is not this evidence. This case is a test-plan step only: it has not been
    run.
+5a. **Starter pilots on a device (Wave 3; owner dispatch).** The harness is in
+   source; running it on a device is gated outside engineer authority.
+   - **Producer:** `python -m rose.app_builder.starter_pilots --out DIR`, or the
+     manual workflow `starter-pilots.yml`. It builds every template under every
+     theme through the whole job: the `starter` create field, Gradle in
+     bubblewrap, the binary checks, and a throwaway signing key per pilot that
+     never leaves the work directory. It writes the signed APKs, `pilots.json`
+     and `SHA256SUMS`. These are **compiled starter trees with a scripted writer
+     that changes nothing**, and every record carries that label.
+   - **Device check:** `python -m rose.app_builder.device_check --pilots DIR
+     --serial SERIAL --evidence OUT`, over adb against a device adb already
+     reaches. It refuses tampered or relabelled pilots before adb runs. For
+     each pilot it installs it (`install -r`, then reads the version back) and
+     launches it (`am start -W`, Status ok). It needs the process running and
+     the activity resumed, takes a screenshot, and reads the crash buffer. It
+     then stops the app and uninstalls it. It boots nothing and changes no
+     permission.
+   - **Runtime gate:** the only Android runtime that has booted is the hosted
+     emulator in `systemui-persistent-experiment.yml` (API 35; run 41161860755).
+     It needs `kvm_acl=true`, which needs the owner's approval of that exact
+     delta. That workflow also installs only its fixture today. Wiring
+     `device_check` into it and pinning API 34 and 37 images is that
+     workflow's owner's change. No other emulator is an engineer path: the
+     isolated trial VM, `quantus-rtx`, `alpha-runtime.yml` and the
+     `os-release` emulator modes all fall outside engineer authority.
+   - **Writer gate:** these become writer-generated apps only when a Linux
+     bubblewrap builder host has an owner-run `codex login` (ChatGPT; API keys
+     and copied auth are refused, docs/CODEX-VOICE.md), and blocker 3's live
+     sandbox check passes there. Until then only the simulated app-server
+     step in App offline tests is writer evidence, and it shows no model
+     output.
 6. **Level 2 (App Core co-generation; Chariot owner; OS Core).** App Core owns
    client/server co-generation and sign-in integration (§7). Each part is
    blocked on its owner, as follows:
