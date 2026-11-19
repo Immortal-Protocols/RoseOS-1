@@ -2,10 +2,12 @@ package app.rose.theme.material3
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toPixelMap
@@ -23,7 +25,9 @@ import app.rose.design.Panel
 import app.rose.design.PanelKind
 import app.rose.design.RoseIcon
 import app.rose.design.RoseTheme
+import app.rose.design.Segmented
 import app.rose.design.testing.Contrast
+import app.rose.design.testing.Pixels
 import app.rose.design.testing.ThemeCases
 import app.rose.design.testing.setThemedContent
 import org.junit.Assert.assertEquals
@@ -95,6 +99,22 @@ class Material3FilledControlBoundariesTest(private val dark: Boolean) {
                 Contrast.require("$surface $control top edge", image[image.width / 2, edgePixel], background, 3.0)
             }
         }
+    }
+
+    @Test
+    fun segmentedOptionsDrawAtRequestedHeight() {
+        val background = Material3Theme.tokens(dark).colors.background
+        rule.setThemedContent(Material3Theme, dark) {
+            Box(Modifier.background(background)) {
+                Segmented(
+                    listOf("Day", "Week"), 0, {}, "Range",
+                    Modifier.size(240.dp, 112.dp).testTag("tall-segments"),
+                )
+            }
+        }
+        Pixels.requireSpan(
+            "Tall Material 3 segments", rule.onNodeWithTag("tall-segments").captureToImage(), background, 0.9f,
+        )
     }
 
     companion object {

@@ -75,7 +75,10 @@ internal fun MaterialTimeline(p: SliderProps) {
     val interactions = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     val isFocused by interactions.collectIsFocusedAsState()
-    val colors = SliderDefaults.colors(thumbColor = if (isFocused) scheme.onPrimaryContainer else scheme.primary)
+    val colors = SliderDefaults.colors(
+        thumbColor = if (isFocused) scheme.onPrimaryContainer else scheme.primary,
+        inactiveTrackColor = scheme.onSurfaceVariant.copy(alpha = 0.45f),
+    )
     val trackModifier = Modifier.drawWithContent {
         drawContent()
         fun timelineX(value: Float): Float {
