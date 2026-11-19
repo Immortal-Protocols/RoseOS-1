@@ -1,298 +1,67 @@
-"""The Level 2 profile declaration and its checks (docs/APP-BUILDER.md §7): a project without rose-app.json is
-checked exactly as before, and a client-server project keeps the builder's files, its users' data and the builder's
-machine out of the writer's reach. Every case is a tree the test writes; nothing is compiled or run."""
+"""Backend profiles preserve Android identity while leaving backend stack choices to the agent."""
 import json
-import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
-
-from rose.app_builder import appprofile as P
-from rose.app_builder import template
+from rose.app_builder import appprofile as P, template
 
 PKG = 'app.rose.gen.p0123456789abcdef'
-INTERNET = '  <uses-permission android:name="android.permission.INTERNET"/>\n  <application'
-DECL = {'schemaVersion': 1, 'profile': 'client-server-v1'}
 
-
-class Base(unittest.TestCase):
+class Profiles(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name) / 'source'
-        self.root.mkdir(mode=0o700)
+        self.root = Path(tmp.name)
         template.write_skeleton(self.root, PKG, 'Notes')
 
-    def put(self, rel, text=''):
-        path = self.root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding='utf-8')
-        return path
+    def backend(self):
+        (self.root / P.FILE).write_text(json.dumps({'schemaVersion': 1, 'profile': P.CLIENT_BACKEND_V1}))
+        (self.root / 'contract').mkdir(exist_ok=True)
+        p = self.root / 'AndroidManifest.xml'
+        p.write_text(p.read_text().replace('<application', '<uses-permission android:name="android.permission.INTERNET"/><application'))
 
-    def client_server(self, decl=None, internet=True):
-        self.put(P.FILE, json.dumps(DECL if decl is None else decl))
-        self.put('contract/api.json', '{}')
-        self.put('server/src/handlers/mod.rs', 'pub struct App;\n')
-        if internet:
-            manifest = self.root / 'AndroidManifest.xml'
-            manifest.write_text(manifest.read_text().replace('  <application', INTERNET, 1))
+    def test_plain_apps_stay_plain_and_cannot_drop_backend_data(self):
+        self.assertEqual(P.check(self.root, PKG).name, P.APP_V1)
+        for bound in (P.CLIENT_SERVER_V1, P.CLIENT_BACKEND_V1):
+            with self.assertRaisesRegex(P.ProfileRefused, 'data lives there'):
+                P.check(self.root, PKG, bound)
 
-    def refused(self, reason, bound=None):
-        with self.assertRaises(P.ProfileRefused) as caught:
-            P.check(self.root, PKG, bound)
-        self.assertEqual(caught.exception.reason, reason, str(caught.exception))
-        return caught.exception
+    def test_python_rust_and_other_build_files_are_authored_freely(self):
+        self.backend()
+        for name in ('main.py', 'requirements.txt', 'Cargo.toml', 'Cargo.lock', 'build.rs', '.cargo/config.toml',
+                     'package.json', 'start', 'src/main.rs'):
+            p = self.root / 'backend' / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text('author supplied')
+        self.assertEqual(P.check(self.root, PKG).name, P.CLIENT_BACKEND_V1)
+        self.assertEqual(P.check(self.root, PKG, P.CLIENT_SERVER_V1).name, P.CLIENT_BACKEND_V1)
 
+    def test_backend_paths_still_cannot_escape_the_project(self):
+        self.backend()
+        (self.root / 'backend').mkdir()
+        (self.root / 'backend/escape').symlink_to('/etc/passwd')
+        with self.assertRaises(template.TemplateRefused):
+            P.check(self.root, PKG)
 
-class Level1(Base):
-    def test_level1_is_unchanged(self):
-        self.assertEqual(P.check(self.root, PKG), P.Profile(P.APP_V1))
-        template.check(self.root, PKG)  # the same tree, the same answer
-        self.put('server/src/handlers/mod.rs', 'pub struct App;\n')
-        for check in (lambda: template.check(self.root, PKG), lambda: P.check(self.root, PKG)):
-            with self.assertRaises(template.TemplateRefused):  # no declaration: server/ is still unknown
-                check()
+    def test_legacy_declaration_is_readable_but_never_buildable(self):
+        (self.root / P.FILE).write_text(json.dumps({'schemaVersion': 1, 'profile': P.CLIENT_SERVER_V1}))
+        self.assertEqual(P.read(self.root).name, P.CLIENT_SERVER_V1)
+        with self.assertRaisesRegex(P.ProfileRefused, 'retired'):
+            P.check(self.root, PKG)
 
-    def test_a_delivered_server_cannot_be_dropped(self):
-        self.refused('profile_dropped', bound=P.CLIENT_SERVER_V1)
-        self.assertEqual(P.check(self.root, PKG, bound=P.APP_V1).name, P.APP_V1)
+    def test_client_contract_internet_and_reserved_package_still_apply(self):
+        self.backend()
+        (self.root / 'contract').rmdir()
+        with self.assertRaisesRegex(P.ProfileRefused, 'contract/'):
+            P.check(self.root, PKG)
+        (self.root / 'contract').mkdir()
+        p = self.root / 'src' / PKG.replace('.', '/') / 'rose'
+        p.mkdir()
+        with self.assertRaisesRegex(P.ProfileRefused, 'written by the builder'):
+            P.check(self.root, PKG)
 
-
-class Declaration(Base):
-    def test_a_good_tree_passes(self):
-        self.client_server()
-        self.assertEqual(P.check(self.root, PKG), P.Profile(P.CLIENT_SERVER_V1, P.ServerDecl((), False, 'invite')))
-        self.client_server({**DECL, 'server': {'crates': ['serde@1.0.219', 'base64@0.22.1'], 'shared': True,
-                                               'admission': 'open'}})
-        self.put('server/migrations/shared/0001_notes.sql', 'CREATE TABLE n (x);')
-        self.put('server/migrations/account/0001_items.sql', 'CREATE TABLE i (x);')
-        self.put('server/assets/words.txt', 'a b c')
-        self.put('server/src/handlers/build.rs', '// a module named build is fine')
-        self.assertEqual(P.check(self.root, PKG).server,
-                         P.ServerDecl(('serde@1.0.219', 'base64@0.22.1'), True, 'open'))
-
-    def test_the_declaration_is_strict(self):
-        self.client_server()
-        bad = {
-            'unknown key': {**DECL, 'extra': 1},
-            'schema 2': {**DECL, 'schemaVersion': 2},
-            'schema true': {**DECL, 'schemaVersion': True},
-            'unknown profile': {**DECL, 'profile': 'app-v2'},
-            'app-v1 declared': {**DECL, 'profile': 'app-v1'},
-            'not an object': [],
-            'unknown server key': {**DECL, 'server': {'port': 1}},
-            'too many crates': {**DECL, 'server': {'crates': [f'c{i}@1.0.0' for i in range(33)]}},
-            'a duplicate crate': {**DECL, 'server': {'crates': ['serde@1.0.0', 'serde@1.0.1']}},
-            'a range': {**DECL, 'server': {'crates': ['serde@^1']}},
-            'no version': {**DECL, 'server': {'crates': ['serde']}},
-            'an upper-case name': {**DECL, 'server': {'crates': ['Serde@1.0.0']}},
-            'a leading zero': {**DECL, 'server': {'crates': ['serde@01.0.0']}},
-            'shared as text': {**DECL, 'server': {'shared': 'yes'}},
-            'unknown admission': {**DECL, 'server': {'admission': 'anyone'}},
-        }
-        for name, decl in bad.items():
-            with self.subTest(name):
-                self.put(P.FILE, json.dumps(decl))
-                self.refused('profile_invalid')
-        for name, raw in {'repeated key': '{"schemaVersion":1,"schemaVersion":1,"profile":"client-server-v1"}',
-                          'not JSON': '{', 'not UTF-8': None}.items():
-            with self.subTest(name):
-                if raw is None:
-                    (self.root / P.FILE).write_bytes(b'\xff')
-                else:
-                    self.put(P.FILE, raw)
-                self.refused('profile_invalid')
-        (self.root / P.FILE).unlink()
-        (self.root / P.FILE).mkdir()
-        self.refused('profile_invalid')
-
-    def test_a_linked_declaration_is_refused(self):
-        self.client_server()
-        (self.root / P.FILE).unlink()
-        os.symlink('/etc/passwd', self.root / P.FILE)
-        self.refused('profile_invalid')
-
-
-class Layout(Base):
-    def setUp(self):
-        super().setUp()
-        self.client_server()
-
-    def test_the_builder_writes_the_cargo_files(self):
-        for rel in ('server/Cargo.toml', 'server/cargo.lock', 'server/build.rs', 'server/.cargo/config.toml',
-                    'server/rust-toolchain.toml', 'server/rust-toolchain'):
-            with self.subTest(rel):
-                path = self.put(rel)
-                self.assertTrue(self.refused('server_build_file').dependency)
-                path.unlink()
-                if path.parent.name == '.cargo':
-                    path.parent.rmdir()
-
-    def test_only_source_assets_and_migrations(self):
-        cases = ['server/notes.txt', 'server/src/data.json', 'server/migrations/account/1_x.sql',
-                 'server/migrations/account/0001_X.sql', 'server/migrations/other/0001_x.sql',
-                 'server/migrations/account/sub/0001_x.sql', 'server/migrations/shared/0001_x.sql']
-        for rel in cases:
-            with self.subTest(rel):
-                path = self.put(rel)
-                self.refused('layout_invalid')
-                path.unlink()
-                shutil.rmtree(self.root / 'server/migrations', ignore_errors=True)  # each case on its own
+    def test_unknown_profile_and_duplicate_keys_are_refused(self):
+        for text in ('{"schemaVersion":1,"profile":"other"}', '{"schemaVersion":1,"schemaVersion":1}'):
+            (self.root / P.FILE).write_text(text)
+            with self.assertRaises(P.ProfileRefused):
                 P.check(self.root, PKG)
-        (self.root / P.HANDLERS).unlink()
-        self.refused('layout_invalid')
-
-    def test_native_and_script_files_stay_refused_everywhere(self):
-        for rel in ('server/src/x.c', 'server/assets/lib.so', 'server/assets/run.sh', 'contract/gen.py'):
-            with self.subTest(rel):
-                path = self.put(rel)
-                self.refused('template_refused')
-                path.unlink()
-
-    def test_links_under_server_are_refused(self):
-        os.symlink('/etc', self.root / 'server/assets')
-        self.refused('template_refused')
-
-    def test_the_builders_client_package_is_reserved(self):
-        path = self.put(f'src/{PKG.replace(".", "/")}/rose/Api.java', f'package {PKG}.rose;\nclass Api {{}}\n')
-        self.refused('reserved_path')
-        path.unlink()
-        path.parent.rmdir()
-        self.put(f'src/{PKG.replace(".", "/")}/Other.java', f'/* elsewhere */ package {PKG}.rose.api;\nclass O {{}}\n')
-        self.refused('reserved_path')
-
-    def test_internet_is_needed_to_reach_the_server(self):
-        manifest = self.root / 'AndroidManifest.xml'
-        good = manifest.read_text()
-        manifest.write_text(good.replace(INTERNET, '  <application'))
-        self.refused('missing_internet')
-        sdk23 = good.replace('<uses-permission android:name', '<uses-permission-sdk-23 android:name')
-        manifest.write_text(sdk23)
-        P.check(self.root, PKG)  # Android applies it from API 23, below minSdk 26
-        nested = good.replace(INTERNET, '  <application').replace(
-            '<activity android:name=".MainActivity" android:exported="true">',
-            '<activity android:name=".MainActivity" android:exported="true">\n'
-            '      <uses-permission android:name="android.permission.INTERNET"/>')
-        manifest.write_text(nested)
-        self.refused('missing_internet')  # Android ignores it there
-        manifest.write_text(good.replace('INTERNET"/>', 'INTERNET" android:maxSdkVersion="25"/>'))
-        self.refused('missing_internet')  # not in force on any phone it installs on
-
-    def test_contract_is_a_folder(self):
-        shutil.rmtree(self.root / 'contract')
-        self.refused('layout_invalid')
-        self.put('contract', '{}')
-        self.refused('layout_invalid')
-
-    def test_a_folder_named_like_source_is_refused_not_a_crash(self):
-        self.put('server/src/handlers/v1.rs/x.rs', 'pub fn x() {}')
-        self.refused('layout_invalid')
-
-    def test_level1_checks_carry_a_reason_here(self):
-        self.put('server/src/x.c')
-        error = self.refused('template_refused')
-        self.assertFalse(error.dependency)
-        (self.root / 'server/src/x.c').unlink()
-        self.put('server/assets/lib.so')
-        self.assertTrue(self.refused('template_refused').dependency)
-
-    def test_server_source_is_scanned(self):
-        self.put('server/src/handlers/mod.rs', 'pub struct App;\nconst K: &str = include_str!("/etc/hostname");\n')
-        error = self.refused('forbidden_construct')
-        self.assertIn('line 2', str(error))
-        self.put('server/src/handlers/mod.rs', 'pub struct App; /* unterminated')
-        self.refused('source_unreadable')
-        (self.root / P.HANDLERS).write_bytes(b'\xff')
-        self.refused('source_unreadable')
-
-
-class RustScan(unittest.TestCase):
-    REFUSED = [
-        'include_str!("/etc/passwd")', 'std::include_bytes!("x")', '::core::include!("x")', 'r#include_str!("x")',
-        'env!("HOME")', 'option_env!("X")', 'core::env!("X")', 'use std::include_str as s;',
-        'use std::env as e;', 'use std::{include_bytes};',
-        'fn include() {}',  # disclosed: the name itself is refused
-        '#[path = "/etc/x.rs"] mod m;', '#[cfg_attr(unix, path = "x.rs")] mod m;',
-        '#[cfg_attr(a, cfg_attr(b, path = "x.rs"))] mod m;', '#[link(name = "z")] extern "C" {}',
-        '#![cfg_attr(unix, link(name = "z"))]', 'global_asm!(".incbin \\"/etc/passwd\\"")',
-        'core::arch::asm!("nop")', 'naked_asm!("ret")',
-        'macro_rules! m { ($i:ident) => { $i!("x") } } m!(include_str);',
-        # found by review: a macro handed the name, renamed native macros, invisible separators, built attributes
-        'macro_rules! m { ($e:ident) => { $e!("HOME") } } fn f() { let x: &str = m!(env); }',
-        'macro_rules! m { ($e:ident) => { $e!(".byte 0") } } m!(global_asm);',
-        'use std::arch::asm as a; fn f() { unsafe { a!("nop"); } }',
-        'use std::arch::global_asm as g; g!(".incbin \\"/etc/passwd\\"");',
-        'use std::{env as e};', 'use ::core::env as e;',
-        'fn f() { let _ = env\u200e!("HOME"); }', '#\u200e[path = "/etc/x.rs"] mod m;',
-        '#[link\u200f(name = "z")] extern "C" {}', 'unsafe { core::arch::asm\u200f!("nop"); }',
-        'macro_rules! p { ($a:meta) => { #[$a] mod m; } } p!(path = "/etc/x.rs");',
-        '#![debugger_visualizer(gdb_script_file = "/etc/passwd")]',
-        '#![cfg_attr(unix, debugger_visualizer(natvis_file = "x.natvis"))]',
-        'fn f(asm: u8) {}',  # disclosed: the native macro names are refused by name, like include
-        # second review: env reached through self:: or a crate alias, then renamed
-        'use std::env;\nuse self::env as e;\npub const K: &str = e!("HOME");',
-        'extern crate std as x;\nuse x::env as e;\npub const K: &str = e!("HOME");',
-        'mod env { pub fn x() {} } use self::env as settings;',  # disclosed: any renamed env in an import
-        '#[' + 'cfg_attr(all(), ' * 2000 + 'path = "x"' + ')' * 2000 + ']\nmod m;',
-        # an attribute macro passes on is fine, but another macro's built one is still refused
-        'macro_rules! keep { ($(#[$m:meta])* fn $n:ident) => { $(#[$m])* fn $n() {} } }\n'
-        'macro_rules! p { ($a:meta) => { #[$a] mod m; } } p!(path = "/etc/x.rs");',
-    ]
-    ALLOWED = [
-        'std::env::var("X")', 'use std::env;', 'let a = env::args();', 'use std::env::{var, args};',
-        'let path = 1; let link = 2;', '#[derive(Debug)] struct S;', '#![allow(dead_code)]', 'extern crate core;',
-        'unsafe {}', '#[no_mangle] pub extern "C" fn f() {}', '#[serde(path = "x", link = "y")] struct S;',
-        '// include_str!("x")', '/* /* env!() */ include!() */', 'let s = "include_str!(\\"x\\")";',
-        'let s = r##"env!("X") "# ok"##;', 'let b = b"include!";', 'let c = c"asm!";', "'a: loop { break 'a; }",
-        "fn f<'a>(x: &'a str) -> &'a str { x }", "let c = '!'; let q = '\\''; let b = b'\"';",
-        'break; crate::x(); let brand = 1; let cr = 2;', 'let x = 1..2; let y = 1.5e3; let z = 0x1F_u8;',
-        'let e = my.env; let s = std::fs::read("data");',
-        # found by review: comparisons, casts and the app's own env module are not env! or a rename
-        'fn f(cfg: &Cfg) -> bool { cfg.env != Env::Prod }', 'fn f(env: &str) -> bool { env != "prod" }',
-        'fn f(env: u8) -> u32 { env as u32 }',
-        'use crate::env::{self as settings};', 'use std::env::{self as stdenv};',  # a module, not the macro 'macro_rules! m { ($x:expr) => { $crate::f($x) } }',
-        "let c = '\\u{1F600}'; let d = '\\x7f'; let e = b'\\\\'; let s = r###\"a\"## b\"###;",
-        'let t = tuple.0.1; let n = 1e10 + 0b1010 as f64 + 1_000u64 as f64 + 1.0f32 as f64;',
-        "async fn f() -> Result<(), E> { g().await?; Ok(()) }", '#[link_section = ".x"] static S: u8 = 0;',
-        'fn main()\u200e{}',
-        # second review: Rust identifiers, a byte order mark, attributes a macro passes through
-        'pub fn f() -> u8 { let नमस्ते = 1; नमस्ते }', 'let cafe\u0301 = 1;', 'let l\u00b7l = 1;',
-        'let \u216b = 1;', '\ufeffpub fn f() {}',
-        'macro_rules! unit { ($(#[$m:meta])* struct $n:ident;) => { $(#[$m])* pub struct $n; } }\n'
-        'unit! { /// A unit.\n #[derive(Debug)] struct A; }',
-        '#[' + 'cfg_attr(all(), ' * 2000 + 'allow(dead_code)' + ')' * 2000 + ']\npub fn f() {}',
-        '#[cfg_attr(any(unix, path = "x"), allow(dead_code))] fn f() {}',  # a cfg key named path, not #[path]
-    ]
-
-    def test_host_reads_and_native_code_are_refused(self):
-        for text in self.REFUSED:
-            with self.subTest(text):
-                self.assertTrue(P.rust_refusals(text), text)
-
-    def test_ordinary_rust_is_allowed(self):
-        for text in self.ALLOWED:
-            with self.subTest(text):
-                self.assertEqual(P.rust_refusals(text), [], text)
-
-    def test_large_inputs_stay_fast(self):
-        import time
-        for text in ('macro_rules! m { ($($t:tt)*) => {} }\nm! { ' + 'use ' * 50000 + '}\n',
-                     '#[' + 'cfg_attr(all(), ' * 50000 + 'allow(dead_code)' + ')' * 50000 + ']\nfn f() {}'):
-            start = time.monotonic()
-            P.rust_refusals(text)
-            self.assertLess(time.monotonic() - start, 10)  # linear: well under a second here
-
-    def test_hits_name_their_line(self):
-        [hit] = P.rust_refusals('fn a() {}\n/* a\nb */\nconst S: &str = "x\ny";\nfn b() { env!("X"); }')
-        self.assertIn('line 6', hit)  # the comment and the string each span a line break
-
-    def test_unterminated_code_is_unreadable(self):
-        for text in ('/* a /* b */', '"open', "r#\"open\"", "let c = '", 'let x = 1\u200b;', 'a\u00a0b'):
-            with self.subTest(text):
-                with self.assertRaises(SyntaxError):
-                    P.rust_refusals(text)
-
-
-if __name__ == '__main__':
-    unittest.main()

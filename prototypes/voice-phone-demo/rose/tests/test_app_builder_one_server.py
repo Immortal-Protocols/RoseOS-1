@@ -41,8 +41,8 @@ class BuilderConfig(unittest.TestCase):
     def test_a_minimal_builder_config_is_safe_by_default(self):
         c = host.parse_builder_config(builder_data('/srv/x'))
         self.assertEqual((c.root, c.sdk), (Path('/srv/x/builder'), SDK))
-        self.assertEqual((c.key_creation, c.writer, c.backup, c.build_timeout_s, c.library_store, c.client_server),
-                         (False, None, None, 600.0, None, None))
+        self.assertEqual((c.key_creation, c.writer, c.backup, c.build_timeout_s, c.library_store),
+                         (False, None, None, 600.0, None))
 
     def test_the_listener_fields_belong_to_the_server_not_the_builder(self):
         for field, value in (('port', 8766), ('adminPort', 8767), ('remoteDir', '/srv/r'), ('hosts', ['100.64.0.9']),
@@ -55,7 +55,7 @@ class BuilderConfig(unittest.TestCase):
         bad = [None, [], {**good, 'schemaVersion': 2}, {**good, 'extra': 1}, {'schemaVersion': 1, 'root': '/srv/x'},
                {**good, 'root': 'relative'}, {**good, 'keyCreation': 'yes'}, {**good, 'buildTimeoutS': 0},
                {**good, 'writer': {'argv': ['node', 'bridge.mjs']}}, {**good, 'backup': ['/bin/backup']},
-               {**good, 'libraryStore': 'relative'}, {**good, 'clientServer': {}}]
+               {**good, 'libraryStore': 'relative'}]
         for data in bad:
             with self.assertRaises(host.ConfigError, msg=data):
                 host.parse_builder_config(data)
@@ -66,7 +66,7 @@ class BuilderConfig(unittest.TestCase):
         hosted = host.parse_config(config_data('/srv/x', **extra))
         alone = host.parse_builder_config(builder_data('/srv/x', **extra))
         for name in ('root', 'sdk', 'java_home', 'build_timeout_s', 'key_creation', 'writer', 'backup',
-                     'library_store', 'client_server', 'agent_host'):
+                     'library_store', 'agent_host'):
             self.assertEqual(getattr(hosted, name), getattr(alone, name), name)
 
 

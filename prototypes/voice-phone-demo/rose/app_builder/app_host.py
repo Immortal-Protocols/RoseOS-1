@@ -257,18 +257,23 @@ test -d "$HOME/workspace" && test -w "$HOME/workspace" || { echo "missing=worksp
 test -n "${CHARIOT_APP_ID:-}" && test -n "${CHARIOT_APP_URL:-}" || { echo "missing=identity"; exit 3; }
 printf 'app_id=%s\\napp_url=%s\\n' "$CHARIOT_APP_ID" "$CHARIOT_APP_URL"
 '''
-STATE = r'''set -eu
-app="$HOME/workspace/.chariot-app"
-umask 077
-@BIN@/mkdir -p "$app/data" "$app/backups" "$app/keys" "$app/releases"
-cd "$app"
-occupied=no
+STATE_CONTENTS = r'''occupied=no
 if test -e server || test -e start || test -e current; then occupied=yes; fi
 for f in data/* data/.[!.]*; do if test -e "$f"; then occupied=yes; fi; done
 echo "occupied=$occupied"
 if test -f switching; then printf 'switching=%s\n' "$(@BIN@/cat switching)"; fi
 if test -f deployed.json; then printf 'deployed=%s\n' "$(@BIN@/cat deployed.json)"; fi
 '''
+STATE = r'''set -eu
+app="$HOME/workspace/.chariot-app"
+umask 077
+@BIN@/mkdir -p "$app/data" "$app/backups" "$app/keys" "$app/releases"
+cd "$app"
+''' + STATE_CONTENTS
+LEGACY_STATE = r'''set -eu
+app="$HOME/workspace/.chariot-app"
+cd "$app" 2>/dev/null || { echo "occupied=no"; exit 0; }
+''' + STATE_CONTENTS
 PREPARE = '''set -eu
 app="$HOME/workspace/.chariot-app"
 umask 077
@@ -523,8 +528,8 @@ def _check(result: Result, step: str) -> str:
     return result.stdout
 
 
-def _state(channel: Channel, bin_dir: str) -> dict:
-    out = _check(channel.script(_sh(STATE, bin_dir)), 'state')
+def _state(channel: Channel, bin_dir: str, *, read_only: bool = False) -> dict:
+    out = _check(channel.script(_sh(LEGACY_STATE if read_only else STATE, bin_dir)), 'state')
     lines = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
     deployed = None
     if 'deployed' in lines:
@@ -745,6 +750,25 @@ class AgentHosting:
             return revert(p, self.channel(self.name_for(p.agent_id)), p.sha256)
 
     # ---- the building agent's backend (§7.7a, client-backend-v1) ----------------------------------------------
+
+    def check_legacy(self, project: str) -> None:
+        """Read only, before a legacy writer or switch: its exact delivered release and data must still be here.
+        This prevents an empty or reset container from silently becoming a legacy app's replacement backend."""
+        p = plan(self.ledger, self.ledger.root, project, port=self.config.port)
+        channel = self.channel(self.name_for(p.agent_id))
+        with self._busy:
+            _identity_matches(channel, p, BIN)
+            state = _state(channel, BIN, read_only=True)
+            _check_owner(state, project)
+            deployed = state['deployed'] or {}
+            if state['switching'] or (deployed.get('release'), deployed.get('versionCode'),
+                                      deployed.get('dataSchema')) != (p.sha256, p.version_code, p.data_schema):
+                raise SetupFailed('migration', 'the existing agent does not hold the latest delivered legacy release; '
+                                  'the Local Server Worker must reconcile it before migration')
+            _check(channel.script('test -d "$HOME/workspace/.chariot-app/data" && '
+                                  'test -f "$HOME/workspace/.chariot-app/keys/keyring.json" && '
+                                  f'test "$({BIN}/cat \"$HOME/workspace/.chariot-app/current\")" = {p.sha256}'),
+                   'migration')
 
     def release_folder(self, release: str) -> str:
         return f'$HOME/workspace/.chariot-app/releases/{release}'  # where it runs: never moved, so paths hold

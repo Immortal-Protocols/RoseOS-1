@@ -9,8 +9,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from rose.app_builder import (appprofile, codegen, contract, generator, gradle, gradle_stack, migrations, server_build,
-                              service, template)
+from rose.app_builder import appprofile, codegen, contract, generator, gradle, gradle_stack, service, template
 
 REPO = Path(__file__).resolve().parents[4]
 POLICY_MODULE = REPO / 'workspace/rose-agent/server/app-build.mjs'
@@ -51,11 +50,6 @@ class WriterPolicy(unittest.TestCase):
         for phrase in phrases:
             self.assertIn(flat(phrase), self.policy)
 
-    def test_it_is_offered_only_when_the_turn_says_so(self):
-        self.says('A client-server app, only when this turn says the builder builds them')
-        self.assertIn('This builder builds client-server apps', generator.prompt('create', 'x', client_server=True))
-        for kind in ('create', 'revise'):
-            self.assertNotIn('client-server', generator.prompt(kind, 'x'))  # a host without the parts says nothing
 
     def test_the_gradle_project_is_the_skeletons_and_the_stacks(self):
         self.says('The app is an ordinary Android Gradle project', 'settings.gradle.kts, build.gradle.kts and '
@@ -130,15 +124,12 @@ class WriterPolicy(unittest.TestCase):
                 self.assertIn(named, text)
             self.assertNotIn('Gradle', generator.prompt(kind, 'x'))  # a host without the stack names none
 
-    def test_the_layout_is_the_profiles(self):
-        self.assertEqual(appprofile.SERVER_TOP, {'rose-app.json', 'contract', 'server'})
-        self.says('also writes rose-app.json, contract/ and server/', '"profile": "client-server-v1"',
-                  '"admission" is "invite" or "open"', 'server/src/handlers/mod.rs', 'server/src holds only .rs files',
-                  f'files up to {template.MAX_FILE // (1024 * 1024)} MB')
-        self.assertEqual(str(appprofile.HANDLERS), 'server/src/handlers/mod.rs')
-        self.assertEqual(set(appprofile.ADMISSIONS), {'invite', 'open'})
-        self.assertTrue(appprofile.CRATE.fullmatch('serde@1.0.219'))
-        self.assertIsNone(appprofile.CRATE.fullmatch('serde:1.0.219'))
+    def test_only_the_agent_path_is_offered(self):
+        self.says('Python and other stacks require no Rust', 'A client-only app has no backend',
+                  'existing Chariot agent container', 'backend/legacy', 'preserve every existing user')
+        self.assertNotIn('server/src/handlers/mod.rs', self.policy)
+        self.assertNotIn('client-server-v1', generator.prompt('create', 'x'))
+        self.assertIn('agent_container', generator.prompt('create', 'x', backend_folder='/release'))
 
     def test_the_contract_rules_are_the_contracts(self):
         self.assertEqual(contract.METHODS, ('GET', 'POST', 'PUT', 'DELETE'))
@@ -151,65 +142,10 @@ class WriterPolicy(unittest.TestCase):
                          ('/app/' + '/'.join('x' * 9), False)):
             self.assertEqual(bool(contract.PATH.fullmatch(path)), ok, path)
 
-    def test_names_map_as_it_says(self):
-        self.says("each capital letter turned into '_' and its lower case (listNotes is list_notes, noteId is "
-                  "note_id)", 'a Rust keyword gets r# (r#type)', 'self, super, crate and Self get a trailing _')
-        self.assertEqual((codegen.snake('listNotes'), codegen.snake('noteId'), codegen.snake('noteID')),
-                         ('list_notes', 'note_id', 'note_i_d'))
-        self.assertEqual(codegen.rust_ident('type'), 'r#type')
-        for name in ('self', 'super', 'crate', 'Self'):
-            self.assertEqual(codegen.rust_ident(name), name + '_')
-        self.assertIn('fn list_notes(ctx: &::rose_app_runtime::server::Ctx)', self.server)
-        self.assertIn('fn add_note(ctx: &::rose_app_runtime::server::Ctx, request: crate::api::Note)', self.server)
-        self.assertIn('pub note_id: i64', self.server)
-        self.assertIn('pub r#type: ::std::option::Option<::std::string::String>', self.server)
-        # An optional field of a contract type is boxed, as the policy says.
-        self.says('Option<Box<T>> for a contract type')
-        self.assertIn('pub parent: ::std::option::Option<::std::boxed::Box<crate::api::Note>>', self.server)
 
-    def test_the_refused_names_are_the_scans(self):
-        names = sorted([*appprofile.HOST_READS, *appprofile.NATIVE_MACROS])
-        listed = re.search(r'The names (.*?) are refused anywhere in server/src', self.policy).group(1)
-        self.assertEqual(sorted(re.split(r', | and ', listed)), names)
-        # The same names as contract members: each maps to one of them.
-        members = re.search(r'are none of (.*?)\. A field is', self.policy).group(1)
-        self.assertEqual(sorted(codegen.snake(m) for m in re.split(r', | or ', members)), names)
 
-    def test_the_migration_rules_are_the_sandboxs(self):
-        listed = re.search(r'The PRAGMAs a migration may use are (.*?)\. A new migration', self.policy).group(1)
-        self.assertEqual(set(re.split(r', | and ', listed)), migrations.PRAGMAS)
-        self.says('names of a-z, 0-9 and \'_\'', 'numbered with no gap',
-                  'all in one transaction with foreign keys off; then every reference is checked',
-                  'ON DELETE actions do not fire there: delete child rows yourself', 'ON UPDATE does not act either')
-        self.assertTrue(migrations.NAME.fullmatch('0001_add_notes.sql'))
-        for bad in ('0001_add-notes.sql', '0001_Notes.sql', '1_notes.sql'):
-            self.assertIsNone(migrations.NAME.fullmatch(bad), bad)
-        # The builder's sandbox and the adapter both apply pending migrations that way (SQLite's procedure).
-        import inspect
-        sandbox = inspect.getsource(migrations._Sandbox.apply)
-        data = (ADAPTER / 'data.rs').read_text()
-        for source in (sandbox, data):
-            self.assertRegex(source, r'foreign_keys\s*=\s*OFF')
-            self.assertIn('foreign_key_check', source)
-            self.assertIn('BEGIN IMMEDIATE', source)
 
-    def test_handlers_reach_data_as_it_says(self):
-        self.says('ctx.data.downcast_ref::<rose_app_runtime_signin::AppData>()', '.account(principal)', '.shared()',
-                  'rose_app_runtime_signin::rusqlite::Connection', 'rose_app_runtime_signin::rusqlite::params',
-                  'crate::assets::get("data/x.json") gives an Option<&\'static [u8]>')
-        lib, data = (ADAPTER / 'lib.rs').read_text(), (ADAPTER / 'data.rs').read_text()
-        self.assertIn('pub use rusqlite;', lib)
-        self.assertRegex(lib, r'pub use data::\{[^}]*AppData')
-        self.assertRegex(data, r'pub fn account\(&self, principal: &Principal\) -> Result<Connection, DataError>')
-        self.assertRegex(data, r'pub fn shared\(&self\) -> Result<Connection, DataError>')
-        self.assertIn("pub fn get(path: &str) -> Option<&'static [u8]>", server_build.assets_rs(Path('/nonexistent')))
-        self.assertIn('pub principal: Option<&', (RUNTIME / 'server.rs').read_text())
 
-    def test_refusals_are_the_runtimes_and_clients(self):
-        self.says("a 4xx status and a word of a-z and '_' starting with a letter, at most 64 characters")
-        self.assertIn('pub const fn new(status: u16, word: &\'static str)', self.server)
-        self.assertIn("b.is_ascii_lowercase() || b == b'_'", (RUNTIME / 'server.rs').read_text())
-        self.assertIn('matches("[a-z][a-z_]{0,63}")', self.client)
 
     def test_the_client_api_is_the_generated_one(self):
         self.says('RoseApi.serverUrl()', 'new RoseApi.Client(new RoseApi.HttpsTransport(url), new RoseSession(context))',
@@ -255,8 +191,8 @@ class WriterPolicy(unittest.TestCase):
                 check(SAMPLE, edited(change))
 
     def test_the_server_is_said_not_to_be_hosted(self):
-        self.says("RoseApi.serverUrl() is null until this app's host is recorded",
-                  'so the app must work with null', 'Never say in your reply that the server')
+        self.says('when it is null, show that the server is not set up yet',
+                  'Never say in your reply that the backend is deployed')
 
     def test_it_sets_no_rule_on_what_an_app_does(self):
         # The owner's rule: the policy describes shapes and isolation, never what an app may store or do.

@@ -1,11 +1,10 @@
-"""Host provider policy/pin tests. No install, download, model or Rose startup.
+"""Bubblewrap build isolation (rose.app_builder.isolation.BubblewrapIsolation): argv policy, and real confinement.
 
-Linux confinement tests are explicit opt-in: ROSE_TEST_LINUX_ISOLATION=1 on an
-already prepared, unprivileged Linux x86-64 host. They fail, rather than silently
-skip, if that host cannot use its bubblewrap. Ordinary tests inspect argv with
-platform checks mocked; those are not evidence of Linux kernel confinement.
+Moved from test_app_host_provider when the builder-managed Rust backend was retired; the isolation now serves
+ordinary Gradle builds. Linux confinement tests are explicit opt-in: ROSE_TEST_LINUX_ISOLATION=1 on an already
+prepared, unprivileged Linux x86-64 host. They fail, rather than silently skip, if that host cannot use its
+bubblewrap. Ordinary tests inspect argv with platform checks mocked; those are not evidence of kernel confinement.
 """
-import hashlib
 import json
 import os
 import platform
@@ -19,8 +18,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from rose.app_builder.providers.host import BubblewrapIsolation, PinnedRustTools, toolchain_digest
-from rose.app_builder.server_build import BuildFailed, TARGET
+from rose.app_builder.isolation import BubblewrapIsolation, BuildFailed
+
+TARGET = 'x86_64-unknown-linux-musl'  # only names a folder in the fake tool tree
+# The interpreter the confined probe runs: its real path, since /usr/bin/python3 may be a link through /etc
+# (alternatives), which the isolation deliberately does not mount.
+PYTHON = os.path.realpath('/usr/bin/python3')
 
 
 class Trees(unittest.TestCase):
@@ -42,70 +45,6 @@ class Trees(unittest.TestCase):
         self.bwrap.chmod(0o755)
         self.env = {'HOME': str(self.job / 'home'), 'PATH': f'{self.tools}/bin:/usr/bin:/bin',
                     'LANG': 'C.UTF-8', 'TEST_VALUE': 'spaces = --options\nremain literal'}
-
-
-class Pins(Trees):
-    def pinned(self):
-        return PinnedRustTools(self.tools, expected_sha256=toolchain_digest(self.tools))
-
-    def test_v1_digest_independent_recipe_and_no_execution(self):
-        records = []
-        for path in [self.tools, *self.tools.rglob('*')]:
-            records.append([path.relative_to(self.tools).as_posix() if path != self.tools else '',
-                            path.stat().st_mode & 0o7777,
-                            hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None])
-        serialized = b'rose-rust-toolchain-v1\n' + b''.join(
-            (json.dumps(r, separators=(',', ':')) + '\n').encode() for r in sorted(records))
-        self.assertEqual(toolchain_digest(self.tools), hashlib.sha256(serialized).hexdigest())
-        with mock.patch('subprocess.Popen', side_effect=AssertionError('pin must not execute tools')):
-            self.assertIsNone(self.pinned().available())
-
-    def test_pin_required_and_external_not_accepted_from_tree(self):
-        for pin in ('', 'A' * 64, 'f' * 63, None):
-            self.assertIsNotNone(PinnedRustTools(self.tools, expected_sha256=pin).available())
-        tools = self.pinned()
-        (self.tools / 'self-reported-pin.json').write_text(json.dumps({'sha256': tools.expected_sha256}))
-        self.assertIsNotNone(tools.available())
-
-    def test_every_file_mode_name_directory_and_extra_entry_is_pinned(self):
-        tools = self.pinned()
-        cargo = self.tools / 'bin/cargo'
-        original = cargo.read_bytes()
-        cargo.write_bytes(original + b'# changed\n')
-        self.assertIsNotNone(tools.available())
-        cargo.write_bytes(original)
-        self.assertIsNone(tools.available())
-        cargo.chmod(0o644)
-        self.assertIsNotNone(tools.available())
-        cargo.chmod(0o755)
-        cargo.rename(cargo.with_name('other'))
-        self.assertIsNotNone(tools.available())
-        cargo.with_name('other').rename(cargo)
-        (self.tools / 'empty-extra').mkdir()
-        self.assertIsNotNone(tools.available())
-
-    def test_link_file_link_directory_fifo_refused(self):
-        tools = self.pinned()
-        extra = self.tools / 'extra'
-        for target in (self.tools / 'bin/cargo', self.tools / 'bin', self.root / 'not-present'):
-            extra.symlink_to(target)
-            self.assertIsNotNone(tools.available())
-            extra.unlink()
-        os.mkfifo(extra)
-        self.assertIsNotNone(tools.available())
-
-    def test_canonical_root_read_errors_missing_target_and_unprivileged_tools(self):
-        tools = self.pinned()
-        alias = self.root / 'alias'
-        alias.symlink_to(self.tools, target_is_directory=True)
-        self.assertIsNotNone(PinnedRustTools(alias, expected_sha256=tools.expected_sha256).available())
-        with mock.patch('os.walk', side_effect=OSError('unreadable')):
-            self.assertIsNotNone(tools.available())
-        shutil.rmtree(self.tools / 'lib/rustlib' / TARGET)
-        self.assertIsNotNone(self.pinned().available())
-        (self.tools / 'lib/rustlib' / TARGET / 'lib').mkdir(parents=True)
-        (self.tools / 'bin/cargo').chmod(0o4755)
-        self.assertIsNotNone(self.pinned().available())
 
 
 class Policy(Trees):
@@ -187,7 +126,7 @@ class Policy(Trees):
         self.refused(writable=self.root)  # contains the bwrap executable
 
     def test_system_alias_cannot_expose_private_tree(self):
-        from rose.app_builder import isolation  # BubblewrapIsolation's home (providers.host re-exports it)
+        from rose.app_builder import isolation
         private = self.root / 'private-system-alias'
         private.symlink_to(self.vendor, target_is_directory=True)
         with mock.patch.object(isolation, '_RUNTIME', (private,)):
@@ -212,7 +151,7 @@ class LinuxConfinement(Trees):
                     'KEEP': 'exact supplied value'}
 
     def wrapped(self, code, *args):
-        return self.provider.command(['/usr/bin/python3', '-c', code, *map(str, args)], self.env,
+        return self.provider.command([PYTHON, '-c', code, *map(str, args)], self.env,
                                      writable=self.job, readonly=(self.tools, self.vendor))
 
     def test_real_filesystem_environment_and_network_denials(self):
@@ -275,11 +214,10 @@ while True: time.sleep(1)
                 harness = '''
 import json, sys
 from pathlib import Path
-from rose.app_builder.toolchain import run, StepFailed
-from rose.app_builder.server_build import RustTools
+from rose.app_builder.toolchain import run, StepFailed, Tools
 args, env, job, cancel = json.loads(sys.argv[1])
 try:
-    run(args, Path(job), Path(job), RustTools(Path(job), timeout_s=1),
+    run(args, Path(job), Path(job), Tools(Path(job), timeout_s=1),
         lambda: cancel and (Path(job) / 'heartbeat').exists(), 'cargo', env=env)
 except StepFailed as failed:
     assert failed.category == ('cancelled' if cancel else 'timeout'), failed.category

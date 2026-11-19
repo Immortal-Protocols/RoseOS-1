@@ -21,8 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import appprofile, contract, dependencies, gradle, migrations, server_build, server_manifest, template, \
-    toolchain
+from . import appprofile, contract, dependencies, gradle, legacy_backend, template, toolchain
 from .ledger import CLIENT_BACKEND, CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -224,8 +223,6 @@ def _note(note, request: str) -> str:
     return request[:200]
 
 
-# The builder's own server files, which a code generator may not write (rose.app_builder.server_build).
-BUILDER_SERVER_FILES = ('rose/migrations.rs', 'rose/meta.rs', 'rose/assets.rs')
 ROSE_SERVER = 'RoseServer.java'  # the builder's client file under src/<package>/rose/: the hosted base URL
 # HOSTED_URL (from the ledger, which checks a recorded endpoint with it too): what the generated client accepts.
 
@@ -242,7 +239,7 @@ def rose_server_java(package: str, url: str | None) -> str:
             '}\n')
 
 
-def client_tree_ignore(snapshot: Path, top_names=appprofile.SERVER_TOP):
+def client_tree_ignore(snapshot: Path, top_names=appprofile.BACKEND_TOP):
     """copytree's ignore for a client-server app's client tree: the server's parts at the top of the snapshot only
     (a writer's own folder named server/ or contract/ further down is the app's)."""
     top = Path(snapshot)
@@ -268,14 +265,13 @@ def _repair_text(failed: toolchain.StepFailed, folders) -> str:
     """What the writer is told about its build error: the failure's summary and the tail of the build tool's own
     output, bounded. That output can quote any file the build read: the writer's own source, the builder's generated
     files (rose.app_builder.codegen: no key, token or account; the app's hosted URL), the pinned libraries and SDK. It
-    cannot hold an inherited environment value: toolchain.run and server_build give each tool a fixed environment
-    (paths, LANG, offline cargo settings) and nothing else. The signing key and its password are not read until a
-    build has passed, and the server's keyring only at its runtime. A Gradle project's build output also holds
-    whatever its own build scripts print: they run inside the build isolation (rose.app_builder.gradle), which sees
-    only the job's copy of the source, the pinned JDK, Gradle, SDK and dependency cache, and no network, so they have
-    nothing else to print. What is removed here is location: file URIs become paths, the builder's folders (and
-    toolchain.run's ``<folder>/`` redactions) become relative, and every other absolute path is replaced with
-    ``<path>``."""
+    cannot hold an inherited environment value: toolchain.run gives each tool a fixed environment (paths and
+    LANG) and nothing else. The signing key and its password are not read until a build has passed, and the
+    server's keyring only at its runtime. A Gradle project's build output also holds whatever its own build scripts
+    print: they run inside the build isolation (rose.app_builder.gradle), which sees only the job's copy of the
+    source, the pinned JDK, Gradle, SDK and dependency cache, and no network, so they have nothing else to print.
+    What is removed here is location: file URIs become paths, the builder's folders (and toolchain.run's
+    ``<folder>/`` redactions) become relative, and every other absolute path is replaced with ``<path>``."""
     text = f'{failed.summary}\n{(failed.log or "")[-REPAIR_TEXT_MAX * 2:]}'
     text = re.sub(r'\bfile:(?://)?(?=/)', '', text)  # Kotlin and Gradle name files as file:///path
     for folder in sorted({str(f) for f in folders}, key=len, reverse=True):
@@ -288,13 +284,16 @@ class BackendSession:
     in, in the project's own agent container, and the one tool it has there. The container is recorded and the
     folder made on the first call, so a client-only app never takes an agent from the pool."""
 
-    def __init__(self, hosting, project_id: str, release: str):
+    def __init__(self, hosting, project_id: str, release: str, legacy: bool = False):
         self.hosting, self.project_id, self.release = hosting, project_id, release
         self.folder = hosting.release_folder(release)
         self.used = False
+        self.legacy = legacy
 
     def exec(self, command: str, stdin: bytes = b'', timeout_s: float = 1800.0, stopped=lambda: False):
         if not self.used:
+            if self.legacy:
+                self.hosting.check_legacy(self.project_id)
             self.hosting.ensure(self.project_id)
             self.hosting.prepare(self.project_id, self.release)  # identity and owner checked there first
             self.used = True
@@ -303,8 +302,7 @@ class BackendSession:
 
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
-                 resolver=None, *, codegen=None, server_isolation=None, rust_tools=None, crate_source=None,
-                 server_crates=None, server_crate_deps=None, server_url=None, hosting=None, repairs: int = REPAIRS,
+                 resolver=None, *, codegen=None, server_url=None, hosting=None, repairs: int = REPAIRS,
                  require_key_backup=True, gradle=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
@@ -316,21 +314,8 @@ class Builder:
         it a new app starts from the older flat Java skeleton, and a Gradle project fails as a toolchain matter.
         Either way the identity, signing and delivery below are the same, so an app can move from one to the other.
 
-        A client-server app (docs/APP-BUILDER.md §7) also needs, all injected by the host and each None by default,
-        when a job for one fails with an honest category instead of building half of it:
-        - ``codegen``: ``server_files(contract) -> {path: text}`` (``rose/*.rs``) and
-          ``client_files(contract, package) -> {path: text}`` (under ``src/<package>/rose/``);
-        - ``server_isolation`` (rose.app_builder.server_build.Isolation), ``rust_tools`` (``RustTools``) and
-          ``crate_source`` (rose.app_builder.crates.CrateSource; only an app that declares crates needs one);
-        - ``server_crates``: the builder's own crates the server depends on (name -> folder: the runtime and its
-          adapter, both named by the builder's own generated code, so both required), and ``server_crate_deps``
-          the path crates those depend on (rose-signin);
-        - ``server_url(project_id) -> str | None``: the app's hosted https base URL from the hosting record (§7.7),
-          which only owner tooling writes; None (the default) means it is not hosted yet. It is baked into the
-          client (``RoseServer.URL``), so the first hosted version needs a build after the record exists.
-        - ``hosting`` (rose.app_builder.app_host.AgentHosting, §7.7a): ``ensure(project_id)`` records the app's agent
-          container before its client is generated, and ``deploy(project_id, version_code, elf, manifest)`` sets the
-          server up there before the version is delivered; None (the default) hosts nothing."""
+        Backend apps use the injected client code generator and hosting connection. The writing agent builds
+        their release inside the existing Chariot agent container; the host builds only the Android client."""
         self.root = Path(root)
         self.ledger = ledger or Ledger(self.root)
         if tools.cache is None:  # the Java system image, made once per toolchain, in this builder's own storage
@@ -339,9 +324,7 @@ class Builder:
         self.backup = backup
         self.require_key_backup = require_key_backup
         self.resolver = resolver  # an offline dependencies.Resolver; None: an app that declares libraries fails
-        self.codegen, self.server_isolation, self.rust_tools = codegen, server_isolation, rust_tools
-        self.crate_source = crate_source
-        self.server_crates, self.server_crate_deps = dict(server_crates or {}), dict(server_crate_deps or {})
+        self.codegen = codegen
         self.server_url = server_url
         self.hosting = hosting
         self.gradle = gradle
@@ -499,6 +482,9 @@ class Builder:
         try:
             self._step(job, 'preparing', 'source', 'Preparing the project source.')
             self._prepare(source, project, job)
+            legacy = self.ledger.profile(project_id) == CLIENT_SERVER
+            if legacy:
+                legacy_backend.prepare(source, self.ledger, project_id)
             self._step(job, 'preparing', 'generating', 'Writing the app.')
             kind, request = job['kind'], job['request']
             if kind == 'revise' and not self.ledger.versions(project_id):
@@ -507,9 +493,9 @@ class Builder:
             backend = None
             # The tool only for an app that is, or may become, client-backend-v1: never for one bound to another kind.
             if self.hosting is not None and getattr(self.generate, 'backend', False) \
-                    and self.ledger.profile(project_id) in ('app-v1', CLIENT_BACKEND):
+                    and self.ledger.profile(project_id) in ('app-v1', CLIENT_BACKEND, CLIENT_SERVER):
                 release = hashlib.sha256(f'{project_id}:{job_id}:{job["attempt"]}'.encode()).hexdigest()
-                backend = BackendSession(self.hosting, project_id, release)
+                backend = BackendSession(self.hosting, project_id, release, legacy=legacy)
             repairs, notes = 0, []
             # One writer budget for the job: repairs share the writer's own turn timeout with the first turn (and the
             # builds between), so repairing never makes the job's writing take longer than one turn could.
@@ -517,7 +503,7 @@ class Builder:
             deadline = time.monotonic() + budget if isinstance(budget, (int, float)) and budget > 0 else None
             while True:  # one writer turn and build, then at most self.repairs repairs of the writer's own build errors
                 try:
-                    (note, snapshot, profile, revision, code, name, libraries, level2, agent, unsigned,
+                    (note, snapshot, profile, revision, code, name, libraries, agent, unsigned,
                      log) = self._write_and_build(job, project, source, work, kind, request, cancelled, backend,
                                                   repairs, notes, deadline if repairs else None)
                     break
@@ -552,32 +538,13 @@ class Builder:
             server_records, hosted = {}, None
             if agent is not None:  # §7.7a: the release the building agent made, switched to before any phone gets it
                 server_records = dict(profile=CLIENT_BACKEND, server={'release': backend.release},
-                                      contract=agent['contract'])
+                                      contract=agent['contract'], migrated_from=legacy_backend.base_version(self.ledger, project_id)
+                                      if legacy else None)
                 self._step(job, 'signing', 'hosting', 'Setting up the app\'s backend.')
                 if self.ledger.cancel_requested(job_id):  # the last point a cancel stops it
                     raise toolchain.StepFailed('cancelled', 'Cancelled.')
                 hosted = self._host_release(project_id, code, backend.release, agent['url'])
                 undo = ('release', project_id, code, backend.release)
-            if level2 is not None:
-                built = level2['server']
-                _place(built.elf, artifacts / f'{built.sha256}.server')  # the ELF, by its digest (§7.7)
-                server_records = dict(profile=CLIENT_SERVER, server=built.record(), migrations=level2['locks'],
-                                      crates=built.crates, cargo_lock=built.cargo_lock, contract=level2['contract'])
-                if built.target == server_manifest.TARGET:  # §7.7: a manifest only for a server the host runs
-                    manifest = server_manifest.manifest(project_id, code, built.record(), level2['locks'],
-                                                        shared=profile.server.shared)
-                    server_records['manifest'] = server_manifest.encode(manifest)
-                    if self.hosting is not None:  # §7.7a: its server runs before any phone can get the app
-                        self._step(job, 'signing', 'hosting', 'Setting up the app\'s server.')
-                        if self.ledger.cancel_requested(job_id):  # the last point a cancel stops it
-                            raise toolchain.StepFailed('cancelled', 'Cancelled.')
-                        target = (project_id, code, artifacts / f'{built.sha256}.server', manifest)
-                        hosted, changed = self._host(*target, level2['url'])
-                        if changed:  # a new server set up: undone if the version is not delivered after all
-                            undo = target
-                elif self.hosting is not None:
-                    raise toolchain.StepFailed('toolchain', 'This app\'s server was not built for its host, so the app '
-                                               'was not delivered.')
             # Once its server is set up, delivery is the commit point: a cancel no longer stops it.
             if not self.ledger.deliver(job_id, name, revision, receipt['sha256'], receipt['size'],
                                        _note(note, job['request']), libraries, _api_report(work),
@@ -602,85 +569,13 @@ class Builder:
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
 
-    def _client_server(self, snapshot: Path, work: Path, project: dict, profile, cancelled) -> dict:
-        """A client-server app's checks, generated code and server build (docs/APP-BUILDER.md §7): the contract
-        against every delivered version's, the migrations against the delivered lock and a sandbox, the server
-        built offline under isolation, and the client's tree with the builder's generated files added."""
-        project_id, package = project['projectId'], project['packageName']
-        try:
-            api = contract.load(snapshot)
-            canonical = contract.canonical_bytes(api.data)
-            if len(canonical) > MAX_CONTRACT:  # what the ledger keeps; the normalised form outgrows the file
-                raise contract.ContractRefused(f'contract/api.json is too large once normalised ({len(canonical)} '
-                                               f'bytes; at most {MAX_CONTRACT}).', 'contract_invalid')
-            delivered = [contract.parse(json.loads(text)) for text in self.ledger.contracts(project_id)]
-            contract.check_update(delivered, api)
-            current = migrations.read(snapshot)
-            locks = [m.lock() for scope in sorted(current) for m in current[scope]]
-            migrations.check(current, self.ledger.migration_lock(project_id))
-        except appprofile.ProfileRefused as refused:  # contract and migration refusals too
-            raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
-        if self.codegen is None:
-            raise toolchain.StepFailed('toolchain', 'This builder has no code generator for a client-server app '
-                                       'yet, so its server and API client were not built.')
-        if missing := [name for name in server_build.BUILDER_CRATES if name not in self.server_crates]:
-            raise toolchain.StepFailed('toolchain', f'This builder has no {" or ".join(missing)} crate set up, so the '
-                                       'app\'s server was not built.')
-        try:
-            server_files = dict(self.codegen.server_files(api))
-            client_files = dict(self.codegen.client_files(api, package))
-        except Exception:
-            raise toolchain.StepFailed('toolchain', 'The builder could not generate the app\'s server and API '
-                                       'client code.') from None
-        prefix = f'src/{package.replace(".", "/")}/rose/'
-        if any(k in server_files for k in BUILDER_SERVER_FILES) or prefix + ROSE_SERVER in client_files:
-            raise toolchain.StepFailed('toolchain', 'The builder\'s code generator wrote a file the builder writes '
-                                       'itself.')
-        server_files['rose/migrations.rs'] = server_build.migrations_rs(current, profile.server.shared)
-        server_files['rose/meta.rs'] = server_build.meta_rs(package, project['name'], profile.server.admission)
-        server_files['rose/assets.rs'] = server_build.assets_rs(snapshot)
-        if any(not isinstance(k, str) or not isinstance(v, str) or not k.startswith(prefix)
-               or any(part in ('', '.', '..') for part in k[len(prefix):].split('/')) for k, v in client_files.items()):
-            raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote outside its own '
-                                       'folder.')
-        url = self._hosted_url(project_id)
-        client_files[prefix + ROSE_SERVER] = rose_server_java(package, url)
-        # The client's tree: the writer's checked app without the server's parts, plus the builder's own files.
-        client = work / 'client'
-        shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot))
-        try:
-            for path, text in client_files.items():
-                target = client / path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with open(target, 'x', encoding='utf-8') as stream:  # two of its files at one path is its fault too
-                    stream.write(text)
-        except (OSError, ValueError, UnicodeError):
-            raise toolchain.StepFailed('toolchain', 'The builder\'s client code generator wrote files that could not '
-                                       'be written.') from None
-        built = server_build.build(
-            snapshot, work / 'server', profile.server.crates, self.crate_source, self.rust_tools,
-            self.server_isolation, cancelled, cache=self.root / 'crates', generated=server_files,
-            previous_lock=self.ledger.cargo_lock(project_id), locked=self.ledger.crate_lock(project_id),
-            path_crates=self.server_crates, dependent_path_crates=self.server_crate_deps)
-        packages = set()
-        for path, text in client_files.items():
-            declared = re.match(r'\s*package\s+([A-Za-z_][\w.]*)\s*;', text) if path.endswith('.java') else None
-            if declared and declared.group(1) != package and not declared.group(1).startswith(package + '.'):
-                packages.add(declared.group(1))  # the sign-in core keeps its own package
-        return {'client_source': client, 'builder_files': frozenset(client_files), 'packages': frozenset(packages),
-                'server': built, 'url': url,
-                'locks': locks, 'contract': canonical.decode('utf-8')}
-
     def _undo_hosting(self, undo) -> None:
         """A version whose server was set up but which was not delivered: put the agent back (best effort; a later
         setup reverts it anyway, as the agent's release is not a delivered one)."""
         if undo is None or self.hosting is None:
             return
         try:
-            if undo[0] == 'release':
-                self.hosting.revert_release(*undo[1:])
-            else:
-                self.hosting.revert(*undo)
+            self.hosting.revert_release(*undo[1:])
         except Exception:
             pass
 
@@ -702,6 +597,8 @@ class Builder:
         try:  # before git touches anything the generator wrote
             _snapshot(source, snapshot)
             profile = appprofile.check(snapshot, package, bound=self.ledger.profile(project_id))
+            if self.ledger.profile(project_id) == CLIENT_SERVER:
+                legacy_backend.check(snapshot, self.ledger, project_id)
         except template.TemplateRefused as refused:  # ProfileRefused too
             raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
         layout = gradle.is_gradle_project(snapshot)
@@ -721,13 +618,8 @@ class Builder:
             shutil.rmtree(work)
         # A Gradle project's libraries are its own build files' business, resolved offline from the host's cache.
         libraries = [] if layout else self._libraries(snapshot, work, project_id, package)
-        level2 = agent = None
-        if profile.name == CLIENT_SERVER:
-            level2 = self._client_server(snapshot, work, project, profile, cancelled)
-            unsigned, log = toolchain.build(level2['client_source'], work, package, code, name, self.tools,
-                                            cancelled, libraries, builder_files=level2['builder_files'],
-                                            builder_packages=level2['packages'])
-        elif profile.name == CLIENT_BACKEND:
+        agent = None
+        if profile.name == CLIENT_BACKEND:
             if backend is None:
                 raise toolchain.StepFailed('toolchain', 'This builder has no agent container set up for app '
                                            'backends, so the app was not built.')
@@ -743,12 +635,14 @@ class Builder:
             unsigned, log = gradle.build(snapshot, work, package, code, name, self.gradle, self.tools, cancelled)
         else:  # a plain app's build is called exactly as before Level 2
             unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
-        return note, snapshot, profile, revision, code, name, libraries, level2, agent, unsigned, log
+        return note, snapshot, profile, revision, code, name, libraries, agent, unsigned, log
 
     def _host_release(self, project_id: str, code: int, release: str, url: str) -> tuple[str, float]:
         """Switch to the building agent's release; returns ``(app URL, when)`` once it answered its health check."""
         from .app_host import SetupFailed
         try:
+            if self.ledger.profile(project_id) == CLIENT_SERVER:
+                self.hosting.check_legacy(project_id)
             self.hosting.deploy_release(project_id, code, release, url)
         except SetupFailed as failed:
             if failed.step == 'switch' and '(release)' in failed.message:
@@ -812,21 +706,6 @@ class Builder:
                 packages.add(declared.group(1))
         return {'client_source': client, 'builder_files': frozenset(client_files), 'packages': frozenset(packages),
                 'url': url, 'contract': canonical.decode('utf-8')}
-
-    def _host(self, project_id: str, code: int, elf: Path, manifest: dict, url: str):
-        """Set the version's server up; returns ``((app URL, when), changed)`` once it answered its health check,
-        ``changed`` False when the server was byte-identical to the one already set up."""
-        from .app_host import SetupFailed
-        try:
-            out = self.hosting.deploy(project_id, code, elf, manifest, url)
-            changed = not (isinstance(out, dict) and out.get('unchanged'))
-            if changed:  # another server runs there now: no older version is claimed set up until this one is delivered
-                self.ledger.clear_server_setup(project_id)
-            return (self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()), changed
-        except SetupFailed as failed:
-            raise toolchain.StepFailed('toolchain', f'The app\'s server could not be set up in its Chariot agent '
-                                       f'container ({failed.step}), so the app was not delivered.', retryable=True,
-                                       log=failed.message[:2000]) from None
 
     def _hosted_url(self, project_id: str) -> str | None:
         """The app's hosted base URL from the injected hosting record, or None when it is not hosted yet. A record

@@ -102,13 +102,13 @@ class LayoutTest(Base):
         self.assertEqual(appprofile.client_root(gradle=True), 'app/src/main/java/')
         self.assertEqual(appprofile.client_root(), 'src/')
 
-    def test_a_client_server_app_keeps_the_older_layout(self):
+    def test_a_retired_client_server_app_is_refused_in_either_layout(self):
         tree = self.gradle_tree()
         (tree / 'rose-app.json').write_text('{"schemaVersion": 1, "profile": "client-server-v1", '
                                             '"server": {"crates": []}}')
         with self.assertRaises(appprofile.ProfileRefused) as refused:
             appprofile.check(tree, 'app.rose.gen.pabc')
-        self.assertEqual(refused.exception.reason, 'layout_invalid')
+        self.assertEqual(refused.exception.reason, 'legacy_backend')
 
     def test_a_gradle_project_on_a_builder_without_gradle_fails_as_a_toolchain_matter(self):
         def to_gradle(source, kind, request, cancelled):

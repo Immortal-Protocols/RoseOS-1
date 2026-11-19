@@ -16,6 +16,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -25,7 +26,6 @@ from pathlib import Path
 
 from rose.app_builder import codegen as G
 from rose.app_builder import contract as C
-from rose.app_builder import server_build as S
 from rose.app_builder import service as V
 
 REPO = Path(__file__).resolve().parents[4]
@@ -91,13 +91,13 @@ class Server(unittest.TestCase):
 
     def test_files_are_the_builders_generated_modules(self):
         self.assertEqual(sorted(self.files), ['rose/api.rs', 'rose/main.rs', 'rose/routes.rs', 'rose/wire.rs'])
-        self.assertTrue(all(S.GENERATED.fullmatch(k) for k in self.files))
-        self.assertIn(S.ENTRY, self.files)
+        self.assertTrue(all(re.fullmatch(r'rose/[a-z][a-z0-9_]*\.rs', k) for k in self.files))
+        self.assertIn('rose/main.rs', self.files)
         # The builder's own modules: codegen never writes them.
         self.assertNotIn('rose/meta.rs', self.files)
         self.assertNotIn('rose/migrations.rs', self.files)
         self.assertNotIn('rose/assets.rs', self.files)
-        self.assertFalse(set(self.files) & set(V.BUILDER_SERVER_FILES))
+        self.assertFalse(set(self.files) & {'rose/migrations.rs', 'rose/meta.rs', 'rose/assets.rs'})
 
     def test_main_takes_everything_from_the_host_and_the_build(self):
         main = self.files['rose/main.rs']
@@ -181,7 +181,7 @@ class Server(unittest.TestCase):
             write_tree(crate, {'Cargo.toml': ADAPTER_CARGO.replace('@RUNTIME@', json.dumps(str(RUNTIME)))
                                .replace('@ADAPTER@', json.dumps(str(ADAPTER))),
                                'rose/meta.rs': META_RS, 'rose/migrations.rs': MIGRATIONS_RS,
-                               'rose/assets.rs': S.assets_rs(Path(tmp) / 'no-assets'),
+                               'rose/assets.rs': "pub fn get(_: &str) -> Option<&'static [u8]> { None }\n",
                                'src/handlers/mod.rs': RUST_WRITER})
             env = {**os.environ, 'CARGO_TARGET_DIR': str(crate / 'target'), 'CARGO_NET_OFFLINE': 'true'}
             built = subprocess.run(['cargo', 'build', '--offline', '--quiet'], cwd=crate, env=env,

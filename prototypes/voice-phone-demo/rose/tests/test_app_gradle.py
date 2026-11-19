@@ -29,7 +29,7 @@ from unittest import mock
 
 from rose.app_builder import gradle, gradle_stack, template, toolchain
 from rose.app_builder.isolation import BuildFailed
-from rose.app_builder.providers.host import BubblewrapIsolation
+from rose.app_builder.isolation import BubblewrapIsolation
 
 PACKAGE = 'com.example.app'
 

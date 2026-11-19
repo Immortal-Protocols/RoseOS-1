@@ -1,8 +1,8 @@
-"""rose.app_builder.isolation: the moved names keep their old homes, and the macOS profile and pre-flight.
+"""rose.app_builder.isolation: its base contract, and the macOS profile and pre-flight.
 
 SeatbeltIsolation cannot run here (no sandbox-exec off macOS): these tests check the profile text and every
 refusal with the platform mocked. They are not evidence that macOS enforces the profile; a Mac must qualify it.
-The bubblewrap provider's own tests stay in test_app_host_provider (its real-confinement ones are opt-in).
+The bubblewrap provider's own tests are in test_app_isolation_bubblewrap (its real-confinement ones are opt-in).
 """
 import os
 import subprocess
@@ -68,19 +68,9 @@ def paths(filters, kind) -> list[str]:
 
 
 class MovedNames(unittest.TestCase):
-    def test_every_old_import_path_names_the_same_object(self):
-        from rose.app_builder import server_build
-        from rose.app_builder.providers import host
-        self.assertIs(server_build.Isolation, Isolation)
-        self.assertIs(server_build.BuildFailed, BuildFailed)
-        self.assertIs(host.BubblewrapIsolation, BubblewrapIsolation)
-        self.assertIs(host.BuildFailed, BuildFailed)
-        self.assertIs(host.Isolation, Isolation)
-        self.assertTrue(issubclass(BubblewrapIsolation, server_build.Isolation))
-
     def test_the_module_imports_no_builder(self):
         code = ('import sys, rose.app_builder.isolation; '
-                'names = ("server_build", "providers.host", "service", "gradle"); '
+                'names = ("service", "gradle", "toolchain_builder"); '
                 'bad = [m for m in sys.modules if m.endswith(names)]; '
                 'assert not bad, bad')
         done = subprocess.run([sys.executable, '-c', code], cwd=HERE, capture_output=True, text=True, timeout=60)

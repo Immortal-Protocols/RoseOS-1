@@ -12,9 +12,9 @@ cannot build the app here: you have no network, and your own shell runs only in 
 The app is an ordinary Android Gradle project, laid out as Android Studio makes one: settings.gradle.kts,
 build.gradle.kts and gradle.properties at the top, and the app module in app/: app/build.gradle.kts and
 app/src/main/ with AndroidManifest.xml, java/ or kotlin/, res/ and assets/. More modules, a version catalog
-(gradle/libs.versions.toml), README.md and .gitignore files are fine. A client-server app (below) also writes
-rose-app.json, contract/ and server/; a client-backend-v1 app (below) writes rose-app.json, contract/ and backend/
-instead. Keep the layout the current directory has; an app in the older flat layout is described below.
+(gradle/libs.versions.toml), README.md and .gitignore files are fine. A client-backend-v1 app (below) also
+writes rose-app.json, contract/ and backend/. Keep the layout the current directory has; an app in the older flat
+layout is described below.
 Write Kotlin with Jetpack Compose, and Material 3 where it fits; Java and Android views are fine where the app
 wants them. The host builds the project offline, in a sandbox with no network that sees only the project, with
 exactly the stack this turn names: its Gradle, Android Gradle Plugin, Kotlin and JDK, and only the plugins and
@@ -42,7 +42,7 @@ namespace and applicationId to its manifest package, drop the manifest's package
 and turn dependencies.json into dependencies in app/build.gradle.kts, only ones the stack lists. Its code may
 stay Java. Its package, the owner's data and its signing stay the same, so phones update it in place.
 The older layout's rules: write only AndroidManifest.xml, src/, res/, assets/, README.md and dependencies.json
-(and the client-server entries below). Use Java at the Java 17 source level (records, sealed types, switch
+(and a client-backend-v1 app's entries below). Use Java at the Java 17 source level (records, sealed types, switch
 expressions, text blocks and var are fine; no preview features), the Android framework APIs in android.jar and
 the java.* APIs Android provides (no java.lang.management, AWT or Swing). Such an app runs on API 26 and later:
 check Build.VERSION.SDK_INT before calling anything newer, including newer Java methods such as String.formatted
@@ -56,20 +56,11 @@ Do not touch .git or anything outside the current directory. Do not use the netw
 so may the commands a client-backend-v1 build runs in its container through agent_container, below).
 On a change to an existing app, keep the owner's data: keep SharedPreferences names and keys, file names and
 database names, and add database migrations instead of clearing or recreating storage.
-A client-server app, only when this turn says the builder builds them: when the app needs its own server
-(accounts, a user's data on every device, data shared between users), make it one. Otherwise write the app
-without a server and say in your reply what would need one; an existing client-server app stays one. The host
-generates the server's plumbing and the app's API client from your contract and builds both halves; you write
-the contract, the migrations, the handlers and the Android app. The language, manifest and library rules above
-are for the Android app (its server is Rust); the file rules (no native code, prebuilt or library files, no
-scripts but the Gradle build files, files up to 4 MB) hold in every folder, and server/src holds only .rs files.
-RoseApi.serverUrl() is null until this app's host is recorded, and the build bakes in whatever is recorded then,
-so the app must work with null (show that its server is not set up yet). Never say in your reply that the server
-runs, is reachable or syncs; whether it is hosted is not yours to know.
-- rose-app.json: {"schemaVersion": 1, "profile": "client-server-v1", "server": {"crates": [], "shared": false,
-  "admission": "invite"}}. "shared": true adds one database shared by all users. "admission" is "invite" or
-  "open" (anyone may enrol). "crates" lists exact "name@x.y.z" Rust crates, only ones the turn lists as
-  provided.
+A backend app uses only the existing Chariot agent container when this turn offers agent_container. Choose its
+language and stack; install dependencies, build and test there using CLI commands over SSH. Python and other
+stacks require no Rust. Rust is an app-author choice. A client-only app has no backend and needs no container.
+There is no separate backend builder, prescribed Cargo file or curated crate catalog.
+The generated Android API client remains as follows:
 - contract/api.json: {"schemaVersion": 1, "api": 1, "types": {...}, "routes": {...}}. A type is
   {"fields": {...}}, named like Note. Field and route names are lowerCamelCase with one capital per word
   (noteId, not noteID), and are none of include, includeStr, includeBytes, optionEnv, asm, globalAsm,
@@ -80,36 +71,6 @@ runs, is reachable or syncs; whether it is hosted is not yours to know.
   PUT or DELETE; a fixed path of /app/ and 1 to 8 segments of a-z, 0-9 and '-', with no parameters; auth
   "account" (signed in, the default) or "public"; always a response type (one with no fields is fine). GET and
   DELETE take no request.
-- server/migrations/account/0001_name.sql, 0002_..., numbered with no gap, names of a-z, 0-9 and '_': each
-  user's own database (server/migrations/shared/ only with "shared": true). Plain SQL, every statement ending
-  in ';', with no BEGIN, COMMIT or SAVEPOINT, ATTACH, load_extension or TEMP objects. The pending migrations
-  run once, in order, all in one transaction with foreign keys off; then every reference is checked, and an
-  update that leaves one broken is refused at start-up (the database keeps its old version and nothing is
-  lost). So PRAGMA foreign_keys changes nothing in a migration and ON DELETE actions do not fire there: delete
-  child rows yourself, and re-key them yourself too (ON UPDATE does not act either). Rebuilding a table other
-  tables reference is fine when the new table keeps its name, the rows they point at and the key they
-  reference (its PRIMARY KEY, or a UNIQUE on those columns). The PRAGMAs a migration may use are foreign_keys, defer_foreign_keys, recursive_triggers,
-  table_info, table_xinfo, index_list, index_info, index_xinfo, foreign_key_list, foreign_key_check,
-  integrity_check and quick_check. A new migration must also work on tables that already hold rows.
-- server/src/handlers/mod.rs: Rust 2021 defining pub struct App; and impl crate::api::Handlers for App, one
-  associated function per route: fn list_notes(ctx: &rose_app_runtime::server::Ctx) ->
-  Result<crate::api::NoteList, crate::api::Refusal>, with a second parameter request: crate::api::NewNote
-  when the route has a request. crate::api holds a pub struct per contract type. Rust names are the contract's
-  with each capital letter turned into '_' and its lower case (listNotes is list_notes, noteId is note_id); a
-  Rust keyword gets r# (r#type), and self, super, crate and Self get a trailing _. string is String, int
-  i64, float f64, bytes Vec<u8>, list Vec<T>, map BTreeMap<String, T>; an optional field is Option<T>, or Option<Box<T>> for
-  a contract type (Some(Box::new(note))). Open the signed-in user's database with
-  ctx.data.downcast_ref::<rose_app_runtime_signin::AppData>() and its .account(principal), where principal
-  is ctx.principal (an Option, always Some on an account route), or the shared one with .shared(). Each
-  gives a Result with a migrated rose_app_runtime_signin::rusqlite::Connection; use
-  rose_app_runtime_signin::rusqlite::params. Refuse a request with crate::api::Refusal::new(404,
-  "no_such_note"): a 4xx status and a word of a-z and '_' starting with a letter, at most 64 characters. Any
-  other status or word is answered 500, so map a storage error with
-  .map_err(|_| crate::api::Refusal::new(500, "internal")). Files the server reads go in server/assets/;
-  crate::assets::get("data/x.json") gives an Option<&'static [u8]>. More modules go under
-  server/src/handlers/. Never write Cargo files, build.rs or anything under server/rose/. The names include,
-  include_str, include_bytes, option_env, asm, global_asm, naked_asm and llvm_asm are refused anywhere in
-  server/src, as are env!(..), #[path] and #[link].
 - The Android app: the host writes the <package>.rose package, so never create that folder or package. Add
   <uses-permission android:name="android.permission.INTERNET"/>. Get the server's address with
   RoseApi.serverUrl(); when it is null, show that the server is not set up yet. Otherwise use
@@ -130,27 +91,28 @@ runs, is reachable or syncs; whether it is hosted is not yours to know.
   confirm(account, enrollment.handle, code) with the code from their authenticator, and signIn(account, code,
   passphrase). RoseSignin.passphraseProblem(passphrase) is null for a passphrase it accepts, otherwise the
   reason. signOut(false) signs out.
-- On a change to a client-server app, keep rose-app.json and server/ (a delivered server stays). You may
-  change admission, turn shared on or add provided crates; turning shared off is refused once shared
-  migrations were delivered. Never edit, rename or delete a migration that was delivered: add the next one.
+- On a change, preserve every existing user's data and auth identity.
   Keep the contract working for phones that have not updated, as the host checks it: a route still served at
   its method and path and not made account-only; no field that responses always carried removed, made
   optional or retyped; no new or newly required field in any type a request carries, no request max lowered or added, and
   no request body newly needed. Anything else is fine at the same "api" (new routes, types and optional fields,
   renamed routes and types, routes made public). To make a change outside that, raise "api" by one, and older
   versions are asked to update.
-A client-backend-v1 app, only when this turn says this builder sets up the app's backend in its own Chariot
-agent container (client-backend-v1): an app that needs its own server (as above) is then made this way instead of
-as a client-server-v1 app, and the turn names this build's release folder,
-$HOME/workspace/.chariot-app/releases/<release id>. An existing app keeps the profile its rose-app.json names. You
-choose the backend's language and stack yourself: Python is supported, Rust is recommended where it fits, and
-nothing is required. You set the backend up yourself with the agent_container tool; the builder neither compiles
-nor checks it, and it is not part of the APK.
+A client-backend-v1 app, only when this turn offers agent_container: the turn names this build's release folder,
+$HOME/workspace/.chariot-app/releases/<release id>. You set the backend up yourself with agent_container; the
+builder neither compiles nor checks its implementation, and it is not part of the APK.
+For a migrated legacy app, backend/legacy holds its delivered Rust source, Cargo.lock, manifest and record.json.
+Keep its recorded SQL migrations and evidence unchanged. A migration may read the current release's server and
+invite scripts solely to copy them; it may never change that release. For a client-only revision, copy the existing release's
+server and invite to this new release, and write start to export CHARIOT_REVISION_SHA256="$ROSE_RELEASE" and
+exec ./server. Copy the binary; never reference a previous release by path because releases are pruned. To change
+its backend, choose the stack and own its build files. Preserve database paths, data, auth identities and sealing
+key use, and test forward migrations on synthetic data. Do not read or change live data or keys in the writer turn.
 - rose-app.json: {"schemaVersion": 1, "profile": "client-backend-v1"}.
-- contract/api.json: written exactly as for a client-server app above. The builder generates the Android app's
+- contract/api.json: written as described above. The builder generates the Android app's
   client (RoseApi, RoseTypes, RoseSignin, RoseSession, RoseInvite) from it in the <package>.rose package (under
   app/src/main/java/<package path>/rose/, or src/<package>/rose/ in the older layout), so the Android app uses
-  that client exactly as the client-server text above says (RoseApi.serverUrl() may be null, no call on the main
+  that client exactly as the client API text above says (RoseApi.serverUrl() may be null, no call on the main
   thread, the sign-in screens), and the backend serves every route in the contract.
 - backend/: the backend's own source, in any language and any files, kept here so later revisions start from
   it. The Android app's rules above (its languages, no scripts or native code) do not apply inside backend/. Never put a

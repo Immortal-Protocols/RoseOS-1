@@ -183,17 +183,12 @@ test('the policy keeps the older flat layout\'s rules for apps that are in it, a
  assert.ok(flat.indexOf('Java 17 source level')>flat.indexOf('The older layout\'s rules:'));
 });
 
-test('the policy offers a client-server app only when the turn says so, and never claims the server runs',()=>{
- // The names themselves are checked against the builder and its generated code in Python
- // (rose/tests/test_app_writer_policy.py); here, the sentences the writer's choices hang on.
- for(const phrase of [/A client-server app, only when this turn says the builder builds them/,
-   /Otherwise write the app\nwithout a server and say in your reply what would need one/,
-   /RoseApi\.serverUrl\(\) is null until this app's host is recorded/,/so the app must work with null/,
-   /Never say in your reply that the server\nruns, is reachable or syncs/,/Do not use the network yourself \(the app may,/,
-   /all in one transaction with foreign keys off; then every reference is checked/,
-   /ON DELETE actions do not fire there: delete\n  child rows yourself/,
-   /never call one on the main thread/,/Never edit, rename or delete a migration that was delivered/])
-  assert.match(appBuildPolicy,phrase);
+test('the policy offers only the agent backend and never claims it is deployed',()=>{
+ assert.match(appBuildPolicy,/existing Chariot agent container when this turn offers agent_container/);
+ assert.match(appBuildPolicy,/Python and other\nstacks require no Rust/);
+ assert.match(appBuildPolicy,/A client-only app has no backend/);
+ assert.doesNotMatch(appBuildPolicy,/server\/src\/handlers|declare crates|builder builds them/);
+ assert.match(appBuildPolicy,/Never say in your reply that the backend is deployed/);
 });
 
 test('the policy source is one template literal with nothing interpolated',()=>{
@@ -502,12 +497,12 @@ test('the container tool is one fixed definition, and container options are chec
 });
 
 test('the policy carries the client-backend-v1 contract',()=>{
- for(const phrase of [/A client-backend-v1 app, only when this turn says this builder sets up the app's backend in its own Chariot\nagent container \(client-backend-v1\)/,
-   /\$HOME\/workspace\/\.chariot-app\/releases\/<release id>/,/Python is supported, Rust is recommended where it fits, and\nnothing is required/,
-   /rose-app\.json: \{"schemaVersion": 1, "profile": "client-backend-v1"\}/,/contract\/api\.json: written exactly as for a client-server app above/,
+ for(const phrase of [/A client-backend-v1 app, only when this turn offers agent_container/,
+   /\$HOME\/workspace\/\.chariot-app\/releases\/<release id>/,/Rust is an app-author choice/,
+   /rose-app\.json: \{"schemaVersion": 1, "profile": "client-backend-v1"\}/,/contract\/api\.json: written as described above/,
    /\(RoseApi, RoseTypes, RoseSignin, RoseSession, RoseInvite\) from it in the <package>\.rose package \(under\n  app\/src\/main\/java\/<package path>\/rose\/, or src\/<package>\/rose\/ in the older layout\)/,
    /backend\/: the backend's own source, in any language and any files, kept here so later revisions start from\n  it/,
-   /the builder neither compiles\nnor checks it, and it is not part of the APK/,
+   /builder neither compiles nor checks its implementation, and it is not part of the APK/,
    /you run as UID 65534, not root, its root filesystem is read-only/,/apt or any system-wide\n  install cannot work/,
    /anything put elsewhere is lost when the container restarts/,/Memory is about 512 MiB/,
    /no compiler or Python is\n  guaranteed/,/BusyBox applets are in \/chariot\/bin, which is not on PATH/,/Prefer a light stack/,

@@ -39,27 +39,22 @@ OPEN_MESSAGES = {
 }
 
 
-CLIENT_SERVER = ('\n\nThis builder builds client-server apps (rose-app.json, contract/ and server/), as your '
-                 'instructions describe.')
 BACKEND = ('\n\nThis builder sets up the app\'s backend in its own Chariot agent container (client-backend-v1), as '
            'your instructions describe, with the agent_container tool; the release folder for this build is {folder}.')
 TOOL_OUTPUT_MAX = 64 * 1024  # each of stdout and stderr, its last bytes, back to the writer
 TOOL = 'agent_container'
 
 
-def prompt(kind: str, request: str, libraries=(), client_server: bool = False, backend_folder: str | None = None,
-           *, stack: str | None = None) -> str:
+def prompt(kind: str, request: str, libraries=(), backend_folder: str | None = None, *,
+           stack: str | None = None) -> str:
     """The owner's request as the turn's text, with the Gradle stack this builder builds ordinary projects with
     (``stack``, gradle_stack.summary(); the policy says to use exactly the stack the turn names), the pure-Java
-    libraries it provides to an app in the older flat layout (declared in dependencies.json, never shipped) and,
-    when it can build them, that it builds client-server apps: the policy (fixed by the bridge, the same for every
-    job) offers one only when the turn says so."""
+    libraries it provides to an app in the older flat layout (declared in dependencies.json, never shipped) and the
+    job's optional agent-container release folder."""
     provided = '\n\n' + stack if stack else ''  # it names the host and its stack itself
     if libraries:
         provided += ('\n\nPure-Java libraries this builder provides, for an app in the older flat layout only '
                      '(declare in dependencies.json only if needed): ' + ', '.join(libraries) + '.')
-    if client_server:
-        provided += CLIENT_SERVER
     if backend_folder is not None:
         provided += BACKEND.format(folder=backend_folder)
     if kind == 'create':
@@ -77,19 +72,16 @@ def prompt(kind: str, request: str, libraries=(), client_server: bool = False, b
 
 class CodexGenerator:
     def __init__(self, timeout_s: float = 900.0, model: str = MODEL, command: list[str] | None = None, connect=None,
-                 libraries=None, client_server: bool = False, backend: bool = False, tool_timeout_s: int = 1800,
-                 gradle: bool = False):
+                 libraries=None, backend: bool = False, tool_timeout_s: int = 1800, gradle: bool = False):
         """``command`` is the bridge command line (for example one that runs it as a separate OS user); ``connect``
         replaces the client for tests: connect(on_event) -> object with request(op, session, **params) and close().
         ``libraries`` lists the coordinates the builder's library store provides (its ``available``), if any.
-        ``client_server`` says the builder can build a client-server app (a host sets it only when it injects
-        the Builder's code generator, server isolation, Rust toolchain and builder crates); the turn then says so.
+        ``backend`` offers the agent_container tool; it never requires a local Rust toolchain.
         ``gradle`` says the builder builds ordinary Gradle projects (a host sets it only with a provisioned Gradle
         stack); each turn then names that stack (gradle_stack.summary())."""
         self.timeout_s, self.model = timeout_s, model
         self.gradle = gradle
         self.libraries = libraries
-        self.client_server = client_server
         # §7.7a: the writer also sets the app's backend up in its agent container, through one host-run tool the
         # Builder answers (BackendSession); the writer itself still has no network, credentials or other tools.
         self.backend, self.tool_timeout_s = backend, int(tool_timeout_s)
@@ -104,8 +96,7 @@ class CodexGenerator:
         """``deadline`` (time.monotonic) ends the turn sooner than ``timeout_s`` would: a repair gets only what is
         left of its job's writer budget."""
         available = self.libraries() if callable(self.libraries) else self.libraries
-        text = prompt(kind, request, sorted(available or ()), self.client_server,
-                      backend.folder if backend is not None else None,
+        text = prompt(kind, request, sorted(available or ()), backend.folder if backend is not None else None,
                       stack=gradle_stack.summary() if self.gradle else None)
         container = {'containerTool': True, 'toolTimeoutS': self.tool_timeout_s} if backend is not None else {}
         events: queue.Queue = queue.Queue()
