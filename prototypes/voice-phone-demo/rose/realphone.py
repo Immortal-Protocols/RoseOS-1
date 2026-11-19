@@ -623,7 +623,7 @@ class RealPhone:
         self._sessions: dict[str, RealSession] = {}
         self._shown: RealSession | None = None
         self._apps: list[dict] = []
-        self._apps_at = 0.0
+        self._apps_at = float("-inf")
         self._lock = threading.RLock()
         self.look_status = ""
         self._shot_lock = threading.Lock()  # one screenshot at a time, SHOT_GAP_S apart
@@ -950,7 +950,7 @@ class RealPhone:
         Runs on the server's event loop, so nothing here waits on the phone."""
 
         self._bg = None
-        self._apps_at = 0.0
+        self._apps_at = float("-inf")  # stale even within the first five minutes after boot
         for unit in [*self.workspaces.units, *self._scoped()]:
             unit.forget()
         self._changed("link", {"connected": self.link.connected})
