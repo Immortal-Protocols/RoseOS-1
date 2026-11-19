@@ -52,7 +52,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import gradle, ledger as ledger_module, starters, template, toolchain
+from . import gradle, gradle_stack, ledger as ledger_module, starters, template, toolchain
 from .starter_pilots import REQUESTS, launchable, parse_pilot, sdk_levels, sha256, stack_tools
 
 SCHEMA_VERSION = 1
@@ -416,9 +416,13 @@ def _bind_identity(b, project_id: str, package: str, name: str):
 
 
 def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools: gradle.GradleTools,
-          catalog: starters.Starters, *, attested=(), transplant_to=(), work: Path | None = None, log=print) -> dict:
+          catalog: starters.Starters, *, attested=(), transplant_to=(), work: Path | None = None, log=print,
+          robolectric: Path | None = None) -> dict:
     """Stage 2. ``attested`` holds the handoff.json digests the operator reported out of band; ``transplant_to``
-    themes also build each handoff's template code under those themes (``transplanted``)."""
+    themes also build each handoff's template code under those themes (``transplanted``). With ``robolectric`` (the
+    stack's Android jars), each handoff that is not a transplant also gets Home's behaviour evidence for its written
+    template module under every theme (rose.app_builder.evidence), inside the same isolation, offline; it is kept
+    in out/evidence/<template>-<theme>/ and summarized in the record."""
     from .service import Builder, _git
     out = Path(out)
     owned = work is None
@@ -491,6 +495,14 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
                                'packageName': project['packageName'], 'versionCode': version['versionCode'],
                                'signerSha256': project['signerSha256'], 'launchableActivity': launchable(badging),
                                'minSdk': min_sdk, 'targetSdk': target_sdk})
+                if robolectric is not None and record['outsideTemplate']:
+                    # The evidence compiles the tree's template under the starters checkout's own themes; that
+                    # stands for this tree only when its theme and framework files are the starter's.
+                    record['evidence'] = {'ran': False, 'reason': 'files outside the template changed',
+                                          'outsideTemplate': record['outsideTemplate']}
+                elif robolectric is not None:  # writer runs (B1) and transplants (B2) alike, each labelled
+                    record['evidence'] = _evidence(h, catalog, gradle_tools, Path(robolectric), tools,
+                                                   work / f'evidence-{name}', out / 'evidence' / name, record)
                 records.append(record)
                 log(f'writer_handoff: {name} ready ({record["label"]})')
             finally:
@@ -532,6 +544,31 @@ def cross_theme(records: list[dict]) -> dict:
     return report
 
 
+def _evidence(h: 'Handoff', catalog: starters.Starters, gradle_tools, robolectric: Path, tools, work: Path,
+              keep: Path, record: dict) -> dict:
+    """Home's behaviour evidence for this handoff's written template module (untrusted code: it runs only in the
+    build isolation, offline), kept in ``keep``; the summary goes in the record. A run that produced no report is
+    recorded as such, never as a pass."""
+    from . import evidence
+    tmpl, _ = catalog.resolve({'template': h.manifest['template'], 'theme': h.manifest['theme']})
+    written = h.tree / tmpl.dir
+    try:
+        result = evidence.run(gradle_tools, robolectric, tools, work, written=written, template_object=tmpl.object)
+    except toolchain.StepFailed as failed:
+        return {'ran': False, 'category': failed.category, 'summary': failed.summary,
+                'log': (failed.log or '')[-2000:]}
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(work / 'evidence', keep)
+    # Which tree the snapshots came from, beside them: a writer run (B1), a transplant (B2) or a test import.
+    source = {'label': record['label'], 'template': h.manifest['template'], 'theme': h.manifest['theme'],
+              'handoffSha256': h.digest, 'transplantOf': record.get('transplantOf')}
+    (keep / 'source.json').write_text(json.dumps(source, indent=2, sort_keys=True) + '\n')
+    snapshots = {p.relative_to(keep / 'snapshots').as_posix(): sha256(p)
+                 for p in sorted((keep / 'snapshots').rglob('*.txt'))}
+    return {'ran': True, 'identicalAcrossThemes': result['passed'], 'report': result['report'],
+            'snapshots': snapshots, 'label': result['label'], 'sourceLabel': record['label']}
+
+
 def _enforced(manifest: dict) -> bool:
     lines = manifest.get('sandboxCheck') or []
     try:
@@ -565,6 +602,8 @@ def main(argv=None) -> int:
     bl.add_argument('--handoff-sha256', action='append', default=[], metavar='HEX')
     bl.add_argument('--transplant-to', action='append', default=[], metavar='THEME',
                     help='also build each handoff\'s template code under this theme (cross-theme evidence)')
+    bl.add_argument('--evidence', action='store_true',
+                    help='also run Home\'s behaviour evidence on each written template, in the isolation, offline')
     args = parser.parse_args(argv)
     if not starters.available():
         parser.error('this checkout has no workspace/rose-starters')
@@ -593,7 +632,8 @@ def main(argv=None) -> int:
         java_home = Path(os.environ['JAVA_HOME']) if os.environ.get('JAVA_HOME') else None
         tools = toolchain.Tools(Path(sdk), java_home, timeout_s=900, key_creation=True)
         manifest = build(args.handoff, args.out, tools, stack_tools(Path(stack)), catalog,
-                         attested=args.handoff_sha256, transplant_to=args.transplant_to, log=say)
+                         attested=args.handoff_sha256, transplant_to=args.transplant_to, log=say,
+                         robolectric=Path(stack) / gradle_stack.ROBOLECTRIC_DIR if args.evidence else None)
     except (Refused, ValueError) as error:
         print(f'writer_handoff: refused: {error}', file=sys.stderr)
         return 2

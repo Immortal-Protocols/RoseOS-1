@@ -1854,6 +1854,25 @@ test, and no model was called.
 
      Until one runs, the only writer evidence is the simulated app-server
      step in App offline tests, and it shows no model output.
+   - **Behaviour across themes:** `writer_handoff build --evidence` runs
+     Home's `:evidence:compareThemeSnapshots` (rose.app_builder.evidence) on
+     each written template module. It runs under every pilot theme on API 34
+     and 37, inside the same bubblewrap isolation, offline, against the
+     stack's read-only cache:
+     - The stack pins the tests' libraries (`gradle_stack.TEST_LIBRARIES`,
+       exactly what Home's `:design-testing` declares).
+     - It also pins Robolectric's two Android jars by SHA-256
+       (`ROBOLECTRIC_JARS`, in the stack's `robolectric/`).
+     - A builder-owned init script points the forked test JVMs at the
+       sandbox's own temp folder.
+     - Each run keeps `report.json`, the snapshots, the JUnit results and a
+       `source.json` naming the tree's label, so writer runs (B1),
+       transplants (B2) and test imports stay apart.
+     - It runs only for a tree whose `outside_template` is empty: the themes
+       it compiles are the checkout's, so they stand for the tree's own only
+       when those are untouched.
+     - On the pilot templates the offline run reproduces Home's networked
+       snapshots exactly (18 of 18 digests, 2026-11-19).
 6. **Level 2 (App Core co-generation; Chariot owner; OS Core).** App Core owns
    client/server co-generation and sign-in integration (§7). Each part is
    blocked on its owner, as follows:

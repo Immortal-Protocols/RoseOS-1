@@ -58,7 +58,7 @@ from . import gradle_stack
 from .gradle_stack import Archive
 
 SCHEMA_VERSION = 1
-PARTS = ('jdk', 'gradle', 'sdk', 'cache')
+PARTS = ('jdk', 'gradle', 'sdk', 'cache', gradle_stack.ROBOLECTRIC_DIR)
 CACHE = 'modules-2'
 CACHE_SKIP_SUFFIXES = ('.lock',)
 CACHE_SKIP_NAMES = ('gc.properties',)
@@ -107,7 +107,8 @@ def host() -> tuple[str, str]:
 
 
 def archives(system: str, machine: str) -> dict[str, Archive]:
-    """Every archive the stack for this host is made of: 'jdk', 'gradle' and one per SDK package path. A host with
+    """Every archive the stack for this host is made of: 'jdk', 'gradle', one per SDK package path and one per
+    Robolectric Android jar ('robolectric/<name>'). A host with
     no pinned JDK, or an SDK archive whose pin is still None, is refused (``measure`` produces the missing pin)."""
     jdk = gradle_stack.JDKS.get((system, machine))
     if jdk is None:
@@ -120,6 +121,8 @@ def archives(system: str, machine: str) -> dict[str, Archive]:
             raise Refused(f'gradle_stack.py pins no {system} archive of {path} yet: run '
                           f'`python -m rose.app_builder.gradle_prepare measure` and pin its SHA-256')
         out[path] = archive
+    for jar in gradle_stack.ROBOLECTRIC_JARS:  # used as they are, never unpacked
+        out[f'{gradle_stack.ROBOLECTRIC_DIR}/{jar.name}'] = jar
     return out
 
 
@@ -307,7 +310,12 @@ def install(stage: Path, downloads: Path, system: str, machine: str, log=sys.std
     files = {key: fetch(archive, downloads, log) for key, archive in pinned.items()}
     unpacked = stage / '.unpacked'
     unpacked.mkdir()
+    robolectric = stage / gradle_stack.ROBOLECTRIC_DIR  # plain jars (robolectric.dependency.dir)
+    robolectric.mkdir()
     for n, (key, file) in enumerate(files.items()):
+        if key.startswith(gradle_stack.ROBOLECTRIC_DIR + '/'):
+            shutil.copyfile(file, robolectric / pinned[key].name)
+            continue
         top = unpack(file, unpacked / str(n))
         if key == 'jdk':
             _install_jdk(top, stage / 'jdk')
@@ -468,7 +476,78 @@ def catalog() -> dict[str, str]:
     files['multi/build.gradle.kts'] = _module('multi', base, serialization=False).replace(
         'dependencies {\n', 'dependencies {\n    implementation(project(":lib"))\n', 1)
     files.update(_sources('multi', 'Rose modules', serialization=False))
+    files['settings.gradle.kts'] += 'include(":unit")\n'
+    files['unit/build.gradle.kts'] = _unit_module()
+    files['unit/src/test/kotlin/app/rose/catalog/unit/SeedTest.kt'] = UNIT_TEST
     return files
+
+
+def _unit_module() -> str:
+    """A Compose library module with the stack's test libraries (gradle_stack.TEST_LIBRARIES) and one Robolectric
+    test, run on both validation APIs from the stack's own Android jars: the seed then holds what Home's behaviour
+    evidence (workspace/rose-starters :evidence) resolves and runs with, and the offline proof runs it."""
+    bom = 'androidx.compose:compose-bom'
+    version = gradle_stack.LIBRARIES[bom]
+    deps = (f'    implementation(platform("{bom}:{version}"))\n'
+            '    implementation("androidx.compose.foundation:foundation")\n'
+            '    implementation("androidx.compose.ui:ui")\n'
+            f'    testImplementation(platform("{bom}:{version}"))\n'
+            f'    debugImplementation(platform("{bom}:{version}"))\n')
+    for coordinate, pinned in gradle_stack.TEST_LIBRARIES.items():
+        scope = 'debugImplementation' if coordinate.endswith((':ui-test-manifest', ':ui-tooling')) else 'testImplementation'
+        deps += f'    {scope}("{coordinate}' + (f':{pinned}' if pinned else '') + '")\n'
+    return ('plugins {\n    id("com.android.library")\n    id("org.jetbrains.kotlin.plugin.compose")\n}\n\n'
+            'android {\n'
+            f'    namespace = "{CATALOG_PACKAGE}.unit"\n'
+            f'    compileSdk = {gradle_stack.COMPILE_SDK}\n'
+            f'    defaultConfig {{ minSdk = {gradle_stack.MIN_SDK} }}\n'
+            '    compileOptions {\n'
+            '        sourceCompatibility = JavaVersion.VERSION_17\n'
+            '        targetCompatibility = JavaVersion.VERSION_17\n'
+            '    }\n'
+            '    buildFeatures { compose = true }\n'
+            '    testOptions {\n'
+            '        unitTests {\n'
+            '            isIncludeAndroidResources = true\n'
+            '            all {\n'
+            '                it.systemProperty("robolectric.offline", "true")\n'
+            '                it.systemProperty("robolectric.dependency.dir", providers.gradleProperty('
+            '"roseRobolectric").get())\n'
+            '            }\n'
+            '        }\n'
+            '    }\n'
+            '}\n\n'
+            'dependencies {\n' + deps + '}\n')
+
+
+UNIT_TEST = '''package app.rose.catalog.unit
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34, 37])
+class SeedTest {
+    @get:Rule val compose = createComposeRule()
+
+    @Test fun aClickReachesTheComposable() {
+        var clicks = 0
+        compose.setContent { BasicText("Rose", Modifier.clickable { clicks++ }) }
+        compose.onNodeWithText("Rose").performClick()
+        compose.runOnIdle { assertEquals(1, clicks) }
+    }
+}
+'''
 
 
 def _library_module(libraries: dict) -> str:
@@ -486,7 +565,8 @@ def _library_module(libraries: dict) -> str:
             'dependencies {\n' + deps + '}\n')
 
 
-TASKS = (':app:assembleRelease', ':base:assembleRelease', ':multi:assembleRelease', 'roseResolve')
+TASKS = (':app:assembleRelease', ':base:assembleRelease', ':multi:assembleRelease', 'roseResolve',
+         ':unit:testDebugUnitTest')
 
 
 def _write_tree(root: Path, files: dict[str, str]) -> None:
@@ -533,7 +613,7 @@ def run_catalog(stage: Path, work: Path, *, online: bool, log=sys.stderr) -> Pat
     else:
         env['GRADLE_RO_DEP_CACHE'] = str(stage / 'cache')
         argv.append('--offline')
-    argv += list(TASKS)
+    argv += list(TASKS) + [f'-ProseRobolectric={stage / gradle_stack.ROBOLECTRIC_DIR}']
     what = 'seeding the dependency cache (online)' if online else 'proving the stack builds offline'
     print(f'gradle_prepare: {what}', file=log, flush=True)
     output = work / 'gradle.log'
@@ -613,7 +693,9 @@ def record(system: str, machine: str) -> dict:
             'jdk': gradle_stack.JDKS[(system, machine)].name, 'jdkFeature': gradle_stack.JDK_FEATURE,
             'platform': gradle_stack.PLATFORM, 'buildTools': gradle_stack.BUILD_TOOLS,
             'sdkPackages': [p for p, _t, _a in gradle_stack.SDK_PACKAGES],
-            'plugins': dict(gradle_stack.PLUGINS), 'libraries': dict(gradle_stack.LIBRARIES)}
+            'plugins': dict(gradle_stack.PLUGINS), 'libraries': dict(gradle_stack.LIBRARIES),
+            'testLibraries': dict(gradle_stack.TEST_LIBRARIES),
+            'robolectric': {a.name: a.sha256 for a in gradle_stack.ROBOLECTRIC_JARS}}
 
 
 def verify(out: Path, system: str | None = None, machine: str | None = None) -> dict:
