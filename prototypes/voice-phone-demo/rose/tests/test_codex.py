@@ -342,12 +342,26 @@ class Integration(unittest.TestCase):
                              for op, name, _ in self.engine.client.calls))
 
     def test_app_inventory_cache_hit_and_reconnect_refresh(self):
-        with patch.object(self.controller, 'call', return_value={'status': 'ok', 'apps': APPS}) as calls:
+        with (
+            patch('rose.realphone.time', wraps=time) as clock,
+            patch.object(self.controller, 'call', return_value={'status': 'ok', 'apps': APPS}) as calls,
+        ):
+            clock.monotonic.return_value = 60.0  # Less than one cache lifetime since boot.
+            self.assertEqual(self.phone.apps(refresh=True), APPS)
+            calls.reset_mock()
             self.assertEqual(self.phone.resolve_app('Calculator')[0], CALC)
             calls.assert_not_called()
             self.phone._link_changed()
             calls.assert_not_called()  # reconnect callback never waits on the phone
             self.assertEqual(self.phone.resolve_app('Calculator')[0], CALC)
+            calls.assert_called_once_with('list_apps')
+            calls.reset_mock()
+
+            clock.monotonic.return_value = 360.0
+            self.assertEqual(self.phone.apps(), APPS)
+            calls.assert_not_called()
+            clock.monotonic.return_value = 361.0
+            self.assertEqual(self.phone.apps(), APPS)
             calls.assert_called_once_with('list_apps')
 
     def test_foreground_app_refusal_keeps_actionable_reason_in_failed_result(self):
