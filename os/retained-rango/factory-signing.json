@@ -6,10 +6,10 @@
   "project": "protocols-465723",
   "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
   "keySecret": "PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1",
-  "keyVersion": null,
+  "keyVersion": "1",
   "passphraseSecret": "PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1",
-  "passphraseVersion": null,
+  "passphraseVersion": "1",
   "sshKeygen": {"path": "/usr/bin/ssh-keygen", "sha256": "2843cd46c617cf771c32e6f8a2a11585d83510ec528e3aeff8f7a7f0445420ba"},
-  "bootstrap": null,
+  "bootstrap": {"attempt": "1", "receipt": "os/retained-rango/factory-signing-bootstrap-receipt.json", "receiptSha256": "f243ccd6681e681404f616e09d6316c963c37cfd101402a79380e942c1b2270e", "recipeSha": "297122ab75fa05de44c5bfd0ca4892398680f504", "runId": "41705002875"},
   "basis": "FOLD-ARCHIVE-SIGN: binding for scripts/factory-archive-sign.py. The containers are the fold-rango-factory-v1 bootstrap profile's (os/signing-bootstrap/profiles.json). keyVersion/passphraseVersion come only from that bootstrap's committed public receipt (bootstrap names os/retained-rango/factory-signing-bootstrap-receipt.json with its sha256; scripts/factory-archive-sign.py bind prints the exact values, and check cross-checks project, signer, secrets, the measured ssh-keygen and the flavor principal against the named profile); sshKeygen only from a measured installed identity on the builder; the public identity only from os/flavors/rango.json factorySigning (Flavors), bound from the same receipt. While any value is null, check exits 4 and sign refuses before any host or secret access. Nothing here is a key, secret or credential."
 }
