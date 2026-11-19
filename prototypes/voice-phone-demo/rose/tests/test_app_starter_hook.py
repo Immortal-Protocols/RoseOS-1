@@ -9,9 +9,11 @@ ROSE_STARTER_PILOTS=all builds every template under every theme (nine, about sev
 compiled starter trees with a scripted writer that changes nothing: evidence that each pairing builds through the
 builder, not that Rose's writer made them."""
 import json
+import shutil
 import os
 import re
 import unittest
+from unittest import mock
 import zipfile
 
 from rose.app_builder import gradle, gradle_stack, starter_pilots, starters, toolchain
@@ -161,6 +163,81 @@ class StarterHookTest(Base):
         turn_for(plain, 'create')
         self.assertEqual(turns, [('create', {'template': 'feed', 'theme': 'minimal'}),
                                  ('revise', {'template': 'feed', 'theme': 'minimal'}), ('create', 'absent')])
+
+    def starter_project(self):
+        """A builder on the real starters and one feed/minimal project prepared through it (its root commit is the
+        starter's tree), with a snapshot of that source to edit as a writer turn would."""
+        if not starters.available():
+            self.skipTest('this checkout has no workspace/rose-starters')
+        catalog = starters.Starters.load()
+        b = self.builder(gradle=FakeGradle(), skeleton=starters.skeleton, resolve_starter=catalog.resolve)
+        created = self.create(b, {'template': 'feed', 'theme': 'minimal'})
+        project, job = b.ledger.project(created['projectId']), b.ledger.job(created['jobId'])
+        source = self.root / 'projects' / created['projectId'] / 'source'
+        b._prepare(source, project, job)
+        snapshot = self.root / 'snapshot'
+        shutil.copytree(source, snapshot)
+        check = lambda job_id='job': b._check_starter(job_id, created['projectId'], project['packageName'], snapshot,
+                                                      source)
+        return b, snapshot, check
+
+    def test_a_turn_that_changes_the_theme_or_framework_is_repaired_once_then_refused(self):
+        b, snapshot, check = self.starter_project()
+        check()  # the starter's own tree
+        kt = next((snapshot / 'templates/feed').rglob('*.kt'))
+        kt.write_text(kt.read_text() + '\n// the owner\'s app\n')
+        check()  # template edits are fine
+        theme = next((snapshot / 'themes/minimal').rglob('*.kt'))
+        theme.write_text(theme.read_text() + '\n// forked\n')
+        with self.assertRaises(toolchain.StepFailed) as first:
+            check()
+        self.assertEqual(first.exception.category, 'compile')
+        self.assertIn(theme.relative_to(snapshot).as_posix(), first.exception.log)  # named for the repair turn
+        self.assertIn('templates/feed/', first.exception.log)
+        with self.assertRaises(toolchain.StepFailed) as second:
+            check()
+        self.assertEqual(second.exception.log, '')  # no tool output: never repaired again
+        plain = self.create(b, rid='plain')  # a project without a starter is never checked
+        b._check_starter('job2', plain['projectId'], b.ledger.project(plain['projectId'])['packageName'], snapshot,
+                         snapshot)
+
+    def test_a_catalog_update_after_the_project_was_made_is_not_the_writers_change(self):
+        _, snapshot, check = self.starter_project()
+        theme = next(p for p in sorted((snapshot / 'themes/minimal').rglob('*.kt')))
+        name = theme.relative_to(snapshot).as_posix()
+        real = starters.Starters.files
+
+        def updated(catalog, package, label, starter):
+            files = real(catalog, package, label, starter)
+            files[name] = files[name] + b'\n// the starter, updated upstream\n'
+            return files
+        with mock.patch.object(starters.Starters, 'files', updated):
+            self.assertIn(name, starters.outside_template(snapshot, {'template': 'feed', 'theme': 'minimal'},
+                                                          'unused.package.check') or [name])
+            check()  # the project's own first tree is the baseline: nothing the writer changed
+            theme.write_text(theme.read_text() + '\n// forked\n')
+            with self.assertRaises(toolchain.StepFailed):
+                check()  # a real edit is still caught
+
+    def test_a_backend_apps_internet_permission_is_the_one_manifest_change_allowed(self):
+        _, snapshot, check = self.starter_project()
+        manifest = snapshot / 'app/src/main/AndroidManifest.xml'
+        text = manifest.read_text()
+        manifest.write_text(text.replace('  <application', '  <uses-permission android:name="android.permission.INTERNET" />\n  <application', 1))
+        check()
+        manifest.write_text(text.replace('  <application', '  <uses-permission android:name="android.permission.CAMERA" />\n  <application', 1))
+        with self.assertRaises(toolchain.StepFailed):
+            check('job-camera')
+
+    def test_a_starter_the_catalog_no_longer_has_is_not_checked(self):
+        _, snapshot, check = self.starter_project()
+        theme = next((snapshot / 'themes/minimal').rglob('*.kt'))
+        theme.write_text(theme.read_text() + '\n// forked\n')
+
+        def gone(catalog, starter):
+            raise starters.UnknownStarter('There is no starter theme minimal.')
+        with mock.patch.object(starters.Starters, 'resolve', gone):
+            check()  # nothing to compare with: the project still builds
 
     def test_the_prompt_takes_the_starter_and_is_unchanged_without_one(self):
         from rose.app_builder import generator

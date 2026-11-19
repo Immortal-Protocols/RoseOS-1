@@ -1799,15 +1799,55 @@ test, and no model was called.
      writer writes their source. No supported host has both that writer and
      Gradle isolation, and no documented route splits them. There are two
      routes:
-     - **Two-stage handoff (proposed, needs no new sign-in or copied
-       credential).** On the Mac, the Local Worker runs one writer-only turn
-       with the existing signed-in Codex, from a separate checkout and a
-       separate scratch root, with the live server left running. It produces
-       a source bundle with a manifest and digests, and builds and signs
-       nothing. This Linux builder then builds that bundle through the
-       unchanged job. Blocker 3's live sandbox check must pass on the Mac
-       first. Provenance is the Local Worker's out-of-band attestation of the
-       bundle digest; nothing in the bundle proves a writer turn happened.
+     - **Two-stage handoff (`rose.app_builder.writer_handoff`; needs no new
+       sign-in or copied credential).**
+       - **Stage 1, on the Mac (the Local Worker):** `python -m
+         rose.app_builder.writer_handoff write --pilot TEMPLATE:THEME --scratch
+         NEW --out NEW [--protected DIR]...`. Run it as the OS user whose Codex
+         is already signed in, from a checkout that is not the live server's,
+         with the live server left running.
+         - It refuses scratch or output folders that exist, are temp folders,
+           or overlap `ROSE_CONFIG_DIR` or a protected folder.
+         - It writes the starter tree under a package of its own.
+         - It runs the writer's live denial check on that source folder
+           (blocker 3's check) and refuses unless it is enforced.
+         - It runs one `create` turn of the builder's own `CodexGenerator`
+           with the starter and Home's fixed request.
+         - It copies the result out through the builder's own snapshot to
+           `OUT/tree`, `OUT/handoff.json` and `OUT/SHA256SUMS`.
+         - It builds, signs, opens a ledger and makes a key for nothing.
+       - **Transfer:** the operator reports `sha256(handoff.json)` out of
+         band. That report is the attestation: nothing in OUT proves a writer
+         turn happened. The supported route needs no new credential:
+         - The Local Worker commits only OUT to an orphan branch
+           `handoff/<id>`, with `add -A -f`, `core.autocrlf=false`, and
+           attributes, excludes and hooks off.
+         - The Local Worker pushes it with the Mac's existing git credential
+           and opens no PR. Every push trigger is `main` only, so the push
+           starts nothing; a PR would start CI.
+         - Here, the branch is fetched by name and its commit checked, then
+           `git archive <commit> > h.tar` and `python -m
+           rose.app_builder.writer_handoff unpack --archive h.tar --out NEW`.
+         - unpack takes any tar of OUT. It checks the whole archive before
+           writing: plain files and folders only, no `..`, no duplicates, no
+           git names or macOS metadata, only handoff.json, SHA256SUMS and
+           tree/ at the top, and the builder's limits. It writes every file
+           fresh, owner only.
+         - `handoff.json` records the writer binary's name, never its path on
+           the Mac.
+       - **Stage 2, here:** `python -m rose.app_builder.writer_handoff build
+         --handoff DIR... --out NEW [--handoff-sha256 HEX]...`.
+         - It verifies every digest and the fixed request, and binds the
+           handoff's package in that pilot's own throwaway ledger.
+         - It builds through the unchanged job: Gradle in bubblewrap, the
+           binary checks and a throwaway key.
+         - It writes the starter_pilots layout, which `device_check` reads.
+         - A record is labelled writer-generated (attested) only when the
+           handoff came from the real writer with the check enforced, its
+           digest was reported, and both of its trees match what this builder
+           recorded. Otherwise it is labelled as a test writer's imported tree.
+         - A compile failure is the result, with its build output kept as the
+           next stage-1 repair request.
      - **A Linux writer:** an owner-run `codex login` (ChatGPT only; API keys
        and copied auth are refused, docs/CODEX-VOICE.md) on a bubblewrap host,
        plus blocker 3's check there.

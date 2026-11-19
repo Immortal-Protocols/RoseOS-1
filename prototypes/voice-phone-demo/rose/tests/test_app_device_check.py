@@ -151,6 +151,15 @@ class DeviceCheckTest(unittest.TestCase):
         self.assertEqual((self.tmp / 'evidence' / shot['file']).read_bytes(), PNG)
         self.assertIn('Multiple displays', shot['warning'])
 
+    def test_keep_refuses_pilots_that_share_a_package(self):
+        manifest = json.loads((self.pilots / 'pilots.json').read_text())
+        manifest['pilots'][1]['packageName'] = manifest['pilots'][0]['packageName']  # a transplant's package
+        sums = [l + '\n' for l in (self.pilots / 'SHA256SUMS').read_text().splitlines() if 'pilots.json' not in l]
+        self.write_manifest(manifest, sums)
+        with self.assertRaises(Refused):
+            self.check(keep=True)
+        self.assertEqual(self.calls(), [])
+
     def test_keep_leaves_the_pilots_installed(self):
         self.check(keep=True)
         self.assertEqual(set(json.loads(self.state_file.read_text())['installed']), {'app.rose.p0', 'app.rose.p1'})

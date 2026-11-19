@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import appprofile, contract, dependencies, gradle, legacy_backend, template, toolchain
+from . import appprofile, contract, dependencies, gradle, gradle_stack, legacy_backend, template, toolchain
 from .ledger import CLIENT_BACKEND, CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -86,10 +86,9 @@ def _utf8(text: str) -> bool:
         return False
 
 
-def _git(source: Path, *args, work_tree: Path | None = None) -> str:
+def _git_run(source: Path, args, work_tree: Path | None = None, *, text: bool = True):
     """git on a project's source with the repository kept beside it (repo.git), out of the generator's reach,
-    and with hooks, fsmonitor, attributes and excludes switched off: nothing in the tree can make git run code.
-    ``work_tree`` records a snapshot of the source instead of the source itself."""
+    and with hooks, fsmonitor, attributes and excludes switched off: nothing in the tree can make git run code."""
     gitdir = source.parent / 'repo.git'
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(source.parent), 'GIT_CONFIG_NOSYSTEM': '1',
            'GIT_CONFIG_GLOBAL': os.devnull, 'LANG': 'C.UTF-8', 'GIT_DIR': str(gitdir),
@@ -99,10 +98,27 @@ def _git(source: Path, *args, work_tree: Path | None = None) -> str:
     safe = ['-c', 'core.hooksPath=' + os.devnull, '-c', 'core.fsmonitor=false', '-c', 'core.excludesFile=' + os.devnull,
             '-c', 'core.attributesFile=' + os.devnull, '-c', 'core.symlinks=false', '-c', 'commit.gpgSign=false',
             '-c', 'core.fsync=all', '-c', 'core.fsyncObjectFiles=true']  # a delivered revision survives a crash
-    result = subprocess.run(['git', *safe, *args], capture_output=True, text=True, env=env, cwd=source.parent)
+    return subprocess.run(['git', *safe, *args], capture_output=True, text=text, env=env, cwd=source.parent)
+
+
+def _git(source: Path, *args, work_tree: Path | None = None) -> str:
+    """git on a project's source (``_git_run``); ``work_tree`` records a snapshot of the source instead of the
+    source itself."""
+    result = _git_run(source, args, work_tree)
     if result.returncode:
         raise toolchain.StepFailed('internal', 'The project source could not be recorded.')
     return result.stdout.strip()
+
+
+def _git_blob(source: Path, revision: str, path: str) -> bytes | None:
+    """A file's exact bytes at ``revision`` of the project's own history, or None when it has no such file."""
+    result = _git_run(source, ['cat-file', 'blob', f'{revision}:{path}'], text=False)
+    return result.stdout if result.returncode == 0 else None
+
+
+# A backend app (client-backend-v1) must declare INTERNET in its manifest (appprofile); a starter's manifest may
+# differ from the starter's by that one permission and nothing else.
+_INTERNET = re.compile(rb'[ \t]*<uses-permission\s+android:name="android\.permission\.INTERNET"\s*/>[ \t]*\r?\n?')
 
 
 def _owner_access(root: Path):
@@ -247,6 +263,7 @@ def client_tree_ignore(snapshot: Path, top_names=appprofile.BACKEND_TOP):
 
 
 REPAIRS = 2  # repairs of the writer's own build errors in one job, after its first turn
+STARTER_LISTED = 40  # paths a starter-boundary repair request names
 REPAIR_MIN_S = 60.0  # writing time a repair needs left in the job's one writer budget to be worth starting
 REPAIR_TEXT_MAX = 4000
 _ABSOLUTE_PATH = re.compile(r'(?<![\w.~-])/(?:[\w.@+~-]+/)*[\w.@+~-]+')
@@ -340,6 +357,7 @@ class Builder:
         self.hosting = hosting
         self.gradle = gradle
         self.skeleton, self.resolve_starter = skeleton, resolve_starter
+        self._starter_findings: dict[str, int] = {}  # job -> writer turns that crossed the starter boundary
         # A build tool's rejection of the writer's own source goes back to the writer as a repair turn, at most this
         # many times in a job, before anything is signed: the same project, job and version code.
         self.repairs = max(0, int(repairs))
@@ -534,6 +552,7 @@ class Builder:
                 release = hashlib.sha256(f'{project_id}:{job_id}:{job["attempt"]}'.encode()).hexdigest()
                 backend = BackendSession(self.hosting, project_id, release, legacy=legacy)
             repairs, notes = 0, []
+            self._starter_findings.pop(job_id, None)  # counted per attempt
             # One writer budget for the job: repairs share the writer's own turn timeout with the first turn (and the
             # builds between), so repairing never makes the job's writing take longer than one turn could.
             budget = getattr(self.generate, 'timeout_s', None)
@@ -606,6 +625,53 @@ class Builder:
             self._safe_reset(source, project_id)
             self._record_failure(job_id, 'internal', f'The builder stopped ({type(error).__name__}).', True)
 
+    def _check_starter(self, job_id: str, project_id: str, package: str, snapshot: Path, source: Path):
+        """A starter app keeps its shared framework, theme, version catalog and app/ wiring as its own first tree
+        has them (rose.app_builder.starters.outside_template, against the builder's own package), so its theme stays
+        swappable. The first turn in a job that changed any of them gets a repair turn naming them; a turn after
+        that which still does refuses the job.
+
+        outside_template compares with the starter as the catalog writes it today; what it reports is kept only
+        where the turn's snapshot also differs from the project's own root commit (the tree it was created with),
+        so a catalog update after the project was made never counts as the writer's change. A starter the catalog
+        no longer has is not checked (there is nothing to compare with); the project still builds."""
+        starter = self.ledger.starter(project_id)
+        if starter is None:
+            return
+        from . import starters
+        try:
+            changed = starters.outside_template(snapshot, starter, package)
+        except ValueError:
+            return
+        if changed:
+            root = _git(source, 'rev-list', '--max-parents=0', 'HEAD')
+
+            def now(path):
+                file = snapshot / path
+                return file.read_bytes() if file.is_file() and not file.is_symlink() else None
+            kept = []
+            for path in changed:
+                current, first = now(path), _git_blob(source, root, path)
+                if current == first:
+                    continue  # the catalog changed since this project was made, not the writer
+                if (path == f'{gradle_stack.APP_MODULE}/src/main/AndroidManifest.xml' and current is not None
+                        and first is not None and _INTERNET.sub(b'', current, count=1) == first):
+                    continue  # the INTERNET permission a backend app needs, and nothing else
+                kept.append(path)
+            changed = kept
+        if not changed:
+            return
+        seen = self._starter_findings.get(job_id, 0)
+        self._starter_findings[job_id] = seen + 1
+        listed = ', '.join(changed[:STARTER_LISTED]) + (
+            f' and {len(changed) - STARTER_LISTED} more' if len(changed) > STARTER_LISTED else '')
+        summary = 'The app changed files a Rose starter app keeps as they are.'
+        if seen:
+            raise toolchain.StepFailed('compile', summary + ' It still did after being asked to put them back.')
+        raise toolchain.StepFailed('compile', summary, log=(
+            f'Put these back exactly as the starter wrote them, and make the change in templates/{starter["template"]}/ '
+            f'or app/src/main/res instead: {listed}'))
+
     def _undo_hosting(self, undo) -> None:
         """A version whose server was set up but which was not delivered: put the agent back (best effort; a later
         setup reverts it anyway, as the agent's release is not a delivered one)."""
@@ -645,6 +711,7 @@ class Builder:
         if layout and self.gradle is None:
             raise toolchain.StepFailed('toolchain', 'This builder has no Gradle toolchain set up, so a Gradle project '
                                        '(settings.gradle.kts) cannot be built here yet.')
+        self._check_starter(job_id, project_id, package, snapshot, source)
         # -f: a Gradle project's .gitignore never keeps a file out of the record; what is built is what is recorded.
         _git(source, 'add', '-A', '-f', work_tree=snapshot)
         if _git(source, 'status', '--porcelain', work_tree=snapshot):
