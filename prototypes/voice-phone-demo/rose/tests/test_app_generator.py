@@ -112,14 +112,14 @@ class Generator(unittest.TestCase):
         stack = gradle_stack.summary()
         for kind in ('create', 'revise', 'repair'):
             self.assertNotIn('Gradle', prompt(kind, 'x'))  # a host without the stack names none
-            text = prompt(kind, 'the request', ['com.example:lib:1.0'], client_server=True, stack=stack)
+            text = prompt(kind, 'the request', ['com.example:lib:1.0'], '/release', stack=stack)
             self.assertIn(stack, text)
             self.assertIn('com.example:lib:1.0', text)
-            self.assertIn('client-server', text)
+            self.assertIn('/release', text)  # the backend's release folder
             self.assertTrue(text.endswith('the request'))  # the request or build output still comes last
             self.assertLess(text.index(stack), text.index('the request'))
         with self.assertRaises(TypeError):
-            prompt('create', 'x', (), False, None, stack)  # keyword only
+            prompt('create', 'x', (), None, stack)  # keyword only
 
     def test_the_gradle_flag_puts_the_stack_in_every_turn(self):
         g = self.gen(after_submit=DONE)
