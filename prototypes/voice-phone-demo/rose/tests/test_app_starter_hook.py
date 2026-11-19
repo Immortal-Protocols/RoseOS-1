@@ -8,12 +8,13 @@ ROSE_REQUIRE_GRADLE_BUILD=1 makes a missing one a failure. One pilot builds by d
 ROSE_STARTER_PILOTS=all builds every template under every theme (nine, about seventeen minutes on four CPUs). They are
 compiled starter trees with a scripted writer that changes nothing: evidence that each pairing builds through the
 builder, not that Rose's writer made them."""
+import json
 import os
 import re
 import unittest
 import zipfile
 
-from rose.app_builder import gradle, starters, toolchain
+from rose.app_builder import gradle, gradle_stack, starter_pilots, starters, toolchain
 from rose.app_builder.service import Builder, Refused
 from rose.tests.test_app_builder import SDK, JAVA_HOME, Base, fake_backup
 from rose.tests.test_app_gradle_builder import BUILDS, gradle_tools
@@ -23,7 +24,7 @@ class FakeGradle:
     """Stands in for GradleTools where no build runs: the builder only asks whether it has one."""
 
 
-def nothing(source, kind, request, cancelled):
+def nothing(source, kind, request, cancelled, **turn):
     return 'unchanged'
 
 
@@ -133,6 +134,40 @@ class StarterHookTest(Base):
                    b.ledger.job(out['jobId']))
         self.assertEqual(written, [None])
 
+    def test_every_writer_turn_on_a_starter_project_is_given_its_starter(self):
+        turns = []
+
+        def writer(source, kind, request, cancelled, **turn):
+            turns.append((kind, turn.get('starter', 'absent')))
+            return 'unchanged'
+        b = self.hooked()
+        b.generate = writer
+
+        def turn_for(project_id, kind):
+            job = {'jobId': 'j', 'projectId': project_id, 'attempt': 1}
+            project = b.ledger.project(project_id)
+            work = self.root / 'work' / project_id
+            work.mkdir(parents=True, exist_ok=True)
+            try:
+                b._write_and_build(job, project, work / 'source', work, kind, 'a request', lambda: False, None, 0,
+                                   [], None)
+            except Exception:
+                pass  # what follows the turn (the snapshot and build) does not matter here
+        started = self.create(b, {'template': 'feed', 'theme': 'minimal'})['projectId']
+        plain = self.create(b, rid='r2')['projectId']
+        b.gradle = None  # stop before any build: only the turn's arguments matter here
+        turn_for(started, 'create')
+        turn_for(started, 'revise')
+        turn_for(plain, 'create')
+        self.assertEqual(turns, [('create', {'template': 'feed', 'theme': 'minimal'}),
+                                 ('revise', {'template': 'feed', 'theme': 'minimal'}), ('create', 'absent')])
+
+    def test_the_prompt_takes_the_starter_and_is_unchanged_without_one(self):
+        from rose.app_builder import generator
+        for kind in ('create', 'revise', 'repair'):
+            self.assertEqual(generator.prompt(kind, 'x', starter=None), generator.prompt(kind, 'x'))
+            generator.prompt(kind, 'x', starter={'template': 'feed', 'theme': 'minimal'})
+
     def test_the_real_starters_resolve_and_refuse(self):
         if not starters.available():
             self.skipTest('this checkout has no workspace/rose-starters')
@@ -144,50 +179,46 @@ class StarterHookTest(Base):
             catalog.resolve({'template': 'nonexistent', 'theme': next(iter(catalog.themes))})
 
 
-# One fixed request per template; only the theme varies (Wave 3's comparison).
-REQUESTS = {'feed': 'A feed of short posts to scroll, open and come back to.',
-            'sprite-game': 'A short sprite game: move, collide and restart.',
-            'player': 'A player for one passage: play, scrub and loop it.'}
-
-
 @unittest.skipUnless(BUILDS and starters.available(),
                      'needs ROSE_GRADLE_STACK, the legacy SDK, bubblewrap as a non-root Linux user and the starters')
 class StarterPilotsTest(Base):
     """Starter pilots through the whole job with the real starters and a scripted writer that changes nothing
-    (compiled starter trees, not writer-generated apps)."""
+    (rose.app_builder.starter_pilots: compiled starter trees, not writer-generated apps)."""
 
     def test_each_pilot_builds_with_exactly_its_template_and_theme_and_its_own_key(self):
         catalog = starters.Starters.load()
-        tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=900, key_creation=True)
-        pilots = [(t, h) for t in catalog.templates for h in catalog.themes]
+        pilots = starter_pilots.all_pilots(catalog)
         self.assertEqual(len(pilots), 9)
         if os.environ.get('ROSE_STARTER_PILOTS') != 'all':
             pilots = pilots[:1]
-        signers = set()
-        for template, theme in pilots:
-            with self.subTest(template=template, theme=theme):
-                b = Builder(self.root / f'{template}-{theme}', tools, nothing, backup=fake_backup,
-                            gradle=gradle_tools(), skeleton=starters.skeleton,
-                            resolve_starter=lambda s: catalog.resolve(s))
-                self.addCleanup(b.ledger.close)
-                out = b.create('d', {'schemaVersion': 1, 'clientRequestId': 'r',
-                                     'description': REQUESTS.get(template, f'A {template} app.'),
-                                     'starter': {'template': template, 'theme': theme}})
-                b.run_next()
-                job = b.job(out['jobId'])
-                self.assertEqual(job['state'], 'ready', job)
-                project = b.projects()[0]
-                version = project['versions'][0]
-                apk = b.root / 'artifacts' / f'{version["apk"]["sha256"]}.apk'
-                with zipfile.ZipFile(apk) as z:
-                    dex = b''.join(z.read(n) for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n))
-                found = {m.decode() for m in re.findall(rb'Lapp/rose/(?:theme|template)/[a-z0-9]+/', dex)}
-                tmpl, them = catalog.resolve({'template': template, 'theme': theme})
-                wanted = {'L' + tmpl.object.rsplit('.', 1)[0].replace('.', '/') + '/',
-                          'L' + them.object.rsplit('.', 1)[0].replace('.', '/') + '/'}
-                self.assertEqual(found, wanted)  # exactly that template and that theme
-                signers.add(project['signerSha256'])
-        self.assertEqual(len(signers), len(pilots))  # each app its own key
+        tools = toolchain.Tools(SDK, JAVA_HOME, timeout_s=900, key_creation=True)
+        self.root.mkdir(parents=True, exist_ok=True)
+        out = self.root / 'pilots'
+        manifest = starter_pilots.build(out, pilots, tools, gradle_tools(), catalog, work=self.root / 'work',
+                                        log=lambda m: None)
+        self.assertEqual(manifest['label'], starter_pilots.LABEL)
+        self.assertEqual([(p['template'], p['theme'], p['state']) for p in manifest['pilots']],
+                         [(t, h, 'ready') for t, h in pilots])
+        self.assertEqual(json.loads((out / 'pilots.json').read_text()), manifest)
+        sums = dict(reversed(line.split('  ')) for line in (out / 'SHA256SUMS').read_text().splitlines())
+        self.assertEqual(set(sums), {p['apk'] for p in manifest['pilots']} | {'pilots.json'})
+        self.assertFalse(any(path.suffix in ('.p12', '.jks', '.keystore') for path in out.rglob('*')))  # no keys
+        for record in manifest['pilots']:
+            apk = out / record['apk']
+            self.assertEqual(sums[record['apk']], record['apkSha256'])
+            self.assertEqual(starter_pilots.sha256(apk), record['apkSha256'])
+            self.assertTrue(record['launchableActivity'].startswith(record['packageName'] + '.'), record)
+            # Installs on every phone Rose runs on and on current Android (the starter chooses its own levels).
+            self.assertLessEqual(record['minSdk'], gradle_stack.MAX_MIN_SDK)
+            self.assertGreaterEqual(record['targetSdk'], gradle_stack.MIN_TARGET_SDK)
+            with zipfile.ZipFile(apk) as z:
+                dex = b''.join(z.read(n) for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n))
+            found = {m.decode() for m in re.findall(rb'Lapp/rose/(?:theme|template)/[a-z0-9]+/', dex)}
+            tmpl, them = catalog.resolve({'template': record['template'], 'theme': record['theme']})
+            wanted = {'L' + tmpl.object.rsplit('.', 1)[0].replace('.', '/') + '/',
+                      'L' + them.object.rsplit('.', 1)[0].replace('.', '/') + '/'}
+            self.assertEqual(found, wanted)  # exactly that template and that theme
+        self.assertEqual(len({p['signerSha256'] for p in manifest['pilots']}), len(pilots))  # each its own key
 
 
 if __name__ == '__main__':
