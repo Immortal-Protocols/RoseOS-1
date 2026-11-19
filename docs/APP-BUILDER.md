@@ -1795,12 +1795,25 @@ test, and no model was called.
      workflow's owner's change. No other emulator is an engineer path: the
      isolated trial VM, `quantus-rtx`, `alpha-runtime.yml` and the
      `os-release` emulator modes all fall outside engineer authority.
-   - **Writer gate:** these become writer-generated apps only when a Linux
-     bubblewrap builder host has an owner-run `codex login` (ChatGPT; API keys
-     and copied auth are refused, docs/CODEX-VOICE.md), and blocker 3's live
-     sandbox check passes there. Until then only the simulated app-server
-     step in App offline tests is writer evidence, and it shows no model
-     output.
+   - **Writer gate:** these become writer-generated apps only when Rose's real
+     writer writes their source. No supported host has both that writer and
+     Gradle isolation, and no documented route splits them. There are two
+     routes:
+     - **Two-stage handoff (proposed, needs no new sign-in or copied
+       credential).** On the Mac, the Local Worker runs one writer-only turn
+       with the existing signed-in Codex, from a separate checkout and a
+       separate scratch root, with the live server left running. It produces
+       a source bundle with a manifest and digests, and builds and signs
+       nothing. This Linux builder then builds that bundle through the
+       unchanged job. Blocker 3's live sandbox check must pass on the Mac
+       first. Provenance is the Local Worker's out-of-band attestation of the
+       bundle digest; nothing in the bundle proves a writer turn happened.
+     - **A Linux writer:** an owner-run `codex login` (ChatGPT only; API keys
+       and copied auth are refused, docs/CODEX-VOICE.md) on a bubblewrap host,
+       plus blocker 3's check there.
+
+     Until one runs, the only writer evidence is the simulated app-server
+     step in App offline tests, and it shows no model output.
 6. **Level 2 (App Core co-generation; Chariot owner; OS Core).** App Core owns
    client/server co-generation and sign-in integration (§7). Each part is
    blocked on its owner, as follows:
