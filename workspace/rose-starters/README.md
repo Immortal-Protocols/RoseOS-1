@@ -196,6 +196,32 @@ then writes the project's first tree with `rose.app_builder.starters.skeleton`. 
 The writer then customizes inside the template. Without a starter, the builder's plain skeleton is unchanged.
 `starters.json` must list exactly the pilots in `matrix/.../Pilots.kt`; `test_app_starters` checks that.
 
+## Behaviour evidence across themes (`:evidence`)
+
+The same template code must behave the same under every theme. A theme may change every pixel, but not what a
+person can read and do. `ThemeInvarianceTest` runs each template under each pilot theme, on API 34 and 37:
+- it checks invariants: a titled screen, every clickable labelled, touch targets of at least 48dp;
+- it writes a normalized semantics snapshot to `evidence/build/evidence/<template>/<theme>-api<N>.txt`, of the
+  opening screen and after clicking each control in turn. The snapshot holds texts, roles, actions and states,
+  never sizes, positions, colours or layout order.
+
+`compareThemeSnapshots`, part of `check`, fails when one template's snapshots differ between themes and writes
+`report.json` either way.
+
+```sh
+./gradlew :evidence:compareThemeSnapshots                      # the pilot templates
+./gradlew :evidence:compareThemeSnapshots \
+  -PwrittenTemplate=<generated tree>/templates/<id> \
+  -PtemplateObject=app.rose.template.<pkg>.<Object>            # a writer's template module (Wave 3)
+```
+
+This is Robolectric on the JVM, not a device run.
+- **Pilot templates** (our own code) run anywhere, including CI with network.
+- **A written template is a writer's code**, as untrusted as a project's build scripts. It runs only inside the
+  builder's isolation: offline, in bubblewrap, against the read-only dependency cache, with
+  `-ProbolectricDependencyDir=<folder of android-all-instrumented-*.jar>`. Never run it on a session or host that
+  holds credentials.
+
 ## Not here (other owners)
 
 - App Core owns ordinary Gradle/Kotlin/Compose support in Rose's builder (build, sign, install, update).

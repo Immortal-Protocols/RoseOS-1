@@ -51,6 +51,7 @@ jobs:
           path: |
             workspace/rose-starters/**/build/reports/tests/
             workspace/rose-starters/**/build/screenshots/
+            workspace/rose-starters/evidence/build/evidence/
             workspace/rose-starters/**/build/reports/lint-results-debug.html
           retention-days: 14
           if-no-files-found: ignore
