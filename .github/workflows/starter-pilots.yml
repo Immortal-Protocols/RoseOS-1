@@ -15,6 +15,14 @@ on:
         description: 'Space-separated TEMPLATE:THEME pairs, or "all"'
         required: false
         default: all
+  # Called from another workflow in the same run (docs/STARTER-PILOTS-DEVICE-HANDOFF.md): the artifact is named after
+  # the caller's run, and the caller's token permissions cap this one's.
+  workflow_call:
+    inputs:
+      pilots:
+        type: string
+        required: false
+        default: all
 
 permissions:
   contents: read
@@ -62,6 +70,8 @@ jobs:
           cd prototypes/voice-phone-demo
           python3 -m rose.app_builder.starter_pilots --out "$RUNNER_TEMP/starter-pilots" "${args[@]}"
           (cd "$RUNNER_TEMP/starter-pilots" && sha256sum -c SHA256SUMS)
+          { echo '### Starter pilots'; echo '```'; cat "$RUNNER_TEMP/starter-pilots/SHA256SUMS"; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the pilots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
