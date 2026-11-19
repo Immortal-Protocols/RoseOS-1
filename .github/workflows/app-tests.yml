@@ -9,6 +9,8 @@ on:
     paths:
       - 'workspace/**'
       - 'prototypes/voice-phone-demo/**'
+      - 'prototypes/rose-hifi/glacier.py'
+      - 'prototypes/rose-keyboard/src/keyboard.js'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
@@ -125,6 +127,8 @@ on:
     paths:
       - 'workspace/**'
       - 'prototypes/voice-phone-demo/**'
+      - 'prototypes/rose-hifi/glacier.py'
+      - 'prototypes/rose-keyboard/src/keyboard.js'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
