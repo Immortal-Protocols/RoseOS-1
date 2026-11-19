@@ -162,6 +162,29 @@ class StarterHookTest(Base):
         self.assertEqual(turns, [('create', {'template': 'feed', 'theme': 'minimal'}),
                                  ('revise', {'template': 'feed', 'theme': 'minimal'}), ('create', 'absent')])
 
+    def test_a_turn_that_changes_the_theme_or_framework_is_repaired_once_then_refused(self):
+        b = self.hooked()
+        created = self.create(b, {'template': 'feed', 'theme': 'minimal'})
+        project = b.ledger.project(created['projectId'])
+        snapshot = self.root / 'snapshot'
+        starters.skeleton(snapshot, project['packageName'], project['name'], {'template': 'feed', 'theme': 'minimal'})
+        b._check_starter('job', created['projectId'], project['packageName'], snapshot)  # the starter's own tree
+        kt = next((snapshot / 'templates/feed').rglob('*.kt'))
+        kt.write_text(kt.read_text() + '\n// the owner\'s app\n')
+        b._check_starter('job', created['projectId'], project['packageName'], snapshot)  # template edits are fine
+        theme = next((snapshot / 'themes/minimal').rglob('*.kt'))
+        theme.write_text(theme.read_text() + '\n// forked\n')
+        with self.assertRaises(toolchain.StepFailed) as first:
+            b._check_starter('job', created['projectId'], project['packageName'], snapshot)
+        self.assertEqual(first.exception.category, 'compile')
+        self.assertIn(theme.relative_to(snapshot).as_posix(), first.exception.log)  # named for the repair turn
+        self.assertIn('templates/feed/', first.exception.log)
+        with self.assertRaises(toolchain.StepFailed) as second:
+            b._check_starter('job', created['projectId'], project['packageName'], snapshot)
+        self.assertEqual(second.exception.log, '')  # no tool output: never repaired again
+        plain = self.create(b, rid='plain')  # a project without a starter is never checked
+        b._check_starter('job2', plain['projectId'], b.ledger.project(plain['projectId'])['packageName'], snapshot)
+
     def test_the_prompt_takes_the_starter_and_is_unchanged_without_one(self):
         from rose.app_builder import generator
         for kind in ('create', 'revise', 'repair'):

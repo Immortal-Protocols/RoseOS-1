@@ -11,7 +11,7 @@ from pathlib import Path
 
 from rose.app_builder import device_check, starters, toolchain, writer_handoff
 from rose.app_builder.starter_pilots import REQUESTS
-from rose.app_builder.writer_handoff import Refused, TEST_LABEL, WRITER_LABEL
+from rose.app_builder.writer_handoff import Refused, TEST_LABEL, TRANSPLANT_LABEL, WRITER_LABEL
 from rose.tests.test_app_builder import SDK, JAVA_HOME
 from rose.tests.test_app_gradle_builder import BUILDS, gradle_tools
 
@@ -192,6 +192,28 @@ class StageTwoChecksTest(unittest.TestCase):
         self.assertEqual(caught.exception.category, 'compile')
         self.assertEqual(repairs, ['e: Unresolved reference'])
 
+    def test_a_transplant_runs_the_same_template_code_under_another_theme(self):
+        h = self.load()
+        t = writer_handoff.transplanted(h, 'material3', self.tmp / 'transplant', self.catalog)
+        self.assertEqual(t.pilot, ('feed', 'material3'))
+        self.assertEqual(t.transplant, {'theme': 'minimal', 'handoffSha256': h.digest})
+        package, name = h.manifest['packageName'], h.manifest['name']
+        self.assertEqual(starters.outside_template(t.tree, {'template': 'feed', 'theme': 'material3'}, package), [])
+        self.assertEqual(starters.template_edits(t.tree, {'template': 'feed', 'theme': 'material3'}, package, name),
+                         starters.template_edits(h.tree, {'template': 'feed', 'theme': 'minimal'}, package, name))
+        with self.assertRaises(Refused):
+            writer_handoff.transplanted(h, 'minimal', self.tmp / 'same', self.catalog)
+
+    def test_writer_runs_and_transplants_are_compared_separately(self):
+        edits = {'templates/feed/x.kt': 'a'}
+        records = [{'template': 'feed', 'theme': t, 'templateEdits': edits} for t in ('minimal', 'material3')]
+        records += [{'template': 'feed', 'theme': t, 'templateEdits': dict(edits, extra='b'),
+                     'transplantOf': {'theme': 'minimal'}} for t in ('material3', 'skeuomorphic')]
+        report = writer_handoff.cross_theme(records)['feed']
+        self.assertTrue(report['writerRuns']['equivalent'])
+        self.assertTrue(report['transplants']['equivalent'])
+        self.assertEqual(report['writerRuns']['themes'], ['material3', 'minimal'])
+
     def test_two_handoffs_for_one_pilot_are_refused(self):
         with self.assertRaises(Refused):
             writer_handoff.build([self.out, self.out], self.tmp / 'built', None, None, self.catalog,
@@ -204,7 +226,7 @@ class StageTwoChecksTest(unittest.TestCase):
             if path.name in ('writer_handoff.py', 'device_check.py'):
                 continue
             text = path.read_text()
-            self.assertNotIn('writer_handoff', text, path)
+            self.assertNotRegex(text, r'(import|from)\s+[\w.]*writer_handoff|from \.\s+import[^\n]*writer_handoff', path)
             self.assertNotIn('_bind_identity', text, path)
 
 
@@ -239,6 +261,19 @@ class StageTwoBuildTest(unittest.TestCase):
         self.assertEqual(record['label'], TEST_LABEL)  # a test writer's, though attested
         self.assertNotEqual(record['label'], WRITER_LABEL)
         self.assertEqual(len(device_check.load(self.tmp / 'built')), 1)  # the device check reads it as it is
+        self.assertEqual(record['outsideTemplate'], [])
+        self.assertEqual(len(record['templateEdits']), 1)
+
+        # The same handoff's template code under another theme: built, labelled a transplant, compared apart.
+        manifest = writer_handoff.build([good], self.tmp / 'built-t', self.tools, gradle_tools(), self.catalog,
+                                        attested=[good_digest], transplant_to=['material3'], work=self.tmp / 'work-t',
+                                        log=lambda m: None)
+        by_theme = {r['theme']: r for r in manifest['pilots']}
+        self.assertEqual(set(by_theme), {'minimal', 'material3'})
+        self.assertEqual(by_theme['material3']['state'], 'ready', by_theme['material3'])
+        self.assertEqual(by_theme['material3']['label'], TRANSPLANT_LABEL)
+        self.assertEqual(by_theme['material3']['templateEdits'], by_theme['minimal']['templateEdits'])
+        self.assertEqual(json.loads((self.tmp / 'built-t' / 'cross-theme.json').read_text()), {})  # one of each kind
 
         broken = self.handoff('broken', '\nfun broken( {\n')
         manifest = writer_handoff.build([broken], self.tmp / 'built2', self.tools, gradle_tools(), self.catalog,

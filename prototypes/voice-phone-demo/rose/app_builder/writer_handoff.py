@@ -59,6 +59,7 @@ WRITER_KIND = 'codex-app-server'
 WRITER_LABEL = ('writer-generated source (Rose\'s Codex writer, stage 1, attested by the operator\'s digest), '
                 'built on Linux')
 TEST_LABEL = 'imported tree, test writer (not Rose\'s writer)'
+TRANSPLANT_LABEL = 'transplanted template code under another theme (cross-theme evidence, not a writer run)'
 PACKAGE = re.compile(re.escape(ledger_module.PACKAGE_PREFIX) + r'[0-9a-f]{16}')
 CHECKOUT = Path(__file__).resolve().parents[4]  # the repository root this module runs from
 SANDBOX_CHECK = CHECKOUT / 'workspace/rose-agent/server/app-build-sandbox-check.mjs'
@@ -217,8 +218,8 @@ def write(pilot: tuple[str, str], scratch: Path, out: Path, *, protected=(), wri
 class Handoff:
     """A verified handoff: its manifest and a private copy of its tree that matches every digest."""
 
-    def __init__(self, manifest: dict, tree: Path, digest: str):
-        self.manifest, self.tree, self.digest = manifest, tree, digest
+    def __init__(self, manifest: dict, tree: Path, digest: str, transplant: dict | None = None):
+        self.manifest, self.tree, self.digest, self.transplant = manifest, tree, digest, transplant
 
     @property
     def pilot(self) -> tuple[str, str]:
@@ -266,6 +267,20 @@ def load(directory: Path, private: Path, catalog: starters.Starters) -> Handoff:
     return Handoff(manifest, private, digest)
 
 
+def transplanted(h: Handoff, theme: str, private: Path, catalog: starters.Starters) -> Handoff:
+    """The same handoff's template code and app resources under another ``theme`` (rose.app_builder.starters
+    .transplant), as a handoff of its own for the builder: the cross-theme evidence that runs identical template
+    code under every theme. Labelled a transplant, never a writer run."""
+    m = h.manifest
+    catalog.resolve({'template': m['template'], 'theme': theme})
+    if theme == m['theme']:
+        raise Refused('a transplant goes to another theme')
+    starters.transplant(h.tree, {'template': m['template'], 'theme': m['theme']}, m['packageName'], m['name'],
+                        theme, private)
+    manifest = dict(m, theme=theme, files=_tree_files(private))
+    return Handoff(manifest, private, h.digest, transplant={'theme': m['theme'], 'handoffSha256': h.digest})
+
+
 def applier(handoff: Handoff, repairs: list):
     """The builder's writer for a handoff: a create turn becomes exactly the handed-off tree; a repair turn's build
     output is kept (for the next stage-1 turn) and the job fails."""
@@ -307,8 +322,9 @@ def _bind_identity(b, project_id: str, package: str, name: str):
 
 
 def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools: gradle.GradleTools,
-          catalog: starters.Starters, *, attested=(), work: Path | None = None, log=print) -> dict:
-    """Stage 2. ``attested`` holds the handoff.json digests the operator reported out of band."""
+          catalog: starters.Starters, *, attested=(), transplant_to=(), work: Path | None = None, log=print) -> dict:
+    """Stage 2. ``attested`` holds the handoff.json digests the operator reported out of band; ``transplant_to``
+    themes also build each handoff's template code under those themes (``transplanted``)."""
     from .service import Builder, _git
     out = Path(out)
     owned = work is None
@@ -317,6 +333,10 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
     records = []
     try:
         loaded = [load(d, work / f'handoff-{i}', catalog) for i, d in enumerate(handoffs)]
+        for i, h in enumerate(list(loaded)):
+            for theme in transplant_to:
+                if theme != h.manifest['theme']:
+                    loaded.append(transplanted(h, theme, work / f'transplant-{i}-{theme}', catalog))
         if len({h.pilot for h in loaded}) != len(loaded):
             raise Refused('two handoffs are for the same pilot')
         out.mkdir(mode=0o755)
@@ -337,13 +357,22 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
                 job = b.job(created['jobId'])
                 writer = h.manifest.get('writer', {})
                 real = writer.get('kind') == WRITER_KIND and h.digest in attested and _enforced(h.manifest)
+                starter = {'template': template_id, 'theme': theme}
+                package = h.manifest['packageName']
                 record = {'template': template_id, 'theme': theme, 'state': job['state'], 'handoffSha256': h.digest,
-                          'attested': h.digest in attested, 'writer': writer, 'request': h.manifest['request']}
+                          'attested': h.digest in attested, 'writer': writer, 'request': h.manifest['request'],
+                          # Home's starter checks on the verified copy, against the handoff's bound package
+                          'outsideTemplate': starters.outside_template(h.tree, starter, package),
+                          'templateEdits': starters.template_edits(h.tree, starter, package, h.manifest['name'])}
+                if h.transplant:
+                    record['transplantOf'] = h.transplant
+                real = real and not h.transplant and not record['outsideTemplate']
                 source = b.root / 'projects' / created['projectId'] / 'source'
                 root = _git(source, 'rev-list', '--max-parents=0', 'HEAD')
-                record['skeletonMatch'] = _git(source, 'rev-parse', root + '^{tree}') == h.manifest['skeletonTree']
+                record['skeletonMatch'] = (not h.transplant
+                                           and _git(source, 'rev-parse', root + '^{tree}') == h.manifest['skeletonTree'])
                 if job['state'] != 'ready':
-                    record['label'] = TEST_LABEL if not real else WRITER_LABEL
+                    record['label'] = TRANSPLANT_LABEL if h.transplant else WRITER_LABEL if real else TEST_LABEL
                     record['failure'] = job.get('failure') or {'message': job.get('message')}
                     if repairs:
                         record['repairRequest'] = repairs[-1]
@@ -352,10 +381,12 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
                     continue
                 project = next(p for p in b.projects() if p['projectId'] == created['projectId'])
                 version = b.ledger.versions(created['projectId'])[-1]
-                record['sourceMatch'] = (_git(source, 'rev-parse', version['sourceRevision'] + '^{tree}')
+                record['sourceMatch'] = (not h.transplant and
+                                         _git(source, 'rev-parse', version['sourceRevision'] + '^{tree}')
                                          == h.manifest['writerTree'])
-                record['label'] = WRITER_LABEL if real and record['skeletonMatch'] and record['sourceMatch'] \
-                    else TEST_LABEL
+                record['label'] = (TRANSPLANT_LABEL if h.transplant else
+                                   WRITER_LABEL if real and record['skeletonMatch'] and record['sourceMatch']
+                                   else TEST_LABEL)
                 apk = out / 'apks' / f'{name}.apk'
                 shutil.copyfile(b.root / 'artifacts' / f'{project["versions"][-1]["apk"]["sha256"]}.apk', apk)
                 badging = toolchain.run([tools.bt / 'aapt', 'dump', 'badging', apk], work, work, tools,
@@ -375,10 +406,26 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
     labels = {r['label'] for r in records}
     manifest = {'schemaVersion': 1, 'label': labels.pop() if len(labels) == 1 else 'mixed', 'pilots': records}
     (out / 'pilots.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+    (out / 'cross-theme.json').write_text(json.dumps(cross_theme(records), indent=2, sort_keys=True) + '\n')
     sums = [(r['apkSha256'], r['apk']) for r in records if 'apk' in r]
     sums.append((sha256(out / 'pilots.json'), 'pilots.json'))
+    sums.append((sha256(out / 'cross-theme.json'), 'cross-theme.json'))
     (out / 'SHA256SUMS').write_text(''.join(f'{d}  {p}\n' for d, p in sums))
     return manifest
+
+
+def cross_theme(records: list[dict]) -> dict:
+    """Per template and per kind of run, Home's comparison of the template edits across themes
+    (rose.app_builder.starters.compare_trio): writer runs and transplants are compared separately, never mixed.
+    Equal edits mean the same template code ran; they are not by themselves evidence of equal behaviour."""
+    report = {}
+    for template in sorted({r['template'] for r in records}):
+        for kind, pick in (('writerRuns', lambda r: 'transplantOf' not in r),
+                           ('transplants', lambda r: 'transplantOf' in r)):
+            runs = {r['theme']: r['templateEdits'] for r in records if r['template'] == template and pick(r)}
+            if len(runs) > 1:
+                report.setdefault(template, {})[kind] = starters.compare_trio(runs)
+    return report
 
 
 def _enforced(manifest: dict) -> bool:
@@ -408,6 +455,8 @@ def main(argv=None) -> int:
     bl.add_argument('--handoff', action='append', required=True, type=Path)
     bl.add_argument('--out', required=True, type=Path)
     bl.add_argument('--handoff-sha256', action='append', default=[], metavar='HEX')
+    bl.add_argument('--transplant-to', action='append', default=[], metavar='THEME',
+                    help='also build each handoff\'s template code under this theme (cross-theme evidence)')
     args = parser.parse_args(argv)
     if not starters.available():
         parser.error('this checkout has no workspace/rose-starters')
@@ -430,7 +479,7 @@ def main(argv=None) -> int:
         java_home = Path(os.environ['JAVA_HOME']) if os.environ.get('JAVA_HOME') else None
         tools = toolchain.Tools(Path(sdk), java_home, timeout_s=900, key_creation=True)
         manifest = build(args.handoff, args.out, tools, stack_tools(Path(stack)), catalog,
-                         attested=args.handoff_sha256, log=say)
+                         attested=args.handoff_sha256, transplant_to=args.transplant_to, log=say)
     except (Refused, ValueError) as error:
         print(f'writer_handoff: refused: {error}', file=sys.stderr)
         return 2
