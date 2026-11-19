@@ -202,6 +202,15 @@ class OutsideTemplate(unittest.TestCase):
             self.assertIn(activity.relative_to(d).as_posix(), found)
             self.assertIn(moved.relative_to(d).as_posix(), found)
 
+    def test_the_label_never_reaches_a_checked_file(self):
+        """outside_template renders its baseline without the label: that holds only while no checked file has it."""
+        s = starters.Starters.load()
+        starter = {'template': 'player', 'theme': 'material3'}
+        a = s.files(PACKAGE, 'One label', starter)
+        b = s.files(PACKAGE, 'Another & "label"', starter)
+        changed = sorted(n for n in a if a[n] != b.get(n))
+        self.assertEqual(['app/src/main/res/values/strings.xml'], changed)
+
 
 class Equivalence(unittest.TestCase):
     """Wave 3: whether one template's three apps (one per theme) run the same template code, and a way to make them."""

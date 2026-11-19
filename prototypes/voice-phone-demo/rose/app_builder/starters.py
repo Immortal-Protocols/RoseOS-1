@@ -125,7 +125,8 @@ def outside_template(source: Path, starter, package: str, *, root: Path = ROOT) 
     changed, added or removed there, sorted; empty when only the template and app/src/main/res changed. The builder
     may refuse or repair a turn that returns any, so the theme stays swappable and the template stays the only
     variable. ``package`` is the builder's own record of the app's package (project['packageName']), never read
-    from the tree: the tree's namespace and applicationId are among the files checked."""
+    from the tree: the tree's namespace and applicationId are among the files checked. Callers pass the builder's
+    private snapshot of the writer's tree (plain files only), never the live working tree."""
     starters = Starters.load(root)
     tmpl, theme = starters.resolve(starter)
     expected = starters.files(package, '', starter)  # the label only reaches strings.xml, which is not checked
