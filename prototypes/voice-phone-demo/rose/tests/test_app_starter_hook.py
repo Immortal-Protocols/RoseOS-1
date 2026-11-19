@@ -241,6 +241,18 @@ class StarterHookTest(Base):
             with self.assertRaises(toolchain.StepFailed):
                 check('job-gone')  # still a finding: the baseline is the project's own
 
+    def test_a_backend_apps_own_tree_is_the_profiles_not_the_starters(self):
+        _, snapshot, check = self.starter_project()
+        manifest = snapshot / 'app/src/main/AndroidManifest.xml'
+        manifest.write_text(manifest.read_text().replace(
+            '  <application', '  <uses-permission android:name="android.permission.INTERNET"/>\n  <application', 1))
+        (snapshot / 'rose-app.json').write_text('{}\n')
+        (snapshot / 'contract').mkdir()
+        (snapshot / 'contract/api.json').write_text('{}\n')
+        (snapshot / 'backend').mkdir()
+        (snapshot / 'backend/main.rs').write_text('fn main() {}\n')
+        check()  # appprofile and the contract check these; the starter boundary does not
+
     def test_a_new_file_outside_the_template_and_resources_is_a_finding(self):
         _, snapshot, check = self.starter_project()
         (snapshot / 'design' / 'Extra.kt').write_text('package app.rose.design\n')

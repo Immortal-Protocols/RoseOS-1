@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import stat
 from pathlib import Path
 
 from . import gradle, gradle_stack, starters, toolchain
@@ -35,6 +36,7 @@ INIT_SCRIPT = '''gradle.lifecycle.beforeProject {
 '''
 OUTPUT = Path('evidence/build/evidence')  # relative to the starters project
 SKIP = frozenset({'build', '.gradle', '.kotlin', 'local.properties'})  # never copied in: state, not source
+XML_MAX = 4 << 20  # a JUnit result file larger than this is not read
 OBJECT = re.compile(r'[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\.[A-Z][A-Za-z0-9_]*')
 
 
@@ -55,11 +57,34 @@ def _copy_source(source: Path, target: Path) -> None:
             raise StepFailed('compile', 'Source contains a link or special file; it is not run.')
 
 
+def _plain_dir(top: Path, path: Path) -> Path | None:
+    """``path`` when it and every folder between ``top`` and it is a real directory (never a link), else None."""
+    current = top
+    for part in path.relative_to(top).parts:
+        current = current / part
+        try:
+            mode = os.lstat(current).st_mode
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(mode):
+            return None
+    return path
+
+
+def _plain_file(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+
+
 def _failures(results: Path, limit: int = 4000) -> str:
     """The failing tests' names and first message lines from JUnit XML, bounded."""
     import xml.etree.ElementTree as ET
     lines = []
     for path in sorted(results.glob('*.xml')) if results.is_dir() else ():
+        if not _plain_file(path) or path.stat().st_size > XML_MAX:
+            continue
         try:
             root = ET.parse(path).getroot()
         except ET.ParseError:
@@ -121,19 +146,26 @@ def run(gradle_tools: gradle.GradleTools, robolectric: Path, tools: toolchain.To
                               cancelled)
         except StepFailed as failed:  # a difference fails the task after it wrote report.json
             failure, log = failed, failed.log
-        produced = project / OUTPUT
-        results = project / 'evidence/build/test-results/testDebugUnitTest'
+        # Everything below the project was written inside the isolation, by code that may be the writer's: read it
+        # only through paths with no link anywhere below the box (nothing runs there any more: the sandbox's own PID
+        # namespace ended with it), and copy it with the builder's snapshot (no links, bounded).
+        from .service import _snapshot
         out.mkdir(mode=0o700)
-        if results.is_dir():  # the JUnit results, kept for the record: what each check asserted, and any failure
-            gradle._copy_tree(results, out / 'test-results')
-        if not (produced / 'report.json').is_file():
+        results = _plain_dir(box, project / 'evidence/build/test-results/testDebugUnitTest')
+        if results is not None:  # the JUnit results, kept for the record: what each check asserted, and any failure
+            _snapshot(results, out / 'test-results')
+        produced = _plain_dir(box, project / OUTPUT)
+        if produced is None or not _plain_file(produced / 'report.json'):
             if failure is not None:
                 raise StepFailed(failure.category, failure.summary, log=failure.log + _failures(out / 'test-results'))
             raise StepFailed('toolchain', 'The behaviour evidence produced no report.')
-        gradle._copy_tree(produced, out / 'snapshots')
+        _snapshot(produced, out / 'snapshots')
     finally:
         gradle.remove_tree(box)
-    report = json.loads((out / 'snapshots' / 'report.json').read_text(encoding='utf-8'))
+    try:
+        report = json.loads((out / 'snapshots' / 'report.json').read_text(encoding='utf-8'))
+    except (ValueError, UnicodeDecodeError):  # the report names the template, and the template is the writer's
+        raise StepFailed('compile', 'The behaviour evidence report is not valid JSON.') from None
     files = sorted(p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file())
     return {'passed': failure is None, 'report': report, 'files': files,
             'log': (log or '')[-gradle.MAX_LOG:], 'label': 'behaviour snapshots across themes (Robolectric, offline)'}

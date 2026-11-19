@@ -658,6 +658,9 @@ class Builder:
             return
         finally:
             shutil.rmtree(first, ignore_errors=True)
+        # A backend app's own top-level tree (rose-app.json, contract/, backend/) is the profile's to check
+        # (appprofile.check, contract.check_update), not the starter's: it is never part of a starter's first tree.
+        changed = [p for p in changed if p.split('/', 1)[0] not in appprofile.BACKEND_TOP]
         if not changed:
             return
         seen = self._starter_findings.get(job_id, 0)

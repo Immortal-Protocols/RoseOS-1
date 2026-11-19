@@ -420,9 +420,9 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
           robolectric: Path | None = None) -> dict:
     """Stage 2. ``attested`` holds the handoff.json digests the operator reported out of band; ``transplant_to``
     themes also build each handoff's template code under those themes (``transplanted``). With ``robolectric`` (the
-    stack's Android jars), each handoff that is not a transplant also gets Home's behaviour evidence for its written
-    template module under every theme (rose.app_builder.evidence), inside the same isolation, offline; it is kept
-    in out/evidence/<template>-<theme>/ and summarized in the record."""
+    stack's Android jars), each built handoff whose outsideTemplate is empty, transplants included, also gets Home's
+    behaviour evidence for its template module under every theme (rose.app_builder.evidence), inside the same
+    isolation, offline; it is kept in out/evidence/<template>-<theme>/ and summarized in the record."""
     from .service import Builder, _git
     out = Path(out)
     owned = work is None
@@ -554,7 +554,9 @@ def _evidence(h: 'Handoff', catalog: starters.Starters, gradle_tools, robolectri
     written = h.tree / tmpl.dir
     try:
         result = evidence.run(gradle_tools, robolectric, tools, work, written=written, template_object=tmpl.object)
-    except toolchain.StepFailed as failed:
+    except (toolchain.StepFailed, ValueError, OSError) as failed:
+        if not isinstance(failed, toolchain.StepFailed):
+            failed = toolchain.StepFailed('internal', f'The behaviour evidence could not run ({type(failed).__name__}).')
         return {'ran': False, 'category': failed.category, 'summary': failed.summary,
                 'log': (failed.log or '')[-2000:]}
     keep.parent.mkdir(parents=True, exist_ok=True)

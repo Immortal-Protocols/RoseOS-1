@@ -42,6 +42,76 @@ class RefusalsTest(unittest.TestCase):
         self.assertEqual(caught.exception.category, 'toolchain')
 
 
+@unittest.skipUnless(starters.available(), 'this checkout has no workspace/rose-starters')
+class OutputsTest(unittest.TestCase):
+    """What the isolated run left behind is read only through link-free paths and never followed out: a stubbed
+    Gradle run plants the outputs (no build runs here)."""
+
+    def setUp(self):
+        from unittest import mock
+        self.mock = mock
+        self.tmp = Path(tempfile.mkdtemp(prefix='rose-evidence-out-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.tools = toolchain.Tools(SDK, JAVA_HOME)
+        self.jars = self.tmp / 'jars'
+        self.jars.mkdir()
+        for jar in gradle_stack.ROBOLECTRIC_JARS:
+            (self.jars / jar.name).write_bytes(b'jar')
+        for d in ('jdk', 'gradle', 'sdk', 'cache'):
+            (self.tmp / d).mkdir()
+        tmp = self.tmp
+
+        class Ready:
+            jdk, gradle, sdk, cache = tmp / 'jdk', tmp / 'gradle', tmp / 'sdk', tmp / 'cache'
+            def available(self):
+                return None
+        self.gradle = Ready()
+        self.secret = self.tmp / 'host-keys'
+        self.secret.mkdir()
+        (self.secret / 'app.p12').write_bytes(b'hunter2')
+
+    def run_with(self, plant):
+        def fake_run(gradle_tools, tools, argv, env, box, readonly, redact, cancelled):
+            plant(box / 'project')
+            return 'ok'
+        with self.mock.patch.object(evidence.gradle, '_run', fake_run):
+            return evidence.run(self.gradle, self.jars, self.tools, self.tmp / 'work')
+
+    def report(self, project, text='[]'):
+        out = project / 'evidence/build/evidence'
+        out.mkdir(parents=True)
+        (out / 'report.json').write_text(text)
+
+    def test_a_linked_results_folder_is_never_followed(self):
+        def plant(project):
+            self.report(project)
+            results = project / 'evidence/build/test-results'
+            results.mkdir(parents=True)
+            (results / 'testDebugUnitTest').symlink_to(self.secret)
+        result = self.run_with(plant)
+        self.assertNotIn('test-results/app.p12', result['files'])
+        self.assertFalse(list((self.tmp / 'work/evidence').rglob('app.p12')))
+
+    def test_a_linked_report_or_output_folder_is_no_report(self):
+        def linked_report(project):
+            out = project / 'evidence/build/evidence'
+            out.mkdir(parents=True)
+            (out / 'report.json').symlink_to(self.secret / 'app.p12')
+
+        def linked_folder(project):
+            (project / 'evidence/build').mkdir(parents=True)
+            (project / 'evidence/build/evidence').symlink_to(self.secret)
+        for plant in (linked_report, linked_folder):
+            with self.subTest(plant=plant.__name__), self.assertRaises(toolchain.StepFailed):
+                shutil.rmtree(self.tmp / 'work', ignore_errors=True)
+                self.run_with(plant)
+
+    def test_a_report_that_is_not_json_is_a_failure_not_a_crash(self):
+        with self.assertRaises(toolchain.StepFailed) as caught:
+            self.run_with(lambda project: self.report(project, '[{"template":"feed"x"}]'))
+        self.assertEqual(caught.exception.category, 'compile')
+
+
 @unittest.skipUnless(BUILDS and HAS_JARS and starters.available(),
                      'needs ROSE_GRADLE_STACK with its Robolectric jars, bubblewrap as a non-root user and the starters')
 class EvidenceRunTest(unittest.TestCase):
