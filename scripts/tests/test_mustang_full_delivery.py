@@ -171,7 +171,11 @@ class DiskSpaceTest(unittest.TestCase):
         recipe=json.loads((ROOT/'os/build-only/mustang.json').read_text())
         self.assertTrue(recipe['sprint']['reserveChecks'])
         required=mustang_route.full_run_disk_budget(recipe)
-        self.assertEqual(required,794 << 30)
+        self.assertEqual(required,594 << 30)
+        # Dedicated runs only rehash prepared vendor trees included in source;
+        # increasing the unused legacy generation budget must not charge twice.
+        recipe['preparation']['vendor']['boundBytes'] *= 2
+        self.assertEqual(mustang_route.full_run_disk_budget(recipe),required)
         import mustang_lane
         lane=mustang_lane.configuration();cfg=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         total=cfg.get('dataFilesystemTotalInodes',mustang_lane.CONFIRMED_TOTAL_INODES)

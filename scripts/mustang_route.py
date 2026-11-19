@@ -544,9 +544,14 @@ def evaluate_guest(obs, lane, cfg, root=ROOT, *, phase="full"):
 
 
 def full_run_disk_budget(recipe):
-    """Existing stage ceilings plus the existing runner/reporting reserve."""
+    """Dedicated pipeline writes plus the runner/reporting reserve.
+
+    Prepared vendor trees are part of the source copy. The dedicated pipeline
+    rehashes them via mustang_vendor_consumer; it never runs download/vendor
+    generation. Do not charge that legacy generation ceiling a second time.
+    """
     return (recipe['preparation']['source']['boundBytes'] + recipe['gitMeta']['boundBytes']
-            + recipe['preparation']['vendor']['boundBytes'] + recipe['preparation']['lunch']['boundBytes']
+            + recipe['preparation']['lunch']['boundBytes']
             + recipe['capacity']['compileAllowanceBytes']
             + recipe['capacity']['reserveBytes'])
 

@@ -1,0 +1,75 @@
+{
+  "schema": "roseos.mustang-daily-space-evidence.v1",
+  "producer": {
+    "runId": "43973807439",
+    "runAttempt": "1",
+    "source": "7cdc818e5b625cf7931d2e478ddae27dca89f9a0",
+    "conclusion": "success"
+  },
+  "artifact": {
+    "id": 14287844660,
+    "sizeBytes": 36082,
+    "sha256": "5234772c3567e156ca7ce7d769cf4167f3cc1c2ab35153600198b1ef66e9ebd5"
+  },
+  "observed": {
+    "source-completed": {
+      "receiptSha256": "265edff31fdd483293b81f98bc4f5930bfea1414d00375b4737e89e3c6932d7c",
+      "at": "2026-11-16T23:32:15Z",
+      "boundBytes": 161061273600,
+      "copied": {
+        "entries": 2047669,
+        "fileBytes": 107141551298
+      },
+      "selection": {
+        "apparentBytes": 107141551298,
+        "entries": 2047669,
+        "excluded": 1060,
+        "files": 1686949,
+        "problems": [],
+        "projectedBytes": 113425088512,
+        "selectionRecordBoundBytes": 547106816
+      }
+    },
+    "git-meta-completed": {
+      "receiptSha256": "28e3126fa3a09c972df34ca7f26d77261fd634422e0ed5acde7f5ef593b4aab6",
+      "at": "2026-11-16T23:33:23Z",
+      "consumedBytes": 1195651072
+    },
+    "lunch-completed": {
+      "receiptSha256": "eb9d293ed7123979ebcf97492d2616ab861791272a7d72c163e8286d1e617d5a",
+      "at": "2026-11-16T23:50:20Z",
+      "peakSampledBytes": 149389312,
+      "returncode": 0
+    },
+    "compile-completed": {
+      "receiptSha256": "1fbb520e885a9870d09ce7d00f2396d46efddbc0584394d9c0bf1d6a02c526e6",
+      "at": "2026-11-17T01:03:51Z",
+      "ok": true,
+      "returncode": 0,
+      "peakSampledBytes": 119562973184,
+      "consumedBytes": 119398027264,
+      "startAvailableBytes": 769614442496,
+      "lowestSampledAvailableBytes": 650051469312,
+      "outDir": "out-mustang-cache"
+    },
+    "vendor-inputs-completed": {
+      "receiptSha256": "14806d6f677e6eb08c7e171962f538c5ef03f4d93ba0a96457c0c635eca3caaf",
+      "generationStarted": false,
+      "downloadStarted": false,
+      "vendorProducer": {
+        "runAttempt": "1",
+        "runId": "42522784617",
+        "source": "55c085ade9d0ef8fa792df1e824720130997b29b",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    }
+  },
+  "proposal": {
+    "sourceBoundBytes": 137438953472,
+    "compileAllowanceBytes": 161061273600,
+    "reserveBytes": 322122547200,
+    "fullRunRequiredBytes": 637802643456
+  },
+  "accounting": "Dedicated source copy includes prepared vendor; mustang_vendor_consumer rehashes it without generation or download. Legacy vendor generation128GiB is not a new write in this route. Git metadata and lunch remain8GiB each. Stage write ceilings tighten; guest and phase admission, projection checks and sampled reserve stops remain active. Historical free space is not current live free space.",
+  "preservation": "No prior source/output, cache, allocation, journal or release is removed or modified. No resource increase."
+}
