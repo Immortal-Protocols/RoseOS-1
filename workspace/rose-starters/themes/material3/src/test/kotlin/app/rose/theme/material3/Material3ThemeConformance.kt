@@ -1,10 +1,13 @@
 package app.rose.theme.material3
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
@@ -19,6 +22,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.unit.dp
 import app.rose.design.BaselineTheme
 import app.rose.design.Direction
 import app.rose.design.DirectionPad
@@ -102,6 +106,32 @@ class Material3ThemeBehaviorTest(private val dark: Boolean) {
         balance.performSemanticsAction(SemanticsActions.RequestFocus)
         balance.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
         assertEquals(0f, value, 0.001f)
+        assertEquals(2, finished)
+    }
+
+    @Test
+    fun sliderUsesEntireRequestedHeight() {
+        var value by mutableFloatStateOf(0f)
+        var finished = 0
+        rule.setThemedContent(Material3Theme, dark) {
+            Slider(
+                value, { value = it }, "Tall timeline", Modifier.height(80.dp),
+                onValueChangeFinished = { finished++ },
+            )
+        }
+
+        val slider = rule.onNodeWithContentDescription("Tall timeline")
+        slider.performTouchInput {
+            down(Offset(width - 2f, height - 2f))
+            up()
+        }
+        assertTrue("Bottom-edge tap reaches end of the timeline", value >= 0.95f)
+        slider.performTouchInput {
+            down(Offset(width - 2f, height - 2f))
+            moveTo(Offset(2f, height - 2f))
+            up()
+        }
+        assertTrue("Bottom-edge drag reaches start of the timeline", value <= 0.05f)
         assertEquals(2, finished)
     }
 

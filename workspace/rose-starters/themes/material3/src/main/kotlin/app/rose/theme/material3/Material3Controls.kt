@@ -25,17 +25,17 @@ import androidx.compose.material3.Button as FilledButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon as MaterialIcon
 import androidx.compose.material3.IconButton as MaterialIconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem as MaterialListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalContentColor as MaterialContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedIconToggleButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -194,7 +194,11 @@ internal object Material3Controls : Controls {
         }
         when (p.kind) {
             ButtonKind.Primary -> FilledButton(p.onClick, modifier, enabled = p.enabled, content = content)
-            ButtonKind.Secondary -> FilledTonalButton(p.onClick, modifier, enabled = p.enabled, content = content)
+            ButtonKind.Secondary -> FilledTonalButton(
+                p.onClick, modifier, enabled = p.enabled,
+                border = if (p.enabled) tonalControlBorder() else null,
+                content = content,
+            )
             ButtonKind.Quiet -> TextButton(p.onClick, modifier, enabled = p.enabled, content = content)
             ButtonKind.Danger -> {
                 val scheme = MaterialTheme.colorScheme
@@ -217,10 +221,13 @@ internal object Material3Controls : Controls {
         }
         val checked = p.checked
         when {
-            checked != null && p.prominent ->
-                FilledIconToggleButton(checked, { p.onClick() }, modifier, enabled = p.enabled, content = image)
-            checked != null ->
-                FilledTonalIconToggleButton(checked, { p.onClick() }, modifier, enabled = p.enabled, content = image)
+            checked != null -> OutlinedIconToggleButton(
+                checked, { p.onClick() }, modifier, enabled = p.enabled,
+                colors = if (p.prominent) IconButtonDefaults.filledIconToggleButtonColors()
+                    else IconButtonDefaults.filledTonalIconToggleButtonColors(),
+                border = if (p.enabled && !checked) tonalControlBorder() else null,
+                content = image,
+            )
             p.prominent -> FilledIconButton(p.onClick, modifier, enabled = p.enabled, content = image)
             else -> MaterialIconButton(p.onClick, modifier, enabled = p.enabled, content = image)
         }
@@ -361,3 +368,8 @@ internal object Material3Controls : Controls {
 @Composable
 private fun WithMaterialContentColor(content: @Composable () -> Unit) =
     ProvideContentColor(MaterialContentColor.current, content)
+
+/** Material's light tonal fills can have the same luminance as an inset surface. */
+@Composable
+internal fun tonalControlBorder() =
+    BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))

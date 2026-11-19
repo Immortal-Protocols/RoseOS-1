@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -101,24 +102,27 @@ internal fun MaterialTimeline(p: SliderProps) {
     }
 
     // Match the semantic bounds to the actual hit area. Material expands its internal TalkBack box past the track.
-    Box(p.modifier.fillMaxWidth().minTouchTarget().clearAndSetSemantics {
-        contentDescription = p.label
-        progressBarRangeInfo = ProgressBarRangeInfo(
-            p.value.coerceIn(p.valueRange.start, p.valueRange.endInclusive), p.valueRange, p.steps,
-        )
-        p.valueText?.let { stateDescription = it }
-        if (p.enabled) {
-            focused = isFocused
-            requestFocus { focusRequester.requestFocus() }
-            setProgress { target ->
-                p.onValueChange(snapSliderValue(target, p.valueRange, p.steps))
-                p.onValueChangeFinished?.invoke()
-                true
+    BoxWithConstraints(
+        modifier = p.modifier.fillMaxWidth().minTouchTarget().clearAndSetSemantics {
+            contentDescription = p.label
+            progressBarRangeInfo = ProgressBarRangeInfo(
+                p.value.coerceIn(p.valueRange.start, p.valueRange.endInclusive), p.valueRange, p.steps,
+            )
+            p.valueText?.let { stateDescription = it }
+            if (p.enabled) {
+                focused = isFocused
+                requestFocus { focusRequester.requestFocus() }
+                setProgress { target ->
+                    p.onValueChange(snapSliderValue(target, p.valueRange, p.steps))
+                    p.onValueChangeFinished?.invoke()
+                    true
+                }
+            } else {
+                disabled()
             }
-        } else {
-            disabled()
-        }
-    }) {
+        },
+    ) {
+        val hitHeight = maxOf(minHeight, minTarget)
         Slider(
             value = p.value,
             onValueChange = p.onValueChange,
@@ -131,7 +135,7 @@ internal fun MaterialTimeline(p: SliderProps) {
             steps = p.steps,
             thumb = {
                 // Material measures the slider's hit height from the thumb's slot.
-                Box(Modifier.heightIn(min = minTarget), contentAlignment = Alignment.Center) {
+                Box(Modifier.heightIn(min = hitHeight), contentAlignment = Alignment.Center) {
                     SliderDefaults.Thumb(interactions, colors = colors, enabled = p.enabled)
                 }
             },
@@ -253,6 +257,7 @@ private fun HoldSurface(
         color = container,
         contentColor = foreground,
         shape = if (primary) MaterialTheme.shapes.extraLarge else RoseTheme.shapes.small,
+        border = if (enabled && !pressed) tonalControlBorder() else null,
     ) {
         Box(
             Modifier.indication(interactions, ripple(color = foreground)),
