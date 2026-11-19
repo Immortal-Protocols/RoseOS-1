@@ -64,7 +64,7 @@ class LayoutTest(Base):
 
     def gradle_tree(self) -> Path:
         tree = self.root / 'tree'
-        tree.mkdir(mode=0o700)
+        tree.mkdir(mode=0o700, parents=True)
         gradle.write_skeleton(tree, 'app.rose.gen.pabc', 'Notes')
         return tree
 
@@ -80,7 +80,7 @@ class LayoutTest(Base):
         self.assertIn('setContent', main_activity(tree).read_text())
         self.assertEqual(appprofile.check(tree, 'app.rose.gen.pabc').name, appprofile.APP_V1)
         flat = self.root / 'flat'
-        flat.mkdir(mode=0o700)
+        flat.mkdir(mode=0o700, parents=True)
         template.write_skeleton(flat, 'app.rose.gen.pabc', 'Notes')
         self.assertFalse(gradle.is_gradle_project(flat))  # the older layout keeps its own path
 
