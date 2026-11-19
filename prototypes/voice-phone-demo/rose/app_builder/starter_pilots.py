@@ -35,10 +35,19 @@ from . import gradle, starters, toolchain
 LABEL = 'compiled starter tree, scripted writer (not writer-generated)'
 SCHEMA_VERSION = 1
 
-# One fixed request per template; only the theme varies, so pilots of one template differ only by theme.
-REQUESTS = {'feed': 'A feed of short posts to scroll, open and come back to.',
-            'sprite-game': 'A short sprite game: move, collide and restart.',
-            'player': 'A player for one passage: play, scrub and loop it.'}
+# Wave 3's fixed requests, verbatim from Home (2026-11-19). Each is the same under every theme and carries no style
+# words, so the theme is the only variable; each exercises the main interaction its matrix scenario tests. A writer
+# run (stage 1) uses the same text, so scripted and written pilots answer the same request.
+REQUESTS = {
+    'feed': ('A neighbourhood notice board. Show a scrolling list of posts from local groups, each with its group, '
+             'title, time and a short summary. Tapping a post opens it in full; going back returns to the same place '
+             'in the list. Let me save a post and see which posts are saved.'),
+    'sprite-game': ('A short arcade game: a small delivery robot moves through a walled courtyard to collect three '
+                    'parcels, avoiding puddles, then reaches the drop-off door to finish. Touching a puddle ends the '
+                    'round. Show the parcels collected and how the round is going, and let me restart.'),
+    'player': ('A practice player for a 30-second groove. Play and pause it, drag along the timeline to any moment, '
+               'and mark a start and an end so that passage repeats while I practise.'),
+}
 
 
 def unchanged(source, kind, request, cancelled):
