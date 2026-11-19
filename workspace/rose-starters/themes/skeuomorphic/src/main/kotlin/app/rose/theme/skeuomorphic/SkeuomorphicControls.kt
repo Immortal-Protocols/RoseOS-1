@@ -218,12 +218,10 @@ internal object SkeuomorphicControls : Controls {
 
     @Composable
     override fun Progress(p: ProgressProps) {
-        Box(
-            p.modifier.fillMaxWidth().semantics {
-                contentDescription = p.label
-                progressBarRangeInfo = progressInfo(p.progress)
-            },
-        ) { Meter(p.progress) }
+        Meter(p.progress, p.modifier.semantics {
+            contentDescription = p.label
+            progressBarRangeInfo = progressInfo(p.progress)
+        })
     }
 
     @Composable
@@ -324,9 +322,10 @@ internal object SkeuomorphicControls : Controls {
     @Composable
     override fun Divider(p: DividerProps) {
         val colors = RoseTheme.colors
-        Column(p.modifier.fillMaxWidth()) {
-            Spacer(Modifier.fillMaxWidth().height(1.dp).background(colors.outline))
-            Spacer(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = if (colors.isDark) 0.14f else 0.65f)))
+        val highlight = Color.White.copy(alpha = if (colors.isDark) 0.14f else 0.65f)
+        Column(p.modifier.fillMaxWidth().height(2.dp)) {
+            Spacer(Modifier.fillMaxWidth().weight(1f).background(colors.outline))
+            Spacer(Modifier.fillMaxWidth().weight(1f).background(highlight))
         }
     }
 
