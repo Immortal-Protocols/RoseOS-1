@@ -472,14 +472,13 @@ class Invite(unittest.TestCase):
 
 from unittest import mock  # noqa: E402
 
-from rose.app_builder import ledger as L, server_build, server_manifest, service  # noqa: E402
+from rose.app_builder import ledger as L, server_manifest, service  # noqa: E402
 from rose.tests.test_app_builder import HAS_SDK  # noqa: E402
 from rose.tests.test_app_builder_one_server import shape  # noqa: E402
 
 # The hosting additions to builder API v1 (§7.7a) for the Agent's tests: a hosted version's library entry, the invite
 # answer, and the invite refusals (test_builder_routes). Regenerate with ROSE_WRITE_WIRE_FIXTURE=1 after an agreed change.
 HOSTING_WIRE = Path(__file__).resolve().parent / 'fixtures/builder-hosting-v1.json'
-from rose.tests.test_app_level2_pipeline import BUILDER_CRATES, Base, Codegen, client_server_app  # noqa: E402
 from rose.tests.test_app_server_manifest import tiny_elf  # noqa: E402
 
 
@@ -528,126 +527,6 @@ class Hosting(unittest.TestCase):
             with self.assertRaises(app_host.InviteRefused) as caught:
                 self.h.invite(a, 'ab' * 32, 'me')
         self.assertEqual(caught.exception.word, 'busy')
-
-
-@unittest.skipUnless(HAS_SDK or os.environ.get('ROSE_REQUIRE_APP_BUILD'), 'needs the pinned Android SDK and a JDK')
-class InTheJob(Base):
-    """The Builder with hosting: the agent container is recorded before the client is generated (so its URL is
-    baked), and the server is set up before the version is delivered; a failed setup delivers nothing."""
-
-    class FakeHosting:
-        def __init__(self, ledger, fail=None):
-            self.ledger, self.fail, self.calls = ledger, fail, []
-
-        def ensure(self, project):
-            self.calls.append(('ensure', project))
-            if self.ledger.agent_container(project) is None:
-                self.ledger.record_agent_container(project, AGENT_HEX, APP_URL)
-
-        def invite(self, project, sha256, account):
-            self.calls.append(('invite', project, sha256, account))
-            if account == 'enrolled':
-                raise app_host.InviteRefused('already_enrolled')
-            if account == 'asleep':
-                raise app_host.InviteRefused('unreachable')
-            return TOKEN
-
-        def revert(self, project, code, elf, manifest):
-            self.calls.append(('revert', project, code))
-
-        def deploy(self, project, code, elf, manifest, app_url=None):
-            self.calls.append(('deploy', project, code, Path(elf).is_file(), manifest['elf']['sha256'],
-                               self.ledger.versions(project), app_url))
-            if self.fail == 'cancel':  # the owner cancels while the server is being set up
-                self.ledger.cancel(self.ledger.projects()[0]['activeJob']['jobId'])
-            elif self.fail:
-                raise app_host.SetupFailed('switch', self.fail)
-            return {'deployed': manifest['elf']['sha256']}
-
-    def job(self, target=server_manifest.TARGET, fail=None):
-        elf_bytes = tiny_elf()
-        seen = {}
-
-        def build(snapshot, work, *args, **kw):
-            seen['url'] = next((Path(work).parent / 'client').glob('src/**/rose/RoseServer.java')).read_text()
-            Path(work).mkdir(parents=True, exist_ok=True)
-            (Path(work) / 'server').write_bytes(elf_bytes)
-            return server_build.ServerBuild(Path(work) / 'server', hashlib.sha256(elf_bytes).hexdigest(),
-                                            len(elf_bytes), target, '# Cargo.lock\nversion = 4\n')
-        b = self.builder(client_server_app(), codegen=Codegen(), server_crates=BUILDER_CRATES)
-        b.hosting = self.FakeHosting(b.ledger, fail)
-        with mock.patch.object(server_build, 'build', build):
-            out, job = self.run_job(b)
-        return b, out['projectId'], job, seen
-
-    def test_the_container_url_is_baked_and_the_server_is_up_before_delivery(self):
-        b, project, job, seen = self.job()
-        self.assertEqual(job['state'], 'ready', job)
-        self.assertIn(f'static final String URL = "{APP_URL}";', seen['url'])
-        ensure, deploy = b.hosting.calls
-        self.assertEqual(ensure, ('ensure', project))
-        self.assertEqual(deploy[:4], ('deploy', project, 1, True))
-        self.assertEqual(deploy[4], b.ledger.server(project, 1)['sha256'])
-        self.assertEqual(deploy[5], [])  # nothing delivered yet while its server was set up
-        self.assertEqual(deploy[6], APP_URL)  # the URL its client baked, checked against the record at setup
-
-    def test_the_library_says_which_version_is_set_up_and_the_creator_can_be_invited(self):
-        b, project, job, _ = self.job()
-        (version,) = b.ledger.versions(project)
-        hosting = version['hosting']
-        self.assertEqual((hosting['state'], hosting['appUrl']), ('set_up', APP_URL))
-        self.assertIsInstance(hosting['setUpAt'], int)
-        self.assertNotIn('hosting', version['server'])  # beside the server summary, which keeps its exact keys
-        out = b.invite('d', project, {'schemaVersion': 1, 'account': 'me'})
-        live = {'schemaVersion': 1, 'version': version, 'invite': {'schemaVersion': 1, **out}}
-        if os.environ.get('ROSE_WRITE_WIRE_FIXTURE') == '1':
-            recorded = json.loads(HOSTING_WIRE.read_text()) if HOSTING_WIRE.exists() else {}
-            HOSTING_WIRE.write_text(json.dumps({**recorded, **live}, indent=1, sort_keys=True) + '\n')
-        recorded = json.loads(HOSTING_WIRE.read_text())
-        self.assertEqual(shape(live), shape({k: recorded[k] for k in live}))
-        self.assertEqual(recorded['version']['hosting']['state'], 'set_up')
-        self.assertEqual(out, {'projectId': project, 'versionCode': 1, 'account': 'me', 'invite': TOKEN,
-                               'expiresInS': 604800})
-        self.assertEqual(b.hosting.calls[-1], ('invite', project, b.ledger.server(project, 1)['sha256'], 'me'))
-        self.assertNotIn(TOKEN, json.dumps([b.ledger.versions(project), b.ledger.projects(), b.job(job['jobId'])]))
-        for account, reason, retryable in (('enrolled', 'already_enrolled', False), ('asleep', 'server_unavailable',
-                                                                                         True)):
-            with self.subTest(account=account), self.assertRaises(service.Unavailable) as caught:
-                b.invite('d', project, {'schemaVersion': 1, 'account': account})
-            self.assertEqual((caught.exception.reason, caught.exception.retryable), (reason, retryable))
-        for body in ({'schemaVersion': 1, 'account': 'a:b'}, {'schemaVersion': 1}, {'account': 'me'},
-                     {'schemaVersion': 1, 'account': 'me', 'extra': 1}):
-            with self.subTest(body=body), self.assertRaises(service.Refused):
-                b.invite('d', project, body)
-        self.assertIsNone(b.invite('d', 'f' * 32, {'schemaVersion': 1, 'account': 'me'}))
-
-    def test_a_failed_setup_delivers_nothing_and_can_be_retried(self):
-        b, project, job, _ = self.job(fail='never healthy')
-        self.assertEqual((job['state'], job['failure']['category'], job['failure']['retryable']),
-                         ('failed', 'toolchain', True), job)
-        self.assertIn('could not be set up in its Chariot agent container (switch)', job['failure']['summary'])
-        self.assertEqual(b.ledger.versions(project), [])
-
-    def test_once_its_server_is_set_up_a_cancel_no_longer_stops_the_delivery(self):
-        b, project, job, _ = self.job(fail='cancel')
-        self.assertEqual(job['state'], 'ready', job)  # the agent runs it, so it is delivered: the two never differ
-        self.assertEqual([v['versionCode'] for v in b.ledger.versions(project)], [1])
-        self.assertNotIn('revert', [c[0] for c in b.hosting.calls])
-
-    def test_a_set_up_server_whose_version_is_not_delivered_is_reverted(self):
-        with mock.patch.object(L.Ledger, 'deliver', side_effect=L.LedgerError('refused')):
-            b, project, job, _ = self.job()
-        self.assertEqual(job['state'], 'failed', job)
-        self.assertEqual(b.hosting.calls[-1], ('revert', project, 1))
-        self.assertIsNone(b.ledger.server_setup(project))
-
-    def test_a_server_for_another_target_is_not_delivered(self):
-        b, project, job, _ = self.job(target='x86_64-unknown-linux-gnu')
-        self.assertEqual(job['state'], 'failed', job)
-        self.assertEqual(b.ledger.versions(project), [])
-        with self.assertRaises(service.Unavailable) as caught:
-            b.invite('d', project, {'schemaVersion': 1, 'account': 'me'})
-        self.assertEqual(caught.exception.reason, 'not_hosted')
 
 
 if __name__ == '__main__':

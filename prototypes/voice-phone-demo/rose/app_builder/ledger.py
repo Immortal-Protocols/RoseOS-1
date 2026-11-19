@@ -57,8 +57,7 @@ CREATE TABLE IF NOT EXISTS version_servers (
 CREATE TABLE IF NOT EXISTS version_migrations (
   project_id TEXT NOT NULL, version_code INTEGER NOT NULL, scope TEXT NOT NULL, number INTEGER NOT NULL,
   name TEXT NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY (project_id, version_code, scope, number));
--- The crates each client-server version's server was built with, and its Cargo.lock (rose.app_builder.server_build
--- starts the next build from it, so a rebuild keeps the versions this one used).
+-- Historical crate and Cargo locks: retained for migration and provenance after retiring the Rust builder.
 CREATE TABLE IF NOT EXISTS version_crates (
   project_id TEXT NOT NULL, version_code INTEGER NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
   sha256 TEXT NOT NULL, PRIMARY KEY (project_id, version_code, name, version));
@@ -407,7 +406,7 @@ class Ledger:
     def deliver(self, job_id: str, version_name: str, source_revision: str, sha256: str, size: int, notes: str,
                 dependencies=(), api_report: dict | None = None, profile: str | None = None, server=None,
                 migrations=(), crates=(), cargo_lock: str | None = None, contract: str | None = None,
-                manifest: bytes | None = None, committed: bool = False):
+                manifest: bytes | None = None, committed: bool = False, migrated_from: int | None = None):
         """Record the delivered version and, in the same transaction, the libraries it was built with (its lock).
         A client-server version (profile CLIENT_SERVER) also records its server ELF, its migration lock, the crates
         its server was built with and its Cargo.lock, and binds the project's profile; once bound, a version without
@@ -457,7 +456,16 @@ class Ledger:
             bound = self._profile(job['projectId'])
             if profile is None and bound != 'app-v1':
                 raise LedgerError('this project has a server; a version without it is refused')
-            if profile is not None and bound not in ('app-v1', profile):
+            migrating = bound == CLIENT_SERVER and profile == CLIENT_BACKEND
+            if migrating:
+                latest = self.db.execute('SELECT MAX(version_code) FROM versions WHERE project_id=?',
+                                         (job['projectId'],)).fetchone()[0]
+                if type(migrated_from) is not int or migrated_from != latest or not committed \
+                        or self.agent_container(job['projectId']) is None:
+                    raise LedgerError('legacy transition needs its latest version and a switched agent release')
+            elif migrated_from is not None:
+                raise LedgerError('migration applies only to a legacy backend')
+            if profile is not None and bound not in ('app-v1', profile) and not migrating:
                 raise LedgerError('this project\'s server is of another kind; a version of this kind is refused')
             if profile == CLIENT_SERVER:  # the lock, kept by the ledger itself and not only by its callers
                 locked = {(r[0], r[1]): (r[2], r[3]) for r in self.db.execute(
@@ -488,6 +496,9 @@ class Ledger:
                     self.db.execute('INSERT INTO version_api_reports VALUES (?,?,?)',
                                     (job['projectId'], job['versionCode'], json.dumps(api_report, sort_keys=True)))
                 if profile == CLIENT_BACKEND:
+                    if migrating:
+                        self.db.execute('UPDATE project_profiles SET profile=? WHERE project_id=?',
+                                        (CLIENT_BACKEND, job['projectId']))
                     self.db.execute('INSERT OR IGNORE INTO project_profiles VALUES (?,?,?)',
                                     (job['projectId'], CLIENT_BACKEND, job['versionCode']))
                     self.db.execute('INSERT INTO version_servers VALUES (?,?,?,?,?)',
@@ -590,8 +601,8 @@ class Ledger:
         return None if row is None else bytes(row[0])
 
     def migration_lock(self, project: str) -> list[dict]:
-        """Every migration any delivered version ran, once each (rose.app_builder.migrations.check holds every later
-        revision to these). Two versions disagreeing about one would be a ledger fault, refused here."""
+        """Every legacy migration any delivered version ran, retained for source migration and provenance.
+        Two versions disagreeing about one would be a ledger fault, refused here."""
         with self.lock:
             rows = self.db.execute('SELECT DISTINCT scope, number, name, sha256 FROM version_migrations WHERE '
                                    'project_id=? ORDER BY scope, number', (project,)).fetchall()
@@ -600,8 +611,7 @@ class Ledger:
         return [{'scope': r[0], 'number': r[1], 'name': r[2], 'sha256': r[3]} for r in rows]
 
     def crate_lock(self, project: str) -> dict:
-        """name@version -> sha256 for every crate any delivered version's server used
-        (rose.app_builder.crates.check_lock holds later builds to it; the ledger refuses a contradicting one)."""
+        """name@version -> sha256 retained for every crate any delivered legacy server used."""
         with self.lock:
             return self._crate_lock(project)
 
@@ -618,7 +628,7 @@ class Ledger:
         return [r[0] for r in rows]
 
     def cargo_lock(self, project: str) -> str | None:
-        """The newest delivered client-server version's Cargo.lock, which the next server build starts from."""
+        """The newest delivered client-server version's Cargo.lock, retained as migration evidence."""
         with self.lock:
             row = self.db.execute('SELECT lock FROM version_cargo_locks WHERE project_id=? ORDER BY version_code DESC '
                                   'LIMIT 1', (project,)).fetchone()
