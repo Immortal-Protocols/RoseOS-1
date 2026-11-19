@@ -40,6 +40,13 @@ PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+')
 ACTIVITY = re.compile(r'\.?[A-Za-z][A-Za-z0-9_$]*(\.[A-Za-z][A-Za-z0-9_$]*)*')
 
 
+def known_labels() -> set[str]:
+    """What a producer here writes: starter_pilots' scripted pilots, or a writer handoff's build (a test writer's
+    tree, or the attested writer's). The evidence keeps each pilot's label; nothing here changes one."""
+    from .writer_handoff import TEST_LABEL, WRITER_LABEL
+    return {LABEL, TEST_LABEL, WRITER_LABEL}
+
+
 class Refused(Exception):
     """The pilots directory is not starter_pilots' output, or does not match its own digests."""
 
@@ -72,12 +79,13 @@ def load(pilots_dir: Path) -> list[dict]:
     if hashlib.sha256(manifest_bytes).hexdigest() != sums.get('pilots.json'):
         raise Refused('pilots.json does not match SHA256SUMS')
     manifest = json.loads(manifest_bytes)
-    if manifest.get('schemaVersion') != SCHEMA_VERSION or manifest.get('label') != LABEL:
-        raise Refused('pilots.json is not a starter_pilots manifest of this version')
+    labels = known_labels()
+    if manifest.get('schemaVersion') != SCHEMA_VERSION or manifest.get('label') not in labels | {'mixed'}:
+        raise Refused('pilots.json is not a starter_pilots or writer_handoff manifest of this version')
     ready = []
     for record in manifest.get('pilots', []):
-        if record.get('label') != LABEL:
-            raise Refused(f'a pilot is labelled {record.get("label")!r}, not {LABEL!r}')
+        if record.get('label') not in labels or manifest['label'] not in (record['label'], 'mixed'):
+            raise Refused(f'a pilot is labelled {record.get("label")!r}, which no producer here writes')
         if record.get('state') != 'ready':
             continue
         apk = record.get('apk', '')
@@ -195,7 +203,9 @@ def check(pilots_dir: Path, evidence_dir: Path, adb: Adb, *, keep=False, settle_
     code, state = adb.run('get-state', timeout_s=30)
     if code != 0 or state.strip() != 'device':
         raise Refused(f'adb does not reach a ready device: {_bounded(state.strip())}')
-    evidence = {'schemaVersion': 1, 'label': LABEL, 'device': device(adb), 'pilots': []}
+    labels = {p['label'] for p in pilots}
+    evidence = {'schemaVersion': 1, 'label': labels.pop() if len(labels) == 1 else 'mixed', 'device': device(adb),
+                'pilots': []}
     for pilot in pilots:
         evidence['pilots'].append(check_one(adb, pilot, evidence_dir, keep, settle_s))
     evidence['passed'] = bool(evidence['pilots']) and all(p['passed'] for p in evidence['pilots'])
@@ -220,8 +230,8 @@ def main(argv=None) -> int:
         print(f'device_check: refused: {error}', file=sys.stderr)
         return 2
     print(json.dumps({'passed': evidence['passed'], 'device': evidence['device'].get('sdk'),
-                      'pilots': [{'pilot': f'{p["template"]}-{p["theme"]}', 'passed': p['passed']}
-                                 for p in evidence['pilots']], 'label': LABEL}))
+                      'pilots': [{'pilot': f'{p["template"]}-{p["theme"]}', 'passed': p['passed'], 'label': p['label']}
+                                 for p in evidence['pilots']], 'label': evidence['label']}))
     return 0 if evidence['passed'] else 1
 
 

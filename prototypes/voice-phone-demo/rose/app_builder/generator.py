@@ -10,9 +10,10 @@ session on its own bridge process (``codex-voice-bridge.mjs``, the existing and 
   never a success). A process that left the group can still change the source afterwards, so the Builder checks,
   records and builds only a private snapshot taken after this returns, and resets the source before the next job.
 
-What it does not do: it does not keep the writer from *reading* the server's files. That needs the writer to run as
-a separate OS user or in a container that mounts only the project source (``command`` below), which belongs to the
-Server Worker (APP-BUILDER.md §5, blocker 3). Until then no host should construct this.
+Reads are limited by the ``rose_app_build`` permission profile (APP-BUILDER.md §4A), whose enforcement on a host
+is unproven until the writer's live denial check (workspace/rose-agent/server/app-build-sandbox-check.mjs) passes
+there (§5, blocker 3). No host should construct this before that check passes on it;
+rose.app_builder.writer_handoff runs the check itself, on the turn's own source folder, before its one turn.
 """
 from __future__ import annotations
 
