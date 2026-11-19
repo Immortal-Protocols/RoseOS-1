@@ -50,8 +50,8 @@ REQUESTS = {
 }
 
 
-def unchanged(source, kind, request, cancelled):
-    """The scripted writer: the starter's own tree is the app."""
+def unchanged(source, kind, request, cancelled, **turn):
+    """The scripted writer: the starter's own tree is the app (``turn`` carries the starter, unused)."""
     return 'unchanged'
 
 

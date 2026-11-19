@@ -24,7 +24,7 @@ class FakeGradle:
     """Stands in for GradleTools where no build runs: the builder only asks whether it has one."""
 
 
-def nothing(source, kind, request, cancelled):
+def nothing(source, kind, request, cancelled, **turn):
     return 'unchanged'
 
 
@@ -133,6 +133,40 @@ class StarterHookTest(Base):
         b._prepare(self.root / 'projects' / out['projectId'] / 'source', b.ledger.project(out['projectId']),
                    b.ledger.job(out['jobId']))
         self.assertEqual(written, [None])
+
+    def test_every_writer_turn_on_a_starter_project_is_given_its_starter(self):
+        turns = []
+
+        def writer(source, kind, request, cancelled, **turn):
+            turns.append((kind, turn.get('starter', 'absent')))
+            return 'unchanged'
+        b = self.hooked()
+        b.generate = writer
+
+        def turn_for(project_id, kind):
+            job = {'jobId': 'j', 'projectId': project_id, 'attempt': 1}
+            project = b.ledger.project(project_id)
+            work = self.root / 'work' / project_id
+            work.mkdir(parents=True, exist_ok=True)
+            try:
+                b._write_and_build(job, project, work / 'source', work, kind, 'a request', lambda: False, None, 0,
+                                   [], None)
+            except Exception:
+                pass  # what follows the turn (the snapshot and build) does not matter here
+        started = self.create(b, {'template': 'feed', 'theme': 'minimal'})['projectId']
+        plain = self.create(b, rid='r2')['projectId']
+        b.gradle = None  # stop before any build: only the turn's arguments matter here
+        turn_for(started, 'create')
+        turn_for(started, 'revise')
+        turn_for(plain, 'create')
+        self.assertEqual(turns, [('create', {'template': 'feed', 'theme': 'minimal'}),
+                                 ('revise', {'template': 'feed', 'theme': 'minimal'}), ('create', 'absent')])
+
+    def test_the_prompt_takes_the_starter_and_is_unchanged_without_one(self):
+        from rose.app_builder import generator
+        for kind in ('create', 'revise', 'repair'):
+            self.assertEqual(generator.prompt(kind, 'x', starter=None), generator.prompt(kind, 'x'))
+            generator.prompt(kind, 'x', starter={'template': 'feed', 'theme': 'minimal'})
 
     def test_the_real_starters_resolve_and_refuse(self):
         if not starters.available():

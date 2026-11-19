@@ -46,11 +46,12 @@ TOOL = 'agent_container'
 
 
 def prompt(kind: str, request: str, libraries=(), backend_folder: str | None = None, *,
-           stack: str | None = None) -> str:
+           stack: str | None = None, starter: dict | None = None) -> str:
     """The owner's request as the turn's text, with the Gradle stack this builder builds ordinary projects with
     (``stack``, gradle_stack.summary(); the policy says to use exactly the stack the turn names), the pure-Java
     libraries it provides to an app in the older flat layout (declared in dependencies.json, never shipped) and the
-    job's optional agent-container release folder."""
+    job's optional agent-container release folder. ``starter`` is the Rose starter ({template, theme}) the project
+    was created from, for create, repair and revise turns alike, or None; Home's starter guidance is keyed on it."""
     provided = '\n\n' + stack if stack else ''  # it names the host and its stack itself
     if libraries:
         provided += ('\n\nPure-Java libraries this builder provides, for an app in the older flat layout only '
@@ -92,12 +93,12 @@ class CodexGenerator:
         self.last_note = ''
 
     def __call__(self, source: Path, kind: str, request: str, cancelled, backend=None,
-                 deadline: float | None = None) -> str:
+                 deadline: float | None = None, starter: dict | None = None) -> str:
         """``deadline`` (time.monotonic) ends the turn sooner than ``timeout_s`` would: a repair gets only what is
         left of its job's writer budget."""
         available = self.libraries() if callable(self.libraries) else self.libraries
         text = prompt(kind, request, sorted(available or ()), backend.folder if backend is not None else None,
-                      stack=gradle_stack.summary() if self.gradle else None)
+                      stack=gradle_stack.summary() if self.gradle else None, starter=starter)
         container = {'containerTool': True, 'toolTimeoutS': self.tool_timeout_s} if backend is not None else {}
         events: queue.Queue = queue.Queue()
         session = 'app-build-' + uuid.uuid4().hex

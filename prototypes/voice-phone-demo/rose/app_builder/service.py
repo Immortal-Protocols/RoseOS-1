@@ -315,6 +315,9 @@ class Builder:
         it a new app starts from the older flat Java skeleton, and a Gradle project fails as a toolchain matter.
         Either way the identity, signing and delivery below are the same, so an app can move from one to the other.
 
+        A project created from a starter passes it to every writer turn as ``generate(..., starter={template,
+        theme})``; a writer used with starters accepts that keyword.
+
         ``skeleton(source, package, label, starter)`` writes a new Gradle project's first tree (once, as its root
         commit), with ``starter`` the {template, theme} the create request named or None: rose.app_builder.starters
         .skeleton, which writes the builder's own skeleton for None. ``resolve_starter(starter)`` checks a create
@@ -621,6 +624,9 @@ class Builder:
         extra = {'backend': backend} if backend is not None else {}
         if deadline is not None:  # a repair turn: what is left of the job's writer budget
             extra['deadline'] = deadline
+        starter = self.ledger.starter(project_id)
+        if starter is not None:  # the Rose starter the project was created from, for every turn on it
+            extra['starter'] = starter
         note = self.generate(source, kind, request, cancelled, **extra)
         notes.append(note)
         if cancelled():
