@@ -105,6 +105,8 @@ def build(out: Path, pilots: list[tuple[str, str]], tools: toolchain.Tools, grad
     """Builds each pilot in its own builder root under ``work`` and writes DIR's contents. Returns pilots.json's
     object. ``out`` must not exist yet."""
     from .service import Builder
+    if len(set(pilots)) != len(pilots):
+        raise ValueError('a pilot is named more than once')
     out = Path(out)
     out.mkdir(mode=0o755)
     (out / 'apks').mkdir(mode=0o755)
@@ -115,8 +117,9 @@ def build(out: Path, pilots: list[tuple[str, str]], tools: toolchain.Tools, grad
         for template, theme in pilots:
             name = f'{template}-{theme}'
             log(f'starter_pilots: building {name}')
+            # repairs=0: a writer that changes nothing cannot repair, so a build error is the pilot's result.
             b = Builder(work / name, tools, unchanged, backup=local_backup, gradle=gradle_tools,
-                        skeleton=starters.skeleton, resolve_starter=catalog.resolve)
+                        skeleton=starters.skeleton, resolve_starter=catalog.resolve, repairs=0)
             try:
                 created = b.create('starter-pilots', {
                     'schemaVersion': 1, 'clientRequestId': name,
@@ -176,6 +179,8 @@ def main(argv=None) -> int:
         pilots = [parse_pilot(p, catalog) for p in args.pilot] or all_pilots(catalog)
     except ValueError as error:
         parser.error(str(error))
+    if len(set(pilots)) != len(pilots):
+        parser.error('a pilot is named more than once')
     java_home = Path(os.environ['JAVA_HOME']) if os.environ.get('JAVA_HOME') else None
     tools = toolchain.Tools(Path(sdk), java_home, timeout_s=900, key_creation=True)
     manifest = build(args.out, pilots, tools, stack_tools(Path(stack)), catalog,

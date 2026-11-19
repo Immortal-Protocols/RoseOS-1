@@ -40,9 +40,11 @@ if args[0] == 'uninstall':
     installed.pop(args[1], None); save(); out('Success\n')
 if args[:3] == ['exec-out', 'screencap', '-p']:
     bad = state.get('top', '').split('/')[0] in state.get('pngFails', [])
+    sys.stdout.buffer.write(state.get('screencapStderr', '').encode())  # exec-out merges stderr into the stream
     sys.stdout.buffer.write(b'' if bad else bytes.fromhex(state.get('png', ''))); sys.exit(0)
 assert args[0] == 'shell', args
-cmd = args[1]
+import shlex
+cmd = ' '.join(shlex.split(args[1]))
 if cmd.startswith('getprop '):
     out(state.get('props', {}).get(cmd.split()[1], '') + '\n')
 if cmd.startswith('dumpsys package '):
@@ -139,6 +141,16 @@ class DeviceCheckTest(unittest.TestCase):
         self.assertEqual(json.loads(self.state_file.read_text())['installed'], {})  # uninstalled afterwards
         self.assertIn(['shell', 'am start -W -n app.rose.p0/app.rose.p0.MainActivity'], self.calls())
 
+    def test_a_multi_display_warning_before_the_image_is_kept_as_a_warning(self):
+        warning = ('[Warning] Multiple displays were found, but no display id was specified! '
+                   'Defaulting to the first display found.\n')
+        self.state({'screencapStderr': warning})
+        evidence = self.check()
+        self.assertTrue(evidence['passed'], evidence)
+        shot = evidence['pilots'][0]['steps']['screenshot']
+        self.assertEqual((self.tmp / 'evidence' / shot['file']).read_bytes(), PNG)
+        self.assertIn('Multiple displays', shot['warning'])
+
     def test_keep_leaves_the_pilots_installed(self):
         self.check(keep=True)
         self.assertEqual(set(json.loads(self.state_file.read_text())['installed']), {'app.rose.p0', 'app.rose.p1'})
@@ -230,6 +242,13 @@ class StarterPilotsUnitTest(unittest.TestCase):
         self.assertEqual(starter_pilots.launchable(self.BADGING), 'app.rose.p0.MainActivity')
         self.assertEqual(starter_pilots.sdk_levels(self.BADGING), (26, 37))
         self.assertIsNone(starter_pilots.launchable('package: name=x'))
+
+    def test_a_pilot_named_twice_is_refused_before_anything_is_built(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'out'
+            with self.assertRaises(ValueError):
+                starter_pilots.build(out, [('feed', 'minimal'), ('feed', 'minimal')], None, None, None)
+            self.assertFalse(out.exists())
 
     def test_pilot_names_are_checked_against_the_catalog(self):
         from rose.app_builder import starters

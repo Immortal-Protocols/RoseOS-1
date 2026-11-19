@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -34,6 +35,7 @@ from .starter_pilots import LABEL, SCHEMA_VERSION
 
 MAX_TEXT = 2000  # bounded tool output kept in the evidence
 SETTLE_S = 3.0
+PNG_MAGIC = b'\x89PNG\r\n\x1a\n'
 PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+')
 ACTIVITY = re.compile(r'\.?[A-Za-z][A-Za-z0-9_$]*(\.[A-Za-z][A-Za-z0-9_$]*)*')
 
@@ -130,21 +132,21 @@ def check_one(adb: Adb, pilot: dict, evidence_dir: Path, keep: bool, settle_s: f
     if code != 0 or 'Success' not in out:
         return failed('install', out)
     try:
-        _, dump = adb.shell(f'dumpsys package {package}')
+        _, dump = adb.shell(f'dumpsys package {shlex.quote(package)}')
         found = re.search(r'versionCode=(\d+)', dump)
         if not found or int(found.group(1)) != pilot['versionCode']:
             return failed('install', f'installed versionCode is {found.group(1) if found else "missing"}, '
                                      f'expected {pilot["versionCode"]}')
         steps['install'] = {'ok': True}
         adb.shell('logcat -b crash -c')
-        code, out = adb.shell(f'am start -W -n {_component(package, activity)}', timeout_s=120)
+        code, out = adb.shell(f'am start -W -n {shlex.quote(_component(package, activity))}', timeout_s=120)
         status = re.search(r'^Status: (\S+)', out, re.M)
         total = re.search(r'^TotalTime: (\d+)', out, re.M)
         if code != 0 or not status or status.group(1) != 'ok' or 'Error' in out:
             return failed('launch', out)
         steps['launch'] = {'ok': True, 'totalTimeMs': int(total.group(1)) if total else None}
         time.sleep(settle_s)
-        _, pid = adb.shell(f'pidof {package}')
+        _, pid = adb.shell(f'pidof {shlex.quote(package)}')
         if not re.fullmatch(r'\d+( \d+)*', pid.strip()):
             return failed('running', f'no process for {package}: {pid}')
         steps['running'] = {'ok': True, 'pid': int(pid.split()[0])}
@@ -154,11 +156,17 @@ def check_one(adb: Adb, pilot: dict, evidence_dir: Path, keep: bool, settle_s: f
             return failed('resumed', 'resumed: ' + (', '.join(resumed) or 'none'))
         steps['resumed'] = {'ok': True}
         code, png = adb.run('exec-out', 'screencap', '-p', binary=True)
-        if code != 0 or not png.startswith(b'\x89PNG\r\n\x1a\n'):
-            return failed('screenshot', f'screencap exited {code} with {len(png)} bytes')
+        # exec-out carries screencap's stderr in the same stream: on a device with several displays it warns that
+        # none was named before the image. Whatever precedes the PNG is kept as that warning, not as the image.
+        start = png.find(PNG_MAGIC)
+        if code != 0 or start < 0:
+            return failed('screenshot', f'screencap exited {code} with {len(png)} bytes and no PNG')
+        warning, png = png[:start].decode('utf-8', 'replace').strip(), png[start:]
         shot = evidence_dir / f'{name}.png'
         shot.write_bytes(png)
         steps['screenshot'] = {'ok': True, 'file': shot.name, 'sha256': hashlib.sha256(png).hexdigest()}
+        if warning:
+            steps['screenshot']['warning'] = _bounded(warning)
         _, crashes = adb.shell('logcat -b crash -d')
         if package in crashes:
             return failed('crash', crashes)
@@ -166,7 +174,7 @@ def check_one(adb: Adb, pilot: dict, evidence_dir: Path, keep: bool, settle_s: f
         result['passed'] = True
         return result
     finally:
-        adb.shell(f'am force-stop {package}')
+        adb.shell(f'am force-stop {shlex.quote(package)}')
         if not keep:
             adb.run('uninstall', package)
 
