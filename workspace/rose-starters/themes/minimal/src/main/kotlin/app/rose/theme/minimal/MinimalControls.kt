@@ -170,15 +170,14 @@ internal object MinimalControls : Controls {
             PanelKind.Flat -> c.onBackground
             PanelKind.Inset -> c.onSurfaceVariant
         }
-        val edge = if (p.kind == PanelKind.Flat) c.outline else Color.Transparent
         var frame = p.modifier.clip(shape).background(fill)
         if (onClick != null) {
             val interaction = remember { MutableInteractionSource() }
             frame = frame.minTouchTarget()
                 .clickable(interaction, indication = null, onClickLabel = p.onClickLabel, role = Role.Button, onClick = onClick)
-                .interactionFrame(interaction, ink, shape, edge)
+                .interactionFrame(interaction, ink, shape, c.outline)
         } else {
-            frame = frame.border(1.dp, edge, shape)
+            frame = frame.border(1.dp, c.outline, shape)
         }
         Box(frame.padding(if (p.kind == PanelKind.Inset) s.m else s.l)) {
             ProvideContentColor(ink, p.content)
@@ -191,8 +190,9 @@ internal object MinimalControls : Controls {
         val shape = RoseTheme.shapes.small
         val s = RoseTheme.spacing
         val interaction = remember { MutableInteractionSource() }
+        val disabledPrimary = !p.enabled && p.kind == ButtonKind.Primary
         val fill = when {
-            !p.enabled && p.kind == ButtonKind.Primary -> c.surfaceVariant
+            disabledPrimary -> c.surfaceVariant
             p.kind == ButtonKind.Primary -> c.onBackground
             else -> Color.Transparent
         }
@@ -202,7 +202,7 @@ internal object MinimalControls : Controls {
             p.kind == ButtonKind.Danger -> c.danger
             else -> LocalContentColor.current
         }
-        val edge = if (p.kind == ButtonKind.Secondary) c.outline else Color.Transparent
+        val edge = if (p.kind == ButtonKind.Secondary || disabledPrimary) c.outline else Color.Transparent
         Row(
             p.modifier.minTouchTarget().clip(shape).background(fill)
                 .clickable(interaction, indication = null, enabled = p.enabled, role = Role.Button, onClick = p.onClick)
@@ -224,8 +224,9 @@ internal object MinimalControls : Controls {
         val shape = RoseTheme.shapes.small
         val interaction = remember { MutableInteractionSource() }
         val checked = p.checked == true
+        val variantFill = checked || (!p.enabled && p.prominent)
         val fill = when {
-            checked || (!p.enabled && p.prominent) -> c.surfaceVariant
+            variantFill -> c.surfaceVariant
             p.prominent -> c.onBackground
             else -> Color.Transparent
         }
@@ -235,6 +236,7 @@ internal object MinimalControls : Controls {
             p.prominent -> c.background
             else -> LocalContentColor.current
         }
+        val edge = if (variantFill) c.outline else Color.Transparent
         val click = p.checked?.let {
             Modifier.toggleable(it, interaction, indication = null, enabled = p.enabled, role = Role.Checkbox) { p.onClick() }
         } ?: Modifier.clickable(interaction, indication = null, enabled = p.enabled, role = Role.Button, onClick = p.onClick)
@@ -242,7 +244,7 @@ internal object MinimalControls : Controls {
             p.modifier.size(if (p.prominent) 60.dp else RoseTheme.tokens.minTouchTarget)
                 .clip(shape).background(fill).then(click)
                 .semantics { contentDescription = p.contentDescription }
-                .interactionFrame(interaction, ink, shape, focusColor = if (p.prominent && !checked) ink else c.accent),
+                .interactionFrame(interaction, ink, shape, edge, focusColor = if (p.prominent && !checked) ink else c.accent),
             contentAlignment = Alignment.Center,
         ) {
             Icon(IconProps(p.icon, null, tint = ink, size = if (p.prominent) 28.dp else 22.dp))
@@ -335,7 +337,10 @@ internal object MinimalControls : Controls {
         val c = RoseTheme.colors
         val s = RoseTheme.spacing
         val target = RoseTheme.tokens.minTouchTarget
-        BoxWithConstraints(p.modifier.fillMaxWidth().semantics { contentDescription = p.label }.selectableGroup()) {
+        BoxWithConstraints(
+            p.modifier.fillMaxWidth().semantics { contentDescription = p.label }.selectableGroup(),
+            propagateMinConstraints = true,
+        ) {
             val minWidth = target * p.options.size
             val stripWidth = if (constraints.hasBoundedWidth) maxOf(minWidth, maxWidth) else minWidth
             Row(Modifier.horizontalScroll(rememberScrollState()).width(stripWidth).height(IntrinsicSize.Min)) {
