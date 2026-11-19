@@ -1,0 +1,7 @@
+# CI-only compatibility set shared by PR288 and current voice tests.
+# Keep the repository's FastAPI/HTTPX pins; Starlette 1.10 still supports HTTPX
+# (with a deprecation warning). Bare FastAPI does not install a test client.
+# https://github.com/Kludex/starlette/blob/1.10.0/starlette/testclient.py
+fastapi==0.162.0
+starlette==1.10.0
+httpx==0.28.1
