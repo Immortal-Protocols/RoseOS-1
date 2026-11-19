@@ -215,8 +215,12 @@ person can read and do. `ThemeInvarianceTest` runs each template under each pilo
   -PtemplateObject=app.rose.template.<pkg>.<Object>            # a writer's template module (Wave 3)
 ```
 
-This is Robolectric on the JVM, not a device run. It needs the network for Robolectric's Android jars, so it runs
-in CI or a cloud session, not inside the builder's offline sandbox.
+This is Robolectric on the JVM, not a device run.
+- **Pilot templates** (our own code) run anywhere, including CI with network.
+- **A written template is a writer's code**, as untrusted as a project's build scripts. It runs only inside the
+  builder's isolation: offline, in bubblewrap, against the read-only dependency cache, with
+  `-ProbolectricDependencyDir=<folder of android-all-instrumented-*.jar>`. Never run it on a session or host that
+  holds credentials.
 
 ## Not here (other owners)
 

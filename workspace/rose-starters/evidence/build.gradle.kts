@@ -9,7 +9,8 @@ plugins {
 // build/evidence/report.json either way.
 //   Pilots:   ./gradlew :evidence:compareThemeSnapshots
 //   Written:  ./gradlew :evidence:compareThemeSnapshots -PwrittenTemplate=<tree>/templates/<id> \
-//                 -PtemplateObject=app.rose.template.<pkg>.<Object>
+//                 -PtemplateObject=app.rose.template.<pkg>.<Object> -ProbolectricDependencyDir=<jars>
+// A written template is a writer's code: run it only inside the builder's isolation (offline, no credentials).
 android {
     namespace = "app.rose.starters.evidence"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -25,6 +26,12 @@ android {
             all {
                 it.systemProperty("rose.evidence.out", layout.buildDirectory.dir("evidence").get().asFile.path)
                 providers.gradleProperty("templateObject").orNull?.let { o -> it.systemProperty("rose.evidence.templates", o) }
+                // Offline (inside the builder's isolation): Robolectric reads its Android jars from this folder
+                // (android-all-instrumented-<version>.jar) instead of downloading them.
+                providers.gradleProperty("robolectricDependencyDir").orNull?.let { d ->
+                    it.systemProperty("robolectric.offline", "true")
+                    it.systemProperty("robolectric.dependency.dir", d)
+                }
             }
         }
     }
