@@ -43,8 +43,8 @@ ACTIVITY = re.compile(r'\.?[A-Za-z][A-Za-z0-9_$]*(\.[A-Za-z][A-Za-z0-9_$]*)*')
 def known_labels() -> set[str]:
     """What a producer here writes: starter_pilots' scripted pilots, or a writer handoff's build (a test writer's
     tree, or the attested writer's). The evidence keeps each pilot's label; nothing here changes one."""
-    from .writer_handoff import TEST_LABEL, TRANSPLANT_LABEL, WRITER_LABEL
-    return {LABEL, TEST_LABEL, TRANSPLANT_LABEL, WRITER_LABEL}
+    from .writer_handoff import TEST_LABEL, TRANSPLANT_LABEL, WRITER_LABEL, WRITER_UNBUILT_LABEL
+    return {LABEL, TEST_LABEL, TRANSPLANT_LABEL, WRITER_LABEL, WRITER_UNBUILT_LABEL}
 
 
 class Refused(Exception):

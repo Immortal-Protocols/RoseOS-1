@@ -46,6 +46,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,9 @@ WRITER_LABEL = ('writer-generated source (Rose\'s Codex writer, stage 1, atteste
                 'built on Linux')
 TEST_LABEL = 'imported tree, test writer (not Rose\'s writer)'
 TRANSPLANT_LABEL = 'transplanted template code under another theme (cross-theme evidence, not a writer run)'
+WRITER_UNBUILT_LABEL = ('writer-generated source (Rose\'s Codex writer, stage 1, attested by the operator\'s digest), '
+                        'did not build on Linux')
+MANIFEST_MAX = 4 << 20  # handoff.json and SHA256SUMS are small; anything larger is not a handoff
 PACKAGE = re.compile(re.escape(ledger_module.PACKAGE_PREFIX) + r'[0-9a-f]{16}')
 CHECKOUT = Path(__file__).resolve().parents[4]  # the repository root this module runs from
 SANDBOX_CHECK = CHECKOUT / 'workspace/rose-agent/server/app-build-sandbox-check.mjs'
@@ -118,7 +122,7 @@ def _codex_identity() -> dict:
                                  stdin=subprocess.DEVNULL).stdout.strip()[:200]
     except (OSError, subprocess.TimeoutExpired):
         version = None
-    return {'codexBin': binary, 'codexVersion': version}
+    return {'codexBin': os.path.basename(binary), 'codexVersion': version}  # never the host's own path
 
 
 def run_sandbox_check(source: Path, protected: list[Path]) -> list[str]:
@@ -215,6 +219,22 @@ def write(pilot: tuple[str, str], scratch: Path, out: Path, *, protected=(), wri
     return handoff
 
 
+def _read_small(path: Path) -> bytes:
+    """A regular file's bytes, opened without following a link or blocking, at most MANIFEST_MAX."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refused(f'{path.name} is not a regular file')
+        data = b''
+        while len(data) <= MANIFEST_MAX and (chunk := os.read(fd, MANIFEST_MAX + 1 - len(data))):
+            data += chunk
+    finally:
+        os.close(fd)
+    if len(data) > MANIFEST_MAX:
+        raise Refused(f'{path.name} is too large to be a handoff\'s')
+    return data
+
+
 class Handoff:
     """A verified handoff: its manifest and a private copy of its tree that matches every digest."""
 
@@ -232,19 +252,22 @@ def load(directory: Path, private: Path, catalog: starters.Starters) -> Handoff:
     directory = Path(directory)
     try:
         sums = {}
-        for line in (directory / 'SHA256SUMS').read_text().splitlines():
+        for line in _read_small(directory / 'SHA256SUMS').decode('utf-8').splitlines():
             digest, _, path = line.partition('  ')
             if not re.fullmatch(r'[0-9a-f]{64}', digest) or not path or path in sums:
                 raise Refused(f'SHA256SUMS has a malformed line: {line[:80]!r}')
             sums[path] = digest
-        raw = (directory / 'handoff.json').read_bytes()
-    except OSError as error:
+        raw = _read_small(directory / 'handoff.json')
+    except (OSError, UnicodeDecodeError) as error:
         raise Refused(f'{directory} is not a handoff: {error}') from None
     digest = hashlib.sha256(raw).hexdigest()
     if sums.pop('handoff.json', None) != digest:
         raise Refused('handoff.json does not match SHA256SUMS')
-    manifest = json.loads(raw)
-    if manifest.get('schemaVersion') != SCHEMA_VERSION:
+    try:
+        manifest = json.loads(raw)
+    except ValueError:
+        raise Refused('handoff.json is not JSON') from None
+    if not isinstance(manifest, dict) or manifest.get('schemaVersion') != SCHEMA_VERSION:
         raise Refused('handoff.json is not of this version')
     try:
         catalog.resolve({'template': manifest.get('template'), 'theme': manifest.get('theme')})
@@ -279,6 +302,77 @@ def transplanted(h: Handoff, theme: str, private: Path, catalog: starters.Starte
                         theme, private)
     manifest = dict(m, theme=theme, files=_tree_files(private))
     return Handoff(manifest, private, h.digest, transplant={'theme': m['theme'], 'handoffSha256': h.digest})
+
+
+JUNK = re.compile(r'\._.*|\.DS_Store|__MACOSX')  # what macOS archivers add; never part of a handoff
+
+
+def unpack(archive: Path, out: Path, *, expected_sha256: str | None = None) -> Path:
+    """A stage-1 OUT folder as a tar (or tar.gz) archive, including ``git archive`` output of a handoff branch, into
+    ``out`` (which must not exist): the whole archive is checked before anything is written (relative names with no
+    ``..``, regular files and directories only, no duplicates, git names or macOS metadata, exactly handoff.json,
+    SHA256SUMS and tree/ at the top, the builder's entry and size limits), then every file is written fresh, owner
+    only. Nothing in it is run or interpreted; ``load`` checks the digests next."""
+    import tarfile
+    from . import gradle_prepare
+    from .service import SNAPSHOT_MAX_BYTES, SNAPSHOT_MAX_DEPTH, SNAPSHOT_MAX_ENTRIES
+    archive, out = Path(archive), Path(out)
+    if out.exists() or out.is_symlink():
+        raise Refused(f'{out} exists')
+    if expected_sha256 is not None and sha256(archive) != expected_sha256:
+        raise Refused('the archive is not the one reported (SHA-256 differs)')
+    with open(archive, 'rb') as f:
+        gz = f.read(2) == b'\x1f\x8b'
+    try:
+        tar = tarfile.open(archive, 'r:gz' if gz else 'r:')
+    except (tarfile.TarError, OSError) as error:
+        raise Refused(f'not a tar archive: {error}') from None
+    with tar:
+        plan, seen, total = [], set(), 0
+        for member in tar:
+            raw = member.name.removeprefix('./').rstrip('/')
+            if raw in ('', '.'):
+                continue  # the archive's own root
+            try:
+                name = gradle_prepare._member(raw)
+            except gradle_prepare.Refused as refused:
+                raise Refused(str(refused)) from None
+            parts = name.parts
+            if len(parts) > SNAPSHOT_MAX_DEPTH + 2 or any(template.git_name(p) or JUNK.fullmatch(p) for p in parts):
+                raise Refused(f'{name} is not allowed in a handoff')
+            if parts[0] not in ('handoff.json', 'SHA256SUMS', 'tree') or (parts[0] != 'tree' and len(parts) > 1):
+                raise Refused(f'{name} is outside handoff.json, SHA256SUMS and tree/')
+            if not (member.isreg() or member.isdir()):
+                raise Refused(f'{name} is a link or special file')
+            if name in seen:
+                raise Refused(f'{name} appears twice')
+            seen.add(name)
+            if member.isreg():
+                limit = MANIFEST_MAX if parts[0] != 'tree' else template.MAX_FILE
+                if member.size > limit:
+                    raise Refused(f'{name} is larger than a handoff allows')
+                total += member.size
+            plan.append((name, member))
+            if len(plan) > SNAPSHOT_MAX_ENTRIES + 3 or total > SNAPSHOT_MAX_BYTES + 2 * MANIFEST_MAX:
+                raise Refused('the archive is larger than a handoff allows')
+        if {n.parts[0] for n, _ in plan} != {'handoff.json', 'SHA256SUMS', 'tree'}:
+            raise Refused('the archive does not hold handoff.json, SHA256SUMS and tree/')
+        out.mkdir(mode=0o700)
+        try:
+            for name, member in plan:
+                target = out.joinpath(*name.parts)
+                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if member.isdir():
+                    target.mkdir(mode=0o700, exist_ok=True)
+                    continue
+                source = tar.extractfile(member)
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'wb') as dst:
+                    shutil.copyfileobj(source, dst)
+        except Exception:
+            gradle.remove_tree(out)
+            raise
+    return out
 
 
 def applier(handoff: Handoff, repairs: list):
@@ -372,7 +466,8 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
                 record['skeletonMatch'] = (not h.transplant
                                            and _git(source, 'rev-parse', root + '^{tree}') == h.manifest['skeletonTree'])
                 if job['state'] != 'ready':
-                    record['label'] = TRANSPLANT_LABEL if h.transplant else WRITER_LABEL if real else TEST_LABEL
+                    record['label'] = (TRANSPLANT_LABEL if h.transplant else
+                                       WRITER_UNBUILT_LABEL if real and record['skeletonMatch'] else TEST_LABEL)
                     record['failure'] = job.get('failure') or {'message': job.get('message')}
                     if repairs:
                         record['repairRequest'] = repairs[-1]
@@ -417,7 +512,8 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
 def cross_theme(records: list[dict]) -> dict:
     """Per template, Home's comparison of template edits across themes (rose.app_builder.starters.compare_trio):
 
-    - ``writerRuns``: the independent writer runs (B1), one per theme, compared with each other;
+    - ``writerRuns``: the independent writer runs (B1), one per theme, compared with each other: only records that
+      carry the writer label (``testRuns`` holds test-writer imports, compared the same way, never as writer runs);
     - ``transplants``: per source handoff (keyed by the first 12 hex of its digest), that source writer run together
       with every transplant of it (B2). Each transplant carries its source's digest, so expect ``equivalent``; any
       difference means a copy was not exact.
@@ -426,9 +522,10 @@ def cross_theme(records: list[dict]) -> dict:
     report = {}
     for template in sorted({r['template'] for r in records}):
         mine = [r for r in records if r['template'] == template]
-        runs = {r['theme']: r['templateEdits'] for r in mine if 'transplantOf' not in r}
-        if len(runs) > 1:
-            report.setdefault(template, {})['writerRuns'] = starters.compare_trio(runs)
+        for key, labels in (('writerRuns', (WRITER_LABEL, WRITER_UNBUILT_LABEL)), ('testRuns', (TEST_LABEL,))):
+            runs = {r['theme']: r['templateEdits'] for r in mine if 'transplantOf' not in r and r['label'] in labels}
+            if len(runs) > 1:
+                report.setdefault(template, {})[key] = starters.compare_trio(runs)
         for source in sorted({r['transplantOf']['handoffSha256'] for r in mine if 'transplantOf' in r}):
             trio = {r['theme']: r['templateEdits'] for r in mine if r.get('handoffSha256') == source}
             report.setdefault(template, {}).setdefault('transplants', {})[source[:12]] = starters.compare_trio(trio)
@@ -458,6 +555,10 @@ def main(argv=None) -> int:
     w.add_argument('--scratch', required=True, type=Path)
     w.add_argument('--out', required=True, type=Path)
     w.add_argument('--protected', action='append', default=[], type=Path)
+    u = sub.add_parser('unpack', help='a tar of a handoff (or git archive of a handoff branch) into a new folder')
+    u.add_argument('--archive', required=True, type=Path)
+    u.add_argument('--out', required=True, type=Path)
+    u.add_argument('--archive-sha256', metavar='HEX')
     bl = sub.add_parser('build', help='stage 2: build handoffs through the builder')
     bl.add_argument('--handoff', action='append', required=True, type=Path)
     bl.add_argument('--out', required=True, type=Path)
@@ -470,6 +571,12 @@ def main(argv=None) -> int:
     catalog = starters.Starters.load()
     say = lambda m: print(m, file=sys.stderr, flush=True)
     try:
+        if args.stage == 'unpack':
+            if args.archive_sha256 is not None and not re.fullmatch(r'[0-9a-f]{64}', args.archive_sha256):
+                parser.error(f'{args.archive_sha256!r} is not a sha256')
+            unpack(args.archive, args.out, expected_sha256=args.archive_sha256)
+            print(json.dumps({'unpacked': str(args.out), 'handoffSha256': sha256(args.out / 'handoff.json')}))
+            return 0
         if args.stage == 'write':
             handoff = write(parse_pilot(args.pilot, catalog), args.scratch, args.out, protected=args.protected,
                             catalog=catalog, log=say)

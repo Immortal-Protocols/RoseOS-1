@@ -207,10 +207,14 @@ class StageTwoChecksTest(unittest.TestCase):
     def test_writer_runs_and_transplants_are_compared_separately(self):
         edits = {'templates/feed/x.kt': 'a'}
         source, other = 'a' * 64, 'b' * 64
-        records = [{'template': 'feed', 'theme': 'minimal', 'templateEdits': edits, 'handoffSha256': source},
-                   {'template': 'feed', 'theme': 'material3', 'templateEdits': edits, 'handoffSha256': other}]
+        records = [{'template': 'feed', 'theme': 'minimal', 'templateEdits': edits, 'handoffSha256': source,
+                    'label': WRITER_LABEL},
+                   {'template': 'feed', 'theme': 'material3', 'templateEdits': edits, 'handoffSha256': other,
+                    'label': WRITER_LABEL},
+                   {'template': 'feed', 'theme': 'skeuomorphic', 'templateEdits': edits, 'handoffSha256': 'c' * 64,
+                    'label': TEST_LABEL}]  # a test import never counts as a writer run
         records += [{'template': 'feed', 'theme': t, 'templateEdits': edits, 'handoffSha256': source,
-                     'transplantOf': {'theme': 'minimal', 'handoffSha256': source}}
+                     'transplantOf': {'theme': 'minimal', 'handoffSha256': source}, 'label': TRANSPLANT_LABEL}
                     for t in ('material3', 'skeuomorphic')]
         report = writer_handoff.cross_theme(records)['feed']
         self.assertTrue(report['writerRuns']['equivalent'])  # B1: the two independent runs
@@ -218,8 +222,67 @@ class StageTwoChecksTest(unittest.TestCase):
         b2 = report['transplants'][source[:12]]  # B2: the source run with its two transplants
         self.assertEqual(b2['themes'], ['material3', 'minimal', 'skeuomorphic'])
         self.assertTrue(b2['equivalent'])
-        records[2]['templateEdits'] = dict(edits, extra='b')  # a copy that was not exact
+        self.assertNotIn('testRuns', report)  # one test import: nothing to compare it with
+        records[3]['templateEdits'] = dict(edits, extra='b')  # a copy that was not exact
         self.assertFalse(writer_handoff.cross_theme(records)['feed']['transplants'][source[:12]]['equivalent'])
+
+    def tar_of(self, directory, name='handoff.tar', extra=()):
+        import tarfile
+        path = self.tmp / name
+        with tarfile.open(path, 'w') as tar:
+            for entry in sorted(directory.rglob('*')):
+                tar.add(entry, arcname=entry.relative_to(directory).as_posix(), recursive=False)
+            for info, data in extra:
+                tar.addfile(info, None if data is None else __import__('io').BytesIO(data))
+        return path
+
+    def test_unpack_reproduces_the_handoff_exactly_and_load_accepts_it(self):
+        archive = self.tar_of(self.out)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        out = writer_handoff.unpack(archive, self.tmp / 'unpacked', expected_sha256=digest)
+        self.assertEqual((out / 'handoff.json').read_bytes(), (self.out / 'handoff.json').read_bytes())
+        self.assertEqual(writer_handoff.load(out, self.tmp / 'p-unpacked', self.catalog).digest,
+                         hashlib.sha256((self.out / 'handoff.json').read_bytes()).hexdigest())
+        with self.assertRaises(Refused):
+            writer_handoff.unpack(archive, self.tmp / 'again', expected_sha256='0' * 64)
+        with self.assertRaises(Refused):  # out must be new
+            writer_handoff.unpack(archive, out)
+
+    def test_unpack_refuses_anything_but_plain_handoff_entries_before_writing(self):
+        import tarfile
+
+        def member(name, kind=tarfile.REGTYPE, size=1, link=''):
+            info = tarfile.TarInfo(name)
+            info.type, info.size, info.linkname = kind, (size if kind == tarfile.REGTYPE else 0), link
+            return info, (b'x' * size if kind == tarfile.REGTYPE else None)
+        bad = {'link': member('tree/escape', tarfile.SYMTYPE, link='/etc/passwd'),
+               'hardlink': member('tree/hard', tarfile.LNKTYPE, link='handoff.json'),
+               'device': member('tree/dev', tarfile.CHRTYPE),
+               'parent': member('tree/../../outside'),
+               'absolute': member('/tmp/outside'),
+               'git': member('tree/.git/config'),
+               'macos': member('tree/._Feed.kt'),
+               'top': member('notes.txt'),
+               'duplicate': member('handoff.json')}
+        for i, (what, entry) in enumerate(bad.items()):
+            with self.subTest(what=what):
+                archive = self.tar_of(self.out, f'bad-{i}.tar', [entry])
+                with self.assertRaises(Refused):
+                    writer_handoff.unpack(archive, self.tmp / f'bad-{i}')
+                self.assertFalse((self.tmp / f'bad-{i}').exists())  # nothing written
+
+    def test_load_refuses_a_manifest_that_is_not_an_object_or_not_a_plain_file(self):
+        self.rewrite_manifest(lambda m: None)
+        data = b'[]\n'
+        (self.out / 'handoff.json').write_bytes(data)
+        lines = [l for l in (self.out / 'SHA256SUMS').read_text().splitlines() if not l.endswith('  handoff.json')]
+        (self.out / 'SHA256SUMS').write_text('\n'.join(lines) + f'\n{hashlib.sha256(data).hexdigest()}  handoff.json\n')
+        with self.assertRaises(Refused):
+            self.load('p-list')
+        (self.out / 'SHA256SUMS').rename(self.tmp / 'sums')
+        (self.out / 'SHA256SUMS').symlink_to(self.tmp / 'sums')
+        with self.assertRaises(Refused):
+            self.load('p-link')
 
     def test_two_handoffs_for_one_pilot_are_refused(self):
         with self.assertRaises(Refused):

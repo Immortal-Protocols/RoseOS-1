@@ -1816,9 +1816,25 @@ test, and no model was called.
          - It copies the result out through the builder's own snapshot to
            `OUT/tree`, `OUT/handoff.json` and `OUT/SHA256SUMS`.
          - It builds, signs, opens a ledger and makes a key for nothing.
-       - **Transfer:** the operator moves OUT by any channel and reports
-         `sha256(handoff.json)` out of band. That report is the attestation:
-         nothing in OUT proves a writer turn happened.
+       - **Transfer:** the operator reports `sha256(handoff.json)` out of
+         band. That report is the attestation: nothing in OUT proves a writer
+         turn happened. The supported route needs no new credential:
+         - The Local Worker commits only OUT to an orphan branch
+           `handoff/<id>`, with `add -A -f`, `core.autocrlf=false`, and
+           attributes, excludes and hooks off.
+         - The Local Worker pushes it with the Mac's existing git credential
+           and opens no PR. Every push trigger is `main` only, so the push
+           starts nothing; a PR would start CI.
+         - Here, the branch is fetched by name and its commit checked, then
+           `git archive <commit> > h.tar` and `python -m
+           rose.app_builder.writer_handoff unpack --archive h.tar --out NEW`.
+         - unpack takes any tar of OUT. It checks the whole archive before
+           writing: plain files and folders only, no `..`, no duplicates, no
+           git names or macOS metadata, only handoff.json, SHA256SUMS and
+           tree/ at the top, and the builder's limits. It writes every file
+           fresh, owner only.
+         - `handoff.json` records the writer binary's name, never its path on
+           the Mac.
        - **Stage 2, here:** `python -m rose.app_builder.writer_handoff build
          --handoff DIR... --out NEW [--handoff-sha256 HEX]...`.
          - It verifies every digest and the fixed request, and binds the
