@@ -276,6 +276,95 @@ class Equivalence(unittest.TestCase):
             self.assertFalse((Path(b) / 'themes/material3').exists())
 
 
+class Baseline(unittest.TestCase):
+    """An existing project is judged against its own first tree, not the catalog as it is today."""
+
+    STARTER = {'template': 'feed', 'theme': 'minimal'}
+
+    def project(self, d):
+        """A project's first tree (its root commit, materialized) and a working copy the writer changes."""
+        first, work = Path(d) / 'first', Path(d) / 'work'
+        starters.skeleton(first, PACKAGE, 'Feed', self.STARTER)
+        shutil.copytree(first, work)
+        return first, work
+
+    def test_catalog_drift_is_not_the_writers(self):
+        with tempfile.TemporaryDirectory() as d:
+            first, work = self.project(d)
+            drifted = Path(d) / 'catalog'
+            shutil.copytree(ROOT, drifted, ignore=shutil.ignore_patterns('build', '.gradle', '.kotlin', 'local.properties'))
+            kt = next((drifted / 'design/src/main/kotlin').rglob('Baseline.kt'))
+            kt.write_text(kt.read_text() + '\n// an upstream framework change after this project was made\n')
+            self.assertTrue(starters.outside_template(work, self.STARTER, PACKAGE, root=drifted),
+                            'against today\'s catalog the old tree looks changed')
+            self.assertEqual([], starters.outside_template(work, self.STARTER, PACKAGE, baseline=first, root=drifted))
+
+    def test_a_starter_gone_from_the_catalog_is_still_checked(self):
+        with tempfile.TemporaryDirectory() as d:
+            first, work = self.project(d)
+            gone = {'template': 'feed', 'theme': 'retired-theme'}
+            self.assertEqual([], starters.outside_template(work, gone, PACKAGE, baseline=first))
+            (work / 'themes/minimal/build.gradle.kts').write_text('// forked\n')
+            self.assertEqual(['themes/minimal/build.gradle.kts'], starters.outside_template(work, gone, PACKAGE, baseline=first))
+
+    def test_with_a_baseline_everything_outside_the_template_and_resources_is_guarded(self):
+        with tempfile.TemporaryDirectory() as d:
+            first, work = self.project(d)
+            (work / 'templates/feed/src/main/kotlin/Added.kt').write_text('package app.rose.template.feed\n')
+            (work / 'app/src/main/res/values/extra.xml').write_text('<resources/>')
+            self.assertEqual([], starters.outside_template(work, self.STARTER, PACKAGE, baseline=first))
+            (work / 'extra.gradle.kts').write_text('// a new top-level build script\n')
+            (work / 'gradle.properties').write_text('org.gradle.jvmargs=-Xmx8g\n')
+            (work / 'examples/build.gradle.kts').unlink()
+            self.assertEqual(['examples/build.gradle.kts', 'extra.gradle.kts', 'gradle.properties'],
+                             starters.outside_template(work, self.STARTER, PACKAGE, baseline=first))
+
+    def test_template_edits_with_a_baseline_match_the_catalogs(self):
+        with tempfile.TemporaryDirectory() as d:
+            first, work = self.project(d)
+            kt = next((work / 'templates/feed/src/main/kotlin').rglob('FeedPosts.kt'))
+            kt.write_text(kt.read_text().replace('The harbor before sunrise', 'Lost cat'))
+            self.assertEqual(starters.template_edits(work, self.STARTER, PACKAGE, 'Feed'),
+                             starters.template_edits(work, self.STARTER, PACKAGE, 'Feed', baseline=first))
+
+
+class InternetPermission(unittest.TestCase):
+    """A backend app must declare INTERNET; exactly that one line is allowed in the app manifest, nothing more."""
+
+    STARTER = {'template': 'player', 'theme': 'material3'}
+    LINE = '    <uses-permission android:name="android.permission.INTERNET" />\n'
+
+    def run_with(self, edit):
+        with tempfile.TemporaryDirectory() as d:
+            first, work = Path(d) / 'first', Path(d) / 'work'
+            starters.skeleton(first, PACKAGE, 'Player', self.STARTER)
+            shutil.copytree(first, work)
+            manifest = work / 'app/src/main/AndroidManifest.xml'
+            manifest.write_text(edit(manifest.read_text()))
+            return (starters.outside_template(work, self.STARTER, PACKAGE),
+                    starters.outside_template(work, self.STARTER, PACKAGE, baseline=first))
+
+    def after_manifest_tag(self, text, extra):
+        """``extra`` as whole lines right after the <manifest …> line."""
+        lines = text.splitlines(keepends=True)
+        at = next(i for i, line in enumerate(lines) if line.lstrip().startswith('<manifest')) + 1
+        return ''.join(lines[:at]) + extra + ''.join(lines[at:])
+
+    def test_one_internet_permission_is_allowed(self):
+        for found in self.run_with(lambda t: self.after_manifest_tag(t, self.LINE)):
+            self.assertEqual([], found)
+
+    def test_anything_more_is_reported(self):
+        manifest = ['app/src/main/AndroidManifest.xml']
+        for edit in (
+            lambda t: self.after_manifest_tag(t, self.LINE + self.LINE),
+            lambda t: self.after_manifest_tag(t, self.LINE).replace('android:exported="true"', 'android:exported="false"'),
+            lambda t: self.after_manifest_tag(t, self.LINE.replace('INTERNET', 'CAMERA')),
+        ):
+            for found in self.run_with(edit):
+                self.assertEqual(manifest, found)
+
+
 HAS_GRADLE_BUILDER = importlib.util.find_spec('rose.app_builder.gradle') is not None
 
 

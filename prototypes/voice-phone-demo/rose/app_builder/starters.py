@@ -78,7 +78,10 @@ class Starters:
             for key, value in data[kind].items():
                 if not ID.fullmatch(key):
                     raise ValueError(f'{MANIFEST}: {kind} id {key!r} is not a lowercase id')
-                out[key] = Entry(key, _relative(value['dir']), value['object'])
+                entry = Entry(key, _relative(value['dir']), value['object'])
+                if entry.dir != f'{kind}/{key}':
+                    raise ValueError(f'{MANIFEST}: {kind} {key!r} must live in {kind}/{key}')
+                out[key] = entry
             return out
 
         return cls(root, tuple(_relative(d) for d in data['shared']), entries('templates'), entries('themes'))
@@ -119,45 +122,94 @@ def skeleton(source: Path, package: str, label: str, starter=None, *, root: Path
         target.write_bytes(data)
 
 
-def outside_template(source: Path, starter, package: str, *, root: Path = ROOT) -> list[str]:
-    """What a writer changed that a starter app must keep as vendored: the shared framework modules, the theme, the
-    version catalog and app/'s wiring (MainActivity, build files, manifest). Paths (relative to ``source``) that were
-    changed, added or removed there, sorted; empty when only the template and app/src/main/res changed. The builder
-    may refuse or repair a turn that returns any, so the theme stays swappable and the template stays the only
-    variable. ``package`` is the builder's own record of the app's package (project['packageName']), never read
-    from the tree: the tree's namespace and applicationId are among the files checked. Callers pass the builder's
-    private snapshot of the writer's tree (plain files only), never the live working tree."""
-    starters = Starters.load(root)
-    tmpl, theme = starters.resolve(starter)
-    expected = starters.files(package, '', starter)  # the label only reaches strings.xml, which is not checked
-    guarded = (*(f + '/' for f in starters.shared), theme.dir + '/')
-    fixed = {'gradle/libs.versions.toml', 'settings.gradle.kts', 'build.gradle.kts', f'{APP_MODULE}/build.gradle.kts',
-             f'{APP_MODULE}/src/main/AndroidManifest.xml'}
+def outside_template(source: Path, starter, package: str, *, baseline: Path | None = None,
+                     root: Path = ROOT) -> list[str]:
+    """What a writer changed that a starter app must keep as vendored: everything outside its template module
+    (templates/<template>/) and app/src/main/res. Paths (relative to ``source``) that were changed, added or removed
+    there, sorted; empty for a clean turn. The builder may refuse or repair a turn that returns any, so the theme
+    stays swappable and the template stays the only variable.
+
+    ``baseline`` is the tree to compare against: the project's own first tree (its root commit, materialized). Pass it
+    for an existing project, so a later change to the catalog's shared modules, themes or version catalog never
+    reads as the writer's, and a starter since removed from the catalog is still checked. Without it, the baseline
+    is what this catalog writes for ``starter`` and ``package`` (the builder's record of the package, never read
+    from the tree), and only the files the starter wrote are checked (shared modules, the theme, the version
+    catalog, settings and build files, the manifest, MainActivity).
+
+    One addition is always allowed: a single ``<uses-permission android:name="android.permission.INTERNET"/>`` in
+    app/src/main/AndroidManifest.xml, which a backend app must declare. Callers pass the builder's private snapshot
+    of the writer's tree (plain files only), never the live working tree."""
     source = Path(source)
+    allowed = (f'templates/{_id(starter, "template")}/', f'{APP_MODULE}/src/main/res/')
+    if baseline is not None:
+        want = _plain_files(Path(baseline), lambda n: not n.startswith(allowed))
+        actual = _plain_files(source, lambda n: not n.startswith(allowed))
+    else:
+        starters = Starters.load(root)
+        _, theme = starters.resolve(starter)
+        guarded = (*(f + '/' for f in starters.shared), theme.dir + '/')
+        fixed = {'gradle/libs.versions.toml', 'settings.gradle.kts', 'build.gradle.kts',
+                 f'{APP_MODULE}/build.gradle.kts', MANIFEST_PATH}
 
-    def watched(name: str) -> bool:
-        return name in fixed or name.startswith(guarded) or (
-            name.startswith(f'{APP_MODULE}/src/main/java/') and name.endswith('/MainActivity.kt'))
+        def watched(name: str) -> bool:
+            return name in fixed or name.startswith(guarded) or (
+                name.startswith(f'{APP_MODULE}/src/main/java/') and name.endswith('/MainActivity.kt'))
 
-    actual = {}
-    for path in source.rglob('*'):
-        name = path.relative_to(source).as_posix()
-        if path.is_file() and not path.is_symlink() and watched(name) and not (set(Path(name).parts) & SKIP_DIRS):
-            actual[name] = path.read_bytes()
-    want = {n: d for n, d in expected.items() if watched(n)}
+        # the label only reaches strings.xml, which is not checked
+        want = {n: d for n, d in starters.files(package, '', starter).items() if watched(n)}
+        actual = _plain_files(source, watched)
+    if MANIFEST_PATH in actual and MANIFEST_PATH in want:
+        actual[MANIFEST_PATH] = _without_one_internet(actual[MANIFEST_PATH], want[MANIFEST_PATH])
     return sorted(n for n in set(actual) | set(want) if actual.get(n) != want.get(n))
 
 
-def template_edits(source: Path, starter, package: str, label: str, *, root: Path = ROOT) -> dict[str, str | None]:
+MANIFEST_PATH = f'{APP_MODULE}/src/main/AndroidManifest.xml'
+# A whole line holding only the element (any indentation, its own line ending), so removing it restores the baseline.
+_INTERNET = re.compile(rb'(?m)^[ \t]*<uses-permission\s+android:name\s*=\s*"android\.permission\.INTERNET"\s*/>[ \t]*\r?\n')
+
+
+def _without_one_internet(actual: bytes, baseline: bytes) -> bytes:
+    """``actual`` without one INTERNET uses-permission line, when that is the only difference from ``baseline``."""
+    found = list(_INTERNET.finditer(actual))
+    if len(found) != 1 or _INTERNET.search(baseline):
+        return actual
+    stripped = actual[:found[0].start()] + actual[found[0].end():]
+    return stripped if stripped == baseline else actual
+
+
+def _id(starter, key: str) -> str:
+    value = starter.get(key) if isinstance(starter, dict) else None
+    if not isinstance(value, str) or not ID.fullmatch(value):
+        raise UnknownStarter(f'A starter names its {key} as a lowercase id.')
+    return value
+
+
+def _plain_files(tree: Path, keep) -> dict[str, bytes]:
+    """Every plain file under ``tree`` (no links, no build state) whose relative path ``keep`` accepts."""
+    out = {}
+    for path in tree.rglob('*'):
+        name = path.relative_to(tree).as_posix()
+        if (path.is_file() and not path.is_symlink() and not (set(Path(name).parts) & SKIP_DIRS)
+                and name != '.git' and not name.startswith('.git/') and keep(name)):
+            out[name] = path.read_bytes()
+    return out
+
+
+def template_edits(source: Path, starter, package: str, label: str, *, baseline: Path | None = None,
+                   root: Path = ROOT) -> dict[str, str | None]:
     """The writer's allowed edits, normalized: every file under the template module and app/src/main/res that differs
     from what the starter wrote, as path -> sha256 of its normalized content (None for a file the writer removed).
     Text is compared without line-ending or trailing-whitespace noise; anything else byte for byte. Build state is
     ignored. Two apps with equal edits run the same template code and resources. ``package`` and ``label`` are the
-    builder's record of the project (packageName, name), the values its skeleton was written with."""
-    starters = Starters.load(root)
-    tmpl, _ = starters.resolve(starter)
-    expected = starters.files(package, label, starter)
-    allowed = (tmpl.dir + '/', f'{APP_MODULE}/src/main/res/')
+    builder's record of the project (packageName, name), the values its skeleton was written with. ``baseline``, as
+    for outside_template, compares against the project's own first tree instead of what this catalog writes."""
+    allowed = (f'templates/{_id(starter, "template")}/', f'{APP_MODULE}/src/main/res/')
+    if baseline is not None:
+        expected = _plain_files(Path(baseline), lambda n: n.startswith(allowed))
+    else:
+        starters = Starters.load(root)
+        starters.resolve(starter)
+        expected = starters.files(package, label, starter)
     source = Path(source)
     actual = {}
     for path in source.rglob('*'):
