@@ -66,6 +66,7 @@ from .phone import ActionResult, Element, Screen, W, H, _parse_time
 MAX_ELEMENTS = 70   # rows shown to the agent per screen
 SETTLE_S = 0.35     # after an action, before reading the screen again
 CALL_TIMEOUT_S = 25.0
+APP_CACHE_TTL_S = 300
 POINT_SCALE = 1000  # tap_point coordinates: 0..1000 across the screenshot (Qwen's grounding scale)
 SHOT_GAP_S = 0.35   # between screenshots: Android throttles takeScreenshot to one per 333 ms
 SHOT_REUSE_S = 0.3  # look() reuses a screenshot this fresh instead of taking another
@@ -623,7 +624,7 @@ class RealPhone:
         self._sessions: dict[str, RealSession] = {}
         self._shown: RealSession | None = None
         self._apps: list[dict] = []
-        self._apps_at = 0.0
+        self._apps_at = min(0.0, time.monotonic() - APP_CACHE_TTL_S - 1)
         self._lock = threading.RLock()
         self.look_status = ""
         self._shot_lock = threading.Lock()  # one screenshot at a time, SHOT_GAP_S apart
@@ -950,14 +951,15 @@ class RealPhone:
         Runs on the server's event loop, so nothing here waits on the phone."""
 
         self._bg = None
-        self._apps_at = 0.0
+        # A previous inventory can survive a failed refresh and its timestamp goes into JSON.
+        self._apps_at = min(0.0, time.monotonic() - APP_CACHE_TTL_S - 1)
         for unit in [*self.workspaces.units, *self._scoped()]:
             unit.forget()
         self._changed("link", {"connected": self.link.connected})
 
     # ----- apps --------------------------------------------------------
     def apps(self, *, refresh: bool = False) -> list[dict]:
-        if refresh or not self._apps or time.monotonic() - self._apps_at > 300:
+        if refresh or not self._apps or time.monotonic() - self._apps_at > APP_CACHE_TTL_S:
             r = self.link.call("list_apps")
             if r.get("status") == "ok" or r.get("apps"):
                 self._apps, self._apps_at = list(r.get("apps") or []), time.monotonic()
@@ -992,7 +994,7 @@ class RealPhone:
 
     def resolve_app(self, name: str) -> tuple[str | None, str]:
         want = _clean(name).lower()
-        cached = bool(self._apps) and time.monotonic() - self._apps_at <= 300
+        cached = bool(self._apps) and time.monotonic() - self._apps_at <= APP_CACHE_TTL_S
         apps = self.apps()
         if re.fullmatch(r"[a-z][\w]*(\.[\w]+)+", want):
             return want, name
