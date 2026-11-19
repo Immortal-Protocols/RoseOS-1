@@ -460,9 +460,16 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
         from .app_host import AgentHosting
         hosting = AgentHosting(config.agent_host, ledger)
         client_codegen = codegen  # the API client an agent-built backend's app is built with
+    starter_hook = {}
+    if gradle is not None:
+        from . import starters
+        if starters.available():  # this checkout's workspace/rose-starters: new apps may start from a starter
+            starter_hook = dict(skeleton=starters.skeleton,
+                                resolve_starter=lambda s: starters.Starters.load().resolve(s))
     return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
                    require_key_backup=config.require_key_backup,
-                   server_url=ledger.backend_endpoint, hosting=hosting, codegen=client_codegen, gradle=gradle)
+                   server_url=ledger.backend_endpoint, hosting=hosting, codegen=client_codegen, gradle=gradle,
+                   **starter_hook)
 
 
 def build_host(config: HostConfig, generate=None, backup=None) -> Host:

@@ -304,7 +304,7 @@ class BackendSession:
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
                  resolver=None, *, codegen=None, server_url=None, hosting=None, repairs: int = REPAIRS,
-                 require_key_backup=True, gradle=None):
+                 require_key_backup=True, gradle=None, skeleton=None, resolve_starter=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound unless the owner explicitly permits
@@ -314,6 +314,13 @@ class Builder:
         Compose) build with it, offline and inside its isolation, and new apps start from its Kotlin skeleton. Without
         it a new app starts from the older flat Java skeleton, and a Gradle project fails as a toolchain matter.
         Either way the identity, signing and delivery below are the same, so an app can move from one to the other.
+
+        ``skeleton(source, package, label, starter)`` writes a new Gradle project's first tree (once, as its root
+        commit), with ``starter`` the {template, theme} the create request named or None: rose.app_builder.starters
+        .skeleton, which writes the builder's own skeleton for None. ``resolve_starter(starter)`` checks a create
+        request's starter before anything is recorded and raises ValueError for one it does not have
+        (rose.app_builder.starters.Starters.resolve). Without them, a create request with a starter is refused
+        (``unknown_starter``).
 
         Backend apps use the injected client code generator and hosting connection. The writing agent builds
         their release inside the existing Chariot agent container; the host builds only the Android client."""
@@ -329,6 +336,7 @@ class Builder:
         self.server_url = server_url
         self.hosting = hosting
         self.gradle = gradle
+        self.skeleton, self.resolve_starter = skeleton, resolve_starter
         # A build tool's rejection of the writer's own source goes back to the writer as a repair turn, at most this
         # many times in a job, before anything is signed: the same project, job and version code.
         self.repairs = max(0, int(repairs))
@@ -340,14 +348,39 @@ class Builder:
     # API v1.
 
     def create(self, device: str, body) -> dict:
+        starter = body.get('starter') if isinstance(body, dict) else None
+        if isinstance(body, dict) and 'starter' in body:
+            body = {k: v for k, v in body.items() if k != 'starter'}
         b = _body(body, {'clientRequestId': (str, 64), 'description': (str, MAX_TEXT)})
+        if starter is not None:
+            starter = self._starter_shape(starter)
         name = b['description'].splitlines()[0][:40].strip() or 'New app'
+        # Whether this builder has the starter is asked of a new request only: a retry of one already recorded
+        # returns its ids even if the catalog or the configuration changed since.
+        check = None if starter is None else (lambda: self._starter_available(starter))
         try:
-            out = self.ledger.create(device, b['clientRequestId'], b['description'], name)
+            out = self.ledger.create(device, b['clientRequestId'], b['description'], name, starter, check)
         except LedgerError as error:
             raise Refused(str(error)) from None
         self.wake.set()
         return {**out, 'notes': []}
+
+    @staticmethod
+    def _starter_shape(starter) -> dict:
+        """A create request's starter: exactly {template, theme}, two lowercase ids."""
+        if (not isinstance(starter, dict) or set(starter) != {'template', 'theme'}
+                or not all(isinstance(v, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,39}', v) for v in starter.values())):
+            raise Refused('starter must be {template, theme}, two lowercase ids', reason='unknown_starter')
+        return {'template': starter['template'], 'theme': starter['theme']}
+
+    def _starter_available(self, starter: dict):
+        """Refuses a new request's starter this builder cannot make: no starters, no Gradle, or not in the catalog."""
+        if self.resolve_starter is None or self.gradle is None:
+            raise Refused('This builder has no starters.', reason='unknown_starter')
+        try:
+            self.resolve_starter(starter)
+        except ValueError as error:
+            raise Refused(str(error) or 'There is no such starter.', reason='unknown_starter') from None
 
     def revise(self, device: str, project: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'request': (str, MAX_TEXT)})
@@ -810,8 +843,19 @@ class Builder:
         if not gitdir.exists():
             source.mkdir(mode=0o700, parents=True, exist_ok=True)
             _git(source, 'init', '-q')
+            starter = self.ledger.starter(project['projectId'])
+            if starter is not None and (self.gradle is None or self.skeleton is None):
+                raise toolchain.StepFailed('toolchain', 'This app was asked for from a Rose starter, which this '
+                                           'builder cannot make (no starters or no Gradle toolchain).')
             if self.gradle is not None:
-                gradle.write_skeleton(source, project['packageName'], project['name'])
+                if self.skeleton is not None:
+                    try:
+                        self.skeleton(source, project['packageName'], project['name'], starter)
+                    except ValueError as error:  # the catalog no longer has it; the next attempt starts afresh
+                        raise toolchain.StepFailed('toolchain', f'This app\'s Rose starter cannot be made: {error}') \
+                            from None
+                else:
+                    gradle.write_skeleton(source, project['packageName'], project['name'])
             else:
                 template.write_skeleton(source, project['packageName'], project['name'])
             _git(source, 'add', '-A', '-f')
