@@ -125,6 +125,157 @@ class Vendoring(unittest.TestCase):
                 starters.Starters.load(root).files(PACKAGE, 'x', {'template': 'feed', 'theme': 'minimal'})
 
 
+class Prompt(unittest.TestCase):
+    """The writer's turn on a starter project names the starter and where to work, on every kind of turn."""
+
+    def test_create_repair_and_revise_carry_the_starter_guidance(self):
+        from rose.app_builder import generator
+        starter = {'template': 'sprite-game', 'theme': 'skeuomorphic'}
+        for kind in ('create', 'repair', 'revise'):
+            with self.subTest(kind=kind):
+                text = generator.prompt(kind, 'REQUEST', starter=starter)
+                self.assertIn('Rose starter template "sprite-game" under the "skeuomorphic" theme', text)
+                self.assertIn('templates/sprite-game/', text)
+                self.assertIn('themes/skeuomorphic/', text)
+                self.assertIn('never Material or a theme directly', text)
+                self.assertTrue(text.endswith('REQUEST'))
+
+    def test_no_starter_is_the_unchanged_prompt(self):
+        from rose.app_builder import generator
+        for kind in ('create', 'repair', 'revise'):
+            self.assertEqual(generator.prompt(kind, 'R'), generator.prompt(kind, 'R', starter=None))
+            self.assertNotIn('Rose starter', generator.prompt(kind, 'R'))
+
+
+class OutsideTemplate(unittest.TestCase):
+    """After a writer turn: anything changed outside the template and app's resources is reported."""
+
+    def make(self, d, starter={'template': 'feed', 'theme': 'minimal'}):
+        starters.skeleton(Path(d), PACKAGE, 'Feed', starter)
+        return starter
+
+    def test_a_fresh_tree_and_template_or_resource_edits_are_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            starter = self.make(d)
+            self.assertEqual([], starters.outside_template(Path(d), starter, PACKAGE))
+            kt = next((Path(d) / 'templates/feed/src/main/kotlin').rglob('FeedTemplate.kt'))
+            kt.write_text(kt.read_text() + '\n// the owner\'s notice board\n')
+            (Path(d) / 'templates/feed/src/main/kotlin/New.kt').write_text('package x\n')
+            (Path(d) / 'app/src/main/res/values/strings.xml').write_text('<resources/>')
+            (Path(d) / 'templates/feed/build').mkdir()
+            self.assertEqual([], starters.outside_template(Path(d), starter, PACKAGE))
+
+    def test_theme_framework_catalog_and_wiring_edits_are_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            starter = self.make(d)
+            theme = next((Path(d) / 'themes/minimal/src/main/kotlin').rglob('*.kt'))
+            theme.write_text(theme.read_text().replace('Minimal', 'Forked', 1))
+            (Path(d) / 'design/src/main/kotlin/app/rose/design/Extra.kt').write_text('package app.rose.design\n')
+            (Path(d) / 'gradle/libs.versions.toml').write_text('# changed\n')
+            activity = next((Path(d) / 'app/src/main/java').rglob('MainActivity.kt'))
+            activity.write_text(activity.read_text().replace('RoseTheme(MinimalTheme)', 'RoseTheme(BaselineTheme)'))
+            removed = Path(d) / 'examples/build.gradle.kts'
+            removed.unlink()
+            found = starters.outside_template(Path(d), starter, PACKAGE)
+            self.assertIn(theme.relative_to(d).as_posix(), found)
+            self.assertIn('design/src/main/kotlin/app/rose/design/Extra.kt', found)
+            self.assertIn('gradle/libs.versions.toml', found)
+            self.assertIn(activity.relative_to(d).as_posix(), found)
+            self.assertIn('examples/build.gradle.kts', found)
+            self.assertFalse([f for f in found if f.startswith('templates/')])
+
+    def test_a_renamed_package_cannot_move_the_baseline(self):
+        """The baseline is the builder's package, so a writer that renames the namespace and moves MainActivity is
+        reported, not compared against itself."""
+        with tempfile.TemporaryDirectory() as d:
+            starter = self.make(d)
+            other = 'app.rose.gen.pffffffffffffffff'
+            app = Path(d) / 'app/build.gradle.kts'
+            app.write_text(app.read_text().replace(PACKAGE, other))
+            activity = next((Path(d) / 'app/src/main/java').rglob('MainActivity.kt'))
+            moved = Path(d) / 'app/src/main/java' / other.replace('.', '/') / 'MainActivity.kt'
+            moved.parent.mkdir(parents=True)
+            moved.write_text(activity.read_text().replace(PACKAGE, other))
+            activity.unlink()
+            found = starters.outside_template(Path(d), starter, PACKAGE)
+            self.assertIn('app/build.gradle.kts', found)
+            self.assertIn(activity.relative_to(d).as_posix(), found)
+            self.assertIn(moved.relative_to(d).as_posix(), found)
+
+    def test_the_label_never_reaches_a_checked_file(self):
+        """outside_template renders its baseline without the label: that holds only while no checked file has it."""
+        s = starters.Starters.load()
+        starter = {'template': 'player', 'theme': 'material3'}
+        a = s.files(PACKAGE, 'One label', starter)
+        b = s.files(PACKAGE, 'Another & "label"', starter)
+        changed = sorted(n for n in a if a[n] != b.get(n))
+        self.assertEqual(['app/src/main/res/values/strings.xml'], changed)
+
+
+class Equivalence(unittest.TestCase):
+    """Wave 3: whether one template's three apps (one per theme) run the same template code, and a way to make them."""
+
+    def tree(self, d, theme, edit=None, package=PACKAGE):
+        starter = {'template': 'feed', 'theme': theme}
+        starters.skeleton(Path(d), package, 'Feed', starter)
+        if edit:
+            edit(Path(d))
+        return starter
+
+    @staticmethod
+    def notice_board(root, extra=''):
+        kt = next((root / 'templates/feed/src/main/kotlin').rglob('FeedPosts.kt'))
+        kt.write_text(kt.read_text().replace('The harbor before sunrise', 'Lost cat on Elm Street') + extra)
+        (root / 'app/src/main/res/values/strings.xml').write_text('<resources><string name="app_name">Notices</string></resources>')
+
+    def test_a_fresh_tree_has_no_edits(self):
+        with tempfile.TemporaryDirectory() as d:
+            starter = self.tree(d, 'minimal')
+            self.assertEqual({}, starters.template_edits(Path(d), starter, PACKAGE, 'Feed'))
+
+    def test_same_edits_under_three_themes_are_equivalent(self):
+        edits = {}
+        for theme in ('material3', 'minimal', 'skeuomorphic'):
+            with tempfile.TemporaryDirectory() as d:
+                starter = self.tree(d, theme, lambda r: self.notice_board(r))
+                edits[theme] = starters.template_edits(Path(d), starter, PACKAGE, 'Feed')
+        self.assertEqual(2, len(edits['minimal']), edits['minimal'])
+        report = starters.compare_trio(edits)
+        self.assertTrue(report['equivalent'], report)
+
+    def test_whitespace_and_line_endings_are_not_differences(self):
+        edits = {}
+        for theme, extra in (('material3', '\n'), ('minimal', '   \r\n'), ('skeuomorphic', '')):
+            with tempfile.TemporaryDirectory() as d:
+                starter = self.tree(d, theme, lambda r, x=extra: self.notice_board(r, x))
+                edits[theme] = starters.template_edits(Path(d), starter, PACKAGE, 'Feed')
+        self.assertTrue(starters.compare_trio(edits)['equivalent'])
+
+    def test_differing_or_missing_edits_are_recorded(self):
+        edits = {}
+        for theme, extra in (('material3', ''), ('minimal', '\n// extra rule\n'), ('skeuomorphic', None)):
+            with tempfile.TemporaryDirectory() as d:
+                starter = self.tree(d, theme, None if extra is None else (lambda r, x=extra: self.notice_board(r, x)))
+                edits[theme] = starters.template_edits(Path(d), starter, PACKAGE, 'Feed')
+        report = starters.compare_trio(edits)
+        self.assertFalse(report['equivalent'])
+        posts = next(p for p in edits['material3'] if p.endswith('FeedPosts.kt'))
+        self.assertEqual(['material3', 'minimal'], report['onlyIn'][posts])
+        self.assertIn('app/src/main/res/values/strings.xml', report['onlyIn'])
+
+    def test_transplant_puts_the_same_template_code_under_another_theme(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            starter = self.tree(a, 'material3', lambda r: self.notice_board(r))
+            (Path(a) / 'templates/feed/src/main/kotlin/Added.kt').write_text('package app.rose.template.feed\n')
+            starters.transplant(Path(a), starter, PACKAGE, 'Feed', 'skeuomorphic', Path(b))
+            moved = {'template': 'feed', 'theme': 'skeuomorphic'}
+            self.assertEqual(starters.template_edits(Path(a), starter, PACKAGE, 'Feed'),
+                             starters.template_edits(Path(b), moved, PACKAGE, 'Feed'))
+            self.assertEqual([], starters.outside_template(Path(b), moved, PACKAGE))
+            self.assertTrue((Path(b) / 'themes/skeuomorphic').is_dir())
+            self.assertFalse((Path(b) / 'themes/material3').exists())
+
+
 HAS_GRADLE_BUILDER = importlib.util.find_spec('rose.app_builder.gradle') is not None
 
 
