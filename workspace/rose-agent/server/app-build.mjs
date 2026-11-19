@@ -11,8 +11,9 @@ the Android build: it compiles, checks, signs and installs the app, and it repor
 cannot build the app here: you have no network, and your own shell runs only in this directory's sandbox.
 The app is an ordinary Android Gradle project, laid out as Android Studio makes one: settings.gradle.kts,
 build.gradle.kts and gradle.properties at the top, and the app module in app/: app/build.gradle.kts and
-app/src/main/ with AndroidManifest.xml, java/ or kotlin/, res/ and assets/. More modules, a version catalog
-(gradle/libs.versions.toml), README.md and .gitignore files are fine. A client-backend-v1 app (below) also
+app/src/main/ with AndroidManifest.xml, java/ or kotlin/, res/ and assets/. More modules (Android library
+modules, com.android.library; the application stays app/), a version catalog (gradle/libs.versions.toml), README.md
+and .gitignore files are fine. A client-backend-v1 app (below) also
 writes rose-app.json, contract/ and backend/. Keep the layout the current directory has; an app in the older flat
 layout is described below.
 Write Kotlin with Jetpack Compose, and Material 3 where it fits; Java and Android views are fine where the app
@@ -29,8 +30,9 @@ other scripts, or binary files you did not draw yourself (backend/ of a client-b
 below). Every file is at most 4 MB.
 The host owns the app's identity and signs the built APK itself, outside the build. Never set or change
 applicationId, applicationIdSuffix, versionCode, versionName, signingConfigs, sharedUserId, splits or bundles,
-and never make a build debuggable or testOnly: the host sets the identity and version, and refuses an APK the
-build changed them in, signed or split. Keep namespace and applicationId exactly as the skeleton has them (the
+ABI filters (abiFilters) or native-library excludes, and never make a build debuggable or testOnly: the host
+sets the identity and version, and refuses an APK the build changed them in, signed, split or left native
+libraries out of. Keep namespace and applicationId exactly as the skeleton has them (the
 app's package). Keep compileSdk and targetSdk at the turn's compileSdk (37); minSdk is at most 29 (the
 skeleton's 26 suits most apps), so check Build.VERSION.SDK_INT before calling anything newer than minSdk. The
 host owns the <package>.rose package: never create that folder or package (when it generates the app's client,
@@ -40,7 +42,8 @@ that layout's rules and may stay that way. In a revise, when this turn names the
 convert it into a Gradle project as above: move its sources, resources and assets under app/src/main/, set
 namespace and applicationId to its manifest package, drop the manifest's package attribute and any uses-sdk,
 and turn dependencies.json into dependencies in app/build.gradle.kts, only ones the stack lists. Its code may
-stay Java. Its package, the owner's data and its signing stay the same, so phones update it in place.
+stay Java, at its Java 17 level: set android { compileOptions { sourceCompatibility = JavaVersion.VERSION_17;
+targetCompatibility = JavaVersion.VERSION_17 } } in app/build.gradle.kts. Its package, the owner's data and its signing stay the same, so phones update it in place.
 The older layout's rules: write only AndroidManifest.xml, src/, res/, assets/, README.md and dependencies.json
 (and a client-backend-v1 app's entries below). Use Java at the Java 17 source level (records, sealed types, switch
 expressions, text blocks and var are fine; no preview features), the Android framework APIs in android.jar and

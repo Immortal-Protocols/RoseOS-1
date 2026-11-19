@@ -400,7 +400,13 @@ def verify_apk(apk: Path, package: str, version_code: int, version_name: str, to
             or re.search(r'E: (key-sets|upgrade-key-set|original-package|adopt-permissions)\b', tree)):
         raise StepFailed('compile', 'The app tries to set its own identity, debuggability or update keys, '
                          'which is not allowed.')
-    if re.search(r'\(0x01010272\)', tree):  # android:testOnly: installable only over a developer connection
+    # The split attributes, whose APK cannot install alone: isFeatureSplit, isSplitRequired, requiredSplitTypes,
+    # splitTypes (by id, and by the staged ids older build tools print for the last two).
+    if re.search(r'\((0x0101055b|0x01010591|0x0101064e|0x0101064f|0x01df0001|0x01df0002)\)', tree):
+        raise StepFailed('compile', 'The app asks to be installed with split APKs (isFeatureSplit, isSplitRequired, '
+                         'requiredSplitTypes or splitTypes); Rose installs one APK, so it is not delivered.')
+    # android:testOnly, true: installable only over a developer connection (testOnly="false" is the default).
+    if re.search(r'\(0x01010272\)=\(type 0x12\)0x(?!0+\b)[0-9a-f]+', tree):
         raise StepFailed('compile', 'The app is marked test-only (android:testOnly), which phones install only from '
                          'a developer connection, so it is not delivered.')
     if re.search(r'^\s*E: \S*:', tree, re.M):  # an element form the identity checks above do not know
@@ -422,19 +428,22 @@ def verify_apk(apk: Path, package: str, version_code: int, version_name: str, to
 
 
 def manifest_children(tree: str) -> list[str]:
-    """The element names directly inside <manifest> in ``aapt dump xmltree``: one indentation step below it."""
-    lines = tree.splitlines()
-    top = next((i for i, line in enumerate(lines) if re.match(r'\s*E: manifest\b', line)), None)
-    if top is None:
-        return []
-    depth = len(lines[top]) - len(lines[top].lstrip())
-    names = []
-    for line in lines[top + 1:]:
-        found = re.match(r'(\s*)E: (\S+)', line)
-        if found and len(found.group(1)) <= depth:
-            break
-        if found and len(found.group(1)) == depth + 2:
-            names.append(found.group(2))
+    """The element names directly inside <manifest> in ``aapt dump xmltree``, as Android reads them: each line's
+    parent is the nearest line above it that is indented less, and a namespace declaration (``N:``, which indents
+    what follows) is not an element, so an element under one is a child of the element around the declaration."""
+    stack, names = [], []  # (indent, kind, name) of the open lines
+    for line in tree.splitlines():
+        found = re.match(r'(\s*)([EN]): (\S+)', line)
+        if not found:
+            continue
+        indent, kind, name = len(found.group(1)), found.group(2), found.group(3)
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        parent = next((item for item in reversed(stack) if item[1] == 'E'), None)
+        if kind == 'E' and parent is not None and parent[2] == 'manifest' \
+                and not any(item[1] == 'E' for item in stack[stack.index(parent) + 1:]):
+            names.append(name)
+        stack.append((indent, kind, name))
     return names
 
 

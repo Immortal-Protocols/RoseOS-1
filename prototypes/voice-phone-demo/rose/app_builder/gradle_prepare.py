@@ -435,7 +435,9 @@ def catalog() -> dict[str, str]:
     - ``base``: the skeleton's libraries, built as the skeleton is (not minified);
     - ``x<n>``: library n alone (with the BOM when it manages it), ``s<n>``: the skeleton's libraries and library n;
       their release compile and runtime classpaths are resolved (``roseResolve``), so the versions conflict
-      resolution picks for any one library, alone or next to the skeleton's, are in the cache too."""
+      resolution picks for any one library, alone or next to the skeleton's, are in the cache too;
+    - ``lib``: a Compose Android library module (com.android.library), and ``multi``: an application on the skeleton's
+      libraries that depends on it, built, as a project with its own library modules (Home's starters) builds."""
     libs = gradle_stack.LIBRARIES
     each = [c for c in libs if not c.endswith(':compose-bom')]
     base = {c: libs[c] for c in BASE}
@@ -455,10 +457,36 @@ def catalog() -> dict[str, str]:
         files[f'{name}/build.gradle.kts'] = text
     files.update(_sources('app', 'Rose catalog', serialization=True))
     files.update(_sources('base', 'Rose skeleton', serialization=False))
+    files['settings.gradle.kts'] += 'include(":lib")\ninclude(":multi")\n'
+    files['lib/build.gradle.kts'] = _library_module(base)
+    files['lib/src/main/java/app/rose/catalog/lib/Greeting.kt'] = (
+        'package app.rose.catalog.lib\n\n'
+        'import androidx.compose.material3.Text\n'
+        'import androidx.compose.runtime.Composable\n\n'
+        '@Composable\n'
+        'fun Greeting(text: String) = Text(text)\n')
+    files['multi/build.gradle.kts'] = _module('multi', base, serialization=False).replace(
+        'dependencies {\n', 'dependencies {\n    implementation(project(":lib"))\n', 1)
+    files.update(_sources('multi', 'Rose modules', serialization=False))
     return files
 
 
-TASKS = (':app:assembleRelease', ':base:assembleRelease', 'roseResolve')
+def _library_module(libraries: dict) -> str:
+    """An Android library module's build file with the Compose plugin and ``libraries`` (the BOM as a platform)."""
+    bom = 'androidx.compose:compose-bom'
+    deps = f'    implementation(platform("{bom}:{gradle_stack.LIBRARIES[bom]}"))\n'
+    deps += ''.join(_dependency(c, v) for c, v in libraries.items() if c != bom)
+    return ('plugins {\n    id("com.android.library")\n    id("org.jetbrains.kotlin.plugin.compose")\n}\n\n'
+            'android {\n'
+            f'    namespace = "{CATALOG_PACKAGE}.lib"\n'
+            f'    compileSdk = {gradle_stack.COMPILE_SDK}\n'
+            f'    defaultConfig {{ minSdk = {gradle_stack.MIN_SDK} }}\n'
+            '    buildFeatures { compose = true }\n'
+            '}\n\n'
+            'dependencies {\n' + deps + '}\n')
+
+
+TASKS = (':app:assembleRelease', ':base:assembleRelease', ':multi:assembleRelease', 'roseResolve')
 
 
 def _write_tree(root: Path, files: dict[str, str]) -> None:

@@ -76,9 +76,11 @@ JDKS = {
         '48067f2b7c958ed104a9d8a5749be7d25220b0a356b4d2d1bcfaab3e16ad0b14'),
 }
 
-# Gradle plugins a project may apply (plugin id -> version).
+# Gradle plugins a project may apply (plugin id -> version). com.android.library is for a project's own library
+# modules (Home's starter design, template and theme modules are vendored into a project as such).
 PLUGINS = {
     'com.android.application': AGP,
+    'com.android.library': AGP,
     'org.jetbrains.kotlin.plugin.compose': KOTLIN,
     'org.jetbrains.kotlin.plugin.serialization': KOTLIN,
 }

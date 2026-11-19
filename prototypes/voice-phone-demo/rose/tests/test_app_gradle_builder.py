@@ -125,6 +125,81 @@ class LayoutTest(Base):
         self.assertEqual(b.projects()[0]['versions'], [])
 
 
+class BinaryChecksTest(unittest.TestCase):
+    """verify_apk's reading of ``aapt dump xmltree`` and the repair text, on the shapes the tools print."""
+
+    def test_a_namespace_declaration_does_not_hide_a_top_level_element(self):
+        tree = ('N: android=http://schemas.android.com/apk/res/android (line=2)\n'
+                '  E: manifest (line=2)\n'
+                '    E: uses-sdk (line=7)\n'
+                '    N: x=urn:x (line=9)\n'
+                '      E: instrumentation (line=9)\n'
+                '        E: meta-data (line=10)\n'
+                '    E: application (line=17)\n'
+                '      N: y=urn:y (line=20)\n'
+                '        E: provider (line=20)\n')
+        self.assertEqual(toolchain.manifest_children(tree), ['uses-sdk', 'instrumentation', 'application'])
+
+    def test_native_libraries_must_cover_the_phone_and_emulator_abis(self):
+        from rose.app_builder.gradle import _missing_native
+        every = [f'lib/{abi}/libandroidx.graphics.path.so' for abi in ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')]
+        self.assertIsNone(_missing_native(['classes.dex', 'AndroidManifest.xml']))  # no native code: nothing needed
+        self.assertIsNone(_missing_native(every))
+        self.assertIsNone(_missing_native([n for n in every if '/x86/' not in n]))  # 32-bit ABIs are optional
+        self.assertEqual(_missing_native(['lib/x86_64/libandroidx.graphics.path.so']),
+                         'lib/arm64-v8a/libandroidx.graphics.path.so')  # abiFilters += "x86_64"
+        self.assertEqual(_missing_native([*every, 'lib/arm64-v8a/libother.so']), 'lib/x86_64/libother.so')
+
+    def test_the_repair_text_keeps_a_kotlin_errors_file(self):
+        from rose.app_builder.service import _repair_text
+        failed = toolchain.StepFailed('compile', 'The app\'s Gradle build failed in its Kotlin code.',
+                                      log='e: file://<project>/app/src/main/java/a/b/Extra.kt:3:5 Unresolved '
+                                          'reference: x\ne: file:///r/jobs/j/snapshot-1/app/B.kt:1:1 x')
+        text = _repair_text(failed, ['/r/jobs/j/snapshot-1', '/r/jobs/j', '/r'])
+        self.assertIn('e: app/src/main/java/a/b/Extra.kt:3:5 Unresolved reference: x', text)
+        self.assertIn('e: app/B.kt:1:1', text)
+
+
+class GradleConfigTest(Base):
+    """The builder config's ``gradle`` object (rose.app_builder.host): the pinned stack and the only qualified isolation."""
+
+    def stack(self) -> dict:
+        folders = {}
+        for key in ('jdk', 'distribution', 'sdk', 'dependencyCache'):
+            path = (self.root / 'stack' / key).resolve()
+            path.mkdir(parents=True, exist_ok=True)
+            folders[key] = str(path)
+        return dict(folders, isolation='bubblewrap')
+
+    def parse(self, gradle_value):
+        from rose.app_builder import host
+        return host.parse_builder_config({'schemaVersion': 1, 'root': str(self.root / 'builder-root'),
+                                          'sdk': str(SDK), 'gradle': gradle_value})
+
+    def test_a_stack_and_bubblewrap_are_accepted_with_their_defaults(self):
+        config = self.parse(self.stack()).gradle
+        self.assertEqual((config.isolation, config.bubblewrap, config.build_timeout_s),
+                         ('bubblewrap', Path('/usr/bin/bwrap'), 1800.0))
+        self.assertIsNone(__import__('rose.app_builder.host', fromlist=['x']).parse_builder_config(
+            {'schemaVersion': 1, 'root': str(self.root / 'r'), 'sdk': str(SDK)}).gradle)
+
+    def test_refusals(self):
+        from rose.app_builder.host import ConfigError
+        good = self.stack()
+        for name, value, words in [
+                ('the unqualified macOS isolation', dict(good, isolation='seatbelt'), 'not qualified'),
+                ('an unknown isolation', dict(good, isolation='none'), 'must be bubblewrap'),
+                ('a missing part', {k: v for k, v in good.items() if k != 'dependencyCache'}, 'gradle must be'),
+                ('an unknown key', dict(good, extra='x'), 'gradle must be'),
+                ('a relative path', dict(good, jdk='jdk'), 'absolute path'),
+                ('a missing folder', dict(good, sdk=str(self.root / 'nowhere')), 'gradle.sdk must be'),
+                ('a timeout out of range', dict(good, buildTimeoutS=0), 'buildTimeoutS'),
+                ('not an object', 'stack', 'gradle must be')]:
+            with self.subTest(name), self.assertRaises(ConfigError) as refused:
+                self.parse(value)
+            self.assertIn(words, str(refused.exception))
+
+
 @unittest.skipUnless(BUILDS, 'needs ROSE_GRADLE_STACK, the legacy SDK and bubblewrap as a non-root Linux user')
 class GradleJobTest(Base):
     def builder(self, generate, with_gradle=True, root=None) -> Builder:

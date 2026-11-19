@@ -192,8 +192,11 @@ def _sbpl(path: Path | str) -> str:
 @dataclass(frozen=True)
 class SeatbeltIsolation(Isolation):
     """macOS, ``sandbox-exec`` with a generated profile, modelled on Bazel's darwin sandbox (allow by default, then
-    deny). NOT QUALIFIED: it cannot run on Linux, so only its profile and pre-flight are tested; a host must qualify
-    it on the Mac (the same probe as rose.app_builder.qualify's confinement check) before relying on it.
+    deny). NOT QUALIFIED, and the host config refuses it (rose.app_builder.host): allowing by default, it leaves
+    the build's code able to reach localhost (where Rose's own loopback-only pairing API listens), to start
+    processes outside the sandbox through launchd or LaunchServices, and to reach other mach services. Only its
+    profile and pre-flight are tested (it cannot run on Linux). Closing those needs a deny-by-default profile proven
+    on a Mac.
 
     The confined command:
     - writes only ``writable`` and the standard devices (``_MAC_DEVICES``, ``/dev/fd``);

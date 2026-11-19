@@ -284,10 +284,17 @@ def init_script() -> str:
     builder's (ROSE_APPLICATION_ID, ROSE_VERSION_CODE, ROSE_VERSION_NAME), set through AGP's variant API before any
     of the project's own variant callbacks. Values are read inside the action (Gradle 9 isolates lifecycle actions);
     reflection keeps the script free of AGP's classes, which init scripts cannot see. A project can still override
-    them after; the built APK is checked, so that only fails its build."""
+    them after; the built APK is checked, so that only fails its build.
+
+    It also puts the stack's Kotlin Gradle plugin on the root build's classpath: AGP alone asks for an older one,
+    which the offline cache does not hold, so a project without the Compose compiler plugin (a Java or views app)
+    still resolves the stack's Kotlin, as every project the cache was seeded with does."""
     return '''\
 // The Rose builder's own init script: the app's identity is the builder's, whatever the project's build files say.
 gradle.lifecycle.beforeProject {
+    if (this == rootProject) {
+        buildscript.dependencies.add("classpath", "org.jetbrains.kotlin:kotlin-gradle-plugin:@KOTLIN@")
+    }
     pluginManager.withPlugin("com.android.application") {
         val applicationId = System.getenv("ROSE_APPLICATION_ID")!!
         val versionCode = System.getenv("ROSE_VERSION_CODE")!!.toInt()
@@ -312,7 +319,7 @@ gradle.lifecycle.beforeProject {
         })
     }
 }
-'''
+'''.replace('@KOTLIN@', gradle_stack.KOTLIN)
 
 
 def build(tree: Path, work: Path, package: str, version_code: int, version_name: str, gradle: GradleTools,
@@ -332,8 +339,7 @@ def build(tree: Path, work: Path, package: str, version_code: int, version_name:
     work = Path(os.path.realpath(work))
     jdk, dist, sdk, cache = (Path(os.path.realpath(p)) for p in (gradle.jdk, gradle.gradle, gradle.sdk, gradle.cache))
     box = work / 'sandbox'
-    if os.path.lexists(box):
-        shutil.rmtree(box)
+    remove_tree(box)
     box.mkdir(mode=0o700, parents=True)
     project, home, gradle_home, tmp = box / 'project', box / 'home', box / 'gradle-home', box / 'tmp'
     _copy_tree(Path(tree), project)
@@ -359,7 +365,7 @@ def build(tree: Path, work: Path, package: str, version_code: int, version_name:
         verify_home.mkdir(mode=0o700)
         name = _take_output(box, own, log)
     finally:  # the job's Gradle home, intermediates and outputs: hundreds of MB that nothing reads again
-        shutil.rmtree(box, ignore_errors=True)
+        remove_tree(box)
     _refuse_signed(own, name)
     unsigned = _align(own, work, gradle.bt, tools, verify_home, cancelled, redact)
     try:
@@ -420,6 +426,24 @@ def _copy_tree(source: Path, target: Path) -> None:
                 shutil.copyfileobj(src, dst)
         else:
             raise StepFailed('compile', 'Source contains a link or special file; it is not built.')
+
+
+def remove_tree(path: Path) -> None:
+    """Remove a tree the build wrote, whatever modes its code left on it: inside the isolation its files are the
+    builder's own, so a folder it made unreadable or unwritable is given back its owner access first."""
+    if not os.path.lexists(path):
+        return
+
+    def retry(function, name, _):
+        parent = os.path.dirname(name)
+        for folder in (parent, name):
+            try:
+                if os.path.isdir(folder) and not os.path.islink(folder):
+                    os.chmod(folder, 0o700)
+            except OSError:
+                pass
+        function(name)
+    shutil.rmtree(path, onerror=retry)
 
 
 def _discard(path: Path) -> None:
@@ -585,6 +609,26 @@ def _take_output(box: Path, target: Path, log: str) -> str:
     return name
 
 
+# The ABIs every native library the APK ships must be there for: Rose's phones (arm64-v8a) and the emulators an app
+# is checked on (x86_64). The libraries come from AndroidX (the stack has no NDK), which ships these and more.
+REQUIRED_ABIS = ('arm64-v8a', 'x86_64')
+
+
+def _missing_native(names) -> str | None:
+    """The first ``lib/<abi>/<name>.so`` a required ABI lacks while another ABI has it (an ABI filter or an
+    exclude), or None. An APK with no native libraries needs none."""
+    found = {}
+    for entry in names:
+        parts = entry.split('/')
+        if len(parts) == 3 and parts[0] == 'lib' and parts[2].endswith('.so'):
+            found.setdefault(parts[2], set()).add(parts[1])
+    for library, abis in sorted(found.items()):
+        for abi in REQUIRED_ABIS:
+            if abi not in abis:
+                return f'lib/{abi}/{library}'
+    return None
+
+
 def _refuse_signed(apk: Path, name: str) -> None:
     """The build's APK must be unsigned: no v1 signature files and no APK Signing Block. The builder signs it with
     the project's own key afterwards and never signs over another signature."""
@@ -599,6 +643,11 @@ def _refuse_signed(apk: Path, name: str) -> None:
     v1 = [n for n in names if re.fullmatch(r'META-INF/[^/]+\.(?:SF|RSA|DSA|EC)', n, re.I)]
     if v1:
         raise StepFailed('compile', signed, log=f'{name} holds signature files ({", ".join(v1[:5])[:400]}).')
+    missing = _missing_native(names)
+    if missing:
+        raise StepFailed('compile', 'The app\'s build leaves out native libraries an Android phone or emulator needs '
+                         f'({missing}); remove abiFilters, splits and jniLibs excludes, so one APK installs everywhere.',
+                         log=f'{name} has no {missing}.')
     with open(apk, 'rb') as f:
         f.seek(0, os.SEEK_END)
         size = f.tell()

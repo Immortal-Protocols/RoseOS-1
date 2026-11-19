@@ -94,7 +94,10 @@ class WriterPolicy(unittest.TestCase):
     def test_identity_is_the_hosts(self):
         self.says('The host owns the app\'s identity and signs the built APK itself, outside the build',
                   'Never set or change applicationId, applicationIdSuffix, versionCode, versionName, signingConfigs, '
-                  'sharedUserId, splits or bundles, and never make a build debuggable or testOnly',
+                  'sharedUserId, splits or bundles, ABI filters (abiFilters) or native-library excludes, and never '
+                  'make a build debuggable or testOnly',
+                  'Android library modules, com.android.library; the application stays app/',
+                  'set android { compileOptions { sourceCompatibility = JavaVersion.VERSION_17;',
                   'host owns the <package>.rose package: never create that folder or package',
                   f'it writes it as {appprofile.client_root(True)}<package path>/rose/')
         self.assertEqual(appprofile.client_root(True), 'app/src/main/java/')

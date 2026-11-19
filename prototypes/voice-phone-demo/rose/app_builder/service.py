@@ -273,7 +273,8 @@ def _repair_text(failed: toolchain.StepFailed, folders) -> str:
     What is removed here is location: file URIs become paths, the builder's folders (and toolchain.run's
     ``<folder>/`` redactions) become relative, and every other absolute path is replaced with ``<path>``."""
     text = f'{failed.summary}\n{(failed.log or "")[-REPAIR_TEXT_MAX * 2:]}'
-    text = re.sub(r'\bfile:(?://)?(?=/)', '', text)  # Kotlin and Gradle name files as file:///path
+    # Kotlin and Gradle name files as file:///path, or file://<folder>/path once toolchain.run redacted the folder.
+    text = re.sub(r'\bfile:(?://)?(?=[/<])', '', text)
     for folder in sorted({str(f) for f in folders}, key=len, reverse=True):
         text = text.replace(folder + '/', '').replace(folder, '.')
     return _ABSOLUTE_PATH.sub('<path>', _REDACTED_FOLDER.sub('', text))[-REPAIR_TEXT_MAX:]
@@ -614,8 +615,7 @@ class Builder:
         code = self.ledger.allocate_version(job_id)
         name = f'{code}'
         self._step(job, 'building', 'compiling', 'Building the app.')
-        if work.exists():
-            shutil.rmtree(work)
+        gradle.remove_tree(work)  # a build's own folders too, whatever modes it left them in
         # A Gradle project's libraries are its own build files' business, resolved offline from the host's cache.
         libraries = [] if layout else self._libraries(snapshot, work, project_id, package)
         agent = None

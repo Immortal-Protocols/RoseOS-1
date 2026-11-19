@@ -208,7 +208,10 @@ class Catalog(unittest.TestCase):
         root = files['build.gradle.kts']
         for plugin, version in gradle_stack.PLUGINS.items():
             self.assertIn(f'id("{plugin}") version "{version}" apply false', root)
-            self.assertIn(f'id("{plugin}")\n', app)
+            self.assertIn(f'id("{plugin}")\n', files['lib/build.gradle.kts'] if plugin == 'com.android.library' else app)
+        # A project's own library module, and an application that uses it, are built too.
+        self.assertIn('implementation(project(":lib"))', files['multi/build.gradle.kts'])
+        self.assertIn(':multi:assembleRelease', gp.TASKS)
         bom = 'androidx.compose:compose-bom'
         self.assertIn(f'implementation(platform("{bom}:{gradle_stack.LIBRARIES[bom]}"))', app)
         for coordinate, version in gradle_stack.LIBRARIES.items():

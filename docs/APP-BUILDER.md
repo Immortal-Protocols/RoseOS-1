@@ -501,7 +501,9 @@ Kotlin itself), Kotlin 2.4.21 with the Compose compiler plugin, Compose BOM
 default), JDK 21 (Temurin), plus a short list of AndroidX and Kotlin libraries
 (activity, core, lifecycle, navigation, DataStore, Media3, coroutines,
 serialization). The writer's turn names all of them, since builds are offline.
-A project may use only those plugins and libraries, from `google()`,
+Plugins: `com.android.application`, `com.android.library` (a project's own
+library modules), and the Kotlin Compose and serialization plugins. A project may
+use only those plugins and libraries, from `google()`,
 `mavenCentral()` and `gradlePluginPortal()`. Adding one is a reviewed change to
 `gradle_stack.py` followed by reprovisioning.
 
@@ -509,6 +511,8 @@ A project may use only those plugins and libraries, from `google()`,
 - The builder's own init script (`gradle.init_script`) sets the application id
   to the ledger's package and the version code and name to the ledger's
   version, whatever the build files say. Only the release variant is built.
+  It also puts the stack's Kotlin plugin on the root build's classpath, so a
+  project without the Compose plugin (a Java or views app) resolves offline.
 - Gradle produces an unsigned APK. An APK the project's build signed itself is
   refused, never signed over.
 - The project's single universal APK is checked on the binary like every other
@@ -517,7 +521,12 @@ A project may use only those plugins and libraries, from `google()`,
   - not debuggable or testOnly;
   - no shared uid, key sets or other identity elements;
   - permissions only under its own package;
-  - the manifest's top-level elements limited to the allow-list;
+  - the manifest's top-level elements limited to the allow-list (read as a
+    tree, so a namespace declaration cannot hide one);
+  - no split attributes (isFeatureSplit, isSplitRequired, requiredSplitTypes,
+    splitTypes);
+  - every native library present for arm64-v8a (phones) and x86_64
+    (emulators): no ABI filters or excludes;
   - minSdk at most 29 and targetSdk at least 24;
   - 16 KB page alignment.
 - Only then is it signed with the project's own key (`toolchain.sign`), so an
@@ -528,10 +537,12 @@ outside `gradle.isolation` (`app_builder/isolation.py`):
 - **Linux:** `bubblewrap`. The root is empty and read-only, with no network,
   `/etc`, `/tmp` or home. The pinned JDK, Gradle, SDK and dependency cache are
   mounted read-only, and the job's build folder is the only writable one.
-- **macOS:** `seatbelt`, which uses `sandbox-exec`. It allows by default, then
-  denies network beyond localhost, every write outside the build folder, reads
-  of the builder root, the home folder, the Rose configuration and the user's
-  temporary folders, and the keychain services.
+- **macOS:** none yet. `app_builder/isolation.py` has a `sandbox-exec`
+  (Seatbelt) provider, but the host config refuses `isolation: "seatbelt"`:
+  allowing by default, it leaves the build's code able to reach localhost
+  (where Rose's own loopback-only pairing API listens) and to start processes
+  outside the sandbox through launchd or LaunchServices. A Mac builder needs a
+  deny-by-default profile proven on the Mac first, or a Linux builder.
 - Keys, the ledger, artifacts and other projects are never visible.
 - The APK is copied out of the writable folder before it is checked and signed.
 - The job's Gradle home and build outputs are removed afterwards.
@@ -557,10 +568,11 @@ buildTimeoutS?}`. `scripts/setup-android-gradle.sh` is the CI wrapper.
 
 **Verified here:** the Gradle path builds, signs and updates on Linux under
 bubblewrap, as a non-root user (CI job `gradle` and the container this was
-written in).
+written in), including a project with its own Android library module, a Java
+17 app and the identity, signing, split and ABI refusals.
 
 **Not verified:**
-- the Seatbelt isolation on the Mac, which needs qualification there;
+- any macOS isolation (none is qualified; see above);
 - installing on a device or emulator. API 34 and current Android are the
   validation targets, not a cutoff; the APKs are checked against them on the
   binary only.

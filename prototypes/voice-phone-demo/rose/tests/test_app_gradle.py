@@ -217,6 +217,21 @@ class SkeletonTest(Temp):
         for name in ('ROSE_APPLICATION_ID', 'ROSE_VERSION_CODE', 'ROSE_VERSION_NAME', 'withPlugin("com.android.application")',
                      'onVariants', 'getApplicationId', 'getVersionCode', 'getVersionName'):
             self.assertIn(name, script)
+        # The stack's Kotlin plugin on the root classpath, so AGP alone resolves offline.
+        self.assertIn(f'"org.jetbrains.kotlin:kotlin-gradle-plugin:{gradle_stack.KOTLIN}"', script)
+        self.assertNotIn('@KOTLIN@', script)
+
+    def test_a_tree_the_build_locked_up_is_still_removed(self):
+        box = self.root / 'box'
+        (box / 'a/b').mkdir(parents=True)
+        (box / 'a/b/f').write_text('x')
+        (box / 'a/c').mkdir()
+        (box / 'a/c/g').write_text('y')
+        os.chmod(box / 'a/b', 0o000)
+        os.chmod(box / 'a/c', 0o500)
+        gradle.remove_tree(box)
+        self.assertFalse(os.path.lexists(box))
+        gradle.remove_tree(box)  # nothing there: nothing to do
 
 
 KOTLIN_FAILURE = '''\
@@ -357,6 +372,16 @@ class VerifyApkTest(Temp):
         self.assertIn('test-only', failed.summary)
         self.assertEqual(self.refused(extra='      A: android:debuggable(0x0101000f)=(type 0x12)0xffffffff\n')
                          .category, 'compile')
+        self.verify(extra='      A: android:testOnly(0x01010272)=(type 0x12)0x0\n')  # testOnly="false" is the default
+
+    def test_split_attributes_are_refused(self):
+        for attribute in ('isFeatureSplit(0x0101055b)=(type 0x12)0xffffffff', 'isSplitRequired(0x01010591)=(type 0x12)0xffffffff',
+                          'requiredSplitTypes(0x0101064e)="foo" (Raw: "foo")', 'splitTypes(0x0101064f)="foo" (Raw: "foo")',
+                          'requiredSplitTypes(0x01df0001)="foo" (Raw: "foo")'):
+            with self.subTest(attribute):
+                failed = self.refused(extra=f'      A: android:{attribute}\n')
+                self.assertEqual(failed.category, 'compile')
+                self.assertIn('split APKs', failed.summary)
 
     def test_sdk_levels_must_install_on_every_rose_phone_and_current_android(self):
         self.assertIn(f'at most {gradle_stack.MAX_MIN_SDK}', self.refused(min_sdk='30').summary)
@@ -663,12 +688,12 @@ java.io.File(rootDir, "probe.txt").writeText(probe.toString())
 
 
 def plain_project(tree: Path, app_extra: str = '', kotlin_extra: str = '') -> None:
-    """The smallest Kotlin app (framework Activity, no libraries). The compose plugin is on the root classpath
-    (apply false) because AGP 9.5.1 alone asks for kotlin-gradle-plugin 2.2.10, which the stack's cache lacks; with
-    it, Gradle resolves the stack's Kotlin."""
+    """The smallest Kotlin app (framework Activity, no libraries), with only AGP on the root classpath: AGP 9.5.1
+    alone asks for kotlin-gradle-plugin 2.2.10, which the stack's cache lacks, so these builds also prove the
+    builder's init script puts the stack's Kotlin plugin there."""
     files = {
         'settings.gradle.kts': gradle.skeleton(PACKAGE, 'x')['settings.gradle.kts'],
-        'build.gradle.kts': gradle.skeleton(PACKAGE, 'x')['build.gradle.kts'],
+        'build.gradle.kts': f'plugins {{ id("com.android.application") version "{gradle_stack.AGP}" apply false }}\n',
         'gradle.properties': 'android.useAndroidX=true\n',
         'app/build.gradle.kts': (
             'plugins { id("com.android.application") }\n'
@@ -686,6 +711,44 @@ def plain_project(tree: Path, app_extra: str = '', kotlin_extra: str = '') -> No
     for name, text in files.items():
         (tree / name).parent.mkdir(parents=True, exist_ok=True)
         (tree / name).write_text(text)
+
+
+def java17_project(tree: Path) -> None:
+    """A converted older-layout app's Java at the Java 17 level it was written for, as the writer policy says to
+    keep it (compileOptions in app/build.gradle.kts)."""
+    plain_project(tree, 'android { compileOptions { sourceCompatibility = JavaVersion.VERSION_17; '
+                        'targetCompatibility = JavaVersion.VERSION_17 } }\n')
+    path = tree / 'app/src/main/java/com/example/app/Point.java'
+    path.write_text('package com.example.app;\n\npublic record Point(int x, int y) {\n'
+                    '    public String label() { return switch (x) { case 0 -> "origin"; default -> "x" + x; }; }\n}\n')
+
+
+def skeleton_with(tree: Path, package: str, app_extra: str) -> None:
+    gradle.write_skeleton(tree, package, 'Gradle test')
+    with open(tree / 'app/build.gradle.kts', 'a') as f:
+        f.write(app_extra)
+
+
+def modules_project(tree: Path, package: str) -> None:
+    """The skeleton with a Compose library module of its own (com.android.library), as Home's starters are vendored."""
+    skeleton_with(tree, package, 'dependencies { implementation(project(":design")) }\n')
+    with open(tree / 'settings.gradle.kts', 'a') as f:
+        f.write('include(":design")\n')
+    root = (tree / 'build.gradle.kts').read_text()
+    (tree / 'build.gradle.kts').write_text(root.replace(
+        'plugins {\n', f'plugins {{\n    id("com.android.library") version "{gradle_stack.AGP}" apply false\n', 1))
+    bom = gradle_stack.LIBRARIES['androidx.compose:compose-bom']
+    (tree / 'design').mkdir()
+    (tree / 'design/build.gradle.kts').write_text(
+        'plugins {\n    id("com.android.library")\n    id("org.jetbrains.kotlin.plugin.compose")\n}\n'
+        f'android {{\n    namespace = "{package}.design"\n    compileSdk = {gradle_stack.COMPILE_SDK}\n'
+        f'    defaultConfig {{ minSdk = {gradle_stack.MIN_SDK} }}\n    buildFeatures {{ compose = true }}\n}}\n'
+        f'dependencies {{\n    implementation(platform("androidx.compose:compose-bom:{bom}"))\n'
+        '    implementation("androidx.compose.material3:material3")\n}\n')
+    source = tree / 'design/src/main/java' / Path(*package.split('.')) / 'design/Card.kt'
+    source.parent.mkdir(parents=True)
+    source.write_text(f'package {package}.design\n\nimport androidx.compose.material3.Text\n'
+                      'import androidx.compose.runtime.Composable\n\n@Composable\nfun Card(text: String) = Text(text)\n')
 
 
 class GradleBuildTest(unittest.TestCase):
@@ -726,6 +789,10 @@ class GradleBuildTest(unittest.TestCase):
                                                  'include("x86_64", "arm64-v8a"); isUniversalApk = false } } }\n'),
             'syntax': lambda t: plain_project(t, kotlin_extra='fun broken( {\n'),
             'missing': lambda t: plain_project(t, 'dependencies { implementation("androidx.core:core-ktx:0.0.1") }\n'),
+            'java17': java17_project,
+            'modules': lambda t: modules_project(t, cls.identity[0]),
+            'abi': lambda t: skeleton_with(t, cls.identity[0],
+                                           'android { defaultConfig { ndk { abiFilters += "x86_64" } } }\n'),
         }
         cls.results = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
@@ -794,6 +861,17 @@ class GradleBuildTest(unittest.TestCase):
         second = toolchain.sign(apk, work / 'signed-2.apk', keys, first['signerSha256'], self.tools)
         self.assertEqual(first['signerSha256'], second['signerSha256'])
         self.assertIn("versionCode='7'", self.aapt('dump', 'badging', work / 'signed-1.apk'))
+
+    def test_a_converted_apps_java_17_and_a_projects_own_library_module_build(self):
+        for name in ('java17', 'modules'):
+            with self.subTest(name):
+                _, result = self.result(name)
+                self.assertNotIsInstance(result, toolchain.StepFailed, getattr(result, 'log', '')[-4000:])
+
+    def test_native_libraries_filtered_to_some_abis_are_refused(self):
+        failed = self.failure('abi')
+        self.assertEqual(failed.category, 'compile')
+        self.assertIn('lib/arm64-v8a/', failed.summary)
 
     def test_build_scripts_reach_neither_the_builders_files_nor_the_network(self):
         work, result = self.result('skeleton')

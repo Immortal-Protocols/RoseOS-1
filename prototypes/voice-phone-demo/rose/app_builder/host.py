@@ -60,7 +60,8 @@ class Command:
 class GradleConfig:
     """``gradle`` (docs/APP-BUILDER.md §2.4): the pinned stack rose.app_builder.gradle_prepare made (its ``jdk``,
     ``distribution``, ``sdk`` and read-only ``dependencyCache``) and the build isolation ordinary Gradle projects run
-    in (``bubblewrap`` on Linux, ``seatbelt`` on macOS); there is no unisolated Gradle build."""
+    in (``bubblewrap``, Linux); there is no unisolated Gradle build. ``seatbelt`` (macOS) is named so a config that
+    asks for it is refused with the reason: it is not qualified (rose.app_builder.isolation.SeatbeltIsolation)."""
     jdk: Path
     distribution: Path
     sdk: Path
@@ -241,7 +242,10 @@ def _gradle_config(value) -> GradleConfig | None:
         raise ConfigError('gradle must be {jdk, distribution, sdk, dependencyCache, isolation, bubblewrap?, '
                           'buildTimeoutS?}')
     if value['isolation'] not in GRADLE_ISOLATIONS:
-        raise ConfigError('gradle.isolation must be bubblewrap or seatbelt')
+        raise ConfigError('gradle.isolation must be bubblewrap')
+    if value['isolation'] == 'seatbelt':  # allow-by-default: loopback (Rose's own pairing) and launchd stay reachable
+        raise ConfigError('gradle.isolation seatbelt (macOS) is not qualified: it leaves localhost, launchd and '
+                          'other services reachable to the build\'s code. Gradle builds need bubblewrap on Linux.')
     if 'bubblewrap' in value and value['isolation'] != 'bubblewrap':
         raise ConfigError('gradle.bubblewrap is only for the bubblewrap isolation')
     paths = {}
@@ -253,16 +257,14 @@ def _gradle_config(value) -> GradleConfig | None:
                         value['isolation'], bwrap, _seconds(value.get('buildTimeoutS'), 'gradle.buildTimeoutS', 1800.0))
 
 
-def gradle_tools(config: GradleConfig | None, hidden: tuple = ()):
+def gradle_tools(config: GradleConfig | None):
     """The Gradle toolchain and its isolation, checked now: a configured stack that is not usable fails the host at
-    startup instead of every job. ``hidden`` are folders the macOS isolation must keep unreadable (the builder root,
-    the home folder, the Rose server's configuration); Linux isolation shows nothing that is not mounted."""
+    startup instead of every job. The isolation shows the build nothing that is not mounted."""
     if config is None:
         return None
     from .gradle import GradleTools
-    from .isolation import BubblewrapIsolation, SeatbeltIsolation
-    isolation = (BubblewrapIsolation(config.bubblewrap) if config.isolation == 'bubblewrap'
-                 else SeatbeltIsolation(hidden=tuple(Path(h).resolve() for h in hidden)))
+    from .isolation import BubblewrapIsolation
+    isolation = BubblewrapIsolation(config.bubblewrap)  # the only qualified isolation (_gradle_config)
     tools = GradleTools(config.jdk, config.distribution, config.sdk, config.dependency_cache, isolation,
                         timeout_s=config.build_timeout_s)
     missing = tools.available()
@@ -427,7 +429,7 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
     root must be separate from each of them and from ``apart_from`` (the Rose server's own configuration)."""
     resolver = library_store(config.library_store)
     client_codegen = None
-    gradle = gradle_tools(config.gradle, hidden=(config.root, Path.home(), *private, *apart_from))
+    gradle = gradle_tools(config.gradle)
     for other in apart_from:
         if not separate(config.root.resolve(), Path(other).resolve()):
             raise ConfigError("the builder root must be separate from the server's own configuration")
