@@ -430,20 +430,20 @@ def _copy_tree(source: Path, target: Path) -> None:
 
 def remove_tree(path: Path) -> None:
     """Remove a tree the build wrote, whatever modes its code left on it: inside the isolation its files are the
-    builder's own, so a folder it made unreadable or unwritable is given back its owner access first."""
+    builder's own, so every folder is given back its owner access first (top down, so a folder made unreadable is
+    opened again before it is walked), then the tree is removed. Links are never followed."""
     if not os.path.lexists(path):
         return
-
-    def retry(function, name, _):
-        parent = os.path.dirname(name)
-        for folder in (parent, name):
-            try:
-                if os.path.isdir(folder) and not os.path.islink(folder):
-                    os.chmod(folder, 0o700)
-            except OSError:
-                pass
-        function(name)
-    shutil.rmtree(path, onerror=retry)
+    if os.path.isdir(path) and not os.path.islink(path):
+        os.chmod(path, 0o700)
+        for folder, dirs, _ in os.walk(path, topdown=True, followlinks=False):
+            for name in dirs:
+                child = os.path.join(folder, name)
+                if not os.path.islink(child):
+                    os.chmod(child, 0o700)
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
 
 
 def _discard(path: Path) -> None:
