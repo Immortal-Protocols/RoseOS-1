@@ -44,6 +44,17 @@ BACKEND = ('\n\nThis builder sets up the app\'s backend in its own Chariot agent
 TOOL_OUTPUT_MAX = 64 * 1024  # each of stdout and stderr, its last bytes, back to the writer
 TOOL = 'agent_container'
 
+# Home's starter guidance (workspace/rose-starters): the template owns behaviour and state, the theme its look, and
+# app/ only joins them, so the writer works inside the template and the theme stays swappable. Repairs get it too:
+# a build error is never a reason to edit the shared framework or the theme.
+STARTER = (
+    '\n\nThis app starts from the Rose starter template "{template}" under the "{theme}" theme. Make the owner\'s app by '
+    'changing the template module (templates/{template}/) and app/src/main/res only. Leave design/, design-testing/, '
+    'examples/, themes/{theme}/, gradle/libs.versions.toml and app/\'s MainActivity and build files as they are, so '
+    'the theme stays swappable. In the template, draw only with app.rose.design: its stock controls, Text, Compose '
+    'foundation layout and RoseTheme\'s colors, type, shapes and spacing; never Material or a theme directly.'
+)
+
 
 def prompt(kind: str, request: str, libraries=(), backend_folder: str | None = None, *,
            stack: str | None = None, starter: dict | None = None) -> str:
@@ -58,6 +69,8 @@ def prompt(kind: str, request: str, libraries=(), backend_folder: str | None = N
                      '(declare in dependencies.json only if needed): ' + ', '.join(libraries) + '.')
     if backend_folder is not None:
         provided += BACKEND.format(folder=backend_folder)
+    if starter:
+        provided += STARTER.format(template=starter['template'], theme=starter['theme'])
     if kind == 'create':
         return ('Write this new app (the skeleton in the current directory is its starting point).' + provided
                 + '\n\n' + request)

@@ -125,6 +125,66 @@ class Vendoring(unittest.TestCase):
                 starters.Starters.load(root).files(PACKAGE, 'x', {'template': 'feed', 'theme': 'minimal'})
 
 
+class Prompt(unittest.TestCase):
+    """The writer's turn on a starter project names the starter and where to work, on every kind of turn."""
+
+    def test_create_repair_and_revise_carry_the_starter_guidance(self):
+        from rose.app_builder import generator
+        starter = {'template': 'sprite-game', 'theme': 'skeuomorphic'}
+        for kind in ('create', 'repair', 'revise'):
+            with self.subTest(kind=kind):
+                text = generator.prompt(kind, 'REQUEST', starter=starter)
+                self.assertIn('Rose starter template "sprite-game" under the "skeuomorphic" theme', text)
+                self.assertIn('templates/sprite-game/', text)
+                self.assertIn('themes/skeuomorphic/', text)
+                self.assertIn('never Material or a theme directly', text)
+                self.assertTrue(text.endswith('REQUEST'))
+
+    def test_no_starter_is_the_unchanged_prompt(self):
+        from rose.app_builder import generator
+        for kind in ('create', 'repair', 'revise'):
+            self.assertEqual(generator.prompt(kind, 'R'), generator.prompt(kind, 'R', starter=None))
+            self.assertNotIn('Rose starter', generator.prompt(kind, 'R'))
+
+
+class OutsideTemplate(unittest.TestCase):
+    """After a writer turn: anything changed outside the template and app's resources is reported."""
+
+    def make(self, d, starter={'template': 'feed', 'theme': 'minimal'}):
+        starters.skeleton(Path(d), PACKAGE, 'Feed', starter)
+        return starter
+
+    def test_a_fresh_tree_and_template_or_resource_edits_are_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            starter = self.make(d)
+            self.assertEqual([], starters.outside_template(Path(d), starter))
+            kt = next((Path(d) / 'templates/feed/src/main/kotlin').rglob('FeedTemplate.kt'))
+            kt.write_text(kt.read_text() + '\n// the owner\'s notice board\n')
+            (Path(d) / 'templates/feed/src/main/kotlin/New.kt').write_text('package x\n')
+            (Path(d) / 'app/src/main/res/values/strings.xml').write_text('<resources/>')
+            (Path(d) / 'templates/feed/build').mkdir()
+            self.assertEqual([], starters.outside_template(Path(d), starter))
+
+    def test_theme_framework_catalog_and_wiring_edits_are_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            starter = self.make(d)
+            theme = next((Path(d) / 'themes/minimal/src/main/kotlin').rglob('*.kt'))
+            theme.write_text(theme.read_text().replace('Minimal', 'Forked', 1))
+            (Path(d) / 'design/src/main/kotlin/app/rose/design/Extra.kt').write_text('package app.rose.design\n')
+            (Path(d) / 'gradle/libs.versions.toml').write_text('# changed\n')
+            activity = next((Path(d) / 'app/src/main/java').rglob('MainActivity.kt'))
+            activity.write_text(activity.read_text().replace('RoseTheme(MinimalTheme)', 'RoseTheme(BaselineTheme)'))
+            removed = Path(d) / 'examples/build.gradle.kts'
+            removed.unlink()
+            found = starters.outside_template(Path(d), starter)
+            self.assertIn(theme.relative_to(d).as_posix(), found)
+            self.assertIn('design/src/main/kotlin/app/rose/design/Extra.kt', found)
+            self.assertIn('gradle/libs.versions.toml', found)
+            self.assertIn(activity.relative_to(d).as_posix(), found)
+            self.assertIn('examples/build.gradle.kts', found)
+            self.assertFalse([f for f in found if f.startswith('templates/')])
+
+
 HAS_GRADLE_BUILDER = importlib.util.find_spec('rose.app_builder.gradle') is not None
 
 

@@ -119,6 +119,46 @@ def skeleton(source: Path, package: str, label: str, starter=None, *, root: Path
         target.write_bytes(data)
 
 
+def outside_template(source: Path, starter, *, root: Path = ROOT) -> list[str]:
+    """What a writer changed that a starter app must keep as vendored: the shared framework modules, the theme, the
+    version catalog and app/'s wiring (MainActivity, build files, manifest). Paths (relative to ``source``) that were
+    changed, added or removed there, sorted; empty when only the template and app/src/main/res changed. The builder
+    may refuse or repair a turn that returns any, so the theme stays swappable and the template stays the only
+    variable."""
+    starters = Starters.load(root)
+    tmpl, theme = starters.resolve(starter)
+    expected = starters.files(_package_of(source), _label_of(source), starter)
+    guarded = (*(f + '/' for f in starters.shared), theme.dir + '/')
+    fixed = {'gradle/libs.versions.toml', 'settings.gradle.kts', 'build.gradle.kts', f'{APP_MODULE}/build.gradle.kts',
+             f'{APP_MODULE}/src/main/AndroidManifest.xml'}
+    source = Path(source)
+
+    def watched(name: str) -> bool:
+        return name in fixed or name.startswith(guarded) or (
+            name.startswith(f'{APP_MODULE}/src/main/java/') and name.endswith('/MainActivity.kt'))
+
+    actual = {}
+    for path in source.rglob('*'):
+        name = path.relative_to(source).as_posix()
+        if path.is_file() and not path.is_symlink() and watched(name) and not (set(Path(name).parts) & SKIP_DIRS):
+            actual[name] = path.read_bytes()
+    want = {n: d for n, d in expected.items() if watched(n)}
+    return sorted(n for n in set(actual) | set(want) if actual.get(n) != want.get(n))
+
+
+def _package_of(source: Path) -> str:
+    """The package the tree was made for: app/build.gradle.kts's namespace."""
+    text = (Path(source) / APP_MODULE / 'build.gradle.kts').read_text(encoding='utf-8')
+    found = re.search(r'namespace = "([^"]+)"', text)
+    if not found:
+        raise ValueError('app/build.gradle.kts has no namespace; it is not a starter tree.')
+    return found.group(1)
+
+
+def _label_of(source: Path) -> str:
+    return ''  # strings.xml is the writer's to change; the label only reaches files outside_template ignores
+
+
 def available(root: Path = ROOT) -> bool:
     """Whether this checkout has the starters (the host wires the hook only then)."""
     return (Path(root) / MANIFEST).is_file()
