@@ -119,15 +119,16 @@ def skeleton(source: Path, package: str, label: str, starter=None, *, root: Path
         target.write_bytes(data)
 
 
-def outside_template(source: Path, starter, *, root: Path = ROOT) -> list[str]:
+def outside_template(source: Path, starter, package: str, *, root: Path = ROOT) -> list[str]:
     """What a writer changed that a starter app must keep as vendored: the shared framework modules, the theme, the
     version catalog and app/'s wiring (MainActivity, build files, manifest). Paths (relative to ``source``) that were
     changed, added or removed there, sorted; empty when only the template and app/src/main/res changed. The builder
     may refuse or repair a turn that returns any, so the theme stays swappable and the template stays the only
-    variable."""
+    variable. ``package`` is the builder's own record of the app's package (project['packageName']), never read
+    from the tree: the tree's namespace and applicationId are among the files checked."""
     starters = Starters.load(root)
     tmpl, theme = starters.resolve(starter)
-    expected = starters.files(_package_of(source), _label_of(source), starter)
+    expected = starters.files(package, '', starter)  # the label only reaches strings.xml, which is not checked
     guarded = (*(f + '/' for f in starters.shared), theme.dir + '/')
     fixed = {'gradle/libs.versions.toml', 'settings.gradle.kts', 'build.gradle.kts', f'{APP_MODULE}/build.gradle.kts',
              f'{APP_MODULE}/src/main/AndroidManifest.xml'}
@@ -146,17 +147,78 @@ def outside_template(source: Path, starter, *, root: Path = ROOT) -> list[str]:
     return sorted(n for n in set(actual) | set(want) if actual.get(n) != want.get(n))
 
 
-def _package_of(source: Path) -> str:
-    """The package the tree was made for: app/build.gradle.kts's namespace."""
-    text = (Path(source) / APP_MODULE / 'build.gradle.kts').read_text(encoding='utf-8')
-    found = re.search(r'namespace = "([^"]+)"', text)
-    if not found:
-        raise ValueError('app/build.gradle.kts has no namespace; it is not a starter tree.')
-    return found.group(1)
+def template_edits(source: Path, starter, package: str, label: str, *, root: Path = ROOT) -> dict[str, str | None]:
+    """The writer's allowed edits, normalized: every file under the template module and app/src/main/res that differs
+    from what the starter wrote, as path -> sha256 of its normalized content (None for a file the writer removed).
+    Text is compared without line-ending or trailing-whitespace noise; anything else byte for byte. Build state is
+    ignored. Two apps with equal edits run the same template code and resources. ``package`` and ``label`` are the
+    builder's record of the project (packageName, name), the values its skeleton was written with."""
+    starters = Starters.load(root)
+    tmpl, _ = starters.resolve(starter)
+    expected = starters.files(package, label, starter)
+    allowed = (tmpl.dir + '/', f'{APP_MODULE}/src/main/res/')
+    source = Path(source)
+    actual = {}
+    for path in source.rglob('*'):
+        name = path.relative_to(source).as_posix()
+        if (path.is_file() and not path.is_symlink() and name.startswith(allowed)
+                and not (set(Path(name).parts) & SKIP_DIRS)):
+            actual[name] = path.read_bytes()
+    out: dict[str, str | None] = {}
+    for name in sorted(set(actual) | {n for n in expected if n.startswith(allowed)}):
+        have, had = actual.get(name), expected.get(name)
+        if have is None:
+            out[name] = None
+        elif had is None or _digest(have) != _digest(had):
+            out[name] = _digest(have)
+    return out
 
 
-def _label_of(source: Path) -> str:
-    return ''  # strings.xml is the writer's to change; the label only reaches files outside_template ignores
+def compare_trio(edits_by_theme: dict[str, dict]) -> dict:
+    """One template's writer edits under each theme (theme id -> template_edits). ``equivalent`` only when every theme
+    has exactly the same edited paths with the same normalized contents; otherwise what differs, for the record:
+    ``onlyIn`` (path -> the themes that edited it) and ``differs`` (path -> theme -> digest)."""
+    themes = sorted(edits_by_theme)
+    paths = sorted({p for edits in edits_by_theme.values() for p in edits})
+    only_in, differs = {}, {}
+    for path in paths:
+        present = [t for t in themes if path in edits_by_theme[t]]
+        if len(present) != len(themes):
+            only_in[path] = present
+        elif len({edits_by_theme[t][path] for t in themes}) > 1:
+            differs[path] = {t: edits_by_theme[t][path] for t in themes}
+    return {'themes': themes, 'equivalent': not only_in and not differs, 'onlyIn': only_in, 'differs': differs}
+
+
+def transplant(source: Path, starter, package: str, label: str, theme: str, dest: Path, *,
+               root: Path = ROOT) -> None:
+    """``source``'s template module and app resources under another ``theme``, written to ``dest``: the starter tree
+    for {template, theme}, then the source's own templates/<id>/ and app/src/main/res over it. The result runs
+    exactly the same template code as ``source``, so behaviour checks across themes compare like with like."""
+    starters = Starters.load(root)
+    tmpl, _ = starters.resolve(starter)
+    other = {'template': tmpl.id, 'theme': theme}
+    skeleton(dest, package, label, other, root=root)
+    source, dest = Path(source), Path(dest)
+    for folder in (tmpl.dir, f'{APP_MODULE}/src/main/res'):
+        target = dest / folder
+        if target.exists():
+            import shutil
+            shutil.rmtree(target)
+        for name, data in _source(source, folder).items():
+            out = dest / name
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(data)
+
+
+def _digest(data: bytes) -> str:
+    import hashlib
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return hashlib.sha256(data).hexdigest()
+    lines = [line.rstrip() for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n')]
+    return hashlib.sha256('\n'.join(lines).rstrip('\n').encode('utf-8')).hexdigest()
 
 
 def available(root: Path = ROOT) -> bool:
