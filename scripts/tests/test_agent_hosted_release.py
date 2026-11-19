@@ -25,7 +25,7 @@ WRAPPER = ('disk_preflight', 'allocated_floor', 'requested_version', 'missing_in
 WORKFLOW_REF = 'Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main'
 STORE = {'kind': 'synthetic-test-store', 'ref': 'synthetic only; no real ledger'}
 UNBOUND = ['host.integrate.appSdkRoot', 'host.integrate.javaHome', 'host.integrate.publicAssetsDir',
-           'host.integrate.publicAssetDigests', 'host.tools.aapt', 'host.tools.apksigner', 'reservation.store']
+           'host.integrate.publicAssetDigests', 'host.tools.aapt', 'host.tools.apksigner']  # App's, bound at run time
 ASSETS = release.load('host-app-build').PUBLIC_ASSETS
 DIGESTS = {name: hashlib.sha256(name.encode()).hexdigest() for name in ASSETS}  # synthetic pins, five inputs
 
@@ -67,11 +67,15 @@ class Committed(unittest.TestCase):
         self.assertEqual(sorted(COMMITTED['host']), ['integrate', 'tools'])  # no lockPath, sourceRoot or OS commands
         self.assertEqual(sorted(ours), ['appSdkRoot', 'appSecrets', 'javaHome', 'project', 'publicAssetDigests',
                                         'publicAssetsDir', 'secretVersion'])
-        # App's portable inputs and the shared ledger are never copied from the builder or guessed.
+        # App's portable inputs are never copied from the builder or guessed: they are bound at run time.
         for value in (ours['appSdkRoot'], ours['javaHome'], ours['publicAssetsDir'], ours['publicAssetDigests'],
-                      COMMITTED['host']['tools']['aapt'], COMMITTED['host']['tools']['apksigner'],
-                      COMMITTED['reservation']['store']):
+                      COMMITTED['host']['tools']['aapt'], COMMITTED['host']['tools']['apksigner']):
             self.assertIsNone(value)
+        # D1: the shared ledger is bound to the pixel-ota tag store (scripts/app_reservation_store.py).
+        self.assertEqual(COMMITTED['reservation']['store'], {
+            'kind': 'github-annotated-tags', 'repository': 'Immortal-Protocols/pixel-ota',
+            'reservationPrefix': 'refs/tags/app-reservations/dev.pixel.voice/',
+            'floorPrefix': 'refs/tags/app-floors/dev.pixel.voice/'})
         self.assertNotIn('/home/pixelbuild', json.dumps(COMMITTED))
 
     def test_relative_builder_paths_never_count_as_portable(self):
@@ -289,7 +293,7 @@ class Portable(unittest.TestCase):
             return release.hosted_config(target, path)
         return release.hosted_config(release.HOSTED_CONFIG, path)
 
-    def test_it_binds_exactly_apps_fields_and_leaves_only_the_store_unbound(self):
+    def test_it_binds_exactly_apps_fields_and_then_nothing_is_unbound(self):
         config, record = self.effective()
         integrate, tools = config['host']['integrate'], config['host']['tools']
         expected = portable()
@@ -301,13 +305,12 @@ class Portable(unittest.TestCase):
             self.assertEqual(integrate[key], COMMITTED['host']['integrate'][key])
         for key in ('identities', 'appRelease', 'reservation'):
             self.assertEqual(config[key], COMMITTED[key])
-        self.assertEqual(release.hosted_missing_inputs(config), ['reservation.store'])  # D1 stays unbound
+        self.assertEqual(release.hosted_missing_inputs(config), [])  # D1 is bound; App binds the rest at run time
         self.assertEqual(record, {'schema': 'roseos.agent-portable-inputs.v1',
                                   'sha256': hashlib.sha256(self.path.read_bytes()).hexdigest()})
         result = subprocess.run([sys.executable, str(ROOT/'scripts/host-app-release.py'), '--check', '--hosted',
                                  '--portable-inputs', str(self.path)], capture_output=True, text=True)
-        self.assertEqual((result.returncode, json.loads(result.stderr)),
-                         (4, {'verdict': 'SETUP_MISSING', 'missing': ['reservation.store']}))
+        self.assertEqual((result.returncode, result.stderr), (0, ''))
 
     def test_it_can_never_set_signing_allocation_or_store_values(self):
         for key, value in (('appSignerSha256', '0' * 64), ('identities', {}), ('project', 'other'), ('secretVersion', 'latest'),

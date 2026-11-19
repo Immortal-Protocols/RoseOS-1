@@ -349,7 +349,7 @@ class PortableBuildTest(unittest.TestCase):
 
     def test_the_six_fields_are_exactly_the_hosted_routes_unbound_app_inputs(self):
         # Applied where hosted.json keeps them (host.integrate / host.tools), the overlay leaves the Release consumer
-        # (scripts/host-app-release.py, PR611) lacking only its own reservation store. The exact overlay nesting is
+        # (scripts/host-app-release.py, PR611) lacking nothing: Release binds its own reservation store (decision D1). The exact overlay nesting is
         # Release's --portable-inputs reader's; this pins only that the six fields are the right ones.
         self.fx.prepare()
         written = PB.inputs(str(self.tmp/'work/d3.json'), str(self.tmp/'portable-inputs.json'))
@@ -363,7 +363,7 @@ class PortableBuildTest(unittest.TestCase):
             shared['host']['integrate'][key] = written[key]
         for key in ('aapt', 'apksigner'):
             shared['host']['tools'][key] = written[key]
-        self.assertEqual(release.hosted_missing_inputs(shared), ['reservation.store'])
+        self.assertEqual(release.hosted_missing_inputs(shared), [])
 
     def test_paths_must_be_absolute_and_normalized(self):
         base = str(self.tmp)

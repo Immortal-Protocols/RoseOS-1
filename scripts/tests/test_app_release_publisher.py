@@ -28,6 +28,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import app_release_publisher as arp  # noqa: E402
+import app_reservation_store  # noqa: E402
 import github_release_publisher as gp  # noqa: E402
 
 TOKEN = 'ghs_synthetic_app_publisher_token'
@@ -660,7 +661,9 @@ class PublisherHostedTest(unittest.TestCase):
     def setUp(self):
         PublisherTest.setUp(self)
         hosted = json.loads((ROOT/'os/release-pipeline/agent/hosted.json').read_text())
-        self.assertIsNone(hosted['reservation']['store'], 'the committed store is unbound (D1)')
+        # The committed store is the D1 ledger (scripts/app_reservation_store.py); these fakes substitute a synthetic one.
+        self.assertEqual(app_reservation_store.check_store(hosted['reservation']['store'])['repository'],
+                         'Immortal-Protocols/pixel-ota')
         hosted['reservation']['store'] = STORE
         self.hosted_config = self.root/'hosted.json'
         self.hosted_config.write_text(json.dumps(hosted))
@@ -981,13 +984,13 @@ class WorkflowAppPublisherTest(unittest.TestCase):
         for other in ('builder', 'app-builder', 'alpha-builder', 'controller', 'cleanup'):
             self.assertNotIn('PIXEL_OTA_APP_PRIVATE_KEY }}\n', self.jobs[other].replace('!= \'\'', ''), other)
             self.assertNotIn('create-github-app-token', self.jobs[other], other)
-        self.assertIn('      app_publish:\n        description: app-only and app-reuse only', WORKFLOW)
+        self.assertIn('      app_publish:\n        description: app-only, app-reuse and agent-hosted only', WORKFLOW)
         self.assertIn('[[ "$MODE" != app-reuse ]] || reuse=(--reuse-binding "$REUSE_BINDING" --build-number "$BUILD_NUMBER" '
             '--build-timestamp "$BUILD_TIMESTAMP")\n', job)
         self.assertIn('--public-dir "$RUNNER_TEMP/app-public" "${reuse[@]}"\n', job)
         guard = self.jobs['guard']
         self.assertIn('APP_PUBLISH: ${{ inputs.app_publish }}', guard)
-        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]', guard)
+        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse || "$MODE" == agent-hosted ]]', guard)
         self.assertIn("    if: inputs.mode == 'emulator-alpha'\n", self.jobs['alpha-builder'])
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
 

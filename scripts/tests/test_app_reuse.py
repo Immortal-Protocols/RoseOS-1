@@ -361,7 +361,7 @@ class WorkflowAppReuseTest(unittest.TestCase):
     def test_guard_admits_only_rose_agent_and_a_well_formed_binding_in_reuse_mode(self):
         import re
         guard = self.jobs['guard']
-        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]', guard)
+        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse || "$MODE" == agent-hosted ]]', guard)
         self.assertIn('[[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]', guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         check = re.search(r"\[\[ \"\$MODE\" != app-reuse \]\] \|\| python3 -c '(.+)'", guard)[1]

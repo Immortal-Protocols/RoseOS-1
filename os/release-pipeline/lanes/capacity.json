@@ -104,7 +104,9 @@
     "agent": {
       "workflow": ".github/workflows/os-release.yml",
       "modes": [
-        "app-only"
+        "app-only",
+        "agent-hosted",
+        "agent-hosted-probe"
       ],
       "host": "frankel-builder",
       "target": "own",
@@ -116,7 +118,7 @@
         "queue",
         "controller"
       ],
-      "note": "The build itself needs only the public SDK, the pinned ZXing jar, the staged connection inputs and esbuild. Its host coupling is the app signer (PIXEL_APP_SIGNING_* through the signer identity), the 300 GiB free-space reserve and the shared app version ledger below. It cannot leave the ledger's host until the ledger moves."
+      "note": "app-only builds on the Frankel builder: the public SDK, the pinned ZXing jar, the staged connection inputs and esbuild there, the app signer (PIXEL_APP_SIGNING_* through the signer identity), the 300 GiB free-space reserve and the builder-local app version ledger below, so it cannot leave that host. agent-hosted and agent-hosted-probe (1F, scripts/agent-hosted.py) run only on GitHub-hosted runners, with no controller, builder, storage or host lock: App's portable seam, the pinned public inputs, the signer identity admitted by its own probe, and the shared pixel-ota ledger (os/release-pipeline/agent/hosted.json reservation.store), which refuses until the Frankel builder records its consumed versions there (decision D2). They still share this workflow's one queue, so they claim no parallel capacity."
     },
     "harness": {
       "workflow": ".github/workflows/launcher3-compile.yml",

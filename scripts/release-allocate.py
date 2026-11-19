@@ -512,11 +512,13 @@ def check_app_allocation(allocation):
     return allocation
 
 
-def allocate_app(source, observation, now_epoch, run_id, run_attempt, repo=ROOT):
+def allocate_app(source, observation, now_epoch, run_id, run_attempt, repo=ROOT, floor=0, name_suffix='auto-beta'):
     """One fresh Rose Agent version for the app-only route, or 'unchanged' when the newest published app release was
     built from these same Rose Agent sources (already published: nothing to build). A fresh versionCode exceeds every
     consumed one: retained OS baselines, appRelease published/built/reserved, latest-beta and app-only reservations on
-    this builder and every listed rose-agent tag, drafts included. Nothing is assumed about the next number."""
+    this builder and every listed rose-agent tag, drafts included. Nothing is assumed about the next number.
+    The hosted route (scripts/agent-hosted.py) passes the shared ledger's floor, the highest version a builder's own
+    ledger had consumed, and its own versionName suffix; the builder route keeps 0 and auto-beta."""
     if not SHA.fullmatch(source or ''):
         raise Refused('invalid: --source must be a full commit SHA')
     check_observation(observation)
@@ -536,8 +538,10 @@ def allocate_app(source, observation, now_epoch, run_id, run_attempt, repo=ROOT)
     if record and not git(repo, 'diff', '--name-only', record['sourceSha'], source, '--', *package['sources']).strip():
         return {'verdict': 'unchanged', 'sourceSha': source, 'previous': previous,
             'reason': f'rose-agent-{newest} is already published from the same Rose Agent sources ({record["sourceSha"][:12]})'}
-    new_code = max(consumed_versions(APP_PACKAGE, pipeline, observation) | {code}) + 1
-    new_name = f'{new_code}-auto-beta'
+    if type(floor) is not int or floor < 0 or not re.fullmatch(r'[a-z][a-z0-9-]{0,30}', name_suffix):
+        raise Refused('invalid: the ledger floor and versionName suffix')
+    new_code = max(consumed_versions(APP_PACKAGE, pipeline, observation) | {code, floor}) + 1
+    new_name = f'{new_code}-{name_suffix}'
     after = set_manifest_version(text, new_code, new_name)
     delta = [{'path': package['manifest'], 'beforeSha256': hashlib.sha256(text.encode()).hexdigest(),
         'afterSha256': hashlib.sha256(after.encode()).hexdigest(), 'versionCode': [code, new_code],

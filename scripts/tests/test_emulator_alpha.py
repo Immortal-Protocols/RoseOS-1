@@ -1464,7 +1464,7 @@ class WorkflowAlphaTest(unittest.TestCase):
         self.assertIn("      - name: Emulator-alpha successor preflight\n        if: inputs.mode == 'emulator-alpha-successor'\n"
             '        run: python3 scripts/emulator-alpha.py preflight --job successor-guard --candidate-sha "$CANDIDATE_SHA" --apps "$APPS"\n', guard)
         self.assertIn('[[ "$ALPHA_RECOVER" == false || "$MODE" == emulator-alpha-successor ]]', guard)
-        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]', guard)  # no publication in this mode
+        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse || "$MODE" == agent-hosted ]]', guard)  # no publication in this mode
         job = self.jobs['alpha-successor']
         self.assertIn("    needs: controller\n    if: inputs.mode == 'emulator-alpha-successor'\n    runs-on: [self-hosted, roseos-frankel-builder]\n", job)
         self.assertIn('    permissions:\n      contents: read\n    steps:\n', job)
