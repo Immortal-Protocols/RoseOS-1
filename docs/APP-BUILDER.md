@@ -492,7 +492,11 @@ Gradle (`rose.app_builder.gradle`); anything else is the older flat layout and
 builds exactly as before (§2 step 5). When `gradle` is configured, a new app
 starts from a minimal Kotlin + Compose skeleton (`gradle.skeleton`: one
 activity, Material 3, the builder's identity in `app/build.gradle.kts`).
-Templates and themes are Home/App's and are not part of the builder.
+Templates and themes are Home/App's and are not part of the builder. A create
+request may name one (`starter`, §3.1). The builder then writes the project's first tree through its skeleton hook,
+`Builder(skeleton=, resolve_starter=)`. The host wires that hook to `rose.app_builder.starters` when `gradle` is
+configured and the checkout has `workspace/rose-starters`. The starter is kept with the project in the ledger (table
+`project_starters`).
 
 **Pinned stack** (`app_builder/gradle_stack.py`, the one place every version
 and digest is named): Gradle 9.9.1, Android Gradle Plugin 9.5.1 (which compiles
@@ -602,7 +606,7 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 
 | Call | Request | Response |
 |---|---|---|
-| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description}` | `{projectId, jobId, notes}` (`notes` is always `[]`, kept for client compatibility) |
+| `POST /builder/v1/projects` | `{schemaVersion, clientRequestId, description, starter?}` | `{projectId, jobId, notes}` (`notes` is always `[]`, kept for client compatibility) |
 | `POST /builder/v1/projects/<projectId>/revisions` | `{schemaVersion, clientRequestId, request}` | `{jobId, notes}` |
 | `POST /builder/v1/jobs/<jobId>/cancel` | `{schemaVersion}` | `{status: accepted \| not_running \| unknown_job}` |
 | `POST /builder/v1/jobs/<jobId>/retry` | `{schemaVersion}` | `{jobId, attempt}`; 400 unless the job failed, is retryable, the project has no active job, and no later version has been delivered |
@@ -612,7 +616,15 @@ Agent may refuse the `app.rose.gen.` prefix outright.
 | `POST /builder/v1/installs` | install receipt (§3.5) | `{recorded: true}` |
 
 `clientRequestId` makes create and revise idempotent: retrying it returns the
-same ids. `accepted` for cancel means stopping, not stopped. Only the job's own
+same ids. A retry must repeat the same `starter` (or none) too.
+
+`starter` (optional) is `{template, theme}`: two lowercase ids (`[a-z][a-z0-9-]{0,39}`) naming one Rose starter
+template and one theme in `workspace/rose-starters/starters.json` (today the templates `feed`, `sprite-game` and
+`player`, and the themes `material3`, `minimal` and `skeuomorphic`). It is checked before anything is recorded: a
+malformed one, one the catalog does not have, or any starter on a builder without the Gradle toolchain and the
+starters is refused with HTTP 400 and `reason: unknown_starter`. `null` is the same as leaving it out. It belongs to the
+project for good: its first tree is written from that starter (`rose.app_builder.starters.skeleton`) and every
+later revise starts from that history. Without it a new app starts from the builder's own skeleton (§2.4). `accepted` for cancel means stopping, not stopped. Only the job's own
 `cancelled` state confirms it.
 
 ### 3.2 Job

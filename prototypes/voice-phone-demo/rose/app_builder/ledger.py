@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS project_agent_containers (
 CREATE TABLE IF NOT EXISTS project_server_setups (
   project_id TEXT PRIMARY KEY REFERENCES projects(project_id), version_code INTEGER NOT NULL,
   app_url TEXT NOT NULL, set_up REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS project_starters (
+    project_id TEXT PRIMARY KEY REFERENCES projects(project_id), template TEXT NOT NULL, theme TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS installs (
   project_id TEXT NOT NULL, package_name TEXT NOT NULL, version_code INTEGER NOT NULL, signer_sha256 TEXT,
   status TEXT NOT NULL, detail TEXT NOT NULL, device TEXT NOT NULL, created REAL NOT NULL);
@@ -231,13 +233,17 @@ class Ledger:
                               (client_key,)).fetchone()
         return None if row is None else {'jobId': row[0], 'projectId': row[1], 'request': row[2]}
 
-    def create(self, device: str, client_request_id: str, description: str, name: str) -> dict:
-        """A new project and its first job; retrying the same request returns the same ids."""
+    def create(self, device: str, client_request_id: str, description: str, name: str,
+               starter: dict | None = None) -> dict:
+        """A new project and its first job; retrying the same request returns the same ids. ``starter``
+        ({template, theme}, already checked by the caller) is the Rose starter its first tree is made from; it is
+        the project's for good, so a revise starts from it too."""
         key = f'{device}\n{client_request_id}'
         with self.lock:
             existing = self._existing(key)
             if existing:
-                if self.job(existing['jobId'])['kind'] != 'create' or existing['request'] != description:
+                if (self.job(existing['jobId'])['kind'] != 'create' or existing['request'] != description
+                        or self._starter(existing['projectId']) != starter):
                     raise LedgerError('clientRequestId was used for another request')
                 return {'projectId': existing['projectId'], 'jobId': existing['jobId']}
             project, job, now = _id(), _id(), self.clock()
@@ -246,6 +252,9 @@ class Ledger:
                 self.db.execute('INSERT INTO projects VALUES (?,?,?,?,?,?)',
                                 (project, name, PACKAGE_PREFIX + project, None, description, now))
                 self._insert_job(job, project, 'create', description, key, now)
+                if starter is not None:
+                    self.db.execute('INSERT INTO project_starters VALUES (?,?,?)',
+                                    (project, starter['template'], starter['theme']))
                 self.db.execute('COMMIT')
             except Exception:
                 self.db.execute('ROLLBACK')
@@ -550,6 +559,15 @@ class Ledger:
     def project(self, project: str):
         with self.lock:
             return self._project(project)
+
+    def starter(self, project: str) -> dict | None:
+        """The Rose starter ({template, theme}) a project was created from, or None."""
+        with self.lock:
+            return self._starter(project)
+
+    def _starter(self, project: str) -> dict | None:
+        row = self.db.execute('SELECT template, theme FROM project_starters WHERE project_id=?', (project,)).fetchone()
+        return None if row is None else {'template': row[0], 'theme': row[1]}
 
     def _project(self, project: str):
         row = self.db.execute('SELECT project_id, name, package_name, signer_sha256, description FROM projects '
