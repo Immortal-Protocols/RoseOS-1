@@ -198,6 +198,9 @@ def device(adb: Adb) -> dict:
 
 def check(pilots_dir: Path, evidence_dir: Path, adb: Adb, *, keep=False, settle_s=SETTLE_S) -> dict:
     pilots = load(pilots_dir)
+    packages = [p['packageName'] for p in pilots]
+    if keep and len(set(packages)) != len(packages):  # a transplant shares its source's package, not its signer
+        raise Refused('--keep needs every pilot to have its own package; transplants share their source\'s')
     evidence_dir = Path(evidence_dir)
     evidence_dir.mkdir()
     code, state = adb.run('get-state', timeout_s=30)

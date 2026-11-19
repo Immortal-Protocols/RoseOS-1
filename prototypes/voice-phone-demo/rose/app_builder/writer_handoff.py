@@ -415,16 +415,23 @@ def build(handoffs: list[Path], out: Path, tools: toolchain.Tools, gradle_tools:
 
 
 def cross_theme(records: list[dict]) -> dict:
-    """Per template and per kind of run, Home's comparison of the template edits across themes
-    (rose.app_builder.starters.compare_trio): writer runs and transplants are compared separately, never mixed.
+    """Per template, Home's comparison of template edits across themes (rose.app_builder.starters.compare_trio):
+
+    - ``writerRuns``: the independent writer runs (B1), one per theme, compared with each other;
+    - ``transplants``: per source handoff (keyed by the first 12 hex of its digest), that source writer run together
+      with every transplant of it (B2). Each transplant carries its source's digest, so expect ``equivalent``; any
+      difference means a copy was not exact.
+
     Equal edits mean the same template code ran; they are not by themselves evidence of equal behaviour."""
     report = {}
     for template in sorted({r['template'] for r in records}):
-        for kind, pick in (('writerRuns', lambda r: 'transplantOf' not in r),
-                           ('transplants', lambda r: 'transplantOf' in r)):
-            runs = {r['theme']: r['templateEdits'] for r in records if r['template'] == template and pick(r)}
-            if len(runs) > 1:
-                report.setdefault(template, {})[kind] = starters.compare_trio(runs)
+        mine = [r for r in records if r['template'] == template]
+        runs = {r['theme']: r['templateEdits'] for r in mine if 'transplantOf' not in r}
+        if len(runs) > 1:
+            report.setdefault(template, {})['writerRuns'] = starters.compare_trio(runs)
+        for source in sorted({r['transplantOf']['handoffSha256'] for r in mine if 'transplantOf' in r}):
+            trio = {r['theme']: r['templateEdits'] for r in mine if r.get('handoffSha256') == source}
+            report.setdefault(template, {}).setdefault('transplants', {})[source[:12]] = starters.compare_trio(trio)
     return report
 
 

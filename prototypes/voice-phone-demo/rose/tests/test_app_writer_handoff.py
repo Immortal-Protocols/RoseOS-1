@@ -206,13 +206,20 @@ class StageTwoChecksTest(unittest.TestCase):
 
     def test_writer_runs_and_transplants_are_compared_separately(self):
         edits = {'templates/feed/x.kt': 'a'}
-        records = [{'template': 'feed', 'theme': t, 'templateEdits': edits} for t in ('minimal', 'material3')]
-        records += [{'template': 'feed', 'theme': t, 'templateEdits': dict(edits, extra='b'),
-                     'transplantOf': {'theme': 'minimal'}} for t in ('material3', 'skeuomorphic')]
+        source, other = 'a' * 64, 'b' * 64
+        records = [{'template': 'feed', 'theme': 'minimal', 'templateEdits': edits, 'handoffSha256': source},
+                   {'template': 'feed', 'theme': 'material3', 'templateEdits': edits, 'handoffSha256': other}]
+        records += [{'template': 'feed', 'theme': t, 'templateEdits': edits, 'handoffSha256': source,
+                     'transplantOf': {'theme': 'minimal', 'handoffSha256': source}}
+                    for t in ('material3', 'skeuomorphic')]
         report = writer_handoff.cross_theme(records)['feed']
-        self.assertTrue(report['writerRuns']['equivalent'])
-        self.assertTrue(report['transplants']['equivalent'])
+        self.assertTrue(report['writerRuns']['equivalent'])  # B1: the two independent runs
         self.assertEqual(report['writerRuns']['themes'], ['material3', 'minimal'])
+        b2 = report['transplants'][source[:12]]  # B2: the source run with its two transplants
+        self.assertEqual(b2['themes'], ['material3', 'minimal', 'skeuomorphic'])
+        self.assertTrue(b2['equivalent'])
+        records[2]['templateEdits'] = dict(edits, extra='b')  # a copy that was not exact
+        self.assertFalse(writer_handoff.cross_theme(records)['feed']['transplants'][source[:12]]['equivalent'])
 
     def test_two_handoffs_for_one_pilot_are_refused(self):
         with self.assertRaises(Refused):
@@ -273,7 +280,10 @@ class StageTwoBuildTest(unittest.TestCase):
         self.assertEqual(by_theme['material3']['state'], 'ready', by_theme['material3'])
         self.assertEqual(by_theme['material3']['label'], TRANSPLANT_LABEL)
         self.assertEqual(by_theme['material3']['templateEdits'], by_theme['minimal']['templateEdits'])
-        self.assertEqual(json.loads((self.tmp / 'built-t' / 'cross-theme.json').read_text()), {})  # one of each kind
+        cross = json.loads((self.tmp / 'built-t' / 'cross-theme.json').read_text())
+        b2 = cross['feed']['transplants'][good_digest[:12]]  # the source run compared with its transplant
+        self.assertEqual(b2['themes'], ['material3', 'minimal'])
+        self.assertTrue(b2['equivalent'], b2)
 
         broken = self.handoff('broken', '\nfun broken( {\n')
         manifest = writer_handoff.build([broken], self.tmp / 'built2', self.tools, gradle_tools(), self.catalog,
