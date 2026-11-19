@@ -26,3 +26,11 @@ include(":templates:feed", ":templates:sprite-game", ":templates:player")
 include(":themes:material3", ":themes:minimal", ":themes:skeuomorphic")
 // Integration: every pilot template under every pilot theme, the conformance and behavior matrix (Home/App Product).
 include(":matrix")
+
+// Wave 3 evidence (Home/App Product): one template's code under every pilot theme, compared by behaviour snapshot.
+// By default the pilot templates; with -PwrittenTemplate=<generated tree>/templates/<id>, a writer's template module.
+include(":evidence")
+providers.gradleProperty("writtenTemplate").orNull?.let { dir ->
+    include(":written")
+    project(":written").projectDir = file(dir)
+}
