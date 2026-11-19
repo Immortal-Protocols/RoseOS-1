@@ -405,12 +405,16 @@ def verify_apk(apk: Path, package: str, version_code: int, version_name: str, to
     if re.search(r'\((0x0101055b|0x01010591|0x0101064e|0x0101064f|0x01df0001|0x01df0002)\)', tree):
         raise StepFailed('compile', 'The app asks to be installed with split APKs (isFeatureSplit, isSplitRequired, '
                          'requiredSplitTypes or splitTypes); Rose installs one APK, so it is not delivered.')
-    # android:testOnly, true: installable only over a developer connection (testOnly="false" is the default).
-    if re.search(r'\(0x01010272\)=\(type 0x12\)0x(?!0+\b)[0-9a-f]+', tree):
+    # android:testOnly: installable only over a developer connection. Only a plain boolean false is the default;
+    # Android reads any other encoding (an integer, a reference) as its value, so anything else is refused.
+    only = re.findall(r'\(0x01010272\)=(\(type 0x[0-9a-f]+\)0x[0-9a-f]+|\S+)', tree)
+    if any(value != '(type 0x12)0x0' for value in only) or re.search(r"testOnly='(?!0')", badging):
         raise StepFailed('compile', 'The app is marked test-only (android:testOnly), which phones install only from '
                          'a developer connection, so it is not delivered.')
     if re.search(r'^\s*E: \S*:', tree, re.M):  # an element form the identity checks above do not know
         raise StepFailed('compile', 'Manifest elements may not use a namespace.')
+    if not manifest_well_formed(tree):  # a dump whose nesting is not Android's (a moved namespace chunk)
+        raise StepFailed('compile', 'The app\'s manifest is not well formed.')
     unknown = sorted(set(manifest_children(tree)) - set(template.MANIFEST_CHILDREN) - {'uses-sdk'})
     if unknown:  # what a merged manifest may hold at the top: the source rule (template.py), on the binary
         raise StepFailed('compile', f'The app\'s manifest may not contain <{unknown[0]}>.')
@@ -425,6 +429,30 @@ def verify_apk(apk: Path, package: str, version_code: int, version_name: str, to
         raise StepFailed('compile', f'The app\'s targetSdk must be a released API level of at least '
                          f'{gradle_stack.MIN_TARGET_SDK}; current Android does not install older targets.')
     return badging
+
+
+def manifest_well_formed(tree: str) -> bool:
+    """Whether ``aapt dump xmltree`` nests the way Android reads the manifest: one <manifest> element, every other
+    element indented below it, and namespace declarations (``N:``) only before it. aapt's indentation follows
+    namespace chunks as well as elements, while Android's parser skips namespace chunks, so a declaration moved inside
+    the document can shift elements out of <manifest> in the dump but not on the phone."""
+    seen_element, root = False, None
+    for line in tree.splitlines():
+        found = re.match(r'(\s*)([EN]): (\S+)', line)
+        if not found:
+            continue
+        indent, kind, name = len(found.group(1)), found.group(2), found.group(3)
+        if kind == 'N':
+            if seen_element:
+                return False
+            continue
+        if root is None:
+            if name != 'manifest':
+                return False
+            root, seen_element = indent, True
+        elif indent <= root:
+            return False
+    return root is not None
 
 
 def manifest_children(tree: str) -> list[str]:

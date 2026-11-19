@@ -217,8 +217,11 @@ class SkeletonTest(Temp):
         for name in ('ROSE_APPLICATION_ID', 'ROSE_VERSION_CODE', 'ROSE_VERSION_NAME', 'withPlugin("com.android.application")',
                      'onVariants', 'getApplicationId', 'getVersionCode', 'getVersionName'):
             self.assertIn(name, script)
-        # The stack's Kotlin plugin on the root classpath, so AGP alone resolves offline.
-        self.assertIn(f'"org.jetbrains.kotlin:kotlin-gradle-plugin:{gradle_stack.KOTLIN}"', script)
+        # The Kotlin plugin AGP asks for resolves at the stack's version, so AGP alone resolves offline; nothing is
+        # added to a classpath that did not ask for it.
+        self.assertIn(f'useVersion("{gradle_stack.KOTLIN}")', script)
+        self.assertIn('requested.name.startsWith("kotlin-gradle-plugin")', script)
+        self.assertNotIn('dependencies.add', script)
         self.assertNotIn('@KOTLIN@', script)
 
     def test_a_tree_the_build_locked_up_is_still_removed(self):
@@ -373,6 +376,13 @@ class VerifyApkTest(Temp):
         self.assertEqual(self.refused(extra='      A: android:debuggable(0x0101000f)=(type 0x12)0xffffffff\n')
                          .category, 'compile')
         self.verify(extra='      A: android:testOnly(0x01010272)=(type 0x12)0x0\n')  # testOnly="false" is the default
+        for value in ('(type 0x10)0x1', '@0x7f010000'):  # an integer or a reference: Android reads it as set
+            with self.subTest(value):
+                self.assertIn('test-only', self.refused(extra=f'      A: android:testOnly(0x01010272)={value}\n').summary)
+
+    def test_a_manifest_whose_nesting_is_not_androids_is_refused(self):
+        failed = self.refused(extra='    N: x=urn:x\n      E: instrumentation (line=9)\n')
+        self.assertEqual((failed.category, failed.summary), ('compile', 'The app\'s manifest is not well formed.'))
 
     def test_split_attributes_are_refused(self):
         for attribute in ('isFeatureSplit(0x0101055b)=(type 0x12)0xffffffff', 'isSplitRequired(0x01010591)=(type 0x12)0xffffffff',

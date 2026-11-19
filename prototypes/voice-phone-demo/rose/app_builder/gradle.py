@@ -286,14 +286,20 @@ def init_script() -> str:
     reflection keeps the script free of AGP's classes, which init scripts cannot see. A project can still override
     them after; the built APK is checked, so that only fails its build.
 
-    It also puts the stack's Kotlin Gradle plugin on the root build's classpath: AGP alone asks for an older one,
-    which the offline cache does not hold, so a project without the Compose compiler plugin (a Java or views app)
-    still resolves the stack's Kotlin, as every project the cache was seeded with does."""
+    It also resolves the Kotlin Gradle plugin, wherever a build script's classpath asks for it, at the stack's
+    version: AGP alone asks for an older one, which the offline cache does not hold, so a project without the Compose
+    compiler plugin (a Java or views app) still gets the stack's Kotlin, as every project the cache was seeded with
+    does. Only that plugin's own artifacts are redirected, and nothing is added to a classpath that did not ask for
+    it, so a build with no plugin requests at its root, or a buildSrc, resolves exactly as it otherwise would."""
     return '''\
 // The Rose builder's own init script: the app's identity is the builder's, whatever the project's build files say.
 gradle.lifecycle.beforeProject {
-    if (this == rootProject) {
-        buildscript.dependencies.add("classpath", "org.jetbrains.kotlin:kotlin-gradle-plugin:@KOTLIN@")
+    buildscript.configurations.configureEach {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "org.jetbrains.kotlin" && requested.name.startsWith("kotlin-gradle-plugin")) {
+                useVersion("@KOTLIN@")
+            }
+        }
     }
     pluginManager.withPlugin("com.android.application") {
         val applicationId = System.getenv("ROSE_APPLICATION_ID")!!

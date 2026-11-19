@@ -150,6 +150,15 @@ class BinaryChecksTest(unittest.TestCase):
                          'lib/arm64-v8a/libandroidx.graphics.path.so')  # abiFilters += "x86_64"
         self.assertEqual(_missing_native([*every, 'lib/arm64-v8a/libother.so']), 'lib/x86_64/libother.so')
 
+    def test_a_moved_namespace_chunk_cannot_shift_elements_out_of_the_manifest(self):
+        good = 'N: android=x (line=2)\n  E: manifest (line=2)\n    E: uses-sdk (line=7)\n    E: application\n'
+        moved = 'N: android=x\n  N: x=urn:x\n    E: manifest\n    E: overlay\n    E: application\n'
+        inner = 'N: android=x\n  E: manifest\n    N: x=urn:x\n      E: instrumentation\n'
+        self.assertTrue(toolchain.manifest_well_formed(good))
+        self.assertFalse(toolchain.manifest_well_formed(moved))  # overlay would print at the manifest's own depth
+        self.assertFalse(toolchain.manifest_well_formed(inner))  # a namespace declared inside the document
+        self.assertFalse(toolchain.manifest_well_formed('N: android=x\n'))  # no manifest at all
+
     def test_the_repair_text_keeps_a_kotlin_errors_file(self):
         from rose.app_builder.service import _repair_text
         failed = toolchain.StepFailed('compile', 'The app\'s Gradle build failed in its Kotlin code.',

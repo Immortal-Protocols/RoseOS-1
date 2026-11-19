@@ -511,8 +511,9 @@ use only those plugins and libraries, from `google()`,
 - The builder's own init script (`gradle.init_script`) sets the application id
   to the ledger's package and the version code and name to the ledger's
   version, whatever the build files say. Only the release variant is built.
-  It also puts the stack's Kotlin plugin on the root build's classpath, so a
-  project without the Compose plugin (a Java or views app) resolves offline.
+  It also resolves the Kotlin Gradle plugin at the stack's version wherever a
+  build script asks for it, so a project without the Compose plugin (a Java or
+  views app) resolves offline.
 - Gradle produces an unsigned APK. An APK the project's build signed itself is
   refused, never signed over.
 - The project's single universal APK is checked on the binary like every other
