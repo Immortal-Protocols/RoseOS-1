@@ -245,7 +245,7 @@ private object PaperControls : Controls {
             p.options.forEachIndexed { i, option ->
                 val on = i == p.selectedIndex
                 Box(
-                    Modifier.weight(1f).heightIn(min = 48.dp).selectable(on, enabled = p.enabled, role = Role.Tab) { p.onSelect(i) }
+                    Modifier.weight(1f).fillMaxHeight().heightIn(min = 48.dp).selectable(on, enabled = p.enabled, role = Role.Tab) { p.onSelect(i) }
                         .drawBehind {
                             val h = if (on) 3.dp.toPx() else 1.dp.toPx()
                             drawRect(if (on) c.accent else c.outline.copy(alpha = 0.5f), Offset(0f, size.height - h), Size(size.width, h))

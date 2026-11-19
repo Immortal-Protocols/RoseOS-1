@@ -259,7 +259,7 @@ object BaselineControls : Controls {
                 val cy = size.height / 2
                 val track = 4.dp.toPx()
                 fun x(f: Float) = inset + f * w
-                drawRoundRect(c.surfaceVariant, Offset(inset, cy - track / 2), Size(w, track), CornerRadius(track))
+                drawRoundRect(c.track, Offset(inset, cy - track / 2), Size(w, track), CornerRadius(track))
                 highlight?.let {
                     val band = 12.dp.toPx()
                     drawRoundRect(c.accent.copy(alpha = 0.25f), Offset(x(it.start), cy - band / 2), Size(x(it.endInclusive) - x(it.start), band), CornerRadius(band / 2))
@@ -276,7 +276,7 @@ object BaselineControls : Controls {
     override fun Progress(p: ProgressProps) {
         val c = RoseTheme.colors
         Box(
-            p.modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(c.surfaceVariant)
+            p.modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(c.track)
                 .semantics {
                     contentDescription = p.label
                     progressBarRangeInfo = p.progress?.let { ProgressBarRangeInfo(it.coerceIn(0f, 1f), 0f..1f) } ?: ProgressBarRangeInfo.Indeterminate
@@ -322,7 +322,7 @@ object BaselineControls : Controls {
             p.options.forEachIndexed { i, option ->
                 val on = i == p.selectedIndex
                 Box(
-                    Modifier.weight(1f).heightIn(min = 48.dp).background(if (on) c.accent else Color.Transparent)
+                    Modifier.weight(1f).fillMaxHeight().heightIn(min = 48.dp).background(if (on) c.accent else Color.Transparent)
                         .selectable(on, enabled = p.enabled, role = Role.Tab) { p.onSelect(i) },
                     contentAlignment = Alignment.Center,
                 ) { Text(option, role = TextRole.Label, color = if (on) c.onAccent else c.onBackground, maxLines = 1) }
@@ -397,7 +397,8 @@ object BaselineControls : Controls {
         val c = RoseTheme.colors
         var pressed by remember { mutableStateOf(false) }
         Box(
-            Modifier.size(56.dp).clip(RoseTheme.shapes.small).background(if (pressed) c.accent else c.surfaceVariant)
+            Modifier.size(56.dp).clip(RoseTheme.shapes.small).background(if (pressed) c.accent else c.track)
+                .border(1.dp, c.outline, RoseTheme.shapes.small)
                 .holdInput(d.label, p.enabled) { pressed = it; p.onDirection(d, it) }.alpha(if (p.enabled) 1f else 0.38f),
             contentAlignment = Alignment.Center,
         ) {
@@ -432,10 +433,16 @@ object BaselineControls : Controls {
             Text(p.label, role = TextRole.Caption, color = c.muted)
             Text(p.value, role = TextRole.Title)
             p.progress?.let {
-                Box(Modifier.padding(top = 4.dp).width(96.dp).height(4.dp).clip(CircleShape).background(c.surfaceVariant)) {
+                Box(Modifier.padding(top = 4.dp).width(96.dp).height(4.dp).clip(CircleShape).background(c.track)) {
                     Box(Modifier.fillMaxWidth(it.coerceIn(0f, 1f)).fillMaxHeight().background(c.accent))
                 }
             }
         }
     }
 }
+
+/**
+ * The unfilled part of a track, bar or key: a translucent outline, so it reads on background, surface and an Inset
+ * panel's surfaceVariant alike (surfaceVariant itself vanishes on an Inset panel).
+ */
+private val RoseColors.track: Color get() = outline.copy(alpha = 0.45f)
