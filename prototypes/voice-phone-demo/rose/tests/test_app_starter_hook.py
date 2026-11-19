@@ -229,15 +229,35 @@ class StarterHookTest(Base):
         with self.assertRaises(toolchain.StepFailed):
             check('job-camera')
 
-    def test_a_starter_the_catalog_no_longer_has_is_not_checked(self):
+    def test_a_starter_the_catalog_no_longer_has_is_still_checked_against_the_projects_first_tree(self):
         _, snapshot, check = self.starter_project()
-        theme = next((snapshot / 'themes/minimal').rglob('*.kt'))
-        theme.write_text(theme.read_text() + '\n// forked\n')
 
         def gone(catalog, starter):
             raise starters.UnknownStarter('There is no starter theme minimal.')
         with mock.patch.object(starters.Starters, 'resolve', gone):
-            check()  # nothing to compare with: the project still builds
+            check()  # untouched: passes, though the catalog no longer has it
+            theme = next((snapshot / 'themes/minimal').rglob('*.kt'))
+            theme.write_text(theme.read_text() + '\n// forked\n')
+            with self.assertRaises(toolchain.StepFailed):
+                check('job-gone')  # still a finding: the baseline is the project's own
+
+    def test_a_backend_apps_own_tree_is_the_profiles_not_the_starters(self):
+        _, snapshot, check = self.starter_project()
+        manifest = snapshot / 'app/src/main/AndroidManifest.xml'
+        manifest.write_text(manifest.read_text().replace(
+            '  <application', '  <uses-permission android:name="android.permission.INTERNET"/>\n  <application', 1))
+        (snapshot / 'rose-app.json').write_text('{}\n')
+        (snapshot / 'contract').mkdir()
+        (snapshot / 'contract/api.json').write_text('{}\n')
+        (snapshot / 'backend').mkdir()
+        (snapshot / 'backend/main.rs').write_text('fn main() {}\n')
+        check()  # appprofile and the contract check these; the starter boundary does not
+
+    def test_a_new_file_outside_the_template_and_resources_is_a_finding(self):
+        _, snapshot, check = self.starter_project()
+        (snapshot / 'design' / 'Extra.kt').write_text('package app.rose.design\n')
+        with self.assertRaises(toolchain.StepFailed):
+            check()
 
     def test_the_prompt_takes_the_starter_and_is_unchanged_without_one(self):
         from rose.app_builder import generator

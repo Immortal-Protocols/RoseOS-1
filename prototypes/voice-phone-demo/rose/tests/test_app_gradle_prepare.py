@@ -79,7 +79,9 @@ class Archives(unittest.TestCase):
         got = gp.archives('linux', 'x86_64')
         self.assertEqual(got['jdk'], gradle_stack.JDKS[('linux', 'x86_64')])
         self.assertEqual(got['gradle'], gradle_stack.GRADLE_DISTRIBUTION)
-        self.assertEqual(set(got) - {'jdk', 'gradle'}, {p for p, _t, _a in gradle_stack.SDK_PACKAGES})
+        jars = {f'robolectric/{a.name}': a for a in gradle_stack.ROBOLECTRIC_JARS}
+        self.assertEqual({k: got[k] for k in jars}, jars)  # pinned, fetched and used as they are
+        self.assertEqual(set(got) - {'jdk', 'gradle'} - set(jars), {p for p, _t, _a in gradle_stack.SDK_PACKAGES})
         with self.assertRaisesRegex(gp.Refused, 'no JDK'):
             gp.archives('linux', 'riscv64')
         with self.assertRaisesRegex(gp.Refused, 'measure'):  # build-tools has no macOS SHA-256 pin yet
@@ -354,7 +356,7 @@ class Stack(unittest.TestCase):
         result = gp.stack(self.out, self.downloads, log=io.StringIO())
         self.assertTrue(result['prepared'])
         self.assertEqual(self.runs, [True, False])  # seeded online, then proven offline
-        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ['cache', 'gradle', 'jdk', 'sdk', 'stack.json'])
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ['cache', 'gradle', 'jdk', 'robolectric', 'sdk', 'stack.json'])
         data = json.loads((self.out / 'stack.json').read_text())
         self.assertEqual(data, result['stack'])
         self.assertEqual({k: v for k, v in data.items() if k != 'cacheSha256'}, gp.record('linux', 'x86_64'))

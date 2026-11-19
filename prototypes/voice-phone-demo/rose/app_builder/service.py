@@ -17,11 +17,12 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 
-from . import appprofile, contract, dependencies, gradle, gradle_stack, legacy_backend, template, toolchain
+from . import appprofile, contract, dependencies, gradle, legacy_backend, template, toolchain
 from .ledger import CLIENT_BACKEND, CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -116,9 +117,19 @@ def _git_blob(source: Path, revision: str, path: str) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
-# A backend app (client-backend-v1) must declare INTERNET in its manifest (appprofile); a starter's manifest may
-# differ from the starter's by that one permission and nothing else.
-_INTERNET = re.compile(rb'[ \t]*<uses-permission\s+android:name="android\.permission\.INTERNET"\s*/>[ \t]*\r?\n?')
+def _materialize(source: Path, revision: str, target: Path) -> None:
+    """Every file of ``revision`` of the project's own history, written into ``target`` as plain files."""
+    listing = _git_run(source, ['ls-tree', '-r', '-z', '--name-only', revision], text=False)
+    if listing.returncode:
+        raise toolchain.StepFailed('internal', 'The project source could not be read.')
+    for raw in filter(None, listing.stdout.split(b'\0')):
+        name = raw.decode('utf-8', 'surrogateescape')
+        data = _git_blob(source, revision, name)
+        if data is None:
+            raise toolchain.StepFailed('internal', 'The project source could not be read.')
+        path = target / name
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_bytes(data)
 
 
 def _owner_access(root: Path):
@@ -631,34 +642,25 @@ class Builder:
         swappable. The first turn in a job that changed any of them gets a repair turn naming them; a turn after
         that which still does refuses the job.
 
-        outside_template compares with the starter as the catalog writes it today; what it reports is kept only
-        where the turn's snapshot also differs from the project's own root commit (the tree it was created with),
-        so a catalog update after the project was made never counts as the writer's change. A starter the catalog
-        no longer has is not checked (there is nothing to compare with); the project still builds."""
+        The baseline is the project's own root commit (the tree it was created with), materialized, so a catalog
+        update after the project was made never counts as the writer's change and a starter since removed from the
+        catalog is still checked; a backend app's one INTERNET permission is allowed (outside_template)."""
         starter = self.ledger.starter(project_id)
         if starter is None:
             return
         from . import starters
+        root = _git(source, 'rev-list', '--max-parents=0', 'HEAD')
+        first = Path(tempfile.mkdtemp(prefix='first-', dir=snapshot.parent))
         try:
-            changed = starters.outside_template(snapshot, starter, package)
+            _materialize(source, root, first)
+            changed = starters.outside_template(snapshot, starter, package, baseline=first)
         except ValueError:
             return
-        if changed:
-            root = _git(source, 'rev-list', '--max-parents=0', 'HEAD')
-
-            def now(path):
-                file = snapshot / path
-                return file.read_bytes() if file.is_file() and not file.is_symlink() else None
-            kept = []
-            for path in changed:
-                current, first = now(path), _git_blob(source, root, path)
-                if current == first:
-                    continue  # the catalog changed since this project was made, not the writer
-                if (path == f'{gradle_stack.APP_MODULE}/src/main/AndroidManifest.xml' and current is not None
-                        and first is not None and _INTERNET.sub(b'', current, count=1) == first):
-                    continue  # the INTERNET permission a backend app needs, and nothing else
-                kept.append(path)
-            changed = kept
+        finally:
+            shutil.rmtree(first, ignore_errors=True)
+        # A backend app's own top-level tree (rose-app.json, contract/, backend/) is the profile's to check
+        # (appprofile.check, contract.check_update), not the starter's: it is never part of a starter's first tree.
+        changed = [p for p in changed if p.split('/', 1)[0] not in appprofile.BACKEND_TOP]
         if not changed:
             return
         seen = self._starter_findings.get(job_id, 0)

@@ -108,6 +108,32 @@ LIBRARIES = {
 }
 
 
+# Test-only libraries, never in an app: what Home's behaviour evidence (workspace/rose-starters :evidence, whose
+# :design-testing declares exactly these) resolves, so it can run offline inside the build isolation against the
+# read-only cache. Exactly what Home declares, so conflict resolution picks the same versions as their own build
+# (androidx.test.ext:junit, for one, arrives through ui-test-junit4). The Espresso and androidx.test pre-releases are there because 3.7.0, the latest stable, fails every
+# Compose test on API 37 (InputManager.getInstance() is gone); they never ship.
+TEST_LIBRARIES = {
+    'junit:junit': '4.13.2',
+    'org.robolectric:robolectric': '4.18.1',
+    'androidx.compose.ui:ui-test-junit4': None,
+    'androidx.compose.ui:ui-test-manifest': None,  # debug variant
+    'androidx.compose.ui:ui-tooling': None,  # debug variant (Home's :design)
+    'androidx.test:core': '1.7.0',
+    'androidx.test.espresso:espresso-core': '3.8.0-alpha04',
+}
+
+# Robolectric's Android framework jars for the two validation APIs, read from a folder (robolectric.offline) instead
+# of downloaded at test time. SHA-256 measured 2026-11-19 on Maven Central's archives, whose .sha1 matched.
+_ROBOLECTRIC = 'https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/'
+ROBOLECTRIC_JARS = tuple(Archive(f'android-all-instrumented-{v}.jar', f'{_ROBOLECTRIC}{v}/android-all-instrumented-{v}.jar',
+                                 digest) for v, digest in (
+    ('14-robolectric-10818077-i7', '3fdac2d463f431c6b8d83b9d0ca739e795de75fffedee648c6761bd4bd864701'),  # API 34
+    ('17-robolectric-16653203-i7', 'a0536dd688c5bd92c78f55c6f6e4e7565ada75534b196a62d9d3668485cdc4e9'),  # API 37
+))
+ROBOLECTRIC_DIR = 'robolectric'  # the stack folder that holds them
+
+
 def summary() -> str:
     """The stack in one paragraph, for the writer's turn text."""
     plugins = ', '.join(f'{p} {v}' for p, v in PLUGINS.items())
