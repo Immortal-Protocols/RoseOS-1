@@ -16,6 +16,10 @@ import androidx.compose.ui.unit.dp
  * **What a theme owns:** every pixel, shape, motion and press/hover/focus/drag state of the control.
  * **What a theme must keep** (ThemeConformance checks it for every theme in light and dark mode):
  *  - apply [Props.modifier] to the control's outermost element (templates and tests tag and size controls through it);
+ *  - draw at the size that modifier gives: a button given fillMaxWidth is a full-width button, not a small one
+ *    centred in a wide touch area;
+ *  - stay visible on every surface a template may place it on: background, surface, and an Inset panel's
+ *    surfaceVariant (give filled controls an edge or a fill that differs from all three);
  *  - call each callback exactly when the props say (a click is one `onClick`, a drag reports values in the range);
  *  - expose the semantics each props class documents (role, text, state, progress, disabled), so a template's
  *    behaviour, and its tests, are the same under every theme;

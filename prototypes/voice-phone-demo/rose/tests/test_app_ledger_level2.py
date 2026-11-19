@@ -6,14 +6,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rose.app_builder import crates, ledger as L, server_manifest as SM
+from rose.app_builder import ledger as L, server_manifest as SM
 
 SERVER = {'sha256': 'e' * 64, 'size': 1234, 'target': 'x86_64-unknown-linux-musl'}
 M1 = {'scope': 'account', 'number': 1, 'name': 'notes', 'sha256': '1' * 64}
 M2 = {'scope': 'account', 'number': 2, 'name': 'pinned', 'sha256': '2' * 64}
 HOSTED = '11111111-1111-4111-8111-111111111111'
 LOCK = '# Cargo.lock\nversion = 4\n'
-SERDE = crates.Locked('serde', '1.0.219', '5' * 64)
+from collections import namedtuple
+Locked = namedtuple('Locked', 'name version sha256')  # retained legacy ledger records, not a crate resolver
+SERDE = Locked('serde', '1.0.219', '5' * 64)
 
 
 class Base(unittest.TestCase):
@@ -98,9 +100,9 @@ class Pairing(Base):
             dict(profile=L.CLIENT_SERVER, server=SERVER, cargo_lock=LOCK, crates=[SERDE, SERDE]),
             dict(profile=L.CLIENT_SERVER, server=SERVER, cargo_lock=LOCK, crates=[{'name': 'serde'}]),
             dict(profile=L.CLIENT_SERVER, server=SERVER, cargo_lock=LOCK,
-                 crates=[crates.Locked('serde', '1.0.219', 'E' * 64)]),
+                 crates=[Locked('serde', '1.0.219', 'E' * 64)]),
             dict(profile=L.CLIENT_SERVER, server=SERVER, cargo_lock=LOCK,
-                 crates=[crates.Locked('ser de', '1.0.219', '5' * 64)]),
+                 crates=[Locked('ser de', '1.0.219', '5' * 64)]),
             dict(profile='app-v2'),
             dict(server=SERVER),  # a plain app has no server
             dict(migrations=[M1]),
@@ -113,7 +115,7 @@ class Pairing(Base):
                     self.l.deliver('nope', '1', 'r', '1' * 64, 10, 'x', **kw)
 
     def test_crates_and_the_cargo_lock_are_recorded_and_a_crate_never_changes(self):
-        other = crates.Locked('itoa', '1.0.15', '6' * 64)
+        other = Locked('itoa', '1.0.15', '6' * 64)
         self.assertTrue(self.deliver(1, profile=L.CLIENT_SERVER, server=SERVER, crates=[SERDE, other],
                                      cargo_lock=LOCK))
         self.assertEqual(self.l.crates(self.project, 1), [
@@ -123,17 +125,17 @@ class Pairing(Base):
         self.assertEqual(self.l.cargo_lock(self.project), LOCK)
         with self.assertRaises(L.LedgerError):  # the same crate version with other contents
             self.deliver(2, profile=L.CLIENT_SERVER, server=SERVER,
-                         crates=[crates.Locked('serde', '1.0.219', '7' * 64)])
+                         crates=[Locked('serde', '1.0.219', '7' * 64)])
         self.assertEqual([v['versionCode'] for v in self.l.versions(self.project)], [1])
         # A crate may be dropped, and a new version of it may come in; the next build starts from the newest lock.
         newer = '# Cargo.lock\nversion = 4\n# 2\n'
         self.assertTrue(self.deliver(2, profile=L.CLIENT_SERVER, server=SERVER,
-                                     crates=[crates.Locked('serde', '1.0.220', '8' * 64)], cargo_lock=newer))
+                                     crates=[Locked('serde', '1.0.220', '8' * 64)], cargo_lock=newer))
         self.assertEqual(self.l.cargo_lock(self.project), newer)
         self.assertEqual(self.l.crate_lock(self.project)['serde@1.0.219'], '5' * 64)  # still held, if it comes back
         with self.assertRaises(L.LedgerError):
             self.deliver(3, profile=L.CLIENT_SERVER, server=SERVER,
-                         crates=[crates.Locked('itoa', '1.0.15', '9' * 64)])
+                         crates=[Locked('itoa', '1.0.15', '9' * 64)])
 
     def test_level1_is_unchanged(self):
         self.assertTrue(self.deliver(1))

@@ -149,6 +149,7 @@ private object PaperControls : Controls {
                 .clickable(interaction, indication = null, enabled = p.enabled, role = Role.Button, onClick = p.onClick)
                 .alpha(if (p.enabled) 1f else 0.4f),
             contentAlignment = Alignment.Center,
+            propagateMinConstraints = true, // the drawn button takes the size the caller asked for (e.g. full width)
         ) {
             Row(
                 Modifier.offset(x = 3.dp - lift, y = 3.dp - lift)
@@ -244,7 +245,7 @@ private object PaperControls : Controls {
             p.options.forEachIndexed { i, option ->
                 val on = i == p.selectedIndex
                 Box(
-                    Modifier.weight(1f).heightIn(min = 48.dp).selectable(on, enabled = p.enabled, role = Role.Tab) { p.onSelect(i) }
+                    Modifier.weight(1f).fillMaxHeight().heightIn(min = 48.dp).selectable(on, enabled = p.enabled, role = Role.Tab) { p.onSelect(i) }
                         .drawBehind {
                             val h = if (on) 3.dp.toPx() else 1.dp.toPx()
                             drawRect(if (on) c.accent else c.outline.copy(alpha = 0.5f), Offset(0f, size.height - h), Size(size.width, h))

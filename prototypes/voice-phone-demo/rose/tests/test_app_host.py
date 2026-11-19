@@ -14,11 +14,10 @@ from unittest import mock
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from rose.app_builder import dependencies, host, ledger, server_build, toolchain
+from rose.app_builder import dependencies, host, ledger, toolchain
 from rose.tests.test_app_builder import HAS_SDK, JAVA_HOME, SDK, fake_backup
 from rose.tests.test_app_dependencies import CLASS, Store, jar
 from rose.tests.test_app_generator import DONE, FakeClient
-from rose.tests.test_app_level2_pipeline import BUILDER_CRATES, Codegen, client_server_app
 from rose.tests.test_builder_routes import Device, label
 
 
@@ -243,7 +242,7 @@ class NativeHosts(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.config = host.parse_config(config_data(tmp.name))
-        self.host = host.build_host(self.config, generate=client_server_app())
+        self.host = host.build_host(self.config, generate=host.no_writer)
         self.builder = self.host.builder
         self.addCleanup(self.builder.ledger.close)
 
@@ -271,60 +270,6 @@ class NativeHosts(unittest.TestCase):
         self.assertEqual(rebuilt.builder.server_url(other), container)
         self.assertIsNone(rebuilt.worker)
 
-    def test_jobs_bake_missing_recorded_and_explicitly_replaced_endpoints(self):
-        b = self.builder
-        # These are deliberately not production host wiring: this test needs
-        # only to reach client generation, then stops before any compilation.
-        b.codegen = Codegen()
-        b.server_crates = BUILDER_CRATES
-        self.assertIsNone(b.rust_tools)
-        self.assertIsNone(b.server_isolation)
-        written = []
-
-        def stop(snapshot, work, *args, **kwargs):
-            written.append(next((Path(work).parent / 'client').glob('src/**/rose/RoseServer.java')))
-            raise server_build.BuildFailed('toolchain', 'server_build', 'Stopped before compilation by the test.')
-
-        first = b.create('fixture', {'schemaVersion': 1, 'clientRequestId': 'missing',
-                                     'description': 'Synthetic notes app'})
-        project = first['projectId']
-        with mock.patch.object(server_build, 'build', side_effect=stop) as compile_server, \
-                mock.patch.object(toolchain, 'build') as compile_client, \
-                mock.patch.object(toolchain, 'ensure_key') as keys:
-            self.assertTrue(b.run_next())
-            self.assertIn('static final String URL = null;', written[-1].read_text())
-            b.ledger.record_native_host(project, self.HOST, self.ENDPOINT)
-            second = b.revise('fixture', project, {'schemaVersion': 1, 'clientRequestId': 'recorded',
-                                                  'request': 'Build with the recorded endpoint.'})
-            self.assertTrue(b.run_next())
-            recorded_client = written[-1]
-            self.assertIn(f'static final String URL = "{self.ENDPOINT}";', recorded_client.read_text())
-            with self.assertRaises(ledger.LedgerError):
-                b.ledger.record_native_host(project, self.REPLACEMENT, self.NEXT_ENDPOINT)
-            self.assertEqual(b.server_url(project), self.ENDPOINT)
-            b.ledger.record_native_host(project, self.REPLACEMENT, self.NEXT_ENDPOINT,
-                                        replaces={'hostId': self.HOST, 'endpoint': self.ENDPOINT})
-            third = b.revise('fixture', project, {'schemaVersion': 1, 'clientRequestId': 'replacement',
-                                                 'request': 'Build with the explicitly replaced endpoint.'})
-            self.assertTrue(b.run_next())
-            self.assertIn(f'static final String URL = "{self.NEXT_ENDPOINT}";', written[-1].read_text())
-            self.assertIn(f'static final String URL = "{self.ENDPOINT}";', recorded_client.read_text())
-            # §7.7a: once its agent container is recorded, the container's app URL is baked ahead of the host.
-            container = 'https://agent-' + 'd4' * 16 + '.apps.example.org'
-            b.ledger.record_agent_container(project, 'd4' * 16, container)
-            b.revise('fixture', project, {'schemaVersion': 1, 'clientRequestId': 'container',
-                                          'request': 'Build against the agent container.'})
-            self.assertTrue(b.run_next())
-            self.assertIn(f'static final String URL = "{container}";', written[-1].read_text())
-            self.assertEqual(compile_server.call_count, 4)
-            compile_client.assert_not_called()
-            keys.assert_not_called()
-        for job in (first, second, third):
-            failure = b.job(job['jobId'])['failure']
-            self.assertEqual(failure['category'], 'toolchain')
-            self.assertEqual(failure['summary'], 'Stopped before compilation by the test.')
-        self.assertEqual(b.ledger.versions(project), [])
-        self.assertIsNone(self.host.worker)
 
 
 class Wired(unittest.TestCase):

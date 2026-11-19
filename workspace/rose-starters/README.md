@@ -86,7 +86,11 @@ The **`checkStarterBoundaries`** task (part of `check`) enforces:
   - expose the documented semantics (role, text, state, progress, disabled);
   - show the caller's text as given;
   - touch targets ≥ 48dp;
-  - readable contrast between each colour role pair.
+  - readable contrast between each colour role pair;
+  - draw at the size the caller's modifier gives: a full-width button looks full width, a taller Progress or
+    Segmented draws taller, and a taller Slider takes taps across its whole height;
+  - stay visible on every surface a template may use (background, surface, and an Inset panel's surfaceVariant):
+    an empty track, an inactive slider track and a Secondary button's edge must stand out from all three.
 - `ControlKit.kt` helps. `Modifier.sliderInput` and `Modifier.holdInput` already satisfy the input and semantics rules.
   `BaselineControls` is a complete reference, and `examples/PaperTheme.kt` shows a second look.
 
@@ -137,7 +141,7 @@ rather than drawing a private control in a template; a private control would not
 
 | Suite | Where | Runs |
 |---|---|---|
-| `ThemeConformanceTest` (16 checks) | every theme's module, and `matrix` for all pilots | light + dark × API 34 + 37 |
+| `ThemeConformanceTest` (20 checks; 2 render pixels with Robolectric's native graphics) | every theme's module, and `matrix` for all pilots | light + dark × API 34 + 37 |
 | `<Template>BehaviorTest` | each template module, under Baseline and Paper | light + dark × API 34 + 37 |
 | `<Template>Scenario` | `matrix`, under every pilot theme | light + dark × API 34 + 37 |
 | `MatrixWiringTest` | `matrix`: 3 templates × (3 pilot themes + Baseline) | API 34 + 37 |

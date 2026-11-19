@@ -1,6 +1,16 @@
 package app.rose.design.testing
 
 import androidx.compose.foundation.layout.Column
+import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import app.rose.design.Divider
+import org.robolectric.annotation.GraphicsMode
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -411,4 +421,87 @@ abstract class ThemeConformanceTest(private val theme: Theme, private val dark: 
         PanelKind.entries.forEach { rule.onNodeWithTag("p$it").assertShows("Kind $it").assertHasNoClickAction() }
         rule.onNodeWithTag("div").assertExists()
     }
+
+    // Size and visibility (pixels): a control draws at the size its modifier gives it and stays visible on every
+    // surface a template may put it on: background, surface, and an Inset panel's surfaceVariant.
+
+    @Test
+    fun controlsTakeTheSizeTheyAreGiven() {
+        show {
+            Column {
+                Button("Sized", {}, Modifier.testTag("Button").size(240.dp, 72.dp))
+                Segmented(listOf("One", "Two"), 0, {}, "Sized", Modifier.testTag("Segmented").size(240.dp, 72.dp))
+                Slider(0.5f, {}, "Sized", Modifier.testTag("Slider").size(240.dp, 72.dp))
+                Toggle(false, {}, "Sized", Modifier.testTag("Toggle").size(240.dp, 72.dp))
+                Progress(0.5f, "Sized", Modifier.testTag("Progress").size(240.dp, 24.dp))
+                Divider(Modifier.testTag("Divider").size(240.dp, 8.dp))
+            }
+        }
+        listOf("Button" to 72.dp, "Segmented" to 72.dp, "Slider" to 72.dp, "Toggle" to 72.dp, "Progress" to 24.dp, "Divider" to 8.dp).forEach { (tag, h) ->
+            val b = rule.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+            assertEquals("$tag given 240dp wide keeps that width", 240f, (b.right - b.left).value, 1f)
+            // At least: Material widens some controls' accessibility bounds beyond what they draw (pixels check the drawing).
+            assertTrue("$tag given $h tall is at least that tall, was ${b.bottom - b.top}", (b.bottom - b.top).value >= h.value - 1f)
+        }
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @RequiresApi(26) // captureToImage; these run on API 34 and 37
+    fun controlsDrawAcrossTheHeightTheyAreGiven() {
+        val host = theme.tokens(dark).colors.background
+        show {
+            Box(Modifier.background(host)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Progress(0.5f, "Tall", Modifier.testTag("Progress").size(240.dp, 24.dp))
+                    Segmented(listOf("One", "Two"), 0, {}, "Tall", Modifier.testTag("Segmented").size(240.dp, 72.dp))
+                    Button("Tall", {}, Modifier.testTag("Button").size(240.dp, 72.dp), kind = ButtonKind.Primary)
+                }
+            }
+        }
+        listOf("Progress" to 24, "Segmented" to 72, "Button" to 72).forEach { (tag, h) ->
+            Pixels.requireSpan("$tag given ${h}dp (${mode()})", rule.onNodeWithTag(tag).captureToImage(), host, 0.5f)
+        }
+    }
+
+    @Test
+    fun aTallSliderTakesInputAcrossItsWholeHeight() {
+        var value by mutableFloatStateOf(0.5f)
+        show { Slider(value, { value = it }, "Tall", Modifier.testTag("s").size(320.dp, 96.dp)) }
+        rule.onNodeWithTag("s").performTouchInput { down(Offset(width - 2f, 3f)); up() }
+        assertTrue("a tap at the top edge, at the end, moves the value to the end (was $value)", value >= 0.9f)
+        rule.onNodeWithTag("s").performTouchInput { down(Offset(2f, height - 3f)); up() }
+        assertTrue("a tap at the bottom edge, at the start, moves the value to the start (was $value)", value <= 0.1f)
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @RequiresApi(26) // captureToImage; these run on API 34 and 37
+    fun tracksAndEdgesStayVisibleOnEverySurface() {
+        val c = theme.tokens(dark).colors
+        val hosts = listOf("background" to c.background, "surface" to c.surface, "surfaceVariant (an Inset panel)" to c.surfaceVariant)
+        var host by mutableIntStateOf(0)
+        show {
+            Box(Modifier.background(hosts[host].second).padding(16.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Progress(0f, "Empty", Modifier.testTag("Progress").width(240.dp))
+                    Slider(0f, {}, "At start", Modifier.testTag("Slider").width(240.dp))
+                    Button("Secondary", {}, Modifier.testTag("Button").width(200.dp))
+                }
+            }
+        }
+        hosts.forEachIndexed { i, (name, color) ->
+            host = i
+            rule.waitForIdle()
+            val on = "on $name (${mode()})"
+            Pixels.requireVisible("Progress(0f): its empty track $on", rule.onNodeWithTag("Progress").captureToImage(), color, Pixels.Region(x0 = 0.5f))
+            Pixels.requireVisible("Slider at 0: its inactive track $on", rule.onNodeWithTag("Slider").captureToImage(), color, Pixels.Region(x0 = 0.6f))
+            Pixels.requireVisible(
+                "Secondary Button: its edge or fill $on", rule.onNodeWithTag("Button").captureToImage(), color,
+                Pixels.Region(x1 = 0.06f, y0 = 0.25f, y1 = 0.75f),
+            )
+        }
+    }
+
+    private fun mode() = if (dark) "dark" else "light"
 }
