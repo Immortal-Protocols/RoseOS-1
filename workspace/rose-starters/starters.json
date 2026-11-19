@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "comment": "What Rose's builder may start a new app from (prototypes/voice-phone-demo/rose/app_builder/starters.py). A create request names one template id and one theme id; the generated project vendors `shared`, that template and that theme, and its app module calls RoseTheme(<theme object>) { <template object>.App() }. Keep in step with matrix/src/main/kotlin/app/rose/starters/matrix/Pilots.kt.",
+  "shared": ["design", "design-testing", "examples"],
+  "templates": {
+    "feed": {"dir": "templates/feed", "object": "app.rose.template.feed.FeedTemplate"},
+    "sprite-game": {"dir": "templates/sprite-game", "object": "app.rose.template.spritegame.SpriteGameTemplate"},
+    "player": {"dir": "templates/player", "object": "app.rose.template.player.PlayerTemplate"}
+  },
+  "themes": {
+    "material3": {"dir": "themes/material3", "object": "app.rose.theme.material3.Material3Theme"},
+    "minimal": {"dir": "themes/minimal", "object": "app.rose.theme.minimal.MinimalTheme"},
+    "skeuomorphic": {"dir": "themes/skeuomorphic", "object": "app.rose.theme.skeuomorphic.SkeuomorphicTheme"}
+  }
+}
