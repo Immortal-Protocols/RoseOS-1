@@ -485,11 +485,13 @@ class OutputTest(Temp):
 class FakeIsolation:
     """Records what build() asks for and runs ``script`` (sh) in Gradle's place, unconfined: unit tests only."""
 
-    def __init__(self, script='exit 0', raises=None, failed=False):
-        self.script, self.raises, self.own, self.calls = script, raises, failed, []
+    def __init__(self, script='exit 0', raises=None, failed=False, keep=None):
+        self.script, self.raises, self.own, self.calls, self.keep = script, raises, failed, [], keep
 
     def command(self, argv, env, *, writable, readonly):
         self.calls.append((argv, env, writable, readonly))
+        if self.keep is not None:  # what Gradle is given, as it starts: build() removes the box afterwards
+            shutil.copytree(writable, self.keep, symlinks=True)
         if self.raises is not None:
             raise self.raises
         return ['/bin/sh', '-c', self.script], env
@@ -554,12 +556,14 @@ class BuildContractTest(Temp):
         self.assertEqual(isolation.calls, [])
 
     def test_what_gradle_is_given(self):
-        isolation = FakeIsolation('exit 0')
+        seen = self.root / 'seen'
+        isolation = FakeIsolation('exit 0', keep=seen)
         with mock.patch.dict(os.environ, {'ROSE_TEST_SECRET': 'inherited-value'}):
             failed = self.build(isolation)
         self.assertIn('did not make a release APK', failed.summary)
         [(argv, env, writable, readonly)] = isolation.calls
         box, s = self.work / 'sandbox', self.stack
+        self.assertFalse(os.path.lexists(box))  # the job's Gradle home and outputs are gone once Gradle is
         self.assertEqual(writable, box)
         self.assertEqual(readonly, (s / 'jdk', s / 'gradle', s / 'sdk', s / 'cache'))
         self.assertEqual(argv, [str(s / 'gradle/bin/gradle'), '--offline', '--no-daemon', '--console=plain',
@@ -575,22 +579,24 @@ class BuildContractTest(Temp):
         for key in ('HOME', 'TMPDIR', 'GRADLE_USER_HOME', 'ANDROID_USER_HOME'):
             self.assertTrue(Path(env[key]).is_relative_to(box), key)
         for folder in ('home', 'gradle-home', 'tmp', 'project'):
-            self.assertEqual((box / folder).stat().st_mode & 0o777, 0o700)
-        properties = (box / 'gradle-home/gradle.properties').read_text()
+            self.assertEqual((seen / folder).stat().st_mode & 0o777, 0o700)
+        properties = (seen / 'gradle-home/gradle.properties').read_text()
         for line in ('org.gradle.daemon=false', 'org.gradle.java.installations.auto-download=false',
                      'org.gradle.java.installations.auto-detect=false', f'org.gradle.java.home={s / "jdk"}',
                      f'org.gradle.java.installations.paths={s / "jdk"}', 'android.builder.sdkDownload=false',
                      'kotlin.compiler.execution.strategy=in-process'):
             self.assertIn(line + '\n', properties)
-        self.assertEqual((box / 'project/local.properties').read_text(), f'sdk.dir={s / "sdk"}\n')
-        self.assertEqual((box / gradle.INIT).read_text(), gradle.init_script())
-        self.assertEqual((box / 'project/app/build.gradle.kts').read_text(),
+        self.assertEqual((seen / 'project/local.properties').read_text(), f'sdk.dir={s / "sdk"}\n')
+        self.assertEqual((seen / gradle.INIT).read_text(), gradle.init_script())
+        self.assertEqual((seen / 'project/app/build.gradle.kts').read_text(),
                          (self.tree / 'app/build.gradle.kts').read_text())
         self.assertEqual((self.tree / 'local.properties').read_text(), 'sdk.dir=/somewhere/else\n')  # source untouched
-        # A second build in the same job starts from a fresh sandbox.
+        # A second build in the same job starts from a fresh sandbox, whatever a first one left.
+        box.mkdir()
         (box / 'stale').write_text('x')
-        self.build(FakeIsolation('exit 0'))
-        self.assertFalse((box / 'stale').exists())
+        again = self.root / 'again'
+        self.build(FakeIsolation('exit 0', keep=again))
+        self.assertFalse((again / 'stale').exists())
 
     def test_a_failed_build_is_classified_with_its_extracted_log(self):
         script = (f'echo "e: file://{self.work}/sandbox/project/app/src/main/java/A.kt:1:1 Syntax error"; '
@@ -794,7 +800,7 @@ class GradleBuildTest(unittest.TestCase):
         self.assertNotIsInstance(result, toolchain.StepFailed, getattr(result, 'log', '')[-4000:])
         _, log = result
         self.assertIn('ROSE-PROBE read=denied net=denied', log)  # the probe ran, and got neither
-        self.assertEqual((work / 'sandbox/project/probe.txt').read_text(), 'read=denied\nnet=denied\n')
+        self.assertFalse(os.path.lexists(work / 'sandbox'))  # nothing the build wrote is left behind
         self.assertNotIn(self.canary_text, log)
         self.assertNotIn(str(self.root), log)  # the builder's paths are redacted
 
