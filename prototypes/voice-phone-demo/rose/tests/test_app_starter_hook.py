@@ -89,6 +89,22 @@ class StarterHookTest(Base):
         b._prepare(source, project, job)  # the tree exists: a later job resets to it, never writes it again
         self.assertEqual(len(written), 1)
 
+    def test_a_recorded_create_is_retried_to_the_same_ids_whatever_changed_since(self):
+        b = self.hooked()
+        out = self.create(b, {'template': 'feed', 'theme': 'minimal'})
+
+        def gone(starter):
+            raise starters.UnknownStarter('There is no starter template feed.')
+        b.resolve_starter = gone  # the catalog changed
+        self.assertEqual(self.create(b, {'template': 'feed', 'theme': 'minimal'}), out)
+        b.ledger.close()
+        restarted = self.builder()  # the same root, restarted without Gradle or starters
+        self.assertEqual(self.create(restarted, {'template': 'feed', 'theme': 'minimal'}), out)
+        with self.assertRaises(Refused) as caught:  # a new request is still checked
+            self.create(restarted, {'template': 'feed', 'theme': 'minimal'}, rid='r2')
+        self.assertEqual(caught.exception.details.get('reason'), 'unknown_starter')
+        self.assertEqual(len(restarted.projects()), 1)
+
     def test_a_starter_the_catalog_no_longer_has_fails_as_a_toolchain_matter_and_starts_afresh(self):
         written = []
         b = self.hooked(written)

@@ -622,7 +622,9 @@ same ids. A retry must repeat the same `starter` (or none) too.
 template and one theme in `workspace/rose-starters/starters.json` (today the templates `feed`, `sprite-game` and
 `player`, and the themes `material3`, `minimal` and `skeuomorphic`). It is checked before anything is recorded: a
 malformed one, one the catalog does not have, or any starter on a builder without the Gradle toolchain and the
-starters is refused with HTTP 400 and `reason: unknown_starter`. `null` is the same as leaving it out. It belongs to the
+starters is refused with HTTP 400 and `reason: unknown_starter`. Whether the builder has it is asked of a new
+request only: a retry of a create already recorded returns its ids even if the catalog or the configuration changed
+since. `null` is the same as leaving it out. It belongs to the
 project for good: its first tree is written from that starter (`rose.app_builder.starters.skeleton`) and every
 later revise starts from that history. Without it a new app starts from the builder's own skeleton (§2.4). `accepted` for cancel means stopping, not stopped. Only the job's own
 `cancelled` state confirms it.

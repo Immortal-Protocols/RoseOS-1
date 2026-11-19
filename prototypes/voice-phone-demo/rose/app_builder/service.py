@@ -353,27 +353,34 @@ class Builder:
             body = {k: v for k, v in body.items() if k != 'starter'}
         b = _body(body, {'clientRequestId': (str, 64), 'description': (str, MAX_TEXT)})
         if starter is not None:
-            starter = self._starter(starter)
+            starter = self._starter_shape(starter)
         name = b['description'].splitlines()[0][:40].strip() or 'New app'
+        # Whether this builder has the starter is asked of a new request only: a retry of one already recorded
+        # returns its ids even if the catalog or the configuration changed since.
+        check = None if starter is None else (lambda: self._starter_available(starter))
         try:
-            out = self.ledger.create(device, b['clientRequestId'], b['description'], name, starter)
+            out = self.ledger.create(device, b['clientRequestId'], b['description'], name, starter, check)
         except LedgerError as error:
             raise Refused(str(error)) from None
         self.wake.set()
         return {**out, 'notes': []}
 
-    def _starter(self, starter) -> dict:
-        """A create request's starter: exactly {template, theme}, two lowercase ids this builder has."""
+    @staticmethod
+    def _starter_shape(starter) -> dict:
+        """A create request's starter: exactly {template, theme}, two lowercase ids."""
         if (not isinstance(starter, dict) or set(starter) != {'template', 'theme'}
                 or not all(isinstance(v, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,39}', v) for v in starter.values())):
             raise Refused('starter must be {template, theme}, two lowercase ids', reason='unknown_starter')
+        return {'template': starter['template'], 'theme': starter['theme']}
+
+    def _starter_available(self, starter: dict):
+        """Refuses a new request's starter this builder cannot make: no starters, no Gradle, or not in the catalog."""
         if self.resolve_starter is None or self.gradle is None:
             raise Refused('This builder has no starters.', reason='unknown_starter')
         try:
             self.resolve_starter(starter)
         except ValueError as error:
             raise Refused(str(error) or 'There is no such starter.', reason='unknown_starter') from None
-        return {'template': starter['template'], 'theme': starter['theme']}
 
     def revise(self, device: str, project: str, body) -> dict:
         b = _body(body, {'clientRequestId': (str, 64), 'request': (str, MAX_TEXT)})

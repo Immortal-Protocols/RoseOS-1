@@ -234,10 +234,11 @@ class Ledger:
         return None if row is None else {'jobId': row[0], 'projectId': row[1], 'request': row[2]}
 
     def create(self, device: str, client_request_id: str, description: str, name: str,
-               starter: dict | None = None) -> dict:
+               starter: dict | None = None, check_new=None) -> dict:
         """A new project and its first job; retrying the same request returns the same ids. ``starter``
-        ({template, theme}, already checked by the caller) is the Rose starter its first tree is made from; it is
-        the project's for good, so a revise starts from it too."""
+        ({template, theme}) is the Rose starter its first tree is made from; it is the project's for good, so a
+        revise starts from it too. ``check_new()`` runs only for a request not seen before, before anything is
+        recorded: what it raises refuses that request, and never a retry of one already recorded."""
         key = f'{device}\n{client_request_id}'
         with self.lock:
             existing = self._existing(key)
@@ -246,6 +247,8 @@ class Ledger:
                         or self._starter(existing['projectId']) != starter):
                     raise LedgerError('clientRequestId was used for another request')
                 return {'projectId': existing['projectId'], 'jobId': existing['jobId']}
+            if check_new is not None:
+                check_new()
             project, job, now = _id(), _id(), self.clock()
             self.db.execute('BEGIN IMMEDIATE')
             try:
