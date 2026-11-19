@@ -9,19 +9,52 @@ import {isObject,privateSessionFilesystem,sessionPermissions} from './session-pe
 export const appBuildPolicy = `You write the source of one small Android app in the current directory. The host owns
 the Android build: it compiles, checks, signs and installs the app, and it reports failures back to the owner. You
 cannot build the app here: you have no network, and your own shell runs only in this directory's sandbox.
-Write only these entries in the current directory: AndroidManifest.xml, src/, res/, assets/, README.md and
-dependencies.json. A client-backend-v1 app (below) also writes rose-app.json, contract/ and backend/.
-Use Java at the Java 17 source level (records, sealed types, switch expressions, text blocks and var are fine; no
-preview features), the Android framework APIs in android.jar and the java.* APIs Android provides (no
-java.lang.management, AWT or Swing). The app runs on API 26 and later: check Build.VERSION.SDK_INT before calling
-anything newer, including newer Java methods such as String.formatted (use String.format instead).
-No Kotlin, Gradle, native code, scripts, or binary files you did not draw yourself (backend/ of a
-client-backend-v1 app has its own rules, below). Never add library files
-(.jar or .aar). A pure-Java library that the request lists as provided may be declared in dependencies.json as
-{"schemaVersion": 1, "dependencies": ["group:artifact:version"]}; the host checks and adds it. Any other library
-fails the build.
-Resources follow aapt v1 rules. The Java package and the manifest package stay exactly as they are.
-Never add or change versionCode, versionName, uses-sdk, sharedUserId, debuggable, signing, or split attributes.
+The app is an ordinary Android Gradle project, laid out as Android Studio makes one: settings.gradle.kts,
+build.gradle.kts and gradle.properties at the top, and the app module in app/: app/build.gradle.kts and
+app/src/main/ with AndroidManifest.xml, java/ or kotlin/, res/ and assets/. More modules (Android library
+modules, com.android.library; the application stays app/), a version catalog (gradle/libs.versions.toml), README.md
+and .gitignore files are fine. A client-backend-v1 app (below) also
+writes rose-app.json, contract/ and backend/. Keep the layout the current directory has; an app in the older flat
+layout is described below.
+Write Kotlin with Jetpack Compose, and Material 3 where it fits; Java and Android views are fine where the app
+wants them. The host builds the project offline, in a sandbox with no network that sees only the project, with
+exactly the stack this turn names: its Gradle, Android Gradle Plugin, Kotlin and JDK, and only the plugins and
+libraries it lists, at its versions (the Compose BOM sets the versions of the libraries it manages). Declare the
+repositories google() and mavenCentral(), and for plugins also gradlePluginPortal(). The Android Gradle Plugin
+compiles Kotlin itself: apply no Kotlin Android plugin, and request no Java toolchain but the turn's JDK. A build
+file that downloads anything or reads outside the project fails. Do not run Gradle or try to build.
+Never add the Gradle wrapper (gradlew, gradlew.bat, gradle/wrapper/), local.properties (the host writes it),
+build output (build/, .gradle/, .kotlin/, .idea/, .cxx/, *.iml), prebuilt files (.jar, .aar, .so, .dex, .apk,
+.aab, .class or .klib), key or keystore files, native code (C or C++, CMake or ndk-build: the stack has no NDK),
+other scripts, or binary files you did not draw yourself (backend/ of a client-backend-v1 app has its own rules,
+below). Every file is at most 4 MB.
+The host owns the app's identity and signs the built APK itself, outside the build. Never set or change
+applicationId, applicationIdSuffix, versionCode, versionName, signingConfigs, sharedUserId, splits or bundles,
+ABI filters (abiFilters) or native-library excludes, and never make a build debuggable or testOnly: the host
+sets the identity and version, and refuses an APK the build changed them in, signed, split or left native
+libraries out of. Keep namespace and applicationId exactly as the skeleton has them (the
+app's package). Keep compileSdk and targetSdk at the turn's compileSdk (37); minSdk is at most 29 (the
+skeleton's 26 suits most apps), so check Build.VERSION.SDK_INT before calling anything newer than minSdk. The
+host owns the <package>.rose package: never create that folder or package (when it generates the app's client,
+it writes it as app/src/main/java/<package path>/rose/).
+An app in the older flat layout (AndroidManifest.xml, src/ and res/ at the top, and no settings.gradle.kts) keeps
+that layout's rules and may stay that way. In a revise, when this turn names the Gradle stack, you may instead
+convert it into a Gradle project as above: move its sources, resources and assets under app/src/main/, set
+namespace and applicationId to its manifest package, drop the manifest's package attribute and any uses-sdk,
+and turn dependencies.json into dependencies in app/build.gradle.kts, only ones the stack lists. Its code may
+stay Java, at its Java 17 level: set android { compileOptions { sourceCompatibility = JavaVersion.VERSION_17;
+targetCompatibility = JavaVersion.VERSION_17 } } in app/build.gradle.kts. Its package, the owner's data and its signing stay the same, so phones update it in place.
+The older layout's rules: write only AndroidManifest.xml, src/, res/, assets/, README.md and dependencies.json
+(and a client-backend-v1 app's entries below). Use Java at the Java 17 source level (records, sealed types, switch
+expressions, text blocks and var are fine; no preview features), the Android framework APIs in android.jar and
+the java.* APIs Android provides (no java.lang.management, AWT or Swing). Such an app runs on API 26 and later:
+check Build.VERSION.SDK_INT before calling anything newer, including newer Java methods such as String.formatted
+(use String.format instead). No Kotlin, Gradle, native code, scripts, or binary files you did not draw yourself.
+Never add library files (.jar or .aar). A pure-Java library that the request lists as provided may be declared
+in dependencies.json as {"schemaVersion": 1, "dependencies": ["group:artifact:version"]}; the host checks and
+adds it. Any other library fails the build. Resources follow aapt v1 rules. The Java package and the manifest
+package stay exactly as they are. Never add or change versionCode, versionName, uses-sdk, sharedUserId,
+debuggable, signing, or split attributes.
 Do not touch .git or anything outside the current directory. Do not use the network yourself (the app may, and
 so may the commands a client-backend-v1 build runs in its container through agent_container, below).
 On a change to an existing app, keep the owner's data: keep SharedPreferences names and keys, file names and
@@ -44,7 +77,8 @@ The generated Android API client remains as follows:
 - The Android app: the host writes the <package>.rose package, so never create that folder or package. Add
   <uses-permission android:name="android.permission.INTERNET"/>. Get the server's address with
   RoseApi.serverUrl(); when it is null, show that the server is not set up yet. Otherwise use
-  new RoseApi.Client(new RoseApi.HttpsTransport(url), new RoseSession(context)), one method per route named
+  new RoseApi.Client(new RoseApi.HttpsTransport(url), new RoseSession(context)) (the client is Java; Kotlin
+  calls it the same way, without new), one method per route named
   as in the contract (a Java keyword or Object method name gets a trailing _), returning RoseTypes classes
   and throwing RoseApi.Error (status, word). A RoseTypes class has public fields named as in the contract (a
   Java keyword gets a trailing _) and a no-arg constructor: int is long, float double, bytes byte[], list
@@ -79,11 +113,12 @@ its backend, choose the stack and own its build files. Preserve database paths, 
 key use, and test forward migrations on synthetic data. Do not read or change live data or keys in the writer turn.
 - rose-app.json: {"schemaVersion": 1, "profile": "client-backend-v1"}.
 - contract/api.json: written as described above. The builder generates the Android app's
-  client (RoseApi, RoseTypes, RoseSignin, RoseSession, RoseInvite) from it under src/<package>/rose/, so the
-  Android app uses that client exactly as the client API text above says (RoseApi.serverUrl() may be null, no
-  call on the main thread, the sign-in screens), and the backend serves every route in the contract.
+  client (RoseApi, RoseTypes, RoseSignin, RoseSession, RoseInvite) from it in the <package>.rose package (under
+  app/src/main/java/<package path>/rose/, or src/<package>/rose/ in the older layout), so the Android app uses
+  that client exactly as the client API text above says (RoseApi.serverUrl() may be null, no call on the main
+  thread, the sign-in screens), and the backend serves every route in the contract.
 - backend/: the backend's own source, in any language and any files, kept here so later revisions start from
-  it. The Android app's rules above (Java, no scripts or native code) do not apply inside backend/. Never put a
+  it. The Android app's rules above (its languages, no scripts or native code) do not apply inside backend/. Never put a
   credential or secret in it.
 - The container is small and plain: you run as UID 65534, not root, its root filesystem is read-only, and
   HOME=/agent-data (a 1 GiB volume) is the only writable and the only persistent place. apt or any system-wide

@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import appprofile, contract, dependencies, legacy_backend, template, toolchain
+from . import appprofile, contract, dependencies, gradle, legacy_backend, template, toolchain
 from .ledger import CLIENT_BACKEND, CLIENT_SERVER, HOSTED_URL, MAX_CONTRACT, Ledger, LedgerError
 
 SCHEMA_VERSION = 1
@@ -265,12 +265,16 @@ def _repair_text(failed: toolchain.StepFailed, folders) -> str:
     """What the writer is told about its build error: the failure's summary and the tail of the build tool's own
     output, bounded. That output can quote any file the build read: the writer's own source, the builder's generated
     files (rose.app_builder.codegen: no key, token or account; the app's hosted URL), the pinned libraries and SDK. It
-    cannot hold an inherited environment value: toolchain.run gives each tool a fixed environment
-    (paths and LANG) and nothing else. The signing key and its password are not read until a
-    build has passed, and the server's keyring only at its runtime. What is removed here is location: the builder's
-    folders (and toolchain.run's ``<folder>/`` redactions) become relative, and every other absolute path is
-    replaced with ``<path>``."""
+    cannot hold an inherited environment value: toolchain.run gives each tool a fixed environment (paths and
+    LANG) and nothing else. The signing key and its password are not read until a build has passed, and the
+    server's keyring only at its runtime. A Gradle project's build output also holds whatever its own build scripts
+    print: they run inside the build isolation (rose.app_builder.gradle), which sees only the job's copy of the
+    source, the pinned JDK, Gradle, SDK and dependency cache, and no network, so they have nothing else to print.
+    What is removed here is location: file URIs become paths, the builder's folders (and toolchain.run's
+    ``<folder>/`` redactions) become relative, and every other absolute path is replaced with ``<path>``."""
     text = f'{failed.summary}\n{(failed.log or "")[-REPAIR_TEXT_MAX * 2:]}'
+    # Kotlin and Gradle name files as file:///path, or file://<folder>/path once toolchain.run redacted the folder.
+    text = re.sub(r'\bfile:(?://)?(?=[/<])', '', text)
     for folder in sorted({str(f) for f in folders}, key=len, reverse=True):
         text = text.replace(folder + '/', '').replace(folder, '.')
     return _ABSOLUTE_PATH.sub('<path>', _REDACTED_FOLDER.sub('', text))[-REPAIR_TEXT_MAX:]
@@ -300,11 +304,16 @@ class BackendSession:
 class Builder:
     def __init__(self, root: Path, tools: toolchain.Tools, generate, ledger: Ledger | None = None, backup=None,
                  resolver=None, *, codegen=None, server_url=None, hosting=None, repairs: int = REPAIRS,
-                 require_key_backup=True):
+                 require_key_backup=True, gradle=None):
         """generate(source, kind, request, cancelled) writes the app's code into source; it may raise
         toolchain.StepFailed. backup(keys_dir, project_id, package) -> receipt copies a project's signing key off the
         host; it must succeed once before the project's signer is bound unless the owner explicitly permits
         local-only key persistence with require_key_backup=False. Signing identity checks always apply.
+
+        ``gradle`` (rose.app_builder.gradle.GradleTools, docs/APP-BUILDER.md §2.4): ordinary Gradle projects (Kotlin,
+        Compose) build with it, offline and inside its isolation, and new apps start from its Kotlin skeleton. Without
+        it a new app starts from the older flat Java skeleton, and a Gradle project fails as a toolchain matter.
+        Either way the identity, signing and delivery below are the same, so an app can move from one to the other.
 
         Backend apps use the injected client code generator and hosting connection. The writing agent builds
         their release inside the existing Chariot agent container; the host builds only the Android client."""
@@ -319,6 +328,7 @@ class Builder:
         self.codegen = codegen
         self.server_url = server_url
         self.hosting = hosting
+        self.gradle = gradle
         # A build tool's rejection of the writer's own source goes back to the writer as a repair turn, at most this
         # many times in a job, before anything is signed: the same project, job and version code.
         self.repairs = max(0, int(repairs))
@@ -592,7 +602,12 @@ class Builder:
                 legacy_backend.check(snapshot, self.ledger, project_id)
         except template.TemplateRefused as refused:  # ProfileRefused too
             raise toolchain.StepFailed('dependency' if refused.dependency else 'compile', str(refused)) from None
-        _git(source, 'add', '-A', work_tree=snapshot)
+        layout = gradle.is_gradle_project(snapshot)
+        if layout and self.gradle is None:
+            raise toolchain.StepFailed('toolchain', 'This builder has no Gradle toolchain set up, so a Gradle project '
+                                       '(settings.gradle.kts) cannot be built here yet.')
+        # -f: a Gradle project's .gitignore never keeps a file out of the record; what is built is what is recorded.
+        _git(source, 'add', '-A', '-f', work_tree=snapshot)
         if _git(source, 'status', '--porcelain', work_tree=snapshot):
             _git(source, 'commit', '-q', '-m', f'{job["kind"]} {job_id} attempt {job["attempt"]}'
                  + (f' repair {repairs}' if repairs else ''), work_tree=snapshot)
@@ -600,18 +615,24 @@ class Builder:
         code = self.ledger.allocate_version(job_id)
         name = f'{code}'
         self._step(job, 'building', 'compiling', 'Building the app.')
-        if work.exists():
-            shutil.rmtree(work)
-        libraries = self._libraries(snapshot, work, project_id, package)
+        gradle.remove_tree(work)  # a build's own folders too, whatever modes it left them in
+        # A Gradle project's libraries are its own build files' business, resolved offline from the host's cache.
+        libraries = [] if layout else self._libraries(snapshot, work, project_id, package)
         agent = None
         if profile.name == CLIENT_BACKEND:
             if backend is None:
                 raise toolchain.StepFailed('toolchain', 'This builder has no agent container set up for app '
                                            'backends, so the app was not built.')
-            agent = self._client_backend(snapshot, work, project)
-            unsigned, log = toolchain.build(agent['client_source'], work, package, code, name, self.tools,
-                                            cancelled, libraries, builder_files=agent['builder_files'],
-                                            builder_packages=agent['packages'])
+            agent = self._client_backend(snapshot, work, project, layout)
+            if layout:
+                unsigned, log = gradle.build(agent['client_source'], work, package, code, name, self.gradle,
+                                             self.tools, cancelled, builder_files=agent['builder_files'])
+            else:
+                unsigned, log = toolchain.build(agent['client_source'], work, package, code, name, self.tools,
+                                                cancelled, libraries, builder_files=agent['builder_files'],
+                                                builder_packages=agent['packages'])
+        elif layout:
+            unsigned, log = gradle.build(snapshot, work, package, code, name, self.gradle, self.tools, cancelled)
         else:  # a plain app's build is called exactly as before Level 2
             unsigned, log = toolchain.build(snapshot, work, package, code, name, self.tools, cancelled, libraries)
         return note, snapshot, profile, revision, code, name, libraries, agent, unsigned, log
@@ -633,7 +654,7 @@ class Builder:
         self.ledger.clear_server_setup(project_id)  # another release runs there now, until this one is delivered
         return self.ledger.agent_container(project_id)['appUrl'], self.ledger.clock()
 
-    def _client_backend(self, snapshot: Path, work: Path, project: dict) -> dict:
+    def _client_backend(self, snapshot: Path, work: Path, project: dict, layout: bool = False) -> dict:
         """An app whose backend the building agent set up (§7.7a): the contract against every delivered version's,
         and the client's tree with the builder's generated client files (the API client from the contract, sign-in,
         RoseInvite, RoseServer.URL). Nothing of backend/ is built here, or goes into the APK."""
@@ -664,6 +685,9 @@ class Builder:
                                        'folder.')
         url = self._hosted_url(project_id)
         client_files[prefix + ROSE_SERVER] = rose_server_java(package, url)
+        if layout:  # the same Java files, in the Gradle application module's source set
+            root = appprofile.client_root(gradle=True)
+            client_files = {root + k[len('src/'):]: v for k, v in client_files.items()}
         client = work / 'client'
         shutil.copytree(snapshot, client, symlinks=True, ignore=client_tree_ignore(snapshot, appprofile.BACKEND_TOP))
         try:
@@ -786,8 +810,11 @@ class Builder:
         if not gitdir.exists():
             source.mkdir(mode=0o700, parents=True, exist_ok=True)
             _git(source, 'init', '-q')
-            template.write_skeleton(source, project['packageName'], project['name'])
-            _git(source, 'add', '-A')
+            if self.gradle is not None:
+                gradle.write_skeleton(source, project['packageName'], project['name'])
+            else:
+                template.write_skeleton(source, project['packageName'], project['name'])
+            _git(source, 'add', '-A', '-f')
             _git(source, 'commit', '-q', '-m', 'skeleton')
         else:
             self._reset(source, project['projectId'])
@@ -825,6 +852,7 @@ class Builder:
         _git(source, 'clean', '-q', '-ffdx')  # twice: also nested repositories git would otherwise keep
         for path in sorted(source.rglob('*'), key=lambda p: len(p.parts), reverse=True):
             mode = os.lstat(path).st_mode
-            if template.git_name(path.name) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            recorded_ignore = path.name == '.gitignore' and stat.S_ISREG(mode)  # a Gradle project's own, as recorded
+            if (template.git_name(path.name) and not recorded_ignore) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                 # whatever git left (metadata, FIFOs, sockets, links), never into the next attempt
                 path.unlink() if not stat.S_ISDIR(mode) else shutil.rmtree(path)

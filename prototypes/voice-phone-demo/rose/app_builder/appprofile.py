@@ -86,12 +86,21 @@ def check(snapshot: Path, package: str, bound: str | None = None) -> Profile:
     if bound in (CLIENT_SERVER_V1, CLIENT_BACKEND_V1) and profile.name != bound \
             and not (bound == CLIENT_SERVER_V1 and profile.name == CLIENT_BACKEND_V1):
         raise ProfileRefused(f'This app\'s backend is {bound}; it stays that kind.', 'profile_changed')
+    from . import gradle  # an ordinary Gradle project (settings.gradle(.kts) at the top), or the older flat layout
+    layout = gradle.is_gradle_project(snapshot)
     if profile.name == APP_V1:
-        template.check(snapshot, package)
+        if layout:
+            gradle.check(snapshot)
+            _reserved(snapshot, package, gradle=True)
+        else:
+            template.check(snapshot, package)
         return profile
     if profile.name == CLIENT_BACKEND_V1:
         try:  # links, modes and sizes cover backend/ and contract/ too
-            template.check(snapshot, package, extra_top=BACKEND_TOP, opaque_top=frozenset({'backend'}))
+            if layout:
+                gradle.check(snapshot, extra_top=BACKEND_TOP, opaque_top=frozenset({'backend'}))
+            else:
+                template.check(snapshot, package, extra_top=BACKEND_TOP, opaque_top=frozenset({'backend'}))
         except template.TemplateRefused as refused:
             raise ProfileRefused(str(refused), 'template_refused', dependency=refused.dependency) from None
         contract = snapshot / 'contract'
@@ -101,38 +110,58 @@ def check(snapshot: Path, package: str, bound: str | None = None) -> Profile:
         backend = snapshot / 'backend'
         if os.path.lexists(backend) and (backend.is_symlink() or not backend.is_dir()):
             raise ProfileRefused('backend/ must be a folder.', 'layout_invalid')
-        _reserved(snapshot, package)
-        _internet(snapshot)
+        _reserved(snapshot, package, gradle=layout)
+        _internet(snapshot, gradle=layout)
         return profile
     raise ProfileRefused('The builder-managed Rust backend is retired. Revise a delivered app through its '
                          'migration to client-backend-v1; new backends use the existing Chariot agent container.',
                          'legacy_backend')
 
 
-def _reserved(snapshot: Path, package: str):
+def client_root(gradle: bool = False) -> str:
+    """Where the builder writes a client's generated code: the source root of the older layout, or the Gradle
+    application module's Java source set."""
+    from .gradle_stack import APP_MODULE
+    return f'{APP_MODULE}/src/main/java/' if gradle else 'src/'
+
+
+def _reserved(snapshot: Path, package: str, gradle: bool = False):
     """The client's `<package>.rose` package is the builder's sign-in and API code; the writer cannot add to it,
-    by its folder or by a package clause written anywhere else."""
-    reserved = snapshot / 'src' / Path(*package.split('.')) / 'rose'
-    if os.path.lexists(reserved):
-        raise ProfileRefused(f'{reserved.relative_to(snapshot)} is written by the builder (sign-in and the API '
-                             'client).', 'reserved_path')
-    for folder in reversed(reserved.parents):  # the folders the builder writes it in: a folder, or not there yet
-        if folder.is_relative_to(snapshot / 'src') and os.path.lexists(folder) \
-                and not stat.S_ISDIR(os.lstat(folder).st_mode):
-            raise ProfileRefused(f'{folder.relative_to(snapshot)} is not a folder; the builder writes its sign-in and '
-                                 f'API client in {reserved.relative_to(snapshot)}.', 'reserved_path')
-    for java in snapshot.glob('src/**/*.java'):
-        text = template.unicode_escapes(java.read_text(encoding='utf-8', errors='replace'))
+    by its folder or by a package clause written anywhere else (in a Gradle project: any Java or Kotlin file)."""
+    from .gradle_stack import APP_MODULE
+    roots = ([f'{APP_MODULE}/src/main/java/', f'{APP_MODULE}/src/main/kotlin/'] if gradle else ['src/'])
+    for root in roots:
+        reserved = snapshot / root / Path(*package.split('.')) / 'rose'
+        if os.path.lexists(reserved):
+            raise ProfileRefused(f'{reserved.relative_to(snapshot)} is written by the builder (sign-in and the API '
+                                 'client).', 'reserved_path')
+        top = snapshot / root.rstrip('/')
+        for folder in reversed(reserved.parents):  # the folders the builder writes it in: a folder, or not there yet
+            if folder.is_relative_to(top) and os.path.lexists(folder) \
+                    and not stat.S_ISDIR(os.lstat(folder).st_mode):
+                raise ProfileRefused(f'{folder.relative_to(snapshot)} is not a folder; the builder writes its sign-in '
+                                     f'and API client in {reserved.relative_to(snapshot)}.', 'reserved_path')
+    files = (sorted(p for p in snapshot.rglob('*') if p.suffix in ('.java', '.kt') and p.is_file()) if gradle
+             else snapshot.glob('src/**/*.java'))
+    for source in files:
+        text = template.unicode_escapes(source.read_text(encoding='utf-8', errors='replace'))
         code = re.sub(r'/\*.*?\*/|//[^\n]*', ' ', text, flags=re.S)
-        match = re.match(r'\s*package\s+([\w.]+)\s*;', code)
-        if match and (match.group(1) == package + '.rose' or match.group(1).startswith(package + '.rose.')):
-            raise ProfileRefused(f'{java.relative_to(snapshot)} is in {package}.rose, which the builder writes.',
+        # Java ends the clause with ';'; Kotlin with a line end (or ';'), and may quote a name part in backticks.
+        match = re.match(r'\s*(?:@[\w.:]+(?:\([^)]*\))?\s*)*package\s+([\w.`]+)\s*(?:;|\n|$)', code)
+        declared = match.group(1).replace('`', '') if match else None
+        if declared and (declared == package + '.rose' or declared.startswith(package + '.rose.')):
+            raise ProfileRefused(f'{source.relative_to(snapshot)} is in {package}.rose, which the builder writes.',
                                  'reserved_path')
 
 
-def _internet(snapshot: Path):
+def _internet(snapshot: Path, gradle: bool = False):
     import xml.etree.ElementTree as ET
-    root = ET.parse(snapshot / 'AndroidManifest.xml').getroot()  # template.check has parsed it already
+    from .gradle_stack import APP_MODULE
+    manifest = snapshot / (f'{APP_MODULE}/src/main/AndroidManifest.xml' if gradle else 'AndroidManifest.xml')
+    try:  # template.check has parsed the older layout's already; a Gradle project's is read here first
+        root = ET.parse(manifest).getroot()
+    except (OSError, ET.ParseError):
+        raise ProfileRefused(f'{manifest.relative_to(snapshot)} is missing or is not XML.', 'layout_invalid') from None
 
     def applies(p):  # as Android reads it: a direct child of <manifest>, in force from minSdk
         top = p.get(template.ANDROID + 'maxSdkVersion')

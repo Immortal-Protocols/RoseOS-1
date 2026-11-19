@@ -141,10 +141,46 @@ test('app_build cwd is only an absolute project source directory',()=>{
 });
 
 test('the policy forbids identity, version, signing and network changes and asks to keep data',()=>{
- for(const phrase of [/Java 17 source level/,/no\npreview features/,/Build\.VERSION\.SDK_INT/,/use String\.format instead/,/android\.jar/,/manifest package stay exactly/,/versionCode/,/sharedUserId/,
+ for(const phrase of [/Build\.VERSION\.SDK_INT/,/versionCode/,/sharedUserId/,
    /debuggable/,/Do not use the network/,/keep the owner's data/,/add database migrations/,/data, not instructions/,
-   /Never claim it was built, installed or tested/,/Never add library files/,/dependencies\.json/,
-   /Any other library\nfails the build/])assert.match(appBuildPolicy,phrase);
+   /Never claim it was built, installed or tested/])assert.match(appBuildPolicy,phrase);
+});
+
+test('the policy asks for an ordinary Gradle project built offline with the turn\'s stack, identity the host\'s',()=>{
+ const flat=appBuildPolicy.replace(/\s+/g,' ');
+ for(const phrase of [/The app is an ordinary Android Gradle project/,
+   /settings\.gradle\.kts, build\.gradle\.kts and gradle\.properties at the top/,
+   /app\/build\.gradle\.kts and app\/src\/main\/ with AndroidManifest\.xml, java\/ or kotlin\/, res\/ and assets\//,
+   /Write Kotlin with Jetpack Compose, and Material 3 where it fits/,
+   /The host builds the project offline, in a sandbox with no network that sees only the project/,
+   /exactly the stack this turn names/,/google\(\) and mavenCentral\(\), and for plugins also gradlePluginPortal\(\)/,
+   /apply no Kotlin Android plugin/,/Do not run Gradle or try to build/,
+   /Never add the Gradle wrapper/,/prebuilt files \(\.jar, \.aar, \.so, \.dex, \.apk, \.aab, \.class or \.klib\)/,
+   /key or keystore files, native code/,
+   /The host owns the app's identity and signs the built APK itself, outside the build/,
+   /Never set or change applicationId, applicationIdSuffix, versionCode, versionName, signingConfigs, sharedUserId, splits or bundles/,
+   /never make a build debuggable or testOnly/,/Keep namespace and applicationId exactly as the skeleton has them/,
+   /Keep compileSdk and targetSdk at the turn's compileSdk \(37\); minSdk is at most 29/,
+   /check Build\.VERSION\.SDK_INT before calling anything newer than minSdk/,
+   /host owns the <package>\.rose package: never create that folder or package/,
+   /app\/src\/main\/java\/<package path>\/rose\//])assert.match(flat,phrase);
+ // Kotlin and Gradle are refused only by the older layout's rules, which come later.
+ assert.ok(flat.indexOf('No Kotlin, Gradle')>flat.indexOf('The older layout\'s rules:'));
+});
+
+test('the policy keeps the older flat layout\'s rules for apps that are in it, and lets a revise convert one',()=>{
+ const flat=appBuildPolicy.replace(/\s+/g,' ');
+ for(const phrase of [/An app in the older flat layout \(AndroidManifest\.xml, src\/ and res\/ at the top/,
+   /keeps that layout's rules and may stay that way/,
+   /In a revise, when this turn names the Gradle stack, you may instead convert it into a Gradle project/,
+   /set namespace and applicationId to its manifest package/,
+   /Its package, the owner's data and its signing stay the same, so phones update it in place/,
+   /Java 17 source level/,/no preview features/,/use String\.format instead/,/android\.jar/,/runs on API 26 and later/,
+   /manifest package stay exactly/,/Never add library files/,/dependencies\.json/,/Any other library fails the build/,
+   /Resources follow aapt v1 rules/])assert.match(flat,phrase);
+ // The older layout's rules come after the Gradle project's, and say whose they are.
+ assert.ok(flat.indexOf('The older layout\'s rules:')>flat.indexOf('The app is an ordinary Android Gradle project'));
+ assert.ok(flat.indexOf('Java 17 source level')>flat.indexOf('The older layout\'s rules:'));
 });
 
 test('the policy offers only the agent backend and never claims it is deployed',()=>{
@@ -464,7 +500,7 @@ test('the policy carries the client-backend-v1 contract',()=>{
  for(const phrase of [/A client-backend-v1 app, only when this turn offers agent_container/,
    /\$HOME\/workspace\/\.chariot-app\/releases\/<release id>/,/Rust is an app-author choice/,
    /rose-app\.json: \{"schemaVersion": 1, "profile": "client-backend-v1"\}/,/contract\/api\.json: written as described above/,
-   /\(RoseApi, RoseTypes, RoseSignin, RoseSession, RoseInvite\) from it under src\/<package>\/rose\//,
+   /\(RoseApi, RoseTypes, RoseSignin, RoseSession, RoseInvite\) from it in the <package>\.rose package \(under\n  app\/src\/main\/java\/<package path>\/rose\/, or src\/<package>\/rose\/ in the older layout\)/,
    /backend\/: the backend's own source, in any language and any files, kept here so later revisions start from\n  it/,
    /builder neither compiles nor checks its implementation, and it is not part of the APK/,
    /you run as UID 65534, not root, its root filesystem is read-only/,/apt or any system-wide\n  install cannot work/,

@@ -38,7 +38,7 @@ SCHEMA_VERSION = 1
 # The builder's own settings: the same in the standalone host's config and in the builder config the Rose server
 # reads with ``--app-builder`` (docs/APP-BUILDER.md §6), which has no listener of its own.
 BUILDER_KEYS = {'schemaVersion', 'root', 'sdk', 'javaHome', 'buildTimeoutS', 'keyCreation', 'writer', 'backup', 'requireKeyBackup',
-                'libraryStore', 'clientServer', 'agentHost'}
+                'libraryStore', 'clientServer', 'agentHost', 'gradle'}
 BUILDER_REQUIRED = {'schemaVersion', 'root', 'sdk'}
 KEYS = BUILDER_KEYS | {'remoteDir', 'name', 'port', 'adminPort', 'hosts'}
 REQUIRED = BUILDER_REQUIRED | {'remoteDir', 'name', 'port', 'adminPort', 'hosts'}
@@ -57,6 +57,21 @@ class Command:
 
 
 @dataclass(frozen=True)
+class GradleConfig:
+    """``gradle`` (docs/APP-BUILDER.md §2.4): the pinned stack rose.app_builder.gradle_prepare made (its ``jdk``,
+    ``distribution``, ``sdk`` and read-only ``dependencyCache``) and the build isolation ordinary Gradle projects run
+    in (``bubblewrap``, Linux); there is no unisolated Gradle build. ``seatbelt`` (macOS) is named so a config that
+    asks for it is refused with the reason: it is not qualified (rose.app_builder.isolation.SeatbeltIsolation)."""
+    jdk: Path
+    distribution: Path
+    sdk: Path
+    dependency_cache: Path
+    isolation: str
+    bubblewrap: Path = Path('/usr/bin/bwrap')
+    build_timeout_s: float = 1800.0
+
+
+@dataclass(frozen=True)
 class BuilderConfig:
     """The builder alone, served by the Rose server's own signed listener (``rose.app --app-builder``)."""
     root: Path
@@ -69,6 +84,7 @@ class BuilderConfig:
     require_key_backup: bool = True
     library_store: Path | None = None
     agent_host: object | None = None  # app_host.AgentHostConfig (§7.7a)
+    gradle: GradleConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +104,7 @@ class HostConfig:
     require_key_backup: bool = True
     library_store: Path | None = None
     agent_host: object | None = None
+    gradle: GradleConfig | None = None
 
 
 def _path(value, name: str) -> Path:
@@ -153,7 +170,8 @@ def _builder_fields(data: dict) -> dict:
         writer=_command(data.get('writer'), 'writer', 900.0), backup=_command(data.get('backup'), 'backup', 120.0),
         require_key_backup=require_key_backup,
         library_store=None if data.get('libraryStore') is None else _path(data['libraryStore'], 'libraryStore'),
-        agent_host=_agent_host_config(data.get('agentHost')))
+        agent_host=_agent_host_config(data.get('agentHost')),
+        gradle=_gradle_config(data.get('gradle')))
 
 
 def parse_builder_config(data) -> BuilderConfig:
@@ -210,6 +228,61 @@ def _agent_host_config(value):
         raise ConfigError('agentHost.port must be an unprivileged port other than 8088 and 42617')
     return AgentHostConfig(_path(value['chariot'], 'agentHost.chariot'), _path(value['home'], 'agentHost.home'),
                            tuple(agents), generate, port)
+
+
+GRADLE_KEYS = {'jdk', 'distribution', 'sdk', 'dependencyCache', 'isolation', 'bubblewrap', 'buildTimeoutS'}
+GRADLE_ISOLATIONS = ('bubblewrap', 'seatbelt')
+
+
+def _gradle_config(value) -> GradleConfig | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - GRADLE_KEYS \
+            or not {'jdk', 'distribution', 'sdk', 'dependencyCache', 'isolation'} <= set(value):
+        raise ConfigError('gradle must be {jdk, distribution, sdk, dependencyCache, isolation, bubblewrap?, '
+                          'buildTimeoutS?}')
+    if value['isolation'] not in GRADLE_ISOLATIONS:
+        raise ConfigError('gradle.isolation must be bubblewrap')
+    if value['isolation'] == 'seatbelt':  # allow-by-default: loopback (Rose's own pairing) and launchd stay reachable
+        raise ConfigError('gradle.isolation seatbelt (macOS) is not qualified: it leaves localhost, launchd and '
+                          'other services reachable to the build\'s code. Gradle builds need bubblewrap on Linux.')
+    if 'bubblewrap' in value and value['isolation'] != 'bubblewrap':
+        raise ConfigError('gradle.bubblewrap is only for the bubblewrap isolation')
+    paths = {}
+    for key in ('jdk', 'distribution', 'sdk', 'dependencyCache'):
+        paths[key] = _facility_path(_path(value[key], f'gradle.{key}'), key, section='gradle')
+    bwrap = (_facility_path(_path(value['bubblewrap'], 'gradle.bubblewrap'), 'bubblewrap', directory=False,
+                            section='gradle') if 'bubblewrap' in value else Path('/usr/bin/bwrap'))
+    return GradleConfig(paths['jdk'], paths['distribution'], paths['sdk'], paths['dependencyCache'],
+                        value['isolation'], bwrap, _seconds(value.get('buildTimeoutS'), 'gradle.buildTimeoutS', 1800.0))
+
+
+def gradle_tools(config: GradleConfig | None):
+    """The Gradle toolchain and its isolation, checked now: a configured stack that is not usable fails the host at
+    startup instead of every job. The isolation shows the build nothing that is not mounted."""
+    if config is None:
+        return None
+    from .gradle import GradleTools
+    from .isolation import BubblewrapIsolation
+    isolation = BubblewrapIsolation(config.bubblewrap)  # the only qualified isolation (_gradle_config)
+    tools = GradleTools(config.jdk, config.distribution, config.sdk, config.dependency_cache, isolation,
+                        timeout_s=config.build_timeout_s)
+    missing = tools.available()
+    if missing:
+        raise ConfigError(f'gradle: {missing}')
+    return tools
+
+
+def _facility_path(path: Path, name: str, *, directory: bool = True, section: str = 'gradle') -> Path:
+    """Owner-supplied facilities use the canonical absolute paths isolation preserves."""
+    try:
+        if (not path.is_absolute() or path.resolve(strict=True) != path or
+                not (path.is_dir() if directory else path.is_file())):
+            raise ValueError
+    except (OSError, ValueError, RuntimeError):
+        raise ConfigError(f'{section}.{name} must be an existing canonical absolute '
+                          + ('directory' if directory else 'file')) from None
+    return path
 
 
 def _read(path: Path):
@@ -356,6 +429,7 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
     root must be separate from each of them and from ``apart_from`` (the Rose server's own configuration)."""
     resolver = library_store(config.library_store)
     client_codegen = None
+    gradle = gradle_tools(config.gradle)
     for other in apart_from:
         if not separate(config.root.resolve(), Path(other).resolve()):
             raise ConfigError("the builder root must be separate from the server's own configuration")
@@ -372,7 +446,7 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
             from .generator import CodexGenerator
             generate = CodexGenerator(timeout_s=config.writer.timeout_s, command=list(config.writer.argv),
                                       libraries=resolver.available if resolver is not None else None,
-                                      backend=config.agent_host is not None)
+                                      backend=config.agent_host is not None, gradle=gradle is not None)
         else:
             generate = no_writer
     if backup is None and config.backup is not None:
@@ -388,7 +462,7 @@ def build_builder(config: BuilderConfig | HostConfig, generate=None, backup=None
         client_codegen = codegen  # the API client an agent-built backend's app is built with
     return Builder(config.root, tools, generate, ledger=ledger, backup=backup, resolver=resolver,
                    require_key_backup=config.require_key_backup,
-                   server_url=ledger.backend_endpoint, hosting=hosting, codegen=client_codegen)
+                   server_url=ledger.backend_endpoint, hosting=hosting, codegen=client_codegen, gradle=gradle)
 
 
 def build_host(config: HostConfig, generate=None, backup=None) -> Host:
