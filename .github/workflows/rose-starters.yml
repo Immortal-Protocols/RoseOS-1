@@ -1,0 +1,49 @@
+name: Rose starters
+
+# The templates × themes framework (workspace/rose-starters): unit tests on Robolectric (API 34 and 37), lint, the
+# template/theme boundary rule, and the two debug apps. Secret-free; builds only with the SDK's debug key.
+
+on:
+  pull_request:
+    paths:
+      - 'workspace/rose-starters/**'
+      - '.github/workflows/rose-starters.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/rose-starters/**'
+      - '.github/workflows/rose-starters.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rose-starters-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: workspace/rose-starters
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Use JDK 21
+        run: echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+      - name: Check (unit tests on API 34 and 37, lint, boundaries) and build the debug apps
+        run: ./gradlew --no-daemon check :sample:assembleDebug :matrix:assembleDebug
+      - name: Keep test reports and screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rose-starters-reports
+          path: |
+            workspace/rose-starters/**/build/reports/tests/
+            workspace/rose-starters/**/build/screenshots/
+            workspace/rose-starters/**/build/reports/lint-results-debug.html
+          retention-days: 14
+          if-no-files-found: ignore
