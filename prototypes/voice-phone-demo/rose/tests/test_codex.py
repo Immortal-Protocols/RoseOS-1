@@ -17,6 +17,7 @@ if importlib.util.find_spec('mlx') is None:
     prepare()
 from rose.bus import Bus
 from rose.codex_conductor import CodexConductor
+from rose.life_executor import AppLifeExecutor
 from rose.transcripts import Transcripts, redact
 from rose.realphone import RealPhone
 from rose.scoped_workspace import ScopedWorkspace
@@ -361,6 +362,24 @@ class Integration(unittest.TestCase):
             self.assertEqual(self.phone.apps(), APPS)
             calls.assert_not_called()
             clock.monotonic.return_value = 361.0
+            self.assertEqual(self.phone.apps(), APPS)
+            calls.assert_called_once_with('list_apps')
+
+    def test_app_inventory_failed_refresh_keeps_context_serializable(self):
+        with (
+            patch('rose.realphone.time', wraps=time) as clock,
+            patch('rose.life_executor.time', clock),
+            patch.object(self.controller, 'call', return_value={'status': 'timeout'}) as calls,
+        ):
+            clock.monotonic.return_value = 1000.0
+            self.phone._link_changed()
+            executor = AppLifeExecutor(SimpleNamespace(clock=lambda: 10000.0), self.engine)
+            context = executor.phone_context()
+            self.assertEqual(json.loads(json.dumps(context, allow_nan=False))['apps'], APPS)
+            calls.assert_any_call('list_apps')
+
+            calls.reset_mock()
+            calls.return_value = {'status': 'ok', 'apps': APPS}
             self.assertEqual(self.phone.apps(), APPS)
             calls.assert_called_once_with('list_apps')
 
